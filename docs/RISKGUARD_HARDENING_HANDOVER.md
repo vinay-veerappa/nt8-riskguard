@@ -52,6 +52,7 @@ Every row was checked, not carried forward. The command that checks it is in the
 | **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
 | **Mutation** | 3 batteries, **31 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py` |
+| **CI** | ✅ **Active in both repos** since 2026-08-13, `windows-latest`, every push and PR. Runs all of the above except deploy parity, in 4m39s. **Watched fail on purpose**, not just pass | `gh run list -R vinay-veerappa/nt8-riskguard -L 3` |
 
 > ⚠️ **There are THREE disagreeing version identifiers on this box, and none of them is wrong by
 > accident.** Git says **`v1.0.2`** (the real one — it is what `sync_nt8.py` deploys). `docs/VERSION.md`
@@ -2144,6 +2145,14 @@ was exactly that until 2026-08-07.
 > identifiers cited from the plan and from older transcripts, so they are deliberately not reordered
 > on disk. Use the reading order in the header.
 
+- **A `.github/workflows/` push refused for the `workflow` scope is a *credential* problem, not a
+  code one — and it has two exits, not one.** `gh auth refresh -s workflow` is the obvious one and it
+  needs a browser. The other: **an SSH push is not an OAuth App push, so the restriction does not
+  apply to it at all.** These repos were created over HTTPS with a `gh` token (`credential.helper` is
+  `gh auth git-credential`, so the token's scopes govern every HTTPS push), and CI stayed parked for a
+  day on the assumption that the scope was the only door. ⚠️ **Do not "prepare" the move by committing
+  the workflow file locally while the push is blocked** — the rejection is per-push, not per-file, so
+  one unpushable commit wedges *every* later push on that branch.
 - **NT8 raises `ExecutionUpdate` BEFORE `PositionUpdate`.** Any code that reads `account.Positions`
   from an execution handler is reading a position that does not exist yet on an entry fill. This
   cost `P0-49`: the copier's bracket anchored itself that way and therefore never anchored at all,
@@ -2982,10 +2991,9 @@ two definitions that drift, which is exactly what `P2-38` was. Ordered remedy:
 
 ### Two loose ends, neither naked-risk
 
-* **CI is parked.** Both repos carry `ci/github-workflow-ci.yml`, not
-  `.github/workflows/ci.yml`, because the OAuth token that created them lacks the `workflow`
-  scope. Activate with `gh auth refresh -s workflow` then `git mv`. Until then the checks run
-  by hand.
+* ~~**CI is parked.**~~ ✅ **Both activated 2026-08-13** — §5.11. The diagnosis here was right
+  (the OAuth token lacks `workflow`) but the prescribed fix was not the one used: an **SSH
+  push is not an OAuth App push**, so the restriction never applied to it.
 * **Two stale files sit in the live NT8 `AddOns/` folder**: `RiskGuardAddOnTests.cs` and
   `TestingStubs.cs`. The old flat layout deployed the test suite into the trading assembly
   because the sync tool globbed `*.cs` from a directory that held both. The new tools
@@ -3355,7 +3363,9 @@ it described a different repository**, so ownership is now explicit.
 | Branches | ✅ **`main` only.** `harden/p0-63` was verified an ancestor of `main` and **deleted 2026-08-13**. Pushed, 0 unpushed. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
 | Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66` — **the deployed code**), `v1.0.3` (docs only). `main` carries docs commits on top of `v1.0.2`; **a tag moving is what would break the bridge's pin**, so never delete or move one. |
 | Git hooks | ✅ **Installed 2026-08-13.** `.githooks/pre-commit` refuses `dll/pdb/exe/zip/nupkg`, media, and anything over 50 MB. **Proven to fire in both directions** before it was committed: a staged 57 MB blob and a staged `.dll` were each rejected with exit 1, and `ALLOW_BIG_FILES=1` passed. ⚠️ `core.hooksPath` is **local config, not tracked** — a fresh clone silently has no hook until someone runs `git config core.hooksPath .githooks`. Both READMEs now say so. Neither repo tracks a single blocked extension today, so the guard cannot misfire on real work. |
-| CI | ⚠️ **Still parked, and blocked on a credential — not on work.** The workflow sits at `ci/github-workflow-ci.yml`. **Proven 2026-08-13 by pushing a probe branch and reading GitHub's own refusal**, not inferred from the scope list: `! [remote rejected] ... refusing to allow an OAuth App to create or update workflow '.github/workflows/ci.yml' without 'workflow' scope`. HTTPS pushes here go through `gh auth git-credential`, so the `gh` token's scopes (`gist, read:org, repo`) govern them. A rejected push creates nothing, so the probe left no residue. **Deliberately not committed into place** — a local commit that cannot be pushed would wedge every later push on the branch. **One interactive `gh auth refresh -s workflow` unblocks it**; SSH is *not* required (it was only checked as a fallback, and there is no key on this box). `P2-27`'s remaining half; until then every gate is local and manual. |
+| CI | ✅ **ACTIVE since 2026-08-13**, at `.github/workflows/ci.yml`, `windows-latest`, on every push and PR. 11 steps: both structural checks, build, the 953-test suite, and **all three** mutation batteries — `mutate_p0_63.py` had to be **added**, because it arrived after the workflow was written and parked, so CI would have run two of three while looking complete. **4m39s** for the lot. Actions pinned to current majors (checkout v7, setup-dotnet v6, setup-python v7), read from the API not guessed, because v4/v5 target the deprecated Node 20 that GitHub is only temporarily force-running on Node 24. |
+| CI — proven in **both** directions | Green on a known-good `main` proves the wiring runs, not that it can fail. So a throwaway branch carrying a deliberate `typeof(McpBridgeAddOn)` reference in `CopierReconciler.cs` was pushed: **run concluded `failure`, failing step `Direction check`** — then branch deleted, remote and local, and `check_direction.py` re-run clean. Six gates in these repos have been caught proving nothing (§8); a CI that has only ever been green is the seventh candidate. |
+| ⚠️ How the scope block was actually cleared | **It was real**: a probe branch carrying a workflow file was refused verbatim — `refusing to allow an OAuth App to create or update workflow '.github/workflows/ci.yml' without 'workflow' scope`. HTTPS pushes here go through `gh auth git-credential`, so the `gh` token's scopes (`gist, read:org, repo`) govern them. **The fix was not `gh auth refresh`** — the operator added an SSH key, and **an SSH push is not an OAuth App push, so the restriction does not apply at all.** Both addon repos now use `git@github.com:` remotes. Keep that in mind before concluding a workflow file cannot be pushed. |
 | Deployed tree | ✅ **No orphans.** The two stale test files were moved out of `bin/Custom/AddOns/` on 2026-08-13 and the guard re-verified after the recompile — §5.10. |
 | Loop artifacts | `logs/agent_loop/*` is ignored except `ledger.jsonl` and `learning_feedback.jsonl`. See §8 for why that took two commits. |
 
@@ -3365,8 +3375,8 @@ it described a different repository**, so ownership is now explicit.
 |---|---|
 | Submodule | `vendor/nt8-riskguard` pinned at **`v1.0.3`**. **Enforced** — `deploy.py` exits 2 on a pin that is behind in `addons/`, and *only* in `addons/`, so a docs commit on the core does not demand a tag bump (§8, §5.10). |
 | Git hooks | ✅ Same hook, same proof, installed 2026-08-13. Its header names the real hazard here: `git add -A` from the root can reach into `vendor/`. |
-| Tests | Harness 9/0, but `P2-27` still records that `McpBridgeAddOn.cs` has no real coverage; `tests/README.md` measures the gap. |
-| CI | Parked the same way, same credential. |
+| Tests | Harness 9/0, but `P2-27` still records that `McpBridgeAddOn.cs` has no real coverage; `tests/README.md` measures the gap. **CI being green here does not narrow that** — it runs the harness, and the harness asserts against source text. |
+| CI | ✅ **ACTIVE since 2026-08-13**, same route. Two real steps: the harness, and one that **hides `vendor/nt8-riskguard` and requires `deploy.py --dry-run` to exit exactly 2** — so "it refuses to half-deploy" is a check rather than a comment claiming there is one. That step was replicated locally before activation, because this session's change to `check_vendor_not_stale` runs on the same path and could have turned the refusal into a crash. |
 
 ### tvDownloadOHLC — **not this repo's problem, recorded so it is not lost**
 
