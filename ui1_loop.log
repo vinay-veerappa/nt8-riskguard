@@ -2,10 +2,30 @@
 === UI1: Copier read model: a conformance snapshot, with measured-vs-unmeasured metrics
   [protected] 1 region file(s) clear of verifier
   [memory] 35 settled decisions (9 from prior runs)
-  [worktree] agentloop-UI1-19220 @ 670cefe4
-  [baseline] 1053 passed, 18 failed at 670cefe4; 18 expected failure(s)
-  REFUSED: expect_green test(s) not failing at baseline: ['snapshot reports latencySamples 1 after one latency is actually recorded']
+  [worktree] agentloop-UI1-20288 @ ba4bdcda
+  [baseline] 1053 passed, 18 failed at ba4bdcda; 18 expected failure(s)
+  [test-first] 18 acceptance test(s) red at baseline
+    region R1                       addons/TradeCopierEngine.cs lines 331-337
+    region R2                       addons/TradeCopierEngine.cs lines 3348-3492
+    region R3                       addons/TradeCopierEngine.cs lines 702-914
+    region R4                       addons/TradeCopierEngine.cs lines 26-64
+  round 1: implement kimi-k2.7-code:cloud 228.6s in=7731 out=30826 think=108370c
+           [static] ok - 4 block(s) well-formed
+           [compile] FAIL - build FAILED
+  round 2: implement kimi-k2.7-code:cloud 66.7s in=15644 out=9732 think=19551c
+           [static] ok - 4 block(s) well-formed
+           [compile] ok - build succeeded
+           [test] FAIL - 18 acceptance test(s) still failing; 1053 passed, 18 failed
+           [compaction] 24822 -> 15815 tokens (pruned 9007)
+  round 3: implement kimi-k2.7-code:cloud 305.2s in=13832 out=47012 think=177621c
+           [static] ok - 4 block(s) well-formed
+           [compile] FAIL - build FAILED
+           [compaction] 26707 -> 20737 tokens (pruned 5970)
+  round 4: implement kimi-k2.7-code:cloud 112.7s in=17656 out=21027 think=55423c
+           [static] ok - 4 block(s) well-formed
+           [compile] FAIL - build FAILED
+  NOT APPLIED: verdict=ARBITER_NEVER_RAN. Patch for review: logs\agent_loop\UI1\final.patch
 
 ==== SUMMARY ====
-UI1   TICKET_REJECTED        applied=False
+UI1   ARBITER_NEVER_RAN      applied=False
 1 of 1 ticket(s) did not produce a promotable candidate
