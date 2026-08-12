@@ -1,0 +1,261 @@
+diff --git a/addons/TradeCopierEngine.cs b/addons/TradeCopierEngine.cs
+index cd1b10b..eb3a475 100644
+--- a/addons/TradeCopierEngine.cs
++++ b/addons/TradeCopierEngine.cs
+@@ -133,6 +133,7 @@ namespace NinjaTrader.NinjaScript.AddOns
+         private readonly Queue<string> _executionIdQueue = new Queue<string>();
+         private const int MaxExecutionCacheSize = 5000;
+         private readonly object _lock = new object();
++        private readonly HashSet<string> _accountsIgnoringChange = new HashSet<string>();
+ 
+         public void AddRelationship(CopierRelationship rel) => UpsertRelationship(rel);
+ 
+@@ -1326,16 +1327,89 @@ namespace NinjaTrader.NinjaScript.AddOns
+         {
+             if (followerAcc == null || order == null || order.Instrument == null) return;
+ 
+-            // P0-61's completion hook, and it must come BEFORE the OccupiesSlot return below.
++            // P0-63 verification must come BEFORE the OccupiesSlot return below. A leg that has
++            // just settled out of ChangeSubmitted/ChangePending still occupies a slot, so the
++            // early return would drop the event -- and we would never notice that the provider
++            // silently ignored the Change() and left the order at its original price/size.
+             //
+-            // A leg that has just settled out of ChangeSubmitted/ChangePending still occupies a
+-            // slot, so the early return would drop this event -- and the instruction we deferred
+-            // while the change was in flight would be lost, leaving the leg at its old price and
+-            // size for the life of the position. That is the defect P0-61 fixes, one layer down:
+-            // declining to act is only safe if something later acts.
+-            if (RiskGuardAddOn.AcceptsModification(order.OrderState)
+-                && ReDriveDeferredLeg(followerAcc, order))
+-                return;
++            // P0-61's completion hook is also in this block; verification runs first because a
++            // detected no-op forces the account onto the cancel-then-create path, which also
++            // satisfies any deferred change queued while the ignored change was in flight.
++            if (RiskGuardAddOn.AcceptsModification(order.OrderState))
++            {
++                string verifyKey = BracketKey(followerAcc.Name, order.Instrument.FullName);
++                FollowerBracket verifyBracket = null;
++                bool verifyIsStopLeg = false;
++                lock (_lock)
++                {
++                    if (_followerBrackets.TryGetValue(verifyKey, out verifyBracket))
++                    {
++                        verifyIsStopLeg = ReferenceEquals(verifyBracket.WorkingStop, order);
++                        bool isTargetLeg = ReferenceEquals(verifyBracket.WorkingTarget, order);
++                        if (!verifyIsStopLeg && !isTargetLeg) verifyBracket = null;
++                    }
++                }
++
++                if (verifyBracket != null)
++                {
++                    bool mismatch = false;
++                    int requestedQty = 0;
++                    double requestedPrice = double.NaN;
++                    lock (_lock)
++                    {
++                        if (verifyIsStopLeg && verifyBracket.StopChangeRequested)
++                        {
++                            requestedQty = verifyBracket.StopChangeRequestedQuantity;
++                            requestedPrice = verifyBracket.StopChangeRequestedPrice;
++                            if (double.IsNaN(requestedPrice)
++                                || order.StopPrice != requestedPrice
++                                || order.Quantity != requestedQty)
++                            {
++                                mismatch = true;
++                                verifyBracket.StopChangeRequested = false;
++                                verifyBracket.StopChangeDeferred = false;
++                                _accountsIgnoringChange.Add(followerAcc.Name);
++                            }
++                            else
++                            {
++                                verifyBracket.StopChangeRequested = false;
++                            }
++                        }
++                        else if (!verifyIsStopLeg && verifyBracket.TargetChangeRequested)
++                        {
++                            requestedQty = verifyBracket.TargetChangeRequestedQuantity;
++                            requestedPrice = verifyBracket.TargetChangeRequestedPrice;
++                            if (double.IsNaN(requestedPrice)
++                                || order.LimitPrice != requestedPrice
++                                || order.Quantity != requestedQty)
++                            {
++                                mismatch = true;
++                                verifyBracket.TargetChangeRequested = false;
++                                verifyBracket.TargetChangeDeferred = false;
++                                _accountsIgnoringChange.Add(followerAcc.Name);
++                            }
++                            else
++                            {
++                                verifyBracket.TargetChangeRequested = false;
++                            }
++                        }
++                    }
++
++                    if (mismatch)
++                    {
++                        CopierLog(followerAcc.Name, "BRACKET_CHANGE_IGNORED",
++                            $"{order.Instrument.FullName} mirrored {(verifyIsStopLeg ? "stop" : "target")} did not take the requested values "
++                            + $"(requested {requestedQty}@{requestedPrice}, broker {order.Quantity}@{(verifyIsStopLeg ? order.StopPrice : order.LimitPrice)}). "
++                            + "Falling back to cancel-then-create for this account.");
++
++                        if (verifyIsStopLeg) SyncFollowerStopOnce(followerAcc, order.Instrument, verifyBracket);
++                        else SyncFollowerTargetOnce(followerAcc, order.Instrument, verifyBracket);
++                        return;
++                    }
++                }
++
++                if (ReDriveDeferredLeg(followerAcc, order)) return;
++            }
+ 
+             if (RiskGuardAddOn.OccupiesSlot(order.OrderState)) return;   // still there; nothing lost
+             if (order.OrderState == OrderState.Filled) return;                 // it did its job
+@@ -1468,6 +1542,18 @@ namespace NinjaTrader.NinjaScript.AddOns
+             // settles (ReDriveDeferredLeg). NOT the same as *ResyncOwed -- see that method.
+             public bool StopChangeDeferred;
+             public bool TargetChangeDeferred;
++
++            // P0-63. What the last Change() asked for, recorded separately from the Order because
++            // NT8 writes the desired values onto the Order immediately even when the provider
++            // silently ignores them. The read-back in OnFollowerOrderUpdate compares these to the
++            // settled order; a mismatch means the provider did not honour the change.
++            public bool StopChangeRequested;
++            public double StopChangeRequestedPrice = double.NaN;
++            public int StopChangeRequestedQuantity;
++
++            public bool TargetChangeRequested;
++            public double TargetChangeRequestedPrice = double.NaN;
++            public int TargetChangeRequestedQuantity;
+         }
+ 
+         // How many EXTRA passes the reservation holder will re-drive the sync for, after a
+@@ -1972,6 +2058,22 @@ namespace NinjaTrader.NinjaScript.AddOns
+                 // and here, and a stop larger than the position FLIPS it on trigger.
+                 int liveQty = Math.Min(qty, livePos.Quantity);
+ 
++                // P0-63. Once this account has demonstrably ignored a Change(), never ask it to
++                // Change() again -- go straight to cancel-then-create. The provider is a property
++                // of the account, not the instrument, so the verdict is account-level.
++                bool providerIgnoresChange;
++                lock (_lock) { providerIgnoresChange = _accountsIgnoringChange.Contains(followerAcc.Name); }
++
++                if (toModify != null && providerIgnoresChange)
++                {
++                    CopierLog(followerAcc.Name, "BRACKET_MODIFY_BYPASSED",
++                        $"{instrument.FullName}: this account has already ignored a Change() once; going straight to cancel-then-create.");
++                    lock (_lock) { bracket.StopChangeRequested = false; }
++                    toCancel = toModify;
++                    wantsCreate = true;
++                    toModify = null;
++                }
++
+                 // A leader trailing its stop is the ordinary case, and cancel-then-create left the
+                 // follower unprotected on EVERY trail step, between the cancel and the new order's
+                 // acceptance. Modify the working order instead: one order, no window.
+@@ -1992,7 +2094,13 @@ namespace NinjaTrader.NinjaScript.AddOns
+                         toModify.Quantity = liveQty;
+                         followerAcc.Change(new[] { toModify });
+ 
+-                        lock (_lock) { bracket.WorkingStop = toModify; }
++                        lock (_lock)
++                        {
++                            bracket.WorkingStop = toModify;
++                            bracket.StopChangeRequested = true;
++                            bracket.StopChangeRequestedPrice = stopPrice;
++                            bracket.StopChangeRequestedQuantity = liveQty;
++                        }
+ 
+                         CopierLog(followerAcc.Name, "BRACKET_MODIFIED",
+                             $"{instrument.FullName} stop moved to {liveQty}@{stopPrice} in place "
+@@ -2007,6 +2115,7 @@ namespace NinjaTrader.NinjaScript.AddOns
+                         // The leg the broker refused to change becomes the leg to replace. Both
+                         // halves must be set: cancelling without creating is a naked follower,
+                         // and it is the failure this fallback exists to avoid.
++                        lock (_lock) { bracket.StopChangeRequested = false; }
+                         toCancel = toModify;
+                         wantsCreate = true;
+                     }
+@@ -2082,7 +2191,11 @@ namespace NinjaTrader.NinjaScript.AddOns
+                 // the bound unreachable. The budget is refreshed only by a genuinely new
+                 // instruction from the leader, or by the bracket being released when the follower
+                 // goes flat. (Caught by this test failing at 21 submissions.)
+-                lock (_lock) { bracket.WorkingStop = stop; }
++                lock (_lock)
++                {
++                    bracket.WorkingStop = stop;
++                    bracket.StopChangeRequested = false;
++                }
+ 
+                 NinjaTrader.Code.Output.Process(
+                     $"[CopierEngine] BRACKET_MIRRORED: {followerAcc.Name} {instrument.FullName} stop {liveQty}@{stopPrice} (leader offset {bracket.StopOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}).",
+@@ -2300,6 +2413,22 @@ namespace NinjaTrader.NinjaScript.AddOns
+                 // Broker calls outside `_lock` (P1-10/P1-35), as the stop sync does.
+                 int liveQty = Math.Min(qty, livePos.Quantity);
+ 
++                // P0-63. Once this account has demonstrably ignored a Change(), never ask it to
++                // Change() again -- go straight to cancel-then-create. The target leg keeps its
++                // own flag so it never blocks or disturbs the stop leg.
++                bool providerIgnoresChange;
++                lock (_lock) { providerIgnoresChange = _accountsIgnoringChange.Contains(followerAcc.Name); }
++
++                if (toModify != null && providerIgnoresChange)
++                {
++                    CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_BYPASSED",
++                        $"{instrument.FullName}: this account has already ignored a Change() once; going straight to cancel-then-create.");
++                    lock (_lock) { bracket.TargetChangeRequested = false; }
++                    toCancel = toModify;
++                    wantsCreate = true;
++                    toModify = null;
++                }
++
+                 // Modify in place where possible: it preserves OCO group membership -- confirmed
+                 // live on 2026-08-10, a trailed leg kept both its orderId and its oco -- so the
+                 // pair survives without any id being re-minted.
+@@ -2311,7 +2440,13 @@ namespace NinjaTrader.NinjaScript.AddOns
+                         toModify.Quantity = liveQty;
+                         followerAcc.Change(new[] { toModify });
+ 
+-                        lock (_lock) { bracket.WorkingTarget = toModify; }
++                        lock (_lock)
++                        {
++                            bracket.WorkingTarget = toModify;
++                            bracket.TargetChangeRequested = true;
++                            bracket.TargetChangeRequestedPrice = targetPrice;
++                            bracket.TargetChangeRequestedQuantity = liveQty;
++                        }
+ 
+                         CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFIED",
+                             $"{instrument.FullName} target moved to {liveQty}@{targetPrice} in place "
+@@ -2322,6 +2457,7 @@ namespace NinjaTrader.NinjaScript.AddOns
+                     {
+                         CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_FAILED",
+                             $"{instrument.FullName}: {cex.Message}. Falling back to cancel-then-create.");
++                        lock (_lock) { bracket.TargetChangeRequested = false; }
+                         toCancel = toModify;
+                         wantsCreate = true;
+                     }
+@@ -2361,7 +2497,11 @@ namespace NinjaTrader.NinjaScript.AddOns
+                 }
+ 
+                 followerAcc.Submit(new[] { target });
+-                lock (_lock) { bracket.WorkingTarget = target; }
++                lock (_lock)
++                {
++                    bracket.WorkingTarget = target;
++                    bracket.TargetChangeRequested = false;
++                }
+ 
+                 CopierLog(followerAcc.Name, "BRACKET_TARGET_MIRRORED",
+                     $"{instrument.FullName} target {liveQty}@{targetPrice} "
+@@ -2490,7 +2630,11 @@ namespace NinjaTrader.NinjaScript.AddOns
+         /// </summary>
+         internal void ResetBracketsForTest()
+         {
+-            lock (_lock) { _followerBrackets.Clear(); }
++            lock (_lock)
++            {
++                _followerBrackets.Clear();
++                _accountsIgnoringChange.Clear();
++            }
+         }
+ 
+         internal double GetMirroredStopPriceForTest(string followerAccount, string instrumentFullName)

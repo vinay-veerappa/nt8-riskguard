@@ -261,6 +261,26 @@ namespace NinjaTrader.Cbi
         /// this suite and still fail live, because live the revert has not happened yet at that
         /// point. Verification has to hang off the settle event, so the double has to make the
         /// synchronous shortcut fail.
+        ///
+        /// THIS BEHAVIOUR IS NOT ASSUMED. It is copied from a live NT8 trace on a follower
+        /// scaling 1 -> 2 lots, recorded in RiskGuardAddOn.AcceptsModification's docstring and
+        /// the basis of P0-61:
+        ///
+        ///     34412 ChangeSubmitted  qty 1 @ 29822.25   (first change in flight)
+        ///     34412 ChangePending    qty 2 @ 29822.5    (our second change)
+        ///     34412 Working          qty 1 @ 29822.25   (reverted -- BOTH changes lost)
+        ///
+        /// Read the third line: on settling to `Working` the ORDER OBJECT ITSELF read back the
+        /// ORIGINAL quantity and price. NT8 owns those fields and restores them; a local write
+        /// followed by an ignored Change() does not survive the round trip. P0-63's probe table
+        /// says the same thing three more times ("asked qty 1 -> 2, result qty 1"), as does stop
+        /// 34410, which was created at 29753.5, logged `stop moved to 1@29754.5`, and *ended at
+        /// 29753.5*.
+        ///
+        /// Recorded at this length because the 2026-08-13 review panel and arbiter concluded the
+        /// opposite -- that NT8 leaves the desired values on the object, so no read-back could
+        /// ever detect a no-op -- and escalated the ticket on it. That conclusion is refuted by
+        /// the trace above. If you are about to raise it again, produce a live trace first.
         /// </summary>
         public void SettleChange(Order o)
         {

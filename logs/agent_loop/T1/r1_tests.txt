@@ -1,0 +1,3 @@
+The broker holds the moved target: expected 18022.00, got 18032. At baseline it holds 18032.00 -- the follower would sit through the leader's exit.
+The broker is actually holding the trailed stop: expected 17997.00, got 17992. At baseline it holds 17992.00 -- the stop never moved and the leader's locked-in gain stayed as open risk on the follower.
+The second trail step is holding at the broker with no round trip: expected 18000.00, got 17992. Anything else means the follower's stop is stale for a broker round trip on every step of a trailing stop.

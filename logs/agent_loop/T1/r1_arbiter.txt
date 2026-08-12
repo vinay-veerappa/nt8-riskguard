@@ -1,0 +1,27 @@
+<<<RULINGS>>>
+- [UPHELD] #1: The verification uses `ReferenceEquals` on the Order object reference, but NT8 may deliver a different Order instance for the same logical order on settle, causing the verification to be silently skipped and the no-op undetected.
+- [REJECTED] #2: The budget is not exhausted because the bypass path resets `StopChangeRequested` before cancel-then-create, and the budget is only consumed once per logical trail (the increment at the top is correct for the fallback path).
+- [UPHELD] #3: The re-drive via `SyncFollowerStopOnce` may hit a `Defer` action and set the deferred flag again, but if no further OrderUpdate arrives for this order, the stop remains at the old price forever.
+- [REJECTED] #4: The budget is not exhausted because the bypass path does not loop; the account is marked once and subsequent trails go straight to cancel-then-create without further increments.
+- [UPHELD] #5: A cancelled order settling while `StopChangeRequested` is still true can cause a false no-op detection, permanently disabling modify-in-place for a healthy account.
+- [REJECTED] #6: The budget is reset when the account is marked as ignoring Change(), and the increment before the try block is correct for the fallback path.
+- [REJECTED] #7: NT8's single-threaded event dispatch makes re-entrancy safe; this is a settled design decision.
+- [OUT_OF_SCOPE] #8: Test adequacy is not a code defect and the mechanical gates confirm the tests pass.
+- [REJECTED] #9: The re-drive does not deadlock because the outer lock is released before calling `SyncFollowerStopOnce`, and broker calls from an NT8 event handler are a settled design.
+- [UPHELD] #10: NT8 writes the desired values onto the Order object immediately, so `order.StopPrice` will always equal `StopChangeRequestedPrice` at settle time, making the verification unable to detect a mismatch.
+- [REJECTED] #11: The bypass path correctly clears `StopChangeRequested` and does not leave the bracket in an inconsistent state.
+- [REJECTED] #12: The budget is not consumed at 2x rate because the re-drive goes straight to cancel-then-create (no second increment).
+- [OUT_OF_SCOPE] #13: The position-read issue is pre-existing and not caused by this patch.
+- [REJECTED] #14: The TOCTOU race is theoretical; the lock release between the two blocks is brief and the bracket state is stable under single-threaded dispatch.
+- [REJECTED] #15: The target leg's OCO handling is correct and self-healing.
+- [REJECTED] #16: The quantity sentinel is not a real-world issue and the boolean flag suffices.
+<<<END RULINGS>>>
+<<<RECOMMENDATION>>>
+ESCALATE
+<<<END RECOMMENDATION>>>
+<<<RATIONALE>>>
+The patch has three upheld findings (#1, #3, #5, #10) that break its core promise: the verification cannot reliably detect a no-op Change() because NT8 mutates the Order object's price field immediately, and the verification logic is vulnerable to false positives and silent skips. These are not edge cases but fundamental flaws in the read-back mechanism. The patch also introduces a new risk of permanent deferral (#3) that leaves the follower unprotected. The mechanical gates passed because the stub tests do not simulate NT8's immediate mutation of the Order object, so the verification appears to work in test but fails in production. A human must decide whether to redesign the verification or accept the risk of undetected no-ops.
+<<<END RATIONALE>>>
+<<<SETTLED>>>
+- NONE
+<<<END SETTLED>>>
