@@ -1007,6 +1007,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // P1-75: LoadFromDisk disarms, so no READ path may call it.
             TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem();
+
+            // P1-76: a follower belongs to a direct relationship OR a group, never both.
+            TestP1_76_ARelationshipIsRefusedWhenTheFollowerIsAlreadyInAGroup();
+            TestP1_76_AddFollowerToGroupIsRefusedWhenADirectRelationshipExists();
+            TestP1_76_AGroupIsRefusedWhenAnyFollowerHasADirectRelationship();
+            TestP1_76_TheRefusalIsCaseInsensitiveAndIgnoresGroupEnabledState();
+            TestP1_76_LoadFromDiskTOLERATESAnOverlapAndReportsIt();
+            TestP1_76_DirectWinsOverGroupAndThatIsNowPinned();
+            TestP1_76_ADisabledDirectRelationshipIsNotResurrectedByAGroup();
+            TestP1_76_TwoGroupsSharingAFollowerStillProduceOneCopy();
             TestCM3_AMalformedRequestDoesNotDestroyTheStoredGroup();
 
             // CM4: cross-instrument ratio rules, slice 2 -- RED until the fix lands
@@ -13374,6 +13384,288 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(released != null && released.IsQuarantined == false, "unquarantine clears it");
             Assert(engine.GetActiveRelationshipsForLeader("Cm2Leader").Any(r => r.FollowerAccountName == "Cm2Follower"),
                 "and it is active again");
+        }
+
+        // ── P1-76 ────────────────────────────────────────────────────────────────
+        //
+        // A follower may be covered by a direct relationship OR by a group, never both.
+        // Operator decision, 2026-08-13, prompted by the observation that it was "not
+        // clear what configuration applies and for what".
+        //
+        // What it was: GetActiveRelationshipsForLeader added direct relationships, then
+        // expanded groups, then deduplicated by follower with .First(). So direct won --
+        // purely because directs were AddRange'd first. Nothing named that rule and no
+        // test pinned it: swapping the two blocks is an innocuous-looking refactor that
+        // would silently flip every group's ratio, sizing mode, conversion flag and
+        // position cap over every direct relationship, and the suite would stay green.
+        //
+        // The deduplication itself is a SAFETY property (one copy per follower, never two
+        // orders) and stays. What these tests add is that the overlap cannot be created in
+        // the first place, and that where one already exists it is REPORTED rather than
+        // resolved in silence.
+        //
+        // ⚠️ The boundary is deliberate: operator write paths REFUSE, LoadFromDisk
+        // TOLERATES. A load that refuses would silently drop config the operator can see
+        // in the file -- that is P?-64's and P2-41's failure shape, and it is worse than
+        // the overlap. So a hand-edited file loads intact, logs a conflict per overlap, and
+        // exposes it over the API for the UI to render.
+
+        private static CopierGroup P176Group(string name, string leader, params string[] followers)
+        {
+            return new CopierGroup
+            {
+                GroupName = name,
+                LeaderAccountName = leader,
+                IsEnabled = true,
+                QuantityRatio = 9.0,          // distinguishable from any direct relationship
+                FollowerAccounts = followers.ToList()
+            };
+        }
+
+        private static void TestP1_76_ARelationshipIsRefusedWhenTheFollowerIsAlreadyInAGroup()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: a direct relationship is REFUSED when the follower is already in a group");
+
+            var engine = new TradeCopierEngine();
+            engine.UpsertGroup(P176Group("P176G", "P176Leader", "P176Follower"));
+
+            var log = CaptureCopierLog(() =>
+            {
+                var rel = engine.ApplyRelationshipRequest(JObject.Parse(
+                    @"{""leaderAccount"":""P176Leader"",""followerAccount"":""P176Follower"",""quantityRatio"":2}"), false);
+                Assert(rel == null, "the request was refused rather than silently creating an overlap");
+            });
+
+            Assert(!engine.GetRelationships().Any(r => r.FollowerAccountName == "P176Follower"),
+                "and nothing was stored -- a refusal that still writes is not a refusal");
+            Assert(LoggedEventType(log, "CONFIG_OVERLAP_REFUSED"),
+                "the refusal is logged, because a silent refusal is as confusing as a silent overwrite");
+            Assert(engine.GetGroups().Count == 1 && engine.GetGroups()[0].FollowerAccounts.Count == 1,
+                "the existing group was left completely alone");
+        }
+
+        private static void TestP1_76_AddFollowerToGroupIsRefusedWhenADirectRelationshipExists()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: adding a follower to a group is REFUSED when it has a direct relationship");
+
+            var engine = new TradeCopierEngine();
+            engine.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "P176Leader",
+                FollowerAccountName = "P176Follower",
+                QuantityRatio = 2.0
+            });
+            engine.UpsertGroup(P176Group("P176G", "P176Leader"));
+
+            var log = CaptureCopierLog(() =>
+            {
+                bool added = engine.AddFollowerToGroup("P176G", "P176Follower");
+                Assert(!added, "AddFollowerToGroup returned false");
+            });
+
+            var grp = engine.GetGroup("P176G");
+            Assert(grp != null && (grp.FollowerAccounts == null || grp.FollowerAccounts.Count == 0),
+                "the group did not gain the follower");
+            Assert(LoggedEventType(log, "CONFIG_OVERLAP_REFUSED"), "and it said why");
+            Assert(engine.GetRelationships().Single().QuantityRatio == 2.0,
+                "the direct relationship is untouched -- refusing must not 'resolve' by editing the other side");
+        }
+
+        private static void TestP1_76_AGroupIsRefusedWhenAnyFollowerHasADirectRelationship()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: a whole group is REFUSED when ANY of its followers has a direct relationship");
+
+            var engine = new TradeCopierEngine();
+            engine.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "P176Leader",
+                FollowerAccountName = "P176Clash",
+                QuantityRatio = 2.0
+            });
+
+            var log = CaptureCopierLog(() =>
+            {
+                var grp = engine.ApplyGroupRequest(JObject.Parse(
+                    @"{""groupName"":""P176G"",""leaderAccount"":""P176Leader"",""followerAccounts"":[""P176Clean"",""P176Clash""],""quantityRatio"":9}"), false);
+                Assert(grp == null, "the group request was refused");
+            });
+
+            Assert(engine.GetGroups().Count == 0,
+                "NO group was created -- not even a partial one with the clean follower. A request that "
+                + "silently drops one of the accounts you named is the config-must-not-lie defect again");
+            Assert(LoggedEventType(log, "CONFIG_OVERLAP_REFUSED"), "and it said why");
+        }
+
+        private static void TestP1_76_TheRefusalIsCaseInsensitiveAndIgnoresGroupEnabledState()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: the refusal is case-insensitive, and a DISABLED group still reserves its followers");
+
+            var engine = new TradeCopierEngine();
+            var grp = P176Group("P176G", "P176Leader", "P176Follower");
+            grp.IsEnabled = false;              // cannot copy today -- but one click away from doing so
+            engine.UpsertGroup(grp);
+
+            var rel = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""p176leader"",""followerAccount"":""P176FOLLOWER"",""quantityRatio"":2}"), false);
+
+            Assert(rel == null,
+                "refused on a case-differing spelling -- account comparisons are OrdinalIgnoreCase "
+                + "everywhere else in this engine (P1-39) and this must not be the exception");
+            Assert(engine.GetRelationships().Count == 0, "and nothing was stored");
+
+            // Membership, not effect: GetActiveRelationshipsForLeader only expands ENABLED
+            // groups, so a disabled group is not an overlap *today*. Enabling it is one
+            // click, and that click must not be what silently creates the overlap.
+            Assert(engine.DetectConfigConflicts().Count == 0,
+                "with the relationship refused there is no conflict to report");
+        }
+
+        private static void TestP1_76_LoadFromDiskTOLERATESAnOverlapAndReportsIt()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: a hand-edited file with an overlap LOADS INTACT and reports the conflict");
+
+            string file = Path.Combine(Path.GetTempPath(), "test_p1_76_overlap.json");
+            var writer = new TradeCopierEngine();
+            writer.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "P176Leader",
+                FollowerAccountName = "P176Follower",
+                QuantityRatio = 2.0
+            });
+            writer.UpsertGroup(P176Group("P176G", "P176Leader", "P176Follower"));
+            writer.SaveToDisk(file);
+
+            try
+            {
+                var reader = new TradeCopierEngine();
+                var log = CaptureCopierLog(() => reader.LoadFromDisk(file));
+
+                Assert(reader.GetRelationships().Any(r => r.FollowerAccountName == "P176Follower"),
+                    "the direct relationship survived the load");
+                Assert(reader.GetGroups().Any(g => g.FollowerAccounts.Any(f => f == "P176Follower")),
+                    "and so did the group entry. A load must NOT delete config to resolve a conflict -- "
+                    + "operator config vanishing without an error is P?-64's shape");
+
+                var conflicts = reader.DetectConfigConflicts();
+                Assert(conflicts.Count == 1, string.Format(
+                    "exactly one conflict is reported (got {0})", conflicts.Count));
+                Assert(conflicts[0].FollowerAccount == "P176Follower" && conflicts[0].GroupName == "P176G",
+                    "and it names the follower AND the group, which is what the UI has to render");
+                Assert(LoggedEventType(log, "CONFIG_OVERLAP_DETECTED"),
+                    "the load logged it -- this is the only notice an operator gets for a file they edited");
+            }
+            finally { try { File.Delete(file); } catch {} }
+        }
+
+        private static void TestP1_76_DirectWinsOverGroupAndThatIsNowPinned()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: where an overlap EXISTS, the direct relationship wins -- pinned, not emergent");
+
+            var engine = new TradeCopierEngine();
+            // Built with the primitives, which is the only way an overlap can exist now:
+            // by hand-editing the file. That is exactly the state this rule must define.
+            engine.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "P176Leader",
+                FollowerAccountName = "P176Follower",
+                QuantityRatio = 2.0,
+                IsEnabled = true
+            });
+            engine.UpsertGroup(P176Group("P176G", "P176Leader", "P176Follower"));   // ratio 9.0
+
+            var active = engine.GetActiveRelationshipsForLeader("P176Leader");
+
+            Assert(active.Count == 1, string.Format(
+                "one copy per follower -- the deduplication is a SAFETY property and stays (got {0})",
+                active.Count));
+            Assert(active[0].QuantityRatio == 2.0, string.Format(
+                "THE DIRECT relationship's ratio applies, not the group's 9.0 (got {0}). Before P1-76 this "
+                + "held only because directs were AddRange'd before groups and .First() took the earliest -- "
+                + "reordering two statements would have flipped live sizing with nothing failing.",
+                active[0].QuantityRatio));
+
+            // The same rule on the exit path, which passes includeQuarantined: true and is
+            // a separate code path through the same method.
+            var activeExit = engine.GetActiveRelationshipsForLeader("P176Leader", true);
+            Assert(activeExit.Count == 1 && activeExit[0].QuantityRatio == 2.0,
+                "and identically on the exit path, where includeQuarantined changes the filtering");
+        }
+
+        private static void TestP1_76_ADisabledDirectRelationshipIsNotResurrectedByAGroup()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: a DISABLED direct relationship is not resurrected by a group");
+
+            // This is the case where direct-wins is actually OBSERVABLE, and it is why the
+            // explicit skip earns its place. Found by mutation, not by reading:
+            // TestP1_76_DirectWinsOverGroupAndThatIsNowPinned uses an ENABLED direct
+            // relationship, where the outcome is over-determined -- the old code's
+            // deduplication .First() picks the direct entry too, so the assertion held
+            // whether or not the tie-break was explicit. Two mutants proved it decorative.
+            //
+            // With the direct relationship DISABLED the two mechanisms diverge:
+            //   old code: the `direct` filter drops it (r.IsEnabled), the group entry
+            //             survives, and the follower COPIES at the group's ratio.
+            //   now:      directRel != null suppresses the group entry, so it copies nothing.
+            //
+            // The second is the only defensible answer. "IsEnabled: false" is an operator
+            // saying this follower does not copy; a group quietly resuming it is a live order
+            // on an account that was switched off.
+            var engine = new TradeCopierEngine();
+            engine.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "P176Leader",
+                FollowerAccountName = "P176Follower",
+                QuantityRatio = 2.0,
+                IsEnabled = false
+            });
+            engine.UpsertGroup(P176Group("P176G", "P176Leader", "P176Follower"));   // enabled, ratio 9.0
+
+            var active = engine.GetActiveRelationshipsForLeader("P176Leader");
+            Assert(active.Count == 0, string.Format(
+                "the follower copies NOTHING: its direct relationship is disabled, and belonging to an "
+                + "enabled group must not override that (got {0} active relationship(s){1})",
+                active.Count,
+                active.Count > 0 ? ", ratio " + active[0].QuantityRatio : ""));
+
+            // And on the exit path, where includeQuarantined: true widens the direct filter.
+            var activeExit = engine.GetActiveRelationshipsForLeader("P176Leader", true);
+            Assert(activeExit.Count == 0, "identically on the exit path");
+        }
+
+        private static void TestP1_76_TwoGroupsSharingAFollowerStillProduceOneCopy()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-76: two groups naming the same follower still produce ONE copy");
+
+            // The deduplication is a SAFETY property in its own right -- two orders for one
+            // leader fill doubles the follower's position. P1-76 makes the direct-vs-group
+            // case unreachable, so this is now the ONLY scenario in which the dedup line can
+            // fire, and therefore the only test that can pin it. Without this, removing the
+            // dedup entirely survived the whole suite.
+            var engine = new TradeCopierEngine();
+            engine.UpsertGroup(P176Group("P176GroupA", "P176Leader", "P176Follower"));
+            var b = P176Group("P176GroupB", "P176Leader", "P176Follower");
+            b.QuantityRatio = 4.0;
+            engine.UpsertGroup(b);
+
+            var active = engine.GetActiveRelationshipsForLeader("P176Leader");
+            Assert(active.Count == 1, string.Format(
+                "ONE copy, not two -- a second entry would double the follower's position on every "
+                + "leader fill (got {0})", active.Count));
+
+            // ⚠️ WHICH group wins here is _groups list order, and that is NOT pinned on
+            // purpose: it is arbitrary either way, and asserting it would freeze an accident
+            // as a rule -- the mistake P1-76 exists to correct. Two groups naming one follower
+            // is itself a configuration error; it is reported by DetectConfigConflicts only
+            // when a direct relationship is also involved, which is a known gap recorded in
+            // mutation/mutate_p1_76.py rather than papered over here.
         }
 
         // ── P1-75 ────────────────────────────────────────────────────────────────

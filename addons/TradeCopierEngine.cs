@@ -266,6 +266,111 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // ── P1-76: a follower belongs to a direct relationship OR a group, never both ──
+        //
+        // Operator decision, 2026-08-13, from the observation that it was "not clear what
+        // configuration applies and for what". It was not clear in the CODE either:
+        // GetActiveRelationshipsForLeader added directs, expanded groups, then deduplicated
+        // with .First(), so direct won purely because directs went into the list first.
+        // Nothing named that and no test pinned it -- reordering two statements would have
+        // flipped every group's ratio, sizing mode, conversion flag and position cap over
+        // every direct relationship, silently, with the suite still green.
+        //
+        // ⚠️ The asymmetry below is deliberate and load-bearing:
+        //
+        //   OPERATOR WRITES REFUSE.  ApplyRelationshipRequest, ApplyGroupRequest and
+        //   AddFollowerToGroup will not create an overlap. That is the whole point: one
+        //   place to look for what applies to a follower.
+        //
+        //   LoadFromDisk TOLERATES AND REPORTS.  A load that refused would silently drop
+        //   config the operator can plainly see in the file, which is exactly P?-64's and
+        //   P2-41's failure shape and worse than the overlap it prevents. So a hand-edited
+        //   file loads intact, logs CONFIG_OVERLAP_DETECTED per overlap, and exposes the
+        //   conflict through DetectConfigConflicts() for the API and the UI to render.
+        //
+        // Membership, not effect: a DISABLED group still reserves its followers. Enabling a
+        // group is one click, and that click must not be the thing that creates the overlap.
+
+        public class CopierConfigConflict
+        {
+            public string LeaderAccount { get; set; }
+            public string FollowerAccount { get; set; }
+            public string GroupName { get; set; }
+            public string Detail { get; set; }
+        }
+
+        /// <summary>
+        /// Every follower covered by BOTH a direct relationship and a group for the same
+        /// leader. Empty is the healthy state. Non-empty means a hand-edited config file:
+        /// the write paths cannot produce this.
+        /// </summary>
+        public List<CopierConfigConflict> DetectConfigConflicts()
+        {
+            var conflicts = new List<CopierConfigConflict>();
+            lock (_lock)
+            {
+                foreach (var grp in _groups)
+                {
+                    if (grp.FollowerAccounts == null || string.IsNullOrWhiteSpace(grp.LeaderAccountName)) continue;
+                    foreach (var follower in grp.FollowerAccounts)
+                    {
+                        if (string.IsNullOrWhiteSpace(follower)) continue;
+                        bool hasDirect = _relationships.Any(r =>
+                            r.LeaderAccountName.Equals(grp.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                            r.FollowerAccountName.Equals(follower, StringComparison.OrdinalIgnoreCase));
+                        if (!hasDirect) continue;
+
+                        conflicts.Add(new CopierConfigConflict
+                        {
+                            LeaderAccount = grp.LeaderAccountName,
+                            FollowerAccount = follower,
+                            GroupName = grp.GroupName,
+                            Detail = string.Format(
+                                "'{0}' is covered by BOTH a direct relationship and group '{1}' under leader '{2}'. "
+                                + "The DIRECT relationship applies and the group's settings are ignored for this "
+                                + "follower. Remove one of the two. Write paths refuse to create this; it can only "
+                                + "come from editing copier_config.json by hand.",
+                                follower, grp.GroupName, grp.LeaderAccountName),
+                        });
+                    }
+                }
+            }
+            return conflicts;
+        }
+
+        /// <summary>
+        /// Caller must NOT hold _lock. Returns the group that already reserves this
+        /// follower, or null when the pairing is free.
+        /// </summary>
+        private CopierGroup GroupReserving(string leaderAccount, string followerAccount)
+        {
+            if (string.IsNullOrWhiteSpace(leaderAccount) || string.IsNullOrWhiteSpace(followerAccount)) return null;
+            lock (_lock)
+            {
+                return _groups.FirstOrDefault(g =>
+                    !string.IsNullOrWhiteSpace(g.LeaderAccountName) &&
+                    g.LeaderAccountName.Equals(leaderAccount, StringComparison.OrdinalIgnoreCase) &&
+                    g.FollowerAccounts != null &&
+                    g.FollowerAccounts.Any(f => !string.IsNullOrWhiteSpace(f)
+                                                && f.Equals(followerAccount, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        /// <summary>
+        /// Caller must NOT hold _lock. True when a direct relationship already covers this
+        /// leader/follower pairing.
+        /// </summary>
+        private bool DirectRelationshipExists(string leaderAccount, string followerAccount)
+        {
+            if (string.IsNullOrWhiteSpace(leaderAccount) || string.IsNullOrWhiteSpace(followerAccount)) return false;
+            lock (_lock)
+            {
+                return _relationships.Any(r =>
+                    r.LeaderAccountName.Equals(leaderAccount, StringComparison.OrdinalIgnoreCase) &&
+                    r.FollowerAccountName.Equals(followerAccount, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
         public void UpsertGroup(CopierGroup group, bool confirmLive = false)
         {
             if (group == null || string.IsNullOrWhiteSpace(group.GroupName)) return;
@@ -322,6 +427,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var grp = _groups.FirstOrDefault(g => g.GroupName.Equals(groupName, StringComparison.OrdinalIgnoreCase));
                 if (grp == null) return false;
 
+                // P1-76, the mirror of the check in ApplyRelationshipRequest. Read inline
+                // rather than through DirectRelationshipExists because _lock is already held
+                // here and it is re-entrant -- calling the helper would work, but a re-entrant
+                // acquisition that reads as an independent one is how P1-35 hid.
+                var clash = _relationships.FirstOrDefault(r =>
+                    !string.IsNullOrWhiteSpace(grp.LeaderAccountName) &&
+                    r.LeaderAccountName.Equals(grp.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                    r.FollowerAccountName.Equals(followerAccount, StringComparison.OrdinalIgnoreCase));
+                if (clash != null)
+                {
+                    CopierLog(followerAccount, "CONFIG_OVERLAP_REFUSED", string.Format(
+                        "refused to add '{0}' to group '{1}': it already has a direct relationship under leader "
+                        + "'{2}'. Remove that relationship first, or leave it out of the group. Note the direct "
+                        + "relationship is NOT modified by this refusal.",
+                        followerAccount, groupName, grp.LeaderAccountName));
+                    return false;
+                }
+
                 if (grp.FollowerAccounts == null) grp.FollowerAccounts = new List<string>();
                 if (!grp.FollowerAccounts.Any(f => f.Equals(followerAccount, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -370,20 +493,39 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     foreach (var rel in group.ToRelationships())
                     {
-                        var directRel = _relationships.FirstOrDefault(r => 
+                        var directRel = _relationships.FirstOrDefault(r =>
                             r.LeaderAccountName.Equals(leaderAccount, StringComparison.OrdinalIgnoreCase) &&
                             r.FollowerAccountName.Equals(rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
-                        
-                        if (!includeQuarantined && directRel != null && directRel.IsQuarantined)
+
+                        // P1-76: THE DIRECT RELATIONSHIP WINS. Stated here rather than left to
+                        // emerge from the order of the two AddRange blocks plus .First() below,
+                        // which is how it worked until 2026-08-13 -- reordering two statements
+                        // would have flipped every group's ratio, sizing mode, conversion flag
+                        // and position cap over every direct relationship, silently, with the
+                        // whole suite green. The write paths now refuse to create this overlap
+                        // at all; this branch only covers a hand-edited config file, which
+                        // LoadFromDisk deliberately tolerates and reports.
+                        //
+                        // A direct relationship that is DISABLED or QUARANTINED still wins and
+                        // still suppresses the group entry. Both of those states mean "this
+                        // follower does not copy right now"; a group silently resuming copying
+                        // for it would be the opposite of what the operator asked for. This
+                        // REPLACES a narrower guard that skipped only the quarantined case --
+                        // that guard is now subsumed, not lost, and the quarantine behaviour is
+                        // still pinned by the P1-22 quarantine test.
+                        if (directRel != null)
                         {
-                            continue; // Skip if direct relationship for this follower is quarantined
+                            continue;
                         }
 
                         result.Add(rel);
                     }
                 }
 
-                // Deduplicate by FollowerAccountName so an account doesn't receive duplicate orders
+                // Deduplicate by FollowerAccountName so an account doesn't receive duplicate
+                // orders. This is a SAFETY property and stays even though P1-76 makes the
+                // direct-vs-group case unreachable: it still catches the SAME follower listed
+                // in two different groups, whose resolution is otherwise _groups list order.
                 result = result
                     .GroupBy(r => r.FollowerAccountName, StringComparer.OrdinalIgnoreCase)
                     .Select(g => g.First())
@@ -776,6 +918,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                     }
                 }
+
+                // P1-76. A load TOLERATES an overlap and REPORTS it; it must never resolve one
+                // by dropping config, because operator config vanishing without an error is
+                // exactly P?-64's and P2-41's failure shape and is worse than the overlap.
+                // Reported OUTSIDE the lock: CopierLog reaches RiskGuardAddOn.LogFromComponent,
+                // and holding _lock across another component's logging is the lock-scope rule
+                // this project has paid for repeatedly (P1-10, P1-43).
+                foreach (var conflict in DetectConfigConflicts())
+                {
+                    CopierLog(conflict.FollowerAccount, "CONFIG_OVERLAP_DETECTED", conflict.Detail);
+                }
             }
             catch (Exception ex)
             {
@@ -1063,6 +1216,34 @@ namespace NinjaTrader.NinjaScript.AddOns
             grp.CustomSymbolMappings = EnsureOrdinalIgnoreCase(grp.CustomSymbolMappings);
 
             ApplyArmingGate(grp.ArmedForLive, armingWasRequested, confirmLive, v => grp.ArmedForLive = v);
+
+            // P1-76. Checked HERE rather than at the top, because the merge above is what
+            // decides the group's final leader and follower list -- a partial update that
+            // does not mention followerAccounts inherits the stored list, and that list is
+            // what has to be checked. `grp` is a CLONE, so returning now leaves the stored
+            // group untouched.
+            //
+            // ALL-OR-NOTHING on purpose: if one named follower clashes, the whole request is
+            // refused. Creating the group minus that account would silently drop something
+            // the operator explicitly named, which is the same "config must not lie" defect
+            // as P1-23 and the dead autoConversion argument (P1-74).
+            if (grp.FollowerAccounts != null && !string.IsNullOrWhiteSpace(grp.LeaderAccountName))
+            {
+                var clashes = grp.FollowerAccounts
+                    .Where(f => !string.IsNullOrWhiteSpace(f) && DirectRelationshipExists(grp.LeaderAccountName, f))
+                    .ToList();
+                if (clashes.Count > 0)
+                {
+                    CopierLog(grp.LeaderAccountName, "CONFIG_OVERLAP_REFUSED", string.Format(
+                        "refused group '{0}' under leader '{1}': {2} of its followers already have a direct "
+                        + "relationship ({3}). The ENTIRE request was refused -- creating the group without them "
+                        + "would silently drop accounts you named. Remove those relationships, or leave those "
+                        + "accounts out of the group.",
+                        grp.GroupName, grp.LeaderAccountName, clashes.Count, string.Join(", ", clashes)));
+                    return null;
+                }
+            }
+
             UpsertGroup(grp, true);
             return grp;
         }
@@ -1072,6 +1253,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (req == null) return null;
             string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName") ?? "Sim101";
             string follower = ReqStr(req, "followerAccount") ?? ReqStr(req, "FollowerAccountName") ?? "SimCopy2";
+
+            // P1-76. Refuse before touching anything: a follower already reserved by a group
+            // cannot also have a direct relationship. Returning null rather than throwing
+            // keeps this consistent with the method's existing "null means no" contract, and
+            // the caller reports it -- but the REASON has to be logged here, because the
+            // caller does not know which group is responsible.
+            var reserving = GroupReserving(leader, follower);
+            if (reserving != null)
+            {
+                CopierLog(follower, "CONFIG_OVERLAP_REFUSED", string.Format(
+                    "refused to create a direct relationship for '{0}' under leader '{1}': it is already a member "
+                    + "of group '{2}'. A follower belongs to a direct relationship OR a group, never both, so that "
+                    + "there is exactly one place to look for what applies to it. Remove it from the group first, "
+                    + "or change the group instead.",
+                    follower, leader, reserving.GroupName));
+                return null;
+            }
 
             CopierRelationship rel;
             lock (_lock)

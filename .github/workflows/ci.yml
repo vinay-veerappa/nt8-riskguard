@@ -76,6 +76,12 @@ jobs:
       - name: Mutation battery P0-67
         run: python mutation/mutate_p0_67.py
 
+      # Session 22 (P1-76). Three of its fourteen mutants SURVIVED on the first run,
+      # including the one that reinstates the pre-P1-76 emergent tie-break -- the
+      # precedence test was decorative because direct-wins was over-determined.
+      - name: Mutation battery P1-76
+        run: python mutation/mutate_p1_76.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

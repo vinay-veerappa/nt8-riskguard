@@ -41,9 +41,14 @@ MUTANTS = [
      "            if (armed && armingWasRequested && !confirmLive)\n                set(false);",
      "            if (false)\n                set(false);"),
 
+    # WARNING This anchor was WIDER until 2026-08-13: it spanned ApplyArmingGate and
+    # UpsertGroup as consecutive lines. P1-76 inserted its overlap check between them, the
+    # anchor stopped matching, and the battery reported "(ANCHOR)" -- which it scores as a
+    # SURVIVOR. That default is why the weakening was caught: an unrelated edit can silently
+    # disarm another battery's mutant, and only refusing to score an unapplied mutant sees it.
     ("Upsert re-applies its own gate, undoing the preserved armed state",
-     "            ApplyArmingGate(grp.ArmedForLive, armingWasRequested, confirmLive, v => grp.ArmedForLive = v);\n            UpsertGroup(grp, true);",
-     "            ApplyArmingGate(grp.ArmedForLive, armingWasRequested, confirmLive, v => grp.ArmedForLive = v);\n            UpsertGroup(grp, confirmLive);"),
+     "            UpsertGroup(grp, true);",
+     "            UpsertGroup(grp, confirmLive);"),
 
     ("`followers` spelling dropped",
      "            if (normalized[\"FollowerAccounts\"] == null && req[\"followers\"] is JArray followers)\n                normalized[\"FollowerAccounts\"] = followers;",
