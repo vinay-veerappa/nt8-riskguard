@@ -1520,12 +1520,26 @@ namespace NinjaTrader.NinjaScript.AddOns
         // returns nothing, so the failure line matches. A test that throws instead of
         // failing produces no [FAIL] line and silently removes itself from the gate.
 
-        private static CopierSnapshotRow Ui1Row(string follower)
+        /// <summary>
+        /// Selects ONE row DELIBERATELY. The snapshot's grain is per relationship PER
+        /// INSTRUMENT ROOT, so a follower holding two instruments produces two rows and
+        /// `FirstOrDefault` on the account name alone picks whichever happens to be
+        /// first. That is how the original eighteen passed against code that counted an
+        /// unrelated ES position as the NQ mirror: the assertions were fine, the
+        /// SELECTION was accidental.
+        /// </summary>
+        private static CopierSnapshotRow Ui1Row(string follower, string root = "NQ")
         {
             var snap = TradeCopierEngine.Instance.GetSnapshot();
             if (snap == null || snap.Rows == null) return null;
-            return snap.Rows.FirstOrDefault(r => r != null
-                && string.Equals(r.FollowerAccountName, follower, StringComparison.OrdinalIgnoreCase));
+            var mine = snap.Rows.Where(r => r != null
+                && string.Equals(r.FollowerAccountName, follower, StringComparison.OrdinalIgnoreCase)).ToList();
+            var byRoot = mine.FirstOrDefault(r => r.InstrumentFullName != null
+                && r.InstrumentFullName.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+            if (byRoot != null) return byRoot;
+            // The placeholder row, emitted when neither side holds anything. It is the
+            // right answer for the flat/flat cases and for them only.
+            return mine.FirstOrDefault(r => r.InstrumentFullName == null);
         }
 
         private static Instrument Ui1Clean()
@@ -1762,7 +1776,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             var mnq = new Instrument("MNQ 03-26");
             var rel0 = SlipRelationship(0);
             SetupCopyPath("SimLeader", "SimFollower", rel0, 0, null, MarketPosition.Flat);
-            var row = Ui1Row("SimFollower");
+            var row = Ui1Row("SimFollower", "MNQ");
             Assert(row != null && row.Latency != null && row.Slippage != null
                    && row.Latency.Samples == 0 && row.Slippage.Samples == 0,
                 "snapshot reports latencySamples 0 and slippageSamples 0 before any fill is observed");
@@ -1776,7 +1790,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lead.Price = 18000.00;
             TradeCopierEngine.Instance.OnExecution(lead);
             FillFollowerCopy(follower, mnq, 18000.00, 143, "UI1-M-F");
-            row = Ui1Row("SimFollower");
+            row = Ui1Row("SimFollower", "MNQ");
             Assert(row != null && row.Latency != null && row.Latency.Samples == 1,
                 "snapshot reports latencySamples 1 after one latency is actually recorded");
 
@@ -1793,7 +1807,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lead2.Price = 18000.00;
             TradeCopierEngine.Instance.OnExecution(lead2);
             FillFollowerCopy(f2, mnq, 18001.00, 250, "UI1-R-F");
-            row = Ui1Row("SimFollower");
+            row = Ui1Row("SimFollower", "MNQ");
             Assert(row != null && row.Latency != null && row.Latency.Samples == 0,
                 "snapshot does not count a latency rejected by the sanity bound as a sample");
 
@@ -1860,10 +1874,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (var r in engine.GetRelationships().ToList())
                 engine.RemoveRelationship(r.LeaderAccountName, r.FollowerAccountName);
             Ui1Rel("Ui1bLeader", "Ui1bFoll2", 1.0);
-            row = Ui1Row("Ui1bFoll2");
-            Assert(row != null && row.Verdict != CopierConformance.Orphan,
-                string.Format("snapshot does not report ORPHAN for a follower position in an unrelated instrument (row={0} verdict={1})",
-                    row == null ? "NULL" : "ok", row == null ? "n/a" : row.Verdict.ToString()));
+            // ⚠️ This assertion was rewritten once the per-instrument grain was
+            // adopted, because its original premise was wrong. It demanded that an
+            // unrelated ES position NOT be reported as an orphan. Under per-instrument
+            // rows the ES position gets its OWN row, and reporting it as an orphan is
+            // correct AND useful: the follower is holding 5 ES the leader does not.
+            //
+            // What actually matters is ATTRIBUTION -- the orphan must be pinned to ES,
+            // and no NQ row may claim those 5 contracts. That is the property the
+            // original defect violated, and it is the one worth pinning.
+            var snap2 = TradeCopierEngine.Instance.GetSnapshot();
+            var esRow = snap2 == null || snap2.Rows == null ? null : snap2.Rows.FirstOrDefault(r =>
+                r != null && string.Equals(r.FollowerAccountName, "Ui1bFoll2", StringComparison.OrdinalIgnoreCase)
+                && r.InstrumentFullName != null
+                && r.InstrumentFullName.StartsWith("ES", StringComparison.OrdinalIgnoreCase));
+            var nqRow = Ui1Row("Ui1bFoll2", "NQ");
+            Assert(esRow != null && esRow.Verdict == CopierConformance.Orphan
+                   && esRow.ActualQuantity == 5 && nqRow == null,
+                string.Format("snapshot attributes an unrelated-instrument orphan to that instrument, not to the mirrored one (es={0} verdict={1} qty={2} nqRow={3})",
+                    esRow == null ? "NULL" : "ok",
+                    esRow == null ? "n/a" : esRow.Verdict.ToString(),
+                    esRow == null ? -1 : esRow.ActualQuantity,
+                    nqRow == null ? "none" : "PRESENT"));
         }
 
         private static void TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt()

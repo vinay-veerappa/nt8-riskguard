@@ -25,7 +25,10 @@
         "snapshot derives expected quantity from the engine's own sizing path rather than a second copy",
         "snapshot carries the clamped flag when the sizing function reports one",
         "snapshot treats a missing follower position as flat rather than as an error",
-        "snapshot leaves the engine unmutated and never reloads config from disk"
+        "snapshot leaves the engine unmutated and never reloads config from disk",
+        "snapshot attributes an unrelated-instrument orphan to that instrument, not to the mirrored one",
+        "snapshot does not count a follower position in an unrelated instrument as the mirror",
+        "snapshot reports SHADOW for a disarmed relationship that also diverges"
       ],
       "regions": [
         {

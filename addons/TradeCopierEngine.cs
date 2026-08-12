@@ -82,8 +82,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         Shadow = 2,      // IsEnabled true, ArmedForLive false: configured, will not act
         Diverged = 3,    // both non-flat, quantity or side disagrees
         Orphan = 4,      // leader FLAT, follower NOT. Ranks above Diverged, deliberately.
-        Quarantined = 5, // not copying at all, so agreement is meaningless
-        NotApplicable = 6 // instrument is not configured for this relationship
+        Quarantined = 5  // not copying at all, so agreement is meaningless
     }
 
     /// <summary>
@@ -100,6 +99,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool Measured { get { return Samples > 0; } }
     }
 
+    /// <summary>
+    /// ONE ROW PER RELATIONSHIP **PER INSTRUMENT ROOT**, not one row per
+    /// relationship. Conformance is per instrument: a follower can mirror NQ
+    /// correctly while holding an unmanaged ES position, and a single aggregate
+    /// row cannot say which one diverged. `InstrumentFullName` is null only for
+    /// the placeholder row emitted when neither side holds anything.
+    /// </summary>
     public class CopierSnapshotRow
     {
         public string RelationshipId { get; set; }
@@ -598,7 +604,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         Position leaderPos = FindPositionByRoot(leaderPositions, kvp.Key);
                         Position followerPos = FindPositionByRoot(followerPositions, kvp.Value);
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, kvp.Key, kvp.Value, false));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, kvp.Key, kvp.Value));
                     }
 
                     foreach (var root in followerRoots)
@@ -607,7 +613,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             continue;
                         Position leaderPos = FindPositionByRoot(leaderPositions, root);
                         Position followerPos = FindPositionByRoot(followerPositions, root);
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root, false));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root));
                     }
 
                     foreach (var lp in leaderPositions)
@@ -619,7 +625,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             continue;
                         if (followerRoots.Contains(root))
                             continue;
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root, true));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root));
                     }
                 }
                 else
@@ -628,7 +634,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         Position leaderPos = FindPositionByRoot(leaderPositions, root);
                         Position followerPos = FindPositionByRoot(followerPositions, root);
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root, false));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root));
                     }
 
                     foreach (var lp in leaderPositions)
@@ -638,17 +644,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                             continue;
                         if (followerRoots.Contains(root))
                             continue;
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root, true));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root));
                     }
 
                     if (rows.Count == 0)
-                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, null, null, null, null, false));
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, null, null, null, null));
                 }
 
                 return rows;
             }
 
-            CopierSnapshotRow BuildSnapshotRow(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Position leaderPos, Position followerPos, string leaderRoot, string followerRoot, bool notApplicable)
+            CopierSnapshotRow BuildSnapshotRow(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Position leaderPos, Position followerPos, string leaderRoot, string followerRoot)
             {
                 Instrument instrument = leaderPos != null ? leaderPos.Instrument : (followerPos != null ? followerPos.Instrument : null);
                 string rawSymbol = instrument != null ? instrument.FullName : leaderRoot;
@@ -659,34 +665,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 MarketPosition actualSide = followerPos != null ? followerPos.MarketPosition : MarketPosition.Flat;
                 int actualQty = followerPos != null ? Math.Abs(followerPos.Quantity) : 0;
 
-                if (notApplicable)
-                {
-                    return new CopierSnapshotRow
-                    {
-                        RelationshipId = rel.Id,
-                        LeaderAccountName = rel.LeaderAccountName,
-                        FollowerAccountName = rel.FollowerAccountName,
-                        GroupName = groupName,
-                        InstrumentFullName = instrument != null ? instrument.FullName : null,
-                        SizingMode = rel.SizingMode,
-                        EffectiveRatio = 0.0,
-                        IsEnabled = rel.IsEnabled,
-                        ArmedForLive = rel.ArmedForLive,
-                        IsQuarantined = rel.IsQuarantined,
-                        QuarantineReason = rel.QuarantineReason,
-                        StealthMode = rel.StealthMode,
-                        LeaderSide = leaderSide,
-                        LeaderQuantity = leaderQty,
-                        ExpectedSide = MarketPosition.Flat,
-                        ExpectedQuantity = 0,
-                        ExpectedIsClamped = false,
-                        ActualSide = actualSide,
-                        ActualQuantity = actualQty,
-                        Latency = new CopierMetric { Value = latencyValue, Samples = latencySamples },
-                        Slippage = new CopierMetric { Value = slippageValue, Samples = slippageSamples },
-                        Verdict = CopierConformance.NotApplicable
-                    };
-                }
 
                 bool expectedIsClamped;
                 int expectedQty;
