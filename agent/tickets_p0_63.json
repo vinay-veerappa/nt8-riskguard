@@ -11,7 +11,8 @@
       "expect_green": [
         "The broker is actually holding the trailed stop",
         "The second trail step is holding at the broker with no round trip",
-        "The broker holds the moved target"
+        "The broker holds the moved target",
+        "The broker is holding the SIXTH trail step"
       ],
       "regions": [
         {

@@ -1,1 +1,6 @@
 {"ts": "2026-08-11T23:34:36", "ticket": "T1", "verdict": "ESCALATED", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "review"}
+{"ts": "2026-08-12T04:30:44", "ticket": "T1", "verdict": "IMPLEMENTER_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "implement"}
+{"ts": "2026-08-12T04:34:13", "ticket": "T1", "verdict": "IMPLEMENTER_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "implement"}
+{"ts": "2026-08-12T04:35:36", "ticket": "T1", "verdict": "IMPLEMENTER_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "implement"}
+{"ts": "2026-08-12T04:47:19", "ticket": "T1", "verdict": "IMPLEMENTER_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "implement"}
+{"ts": "2026-08-12T05:02:44", "ticket": "T1", "verdict": "PANEL_UNREACHABLE", "applied": false, "rounds": 2, "cost_usd": 0.0, "gate": "review"}

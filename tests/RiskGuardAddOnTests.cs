@@ -915,6 +915,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange();
             TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace();
             TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored();
+            TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmissionBudget();
 
             // CM1: copier ratio converter, slice 1 -- RED until the fix lands
             TestCM1_MatrixSizesFromTheTableWithoutTheSymbolMultiplier();
@@ -11506,6 +11507,84 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "got {0}.", follower.ProviderStopPrice(original)));
             Assert(RiskGuardAddOn.OccupiesSlot(original.OrderState),
                 "And it is still the live leg -- it was never cancelled.");
+        }
+
+        /// <summary>
+        /// A long trail on a provider that ignores every Change() must keep working past the
+        /// re-submission budget. `MaxBracketStopAttempts` is 3, and once an account is known to
+        /// ignore changes EVERY trail step spends an attempt on cancel-then-create -- so if the
+        /// budget were the binding constraint, the follower's stop would freeze a few steps into a
+        /// trend and stay frozen for the life of the trade. That is P0-63's own symptom returning
+        /// by a different route, and it would not be visible in a two-step test.
+        ///
+        /// It is NOT the binding constraint, because a leader that genuinely moves its stop changes
+        /// the mirrored offset and `OnLeaderOrderUpdate` zeroes the budget on exactly that
+        /// condition. But nothing pinned that, and the reasoning lives in a different method from
+        /// the bound it protects -- so a reviewer reading the fix in isolation is right to call it
+        /// out. This test is what makes the answer executable instead of argued: raised as a
+        /// required item by the review panel on 2026-08-13, and kept for that reason.
+        /// </summary>
+        private static void TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmissionBudget()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: a long trail on an ignoring provider is not blocked by the attempt budget (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063L");
+
+            var leaderStop = LeaderStop(mnq, OrderAction.Sell, 1, 17990.00);
+            leader.TriggerOrderUpdate(leaderStop);
+
+            follower.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // Six steps, well past MaxBracketStopAttempts. Each one moves the leader's stop a
+                // point closer, so each is a genuinely new instruction.
+                for (int i = 1; i <= 6; i++)
+                {
+                    var live = follower.Orders
+                        .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                        .ToList();
+                    if (live.Count != 1)
+                    {
+                        Assert(false, string.Format(
+                            "Trail step {0}: expected exactly one live stop before the step, got {1}.",
+                            i, live.Count));
+                        return;
+                    }
+
+                    leaderStop.StopPrice = 17990.00 + i;
+                    leader.TriggerOrderUpdate(leaderStop);
+                    // Settle whichever leg is live, so the first step's no-op is detected the way
+                    // it is live. Later steps bypass Change() and need no settle, but settling an
+                    // order that was never changed is a no-op here, so this stays uniform.
+                    foreach (var o in follower.Orders
+                                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                                .ToList())
+                        follower.SettleChange(o);
+                }
+            }
+            finally { follower.SimulateChangeIsSilentNoOp = false; }
+
+            var final = follower.Orders
+                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(final.Count == 1,
+                string.Format("Exactly one live stop after six trail steps (got {0}).", final.Count));
+
+            // Leader stop 17996 is 4 points below its 18000 entry, so the follower's is 4 below
+            // its own 18002 fill. Asked of the PROVIDER, not of the order object.
+            double held = follower.ProviderStopPrice(final[0]);
+            Assert(Math.Abs(held - 17998.00) < 1e-9,
+                string.Format(
+                    "The broker is holding the SIXTH trail step: expected 17998.00, got {0}. A value "
+                    + "from an earlier step means the re-submission budget froze the trail mid-trend, "
+                    + "which is P0-63's symptom returning by another route.", held));
         }
 
         /// <summary>
