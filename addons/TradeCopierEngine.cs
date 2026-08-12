@@ -3007,44 +3007,93 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         private void ObserveFollowerFill(Execution exec)
         {
-            if (exec == null || exec.Order == null) return;
+            if (exec == null || exec.Order == null)
+            {
+                // `exec` itself may be the null one, hence the guarded read.
+                CopierLog(exec != null && exec.Account != null ? exec.Account.Name : null,
+                    "FILL_ORDER_MISSING", "Execution or execution.Order was null; cannot observe follower fill.");
+                return;
+            }
 
-            PendingCopy pending;
-            CopierRelationship rel;
+            PendingCopy pending = null;
+            CopierRelationship rel = null;
+            bool pendingFound = false;
             lock (_lock)
             {
                 // Matched on the Order object, never on OrderId -- see OrderReferenceComparer.
-                if (!_pendingCopies.TryGetValue(exec.Order, out pending)) return;
-                _pendingCopies.Remove(exec.Order);
+                pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
+                if (pendingFound)
+                    _pendingCopies.Remove(exec.Order);
 
                 // Resolve the canonical stored relationship. A group-derived relationship is a
                 // fresh object from ToRelationships(), so writing the metric onto the instance
                 // OnExecution was handed would update a copy that is discarded.
-                rel = _relationships.FirstOrDefault(r => r.Id == pending.RelationshipId)
-                      ?? _relationships.FirstOrDefault(r =>
-                            r.LeaderAccountName.Equals(pending.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
-                            r.FollowerAccountName.Equals(pending.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                if (pendingFound)
+                {
+                    rel = _relationships.FirstOrDefault(r => r.Id == pending.RelationshipId)
+                          ?? _relationships.FirstOrDefault(r =>
+                                r.LeaderAccountName.Equals(pending.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                                r.FollowerAccountName.Equals(pending.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                }
             }
-            if (rel == null) return;
+
+            if (!pendingFound)
+            {
+                CopierLog(exec.Account != null ? exec.Account.Name : null, "FILL_NOT_MEASURED",
+                    string.Format("Pending-copy lookup missed for order '{0}' (OrderId {1}). OrderId is display-only and must never be used as the map key.",
+                        exec.Order.Name, exec.Order.OrderId));
+                return;
+            }
+
+            if (rel == null)
+            {
+                CopierLog(pending.FollowerAccountName, "FILL_RELATIONSHIP_MISSING",
+                    string.Format("Could not resolve canonical relationship for pending copy on follower account '{0}' (relationship id {1}).",
+                        pending.FollowerAccountName, pending.RelationshipId));
+                return;
+            }
 
             // Latency. Both timestamps come from NT8 executions, so they are subtracted raw --
             // exec.Time's DateTimeKind is not dependable and converting one side only would
             // inject the UTC offset as latency. When the leader timestamp is absent (the field
             // is optional and some feeds leave it default) fall back to wall-clock since submit.
+            bool usedRawSubtraction = pending.LeaderExecTime != default(DateTime) && exec.Time != default(DateTime);
             double latencyMs;
-            if (pending.LeaderExecTime != default(DateTime) && exec.Time != default(DateTime))
+            if (usedRawSubtraction)
                 latencyMs = (exec.Time - pending.LeaderExecTime).TotalMilliseconds;
             else
                 latencyMs = (DateTime.UtcNow - pending.SubmittedUtc).TotalMilliseconds;
 
             // A negative or absurd figure means the clocks disagree, not that the copy was fast.
             // Recording it would make the UI lie in a new direction.
-            if (latencyMs >= 0 && latencyMs < 600000)
+            bool latencyAccepted = latencyMs >= 0 && latencyMs < 600000;
+            if (latencyAccepted)
                 rel.LatencyMs = latencyMs;
+            else if (latencyMs < 0 || latencyMs >= 600000)
+            {
+                CopierLog(rel.FollowerAccountName, "LATENCY_REJECTED",
+                    string.Format("Latency {0:F1} ms rejected by sanity bound. UsedRawSubtraction={1}, LeaderExecTime={2:O}, FollowerExecTime={3:O}, SubmittedUtc={4:O}.",
+                        latencyMs, usedRawSubtraction, pending.LeaderExecTime, exec.Time, pending.SubmittedUtc));
+            }
 
             if (!pending.PriceComparable || pending.FollowerTickSize <= 0
                 || pending.LeaderFillPrice <= 0 || exec.Price <= 0)
+            {
+                string failing = string.Empty;
+                if (!pending.PriceComparable)
+                    failing = "PriceComparable=false";
+                if (pending.FollowerTickSize <= 0)
+                    failing = failing.Length > 0 ? failing + ", FollowerTickSize<=0" : "FollowerTickSize<=0";
+                if (pending.LeaderFillPrice <= 0)
+                    failing = failing.Length > 0 ? failing + ", LeaderFillPrice<=0" : "LeaderFillPrice<=0";
+                if (exec.Price <= 0)
+                    failing = failing.Length > 0 ? failing + ", FollowerFillPrice<=0" : "FollowerFillPrice<=0";
+
+                CopierLog(rel.FollowerAccountName, "SLIPPAGE_NOT_COMPARABLE",
+                    string.Format("Slippage skipped for relationship {0} on follower '{1}' because prices are not comparable. Failing conditions: {2}. Values: PriceComparable={3}, FollowerTickSize={4}, LeaderFillPrice={5}, FollowerFillPrice={6}.",
+                        rel.Id, pending.FollowerAccountName, failing, pending.PriceComparable, pending.FollowerTickSize, pending.LeaderFillPrice, exec.Price));
                 return;
+            }
 
             double rawTicks = (exec.Price - pending.LeaderFillPrice) / pending.FollowerTickSize;
             // Positive always means WORSE for the follower: a buy filled above the leader, or a
@@ -3060,6 +3109,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 _slippageSampleCounts[rel.Id] = n;
                 rel.AvgSlippageTicks = rel.AvgSlippageTicks + (ticks - rel.AvgSlippageTicks) / n;
             }
+
+            // Report `latencyMs`, the figure this fill actually produced -- NOT `rel.LatencyMs`,
+            // which is the stored reading and is stale (or 0 on a first fill) precisely when the
+            // measurement was rejected. Printing the stored value here would put a number in the
+            // log that nothing computed for this fill, in the line that claims the fill was
+            // measured: P1-22's own defect, reproduced inside P1-22's instrumentation. When the
+            // bound rejected the reading, this line and LATENCY_REJECTED now agree on the figure.
+            string latencyNote = latencyAccepted ? string.Empty : " (REJECTED by sanity bound, not recorded)";
+            CopierLog(rel.FollowerAccountName, "FILL_MEASURED",
+                string.Format("Fill measured for relationship {0}: latency={1:0.##} ms{2}, slippage={3:0.##} ticks.",
+                    rel.Id, latencyMs, latencyNote, ticks));
 
             if (rel.MaxSlippageTicks <= 0 || ticks <= rel.MaxSlippageTicks) return;
 

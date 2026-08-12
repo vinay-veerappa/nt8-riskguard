@@ -1702,6 +1702,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(LoggedEventContaining(log, "LATENCY_REJECTED"),
                 "But the rejection is now visible, and names the figure it refused. A silent "
                 + "rejection here is indistinguishable from a copy that was never measured.");
+
+            // And the summary line must not contradict it. The first implementation printed
+            // `rel.LatencyMs` -- the STORED reading, which is 0 on a first fill and stale
+            // afterwards, and is stored only when the reading was ACCEPTED. So the one line
+            // claiming the fill was measured carried a number nothing had measured for it, which
+            // is P1-22's own defect reproduced inside P1-22's instrumentation. Found by review,
+            // 2026-08-13, and pinned here so it cannot come back.
+            var measured = log.Where(l => l.StartsWith("FILL_MEASURED|", StringComparison.Ordinal)).ToList();
+            Assert(measured.Count == 1,
+                string.Format("Exactly one FILL_MEASURED line for this fill (got {0}).", measured.Count));
+            Assert(measured.Count == 1 && measured[0].IndexOf("REJECTED", StringComparison.Ordinal) >= 0,
+                "The summary line says the latency was rejected rather than reporting it as a reading.");
+            Assert(measured.Count == 1 && measured[0].IndexOf("latency=0 ", StringComparison.Ordinal) < 0,
+                string.Format(
+                    "And it does NOT report the stored 0 as though it were this fill's latency. Got: {0}",
+                    measured.Count == 1 ? measured[0] : "<no line>"));
         }
 
         /// <summary>
