@@ -39,15 +39,20 @@ than no runner.
 `RiskManagerAddOn.cs` is excluded from the test build (superseded by `RiskGuardAddOn.cs`;
 compiling both duplicates types). It still deploys.
 
-Two structural checks guard the split. Both are mutation-tested, so they can
-actually fail:
+Three structural checks. All three have been watched fail, so they can actually fail:
 
 ```bash
-python tools/check_direction.py         # this repo must never name a bridge type
-python tools/check_no_stray_copies.py   # exactly one copy of each addon source
+python tools/check_direction.py              # this repo must never name a bridge type
+python tools/check_no_stray_copies.py        # exactly one copy of each addon source
+python tools/check_ci_runs_every_battery.py  # no battery that CI does not run
 ```
 
-**CI runs all of the above on every push and pull request**, on `windows-latest`, from
+The third exists because a battery was left out of CI twice, each time leaving CI weaker
+than the local gate while looking complete. It also refuses an empty `mutation/`, since a
+check that iterates a collection passes trivially when the collection is empty.
+
+**CI runs all of the above on every push and pull request** — all five batteries, enforced —
+on `windows-latest`, from
 [.github/workflows/ci.yml](.github/workflows/ci.yml) -- active since 2026-08-13. Deploy
 parity is deliberately *not* in CI: it compares against a NinjaTrader install that exists
 only on the trading machine, so on a hosted runner it would pass vacuously, and a green

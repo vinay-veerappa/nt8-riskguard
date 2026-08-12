@@ -185,6 +185,30 @@ answer. On naked-position risk, a model does not get the last word.""",
         "flatten, then cancel reducing orders only for instruments confirmed flat. Cancelling "
         "everything up front and then failing to flatten is the naked-position bug (P1-11).",
         "No new GuardFsmState enum values -- existing tests assert on them.",
+        # --- Session 20, 2026-08-13: P0-67, P0-68, P1-69, P1-70, P1-71 ---
+        "A cache of broker state is written ONLY from the broker. DynamicAtmManager's "
+        "bracket.CurrentStopPrice is assigned in exactly one place -- ReconcileStopFromBroker, from "
+        "the live Order -- and NEVER from the value passed to Change(). Do not remove the reconcile "
+        "on the grounds that the request usually succeeds: on provider: Simulator it never does "
+        "(P0-67, fixed 2026-08-13).",
+        "ONE outstanding Change() per order, at EVERY call site. A second change while one is in "
+        "flight is dropped AND reverts the order, so it ends at neither request's values (P0-61, "
+        "established live). The copier holds this with bracket.StopInFlight; the ATM manager holds "
+        "it with bracket.RequestedStopPrice. In ScaledRunner the breakeven and trailing moves can "
+        "both fire in one sweep, which is how this was found.",
+        "A log line must not claim an outcome it has not observed: ..._REQUESTED before the broker "
+        "call, ..._CONFIRMED only on settle, printing the SETTLED values (P1-70). And a message must "
+        "not NAME another event type -- it poisons grep on a file whose purpose is post-hoc "
+        "grepping, and it broke an absence assertion in the suite.",
+        "Every relationship named in COPY_BEGIN emits exactly ONE terminal outcome event, matched by "
+        "NAMING CONVENTION (COPY_SUBMITTED / COPY_SKIPPED_* / COPY_BLOCKED_* / COPY_FAILED_*), so a "
+        "skip path added later is counted automatically. Corollary, and it is load-bearing: a "
+        "NON-terminal event must NOT take a terminal prefix, or one relationship reports two "
+        "outcomes while another drops in silence and the totals still look right (P1-71).",
+        "A read endpoint must not mutate. /api/copier/config's get action must NEVER call "
+        "LoadFromDisk: it replaces the in-memory relationships that ObserveFollowerFill writes its "
+        "measurements onto, so reading the config destroyed the thing being read. The metrics are "
+        "session-scoped -- a recompile resets them and a zero is not a measurement (P1-69).",
     ),
 )
 

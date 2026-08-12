@@ -1,10 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (session 18 — **a documentation pass; no code changed**. This header,
-§0, §4a, §5, §7 and §8 were re-derived from the repo and from the live box rather than copied
-forward. Everything they used to claim that was false is listed in **§5.10**, because the *pattern*
-of how this file went stale is more useful than the corrections. **`P0-63` and `P?-66` are fixed,
-deployed and compiling clean.** The next item is **`P0-67`** — §5.6.)
+**Last updated**: 2026-08-13 (session 20 — **the whole `P0` band is now closed**. `P0-63` and `P?-66`
+were validated by one live 1-lot MNQ round trip (**§5.13**), that trade opened four defects, and all
+four plus `P0-67` and a sixth found by a test are fixed and deployed as core **`v1.1.0`** (**§5.14**).
+Suite **1003/0**, five mutation batteries, 0 survivors. The next code work is **`P?-64` + `P?-65`**,
+the copier UI — §5.6.
+
+Session 18 was a documentation pass that re-derived this header, §0, §4a, §5, §7 and §8 from the repo
+and the live box rather than copying them forward; everything they used to claim that was false is in
+**§5.10**, because the *pattern* of how this file went stale is worth more than the corrections.)
 
 > ### Read in this order
 >
@@ -14,7 +18,7 @@ deployed and compiling clean.** The next item is **`P0-67`** — §5.6.)
 > | 2 | **[§5 — THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13)** | the authoritative answer to *what is left?* Start at **§5.6**, the order |
 > | 3 | **§7 — Decisions already made** | do not re-litigate; the review panel will try every round |
 > | 4 | **§8 — Known traps** | each one cost a session to find |
-> | 5 | session records, newest first: **§5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+> | 5 | session records, newest first: **§5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
 >
 > ⚠️ **This file accretes, and a later section supersedes an earlier one.** Where two disagree, the
 > higher-numbered §5.x wins. **§4a is now HISTORICAL** — its "START HERE" pointed at `P0-62`, which
@@ -32,7 +36,7 @@ deployed and compiling clean.** The next item is **`P0-67`** — §5.6.)
 >
 > The split's one behavioural consequence: `TestP2_38`'s three assertions against
 > `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge`, which is why the suite went 929 → 926
-> with nothing broken. It is **953** now.
+> with nothing broken. It is **1003** now.
 
 ---
 
@@ -45,34 +49,42 @@ Every row was checked, not carried forward. The command that checks it is in the
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **1003 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **71 IDs — 57 closed, 14 open.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13) | — |
-| **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite | §5.13 |
-| **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
-| **Deployed** | **`v1.1.0` code is live in NT8** (was `v1.0.2`; §5.14).** 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
+| **Defects** | **71 IDs — 57 closed, 14 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14) | — |
+| **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite (§5.13). Then **`P0-68`, `P1-69` and `P1-71`** on the deployed `v1.1.0` (§5.14) | §5.13, §5.14 |
+| **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` **`v1.1.0`** (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
+| **Deployed** | **`v1.1.0` code is live in NT8** (was `v1.0.2`; §5.14). 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
 | **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
 | **Mutation** | **5 batteries, 50 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py`, `mutate_p1_71.py`, `mutate_p0_67.py` |
 | **CI** | ✅ **Active in both repos** since 2026-08-13, `windows-latest`, every push and PR. Runs all of the above except deploy parity, in 4m39s. **Watched fail on purpose**, not just pass | `gh run list -R vinay-veerappa/nt8-riskguard -L 3` |
 
-> ⚠️ **There are THREE disagreeing version identifiers on this box, and none of them is wrong by
-> accident.** Git says **`v1.0.2`** (the real one — it is what `sync_nt8.py` deploys). `docs/VERSION.md`
-> said **`v1.7.0-ui-audit`** until this pass, from an unrelated pre-hardening scheme. The addon's own
-> constant reports **`1.1.0`** over `/api/riskguard/version`. **Trust the git tag and the file
-> hashes; never a version string.** `VERSION.md` now says so at the top.
+> ⚠️ **The git tag and the addon's own constant now BOTH say `1.1.0`, and that is a coincidence, not
+> a guarantee.** They agreed once before — and for a day they did not: the deployed, correct build
+> reported itself as `1.1.0` while the repo was tagged `v1.0.2` and `docs/VERSION.md` led with
+> `v1.7.0-ui-audit` from an unrelated pre-hardening scheme. The constant
+> (`addons/RiskGuardAddOn.cs:35`) is hand-maintained and drifts; `VERSION.md` now says which one wins
+> at the top. **Trust the git tag and the file hashes; never a version string.** `sync_nt8.py --verify`
+> compares content — a version string compares nothing.
 
 ### What is deployed but NOT validated live
 
 This distinction is the one this document has most often blurred, so it gets its own block.
 
 * **`P0-53`, `P1-54`, `P0-55`, `P1-56`** — unit + compile only.
+* **`P0-67`** — deployed in `v1.1.0`, unit + mutation only. **Nothing has driven `DynamicAtmManager`'s
+  monitor live**; the bridge drives that path and tests none of it (`P2-27`). The sixth defect fixed
+  with it (two `Change()` calls on one stop in a single sweep) is in the same position.
+* **`P1-70`** — the settle-path confirmation is pinned by test, but no live trade has produced a
+  `BRACKET_MODIFY_CONFIRMED` since the deploy.
 * **`T5`'s fail-closed gate** — needs an acting mode; `IsGuardProtecting` requires `mode == "live"`.
 * **The firm-mirror rules** — loaded but unmapped, so none can fire.
 
 **Validated live**: **`P0-63` and `P?-66` (§5.13, 2026-08-13 — the mirrored stop trails and both
-fills measured)**, `P0-9`'s mirrored **stop** (§4l) and **target** (§4s), `P0-50`'s orphan-stop
-release (§5.13), `P0-51`, `P1-52`, `P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler +
-`P0-61`'s fix (§4v), and the ratio converter's slices 2 and 3b (§4z).
+fills measured)**, **`P0-68`, `P1-69` and `P1-71` (§5.14, on the deployed `v1.1.0`)**, `P0-9`'s
+mirrored **stop** (§4l) and **target** (§4s), `P0-50`'s orphan-stop release (§5.13), `P0-51`,
+`P1-52`, `P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler + `P0-61`'s fix (§4v), and the
+ratio converter's slices 2 and 3b (§4z).
 
 > **The remaining `provider: Simulator` caveat is now a narrow one, not a blanket one.** `P0-63`'s
 > detection and its cancel-then-create fallback are proven on a live broker path — a *simulated* one,
@@ -153,7 +165,7 @@ and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verifie
 # the suite -- ALWAYS build first; --no-build after a failed build silently
 # reports the PREVIOUS assembly's result
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 953/0
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1003/0
 
 # deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
 python tools\sync_nt8.py --verify        # expect ALL IN SYNC (7 files)
@@ -163,12 +175,17 @@ python tools\sync_nt8.py
 # the structural checks (free, instant)
 python tools\check_direction.py          # no addon may name a bridge-owned type
 python tools\check_no_stray_copies.py    # no addon .cs outside addons/
+python tools\check_ci_runs_every_battery.py   # no battery CI does not run
 
-# the mutation batteries. All exit NON-ZERO on a survivor, and all three refuse
-# to run from a red baseline -- see §8, they were decorative until 2026-08-13.
+# the mutation batteries. All exit NON-ZERO on a survivor, all five refuse to run
+# from a red baseline -- see §8, they were decorative until 2026-08-13 -- and the
+# two newest also score a CRASH (no result line) as a kill, which the older three
+# do not, because a mutant that crashes the runner read as a SURVIVOR (§5.14).
 python mutation\mutate_cm3.py            # 14 killed   (copier matrix)
 python mutation\mutate_cm4.py            # 10 killed   (copier round-trip)
 python mutation\mutate_p0_63.py          #  7 killed   (ignored Change())
+python mutation\mutate_p1_71.py          #  9 killed   (copy-loop outcome logging)
+python mutation\mutate_p0_67.py          # 10 killed   (ATM stop cache + retry cap)
 
 # free: do all ticket regions still resolve? READ THE LINE RANGES -- a degenerate
 # one-line region also prints OK, and only `kind: line` regions should be one line.
@@ -210,12 +227,26 @@ exit quantity that would have **increased a follower position sitting opposite t
 - **`MAX_TRADES_BREACH` fires on entry on `Sim101`/`Sim-ORB`** (`MaxTradesPerSession` 8, both past
   it), and **`EDGE_WINDOW_BREACH`** fires on an ordinary overnight entry. Armed live, either one
   flattens the trade about a second after it fills — destroying the test rather than the defect
-  (§4p). In `shadow` they only log.
-- **A `Sim101` trade reaches THREE follower accounts.** `Sim101 → Sim-ORB → {SimCopyTest1,
-  SimCopy2}` is a live chain, because `Sim-ORB` is our follower *and* a third-party copier's
-  leader. That is `P1-57`, still open.
+  (§4p). In `shadow` they only log. ⚠️ **On 2026-08-13 the guard logged `MISSING_STOP_FLATTEN`
+  twice**: `shadow` is the only reason the validation survived to produce evidence.
+- **Re-measure the blast radius; do not trust the number below.** `Sim101 → Sim-ORB →
+  {SimCopyTest1, SimCopy2}` is a live chain in principle, because `Sim-ORB` is our follower *and* a
+  third-party copier's leader (`P1-57`, still open). **On 2026-08-13 only `Sim-ORB` acted**:
+  `SimCopyTest1` got nothing because the third-party copier was not running, and `SimCopy2` was named
+  active and then dropped. So `P1-57` is **not** exercised, and the fan-out is a property of what is
+  running that day.
+- **`SimCopy2` is effectively non-functional for micros**, and it will look like a defect if you
+  forget it. It carries `AutoSymbolConversion: true` and maps to **NQ**, so one MNQ at ratio 1.0
+  rounds below a whole contract and is dropped — now visibly, as
+  `COPY_SKIPPED_SUB_MINIMUM` (§5.14). Size the leader's order for the conversion, or expect one
+  follower fewer than the config implies.
 
 <details><summary>Earlier headers, kept for the record</summary>
+
+**Sessions 17–19, 2026-08-13** — `P0-63` (remedy 3) and `P?-66`'s instrumentation shipped, suite
+953/0, three mutation batteries; then the documentation pass (§5.10, §5.12); then **the live
+validation** (§5.13), which closed `P?-66`, proved the trail, and opened four defects. The header at
+that point read *"the next item is `P0-67`"* — it was closed the same day.
 
 **Session 16, 2026-08-12** — the repo split executed; this file moved to
 [nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard), tagged `v1.0.0`, suite 926/0 (929
@@ -2106,6 +2137,39 @@ resolving when `P1-36`'s sum is shared with the reconciler.
 - **`_lastShadowSessionDate` travels with `_shadowSessionsCompleted`** (**P1-37**, closed). They
   are one fact; splitting them let a restart re-count a session.
 - **No new `GuardFsmState` enum values** — existing tests assert on them.
+
+**Settled 2026-08-13 by session 20 (§5.14).** Five rules, all with a live or mutation-tested defect
+behind them. The first three are the same rule at three levels: *do not record what you asked for as
+though it happened*.
+
+- **A cache of broker state is written ONLY from the broker.** `DynamicAtmManager`'s
+  `bracket.CurrentStopPrice` is assigned in exactly one place — `ReconcileStopFromBroker`, from the
+  live `Order` — and never from the value passed to `Change()` (`P0-67`). A polling monitor does not
+  need settle events; it needs to stop trusting its own writes. Do not "optimise" the reconcile away
+  because the request usually succeeds: on `provider: Simulator` it never does.
+- **One outstanding `Change()` per order, at EVERY call site.** A second change while one is in
+  flight is dropped **and reverts the order** to its pre-change values, so it ends at neither
+  request's values (`P0-61`, established by a controlled live trade). The copier holds this with
+  `bracket.StopInFlight`; the ATM manager now holds it with `RequestedStopPrice`. In `ScaledRunner`
+  the breakeven and trailing moves could both fire in one sweep, which is how this was found — by a
+  test, not by reading.
+- **A log line must not claim an outcome it has not observed.** `..._REQUESTED` before the broker
+  call, `..._CONFIRMED` only on settle, printing the **settled** values (`P1-70`). This applies to
+  tooling too: `deploy.py` printed `[FATAL]` and exited 0.
+- **A log message must not name another event type.** `grep BRACKET_MODIFY_CONFIRMED` matched a
+  `REQUESTED` line that merely mentioned it in a hint. In a file whose whole purpose is post-hoc
+  grepping, that is a defect, and it broke an absence assertion in the suite before it broke anything
+  live. Tests use `LoggedEventType` for absence.
+- **Every relationship named in `COPY_BEGIN` emits exactly ONE terminal outcome event**, matched by
+  naming convention — `COPY_SUBMITTED` / `COPY_SKIPPED_*` / `COPY_BLOCKED_*` / `COPY_FAILED_*`
+  (`P1-71`). So a skip path added later is counted automatically. **The corollary is load-bearing and
+  was unpinned until a mutant found it: a non-terminal event must NOT take a terminal prefix.** Name
+  a clamp or a quarantine `COPY_SKIPPED_*` and one relationship reports two outcomes while another
+  drops in silence and the totals still look right.
+- **A read endpoint must not mutate.** `/api/copier/config`'s `get` called `LoadFromDisk`, which
+  **replaces the in-memory relationships that `ObserveFollowerFill` writes its measurements onto** —
+  so reading the config destroyed the thing being read (`P1-69`). Its metrics are **session-scoped**;
+  a recompile resets them, and a zero is not a measurement.
 - **`ValidateInvariant` must not reject `PlaceStopOrder` on `action.Quantity > liveQuantity`**
   (settled landing T2). It looks like a missing safety check and it leaves the position
   permanently naked — see §1. `ExecuteAction` re-sizes from the live position.
@@ -2116,7 +2180,8 @@ resolving when `P1-36`'s sum is shared with the reconciler.
 - **The TOCTOU window between the live position read and `account.Submit` cannot be closed**
   without holding a lock across a broker call, which is forbidden.
 
-These are also encoded in **`agent/nt8_riskguard.py`** under `settled` (**21 entries**, ~1.2k tokens),
+These are also encoded in **`agent/nt8_riskguard.py`** under `settled` (**26 entries**, ~1.7k tokens
+— re-counted 2026-08-13 by importing the module, not by reading it),
 which injects them into every review round. **Add to both places, and retire from both places.**
 A settled decision that has since been settled the other way does not merely go stale — it
 actively instructs the panel to approve reintroducing a closed defect. The P1-35 entry above
@@ -2178,15 +2243,39 @@ was exactly that until 2026-08-07.
   missing sibling checkout only warns, and being behind only in docs proceeds. **Keep the pin bumped
   whenever this repo's `addons/` moves**, and tag first — a submodule cannot resolve a tag that
   exists only locally.
+  > ✅ **The guard fired for real on 2026-08-13** and it was right: the core had moved to `v1.1.0`
+  > while the pin sat at `v1.0.3`, and deploying the bridge would have put a `v1.0.3` core over the
+  > top of three live fixes. The working order is **tag core → push → bump pin → push → deploy →
+  > recompile**, because a submodule cannot pin a tag that exists only locally.
+  >
   > **This guard was itself broken on arrival and shipped with a passing three-direction test** — it
   > asked the vendored clone, which cannot see commits it has not fetched, so it answered "not
   > behind" for the one case that matters. Then the fix over-fired on docs-only commits. Both are
   > written up in §5.10. **Two rounds of getting a nine-line check wrong is the strongest argument in
   > this file for watching a gate fail before trusting it.**
+- **A MUTANT that cannot fail is as useless as a test that cannot fail** — and it reads as the
+  opposite. The `P0-67` mutant written to reinstate the defect verbatim read
+  `bracket.RequestedStopPrice` *after* the reconcile resets it to `NaN`, so it could not change
+  behaviour and survived. A surviving mutant looks exactly like "your tests are decorative" until you
+  read the mutant. **Before believing a survivor, prove the mutant changes behaviour at all**
+  (§5.14). Same error as a vacuous gate, one level up.
+- **A mutation battery must score a CRASH as a KILL.** A `P1-71` mutant renamed an event, a test's
+  `log.First(...)` threw, the runner died, and the battery — which looks for a failure count in the
+  output — found **no result line** and recorded a **SURVIVOR**. The two newest batteries treat
+  `NO RESULT LINE` as a kill; `mutate_cm3`/`cm4`/`p0_63` still do not.
+- **`Assert` records a failure and RETURNS; it does not halt the test.** So a null dereference on the
+  line after a failed assert throws for real and aborts **every test after it in the run** — which
+  presents as dozens of unrelated failures. Guard the value (`x = x ?? string.Empty`) rather than
+  assuming the assert stopped anything.
+- **The copier's latency/slippage metrics are session-scoped, and a recompile resets them.** The
+  first `GET /api/copier/config` after the `P1-69` deploy returned `0.0` for exactly that reason. **A
+  zero is not a measurement** — it is indistinguishable from "no fill observed yet", which is why the
+  response now carries a `metricsNote`. Read it before concluding the instrumentation is broken; that
+  conclusion has already been drawn wrongly once (`P?-66`).
 - **A gate that cannot fail is worse than no gate**, and this repo has shipped four of them. The
   mutation batteries printed `SURVIVORS: [...]` and exited **0** until 2026-08-12; then `mutate_cm3`
   and `mutate_cm4` were found to be **vacuous from a red baseline**, because `killed = 'Failed = 0'
-  not in res` scores every mutant as killed when the baseline is already failing. All three now
+  not in res` scores every mutant as killed when the baseline is already failing. All **five** now
   refuse to run unless the baseline is green (`mutate_p0_63.py` pins the failure *count*, since it
   was written against a deliberately red baseline). The predecessor loop had the same shape three
   times over (§3). **Watch a gate fail once before trusting it.**
@@ -2226,9 +2315,15 @@ was exactly that until 2026-08-07.
   > with the process running and no AddOn loaded.
 - **`nt_riskguard_config` with no arguments POSTs an EMPTY BODY.** Before `P2-41` that one call
   flattened the entire live risk configuration to defaults while echoing your request back as
-  `"applied"`. It merges now, but the habit stands: **GET, mutate, POST, GET, diff.** And
-  `/api/copier/config` has **no GET at all** (§5.3), so the copier's live config cannot be inspected
-  without writing to it.
+  `"applied"`. It merges now, but the habit stands: **GET, mutate, POST, GET, diff.**
+  `/api/copier/config` had **no GET at all** until 2026-08-13, so the copier's live config could not
+  be inspected without writing to it; it has one now (`P1-69`), and it no longer reloads from disk on
+  the way — see §7.
+- **`BRACKET_MODIFIED` and `BRACKET_TARGET_MODIFIED` NO LONGER EXIST** (`v1.1.0`, `P1-70`). Anything
+  grepping `interventions.jsonl` for them finds nothing — including scripts and notes written by
+  earlier sessions. The replacements are `BRACKET_MODIFY_REQUESTED` / `BRACKET_MODIFY_CONFIRMED` and
+  the `TARGET` pair. That is a **breaking change for a log consumer**, which is why `v1.1.0` is a
+  minor, not a patch.
 - **Backticks in a `-m` commit message are executed by bash.** One message lost three fragments this
   way: a backticked span was run as command substitution, and a glob inside it expanded to `/` and
   tried to execute `/LICENSE.txt`. Use a single-quoted heredoc or `git commit -F file`. Heredocs have
@@ -2776,9 +2871,10 @@ maintained by hand. So here is the derivation instead of the number — if you d
 re-run the command rather than trusting the table.
 
 ```bash
-# every defect ID that has an entry in the plan
+# every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
+# match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 64
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 68, re-run 2026-08-13
 ```
 
 | | Count | Which |
@@ -2804,7 +2900,7 @@ were triaged.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13, and now the highest open defect.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
+| ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13; was the highest open defect for one day.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
 | ~~**`P0-67`**~~ ✅ | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
 | ~~**`P1-69`**~~ ✅ | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
 | ~~**`P1-70`**~~ ✅ | **`BRACKET_MODIFIED` writes a false success line to the audit log** before the provider settles, and is contradicted milliseconds later | P1 | **NEW 2026-08-13.** Not naked risk — the detection catches the underlying no-op — but a live audit log that asserts "no unprotected window" before it can know is how the last three sessions lost time |
@@ -2844,7 +2940,7 @@ when one is scheduled.
 |---|---|
 | **UI redesign** | The operator's own assessment: *"not very usable or professional enough"*. On top of `P?-64`/`P?-65`, `PerTickerMatrix` is not in either sizing-mode combo (`:367`, `:459`) and `PerTickerRatios`/`CustomSymbolMappings`/`MaxSlippageTicks` have **no editor at all** — they appear only in a read-only status string. **The ratio converter is reachable ONLY through the bridge today.** |
 | **MCP wrapper gap** | `nt_copier_config` accepts only `leaderAccount`/`followerAccount`/`quantityRatio`/`autoConversion`. It cannot express `sizingMode`, `perTickerRatios`, `customSymbolMappings`, `maxSlippageTicks`, or any group action. Session 15 had to drive raw HTTP to `localhost:7890`, which `.agent/USER.md` asks agents not to do. **The preference is unfollowable until the wrapper is extended.** |
-| **`/api/copier/config` has NO read** | Found 2026-08-13 while verifying live state for this pass. The route is **`Post(method, …)` only** (`McpBridgeAddOn.cs:524`), whereas `/api/riskguard/config` handles `GET` explicitly (`:536`). **So there is no way to inspect the live copier config without issuing a write.** That directly defeats the GET-mutate-POST-GET-diff discipline this project relies on (§7), and it is why `P?-66`'s live metrics could not simply be read off the box during this pass. Fix with the wrapper gap above: `return method == "GET" ? CopierConfig(null) : Post(…)`. |
+| ~~**`/api/copier/config` has NO read**~~ | ✅ **DONE 2026-08-13** as part of `P1-69` (§5.14). The route was **`Post(method, …)` only**, so the live copier config could not be inspected without issuing a write — which defeats the GET-mutate-POST-GET-diff discipline this project relies on (§7), and is why `P?-66`'s live metrics could not simply be read off the box. It is now `return method == "GET" ? CopierConfig(null) : Post(…)`. ⚠️ The fix was **not** the one-liner it looks like: the `get` action was also calling `LoadFromDisk`, which threw away the in-memory measurements it was being asked to report. |
 | ~~**Repo split**~~ | ✅ **EXECUTED 2026-08-12** — §5.7. Two repos, both public: [nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard) and [nt8-mcp-bridge](https://github.com/vinay-veerappa/nt8-mcp-bridge), the latter consuming the former as a submodule pinned to a tag. Record: [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md). |
 | ~~**Doc consolidation**~~ | ✅ **DONE 2026-08-13** — §5.12. The plan's inventory table is regenerated from the entries, the count is now *derived* rather than maintained (§5.0), and the sections that contradicted each other (§4a, the two §5s) are marked or renumbered. |
 
@@ -2900,7 +2996,7 @@ That is the same failure as a stale submodule pin overwriting a newer live core,
 |---|---|---|
 | Where the redesigned UI lives | **Rewrite `TradeCopierWindow.cs` properly, in NT8.** Not the web app. The window stays offline-capable and no new surface is added. | Not started |
 | `P0-63` remedy | **Remedy 3 only** — after every `Change()`, read the order back and fall back to cancel-then-create when it did not take. **No funded-account order.** The `Provider31` question stays open on purpose; remedy 3 is correct either way. | ✅ **Shipped and deployed 2026-08-13** exactly as decided. One refinement forced by the evidence: the read-back must happen **on settle**, not synchronously — NT8 leaves the caller's desired values on the `Order` until the provider settles, so an immediate read always says "it took" (§5.9). |
-| What the next session opens with | **`P0-63` + the `P?-66` log line.** Safety first: the trail has never worked and no slippage number currently means anything. | ✅ **Both done** — session 17. Superseded by §5.6, which now opens with `P0-67`. |
+| What the next session opens with | **`P0-63` + the `P?-66` log line.** Safety first: the trail has never worked and no slippage number currently means anything. | ✅ **Both done** — session 17, then live-validated in session 19 (§5.13). Superseded by §5.6, which now opens with `P?-64`/`P?-65`, the copier UI — `P0-67` came and went in session 20. |
 
 ⚠️ **Consequence of the WPF decision, and it is the same trap as slice 3b:**
 `TradeCopierWindow.cs` is **excluded from `RiskGuardTests.csproj`** (as are
@@ -2939,11 +3035,18 @@ deployed; everything else shifts up unchanged.
 
 `P1-57`, `P1-13`, and the `P2` band are real but none is naked-risk; schedule them after the above.
 
-> **Two suite gaps are worth closing alongside whatever comes next**, both recorded in
-> `mutation/mutate_p0_63.py` beside the mutants that measured them: an S7-style concurrency test for
-> the `SyncFollowerStop`-vs-`...Once` reservation (the most serious defect found in the `P0-63`
-> candidate, and unpinnable today), and a `SimulateChangeAppliesQuantityOnly` stub flag for the
-> partial-honour case. Neither is naked-risk; both are places where the suite currently cannot fail.
+> **Two suite gaps remain worth closing alongside whatever comes next.** Both are places where the
+> suite currently *cannot fail*, and neither is naked-risk.
+>
+> 1. An **S7-style concurrency test for the `SyncFollowerStop`-vs-`...Once` reservation** — the most
+>    serious defect found in the `P0-63` candidate, and still unpinnable. Recorded in
+>    `mutation/mutate_p0_63.py` beside the mutant that measured it.
+> 2. The **quantity-refusal** partial honour — `P0-62`'s exact live shape. ⚠️ Session 20 closed only
+>    the *price*-divergence half, via a new `SimulateChangeSettlesOneTickAway` stub flag. Three
+>    attempts to make the mirrored stop *grow* all left the request at qty 1, because the size comes
+>    from `Math.Min(qty, livePos.Quantity)` where `qty` is the **bracket's** recorded quantity —
+>    so the fix starts at `FollowerBracket.Quantity`, **not** in the test. `mutation/mutate_p1_71.py`
+>    records it.
 
 ## 5.7 Session 16 record — 2026-08-12: the repo split executed, and what it exposed
 
@@ -3377,9 +3480,11 @@ it described a different repository**, so ownership is now explicit.
 | Item | State |
 |---|---|
 | Branches | ✅ **`main` only.** `harden/p0-63` was verified an ancestor of `main` and **deleted 2026-08-13**. Pushed, 0 unpushed. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
-| Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66` — **the deployed code**), `v1.0.3` (docs only). `main` carries docs commits on top of `v1.0.2`; **a tag moving is what would break the bridge's pin**, so never delete or move one. |
+| Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66`), `v1.0.3` (docs only), **`v1.1.0`** (session 20's five defects — **the deployed code**; minor because two audit-log event names were removed). `main` carries docs commits on top of it; **a tag moving is what would break the bridge's pin**, so never delete or move one. |
 | Git hooks | ✅ **Installed 2026-08-13.** `.githooks/pre-commit` refuses `dll/pdb/exe/zip/nupkg`, media, and anything over 50 MB. **Proven to fire in both directions** before it was committed: a staged 57 MB blob and a staged `.dll` were each rejected with exit 1, and `ALLOW_BIG_FILES=1` passed. ⚠️ `core.hooksPath` is **local config, not tracked** — a fresh clone silently has no hook until someone runs `git config core.hooksPath .githooks`. Both READMEs now say so. Neither repo tracks a single blocked extension today, so the guard cannot misfire on real work. |
-| CI | ✅ **ACTIVE since 2026-08-13**, at `.github/workflows/ci.yml`, `windows-latest`, on every push and PR. 11 steps: both structural checks, build, the 953-test suite, and **all three** mutation batteries — `mutate_p0_63.py` had to be **added**, because it arrived after the workflow was written and parked, so CI would have run two of three while looking complete. **4m39s** for the lot. Actions pinned to current majors (checkout v7, setup-dotnet v6, setup-python v7), read from the API not guessed, because v4/v5 target the deprecated Node 20 that GitHub is only temporarily force-running on Node 24. |
+| CI | ✅ **ACTIVE since 2026-08-13**, at `.github/workflows/ci.yml`, `windows-latest`, on every push and PR. Both structural checks, build, the suite, and **every** mutation battery. **4m39s** when it ran three batteries; five now. ⚠️ **This has been got wrong twice**: `mutate_p0_63.py` had to be added when the workflow was activated, and session 20's two batteries had to be added after it — each time CI was briefly **weaker than the local gate while looking complete**. The workflow now says so at the mutation block. |
+| CI — the omission is now a gate | `tools/check_ci_runs_every_battery.py` fails if any `mutation/mutate_*.py` is not invoked by `ci.yml`, and it runs **inside** CI. Watched fail three ways before being trusted: an unwired new battery, an existing battery deleted from the workflow, and an empty `mutation/` (which would otherwise pass vacuously). Twice-repeated is a class, not an instance. |
+| CI, historical detail | Actions pinned to current majors (checkout v7, setup-dotnet v6, setup-python v7), read from the API not guessed, because v4/v5 target the deprecated Node 20 that GitHub is only temporarily force-running on Node 24. |
 | CI — proven in **both** directions | Green on a known-good `main` proves the wiring runs, not that it can fail. So a throwaway branch carrying a deliberate `typeof(McpBridgeAddOn)` reference in `CopierReconciler.cs` was pushed: **run concluded `failure`, failing step `Direction check`** — then branch deleted, remote and local, and `check_direction.py` re-run clean. Six gates in these repos have been caught proving nothing (§8); a CI that has only ever been green is the seventh candidate. |
 | ⚠️ How the scope block was actually cleared | **It was real**: a probe branch carrying a workflow file was refused verbatim — `refusing to allow an OAuth App to create or update workflow '.github/workflows/ci.yml' without 'workflow' scope`. HTTPS pushes here go through `gh auth git-credential`, so the `gh` token's scopes (`gist, read:org, repo`) govern them. **The fix was not `gh auth refresh`** — the operator added an SSH key, and **an SSH push is not an OAuth App push, so the restriction does not apply at all.** Both addon repos now use `git@github.com:` remotes. Keep that in mind before concluding a workflow file cannot be pushed. |
 | Deployed tree | ✅ **No orphans.** The two stale test files were moved out of `bin/Custom/AddOns/` on 2026-08-13 and the guard re-verified after the recompile — §5.10. |
@@ -3704,3 +3809,84 @@ in that order, because a submodule cannot pin a tag that only exists locally.
 
 **Minor, not patch:** `BRACKET_MODIFIED` and `BRACKET_TARGET_MODIFIED` no longer exist. Anything
 parsing the log for them finds nothing, and that is a breaking change for a log consumer.
+
+---
+
+## 5.15 Documentation pass — 2026-08-13, after session 20
+
+**No addon code changed.** This pass reconciled the file against the state session 20 left, and it
+found one live gap while doing it, which is the argument for doing these passes at all.
+
+### The gap it found
+
+**CI was running three of five mutation batteries.** `mutate_p1_71.py` and `mutate_p0_67.py` were
+written, run locally, and never added to `ci.yml` — so for a day CI was **weaker than the local gate
+while looking complete**. That is the second time: `mutate_p0_63.py` had the same history in session
+17 and had to be added when the workflow was activated.
+
+Twice is a class, not an instance, so it is now a gate rather than a comment.
+**`tools/check_ci_runs_every_battery.py`** fails if any `mutation/mutate_*.py` is not invoked by the
+workflow, and it runs **inside** CI as the step before the build. Watched fail **three** ways before
+being trusted, because a check on gates is exactly the kind that ships vacuous:
+
+| Probe | Result |
+|---|---|
+| A new battery nobody wired | `MISSING mutate_zz_probe.py`, exit 1 |
+| An existing battery deleted from `ci.yml` | `MISSING mutate_p0_67.py`, exit 1 |
+| **`mutation/` emptied entirely** | `FAIL: no mutate_*.py found`, exit 1 — *not* "all 0 batteries are wired, OK" |
+
+The third probe is the one worth keeping. A check that iterates a collection passes trivially when the
+collection is empty, which is how four gates in this repo shipped unable to fail (§8). The claim
+"watched fail" was written into this file **before** that probe was run; running it is what made the
+claim true.
+
+### What was corrected
+
+| Was | Now |
+|---|---|
+| Header dated session 18, *"the next item is `P0-67`"* | Session 20; `P0-67` closed; next is `P?-64`/`P?-65`. Session 18's header text moved into the collapsed "earlier headers" block rather than deleted |
+| Path note: suite *"is **953** now"* | **1003** |
+| §0 tags: `v1.0.0`…`v1.0.3` | **`v1.1.0`** added, and marked as the deployed code in both places that name a deployed tag |
+| §0: *"THREE disagreeing version identifiers"* | The tag and the constant now **agree** — stated as a coincidence, not a guarantee, with the day they disagreed kept |
+| §0 commands: `expect 953/0`, three batteries | `1003/0`, five, and which two score a crash as a kill |
+| §0 pre-flight: *"a `Sim101` trade reaches THREE follower accounts"* | **Re-measure it.** Only `Sim-ORB` acted on 2026-08-13; `SimCopy2` is non-functional for micros via `AutoSymbolConversion`; `P1-57` is **not** exercised |
+| §0: nothing distinguished `P0-67`/`P1-70` from the live-validated fixes | Both listed under *deployed but NOT validated live* — nothing has driven the ATM monitor live at all |
+| §5.0: `# -> 64` | `# -> 68`, re-run, plus a note that the three `P?-` IDs deliberately do not match the pattern |
+| §5.3: *"`/api/copier/config` has NO read"* | Struck — and marked that the fix was **not** the one-liner it looked like |
+| §5.6: two suite gaps, both open | One closed (price divergence), one **narrowed and located** — the quantity-refusal shape, starting at `FollowerBracket.Quantity` |
+| §5.11: CI runs *"the 953-test suite and all three batteries"* | Every battery, mechanically enforced |
+| §7: 21 settled entries, ~1.2k tokens | **26**, ~1.7k — counted by importing the module, not by reading it |
+
+### Session 20's six rules are now in BOTH places
+
+§7's own instruction is *add to both places, and retire from both places*, and the split has already
+silently dropped 15 of 21 entries once (§7's closing warning) — after which the panel could not
+possibly flag the invariant the `P0-63` candidate broke, because it was never told. So the five
+session-20 rules plus their corollary went into §7 **and** into `agent/nt8_riskguard.py`'s `settled`
+tuple in the same edit:
+
+1. A cache of broker state is written **only** from the broker (`P0-67`).
+2. **One** outstanding `Change()` per order, at every call site (`P0-61`).
+3. A log line must not claim an outcome it has not observed (`P1-70`) — and must not **name** another
+   event type, which poisons `grep` on a file that exists to be grepped.
+4. Exactly **one** terminal outcome event per relationship in `COPY_BEGIN`, by naming convention —
+   and the corollary a mutant had to find: a **non**-terminal event must not take a terminal prefix.
+5. A read endpoint must not mutate (`P1-69`). Its metrics are session-scoped, and **a zero is not a
+   measurement**.
+
+The first three are the same rule at three levels: *do not record what you asked for as though it
+happened*. That is `P0-63`'s root cause, and it is worth stating that way because it will recur at a
+fourth level.
+
+### New traps recorded in §8
+
+- **A mutant that cannot fail is as useless as a test that cannot fail**, and it presents as the
+  opposite — a survivor reads as "your tests are decorative" until you read the mutant.
+- **A battery must score a crash as a kill.** No result line meant SURVIVOR.
+- **`Assert` records and returns; it does not halt.** A null deref on the next line aborts every
+  later test and presents as dozens of unrelated failures.
+- **`BRACKET_MODIFIED` and `BRACKET_TARGET_MODIFIED` no longer exist** — a breaking change for
+  anything grepping `interventions.jsonl`, including notes written by earlier sessions.
+- **The copier's metrics are session-scoped and a recompile resets them.** A zero is
+  indistinguishable from "no fill observed yet", which is a conclusion already drawn wrongly once.
+- **The stale-pin guard fired for real** and was right, with the working order written down.

@@ -37,16 +37,24 @@ jobs:
       - name: No stray addon copies
         run: python tools/check_no_stray_copies.py
 
+      # Cheap, and it exists because the block below was left incomplete twice.
+      - name: Every mutation battery is wired into this workflow
+        run: python tools/check_ci_runs_every_battery.py
+
       - name: Build
         run: dotnet build tests/RiskGuardTests.csproj -v q --nologo
 
       - name: Test
         run: dotnet run --project tests/RiskGuardTests.csproj --no-build
 
-      # A surviving mutant means a test only looks like coverage. All three batteries
+      # A surviving mutant means a test only looks like coverage. EVERY battery here
       # must report "SURVIVORS: none"; they exit non-zero otherwise, and they exit 2
       # on a non-green baseline rather than scoring every mutant KILLED against a
       # suite that was already red -- which is what they did until 2026-08-13.
+      #
+      # When you add a battery, add it HERE in the same commit. This has now been got
+      # wrong twice (P0-63's, then session 20's two), each time leaving CI weaker than
+      # the local gate while looking complete.
       - name: Mutation battery CM3
         run: python mutation/mutate_cm3.py
 
@@ -58,6 +66,15 @@ jobs:
       # have been WEAKER than the local gate while looking complete.
       - name: Mutation battery P0-63
         run: python mutation/mutate_p0_63.py
+
+      # Session 20 (P1-71, P0-67). These two additionally score a CRASH -- no result
+      # line in the runner's output -- as a KILL. The older three do not, and a mutant
+      # that killed the runner was scored a SURVIVOR because of it.
+      - name: Mutation battery P1-71
+        run: python mutation/mutate_p1_71.py
+
+      - name: Mutation battery P0-67
+        run: python mutation/mutate_p0_67.py
 
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
