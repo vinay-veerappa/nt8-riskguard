@@ -32,7 +32,11 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class RiskGuardAddOn : AddOnBase
     {
         public static RiskGuardAddOn Instance { get; private set; }
-        public const string Version = "1.1.0";
+        // Reported by GET /api/riskguard/version, which is how an operator finds out what
+        // is running on a live account. Bump it in the SAME commit as the release tag --
+        // tools/check_version_matches_tag.py fails the build otherwise, because on
+        // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
+        public const string Version = "1.2.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 

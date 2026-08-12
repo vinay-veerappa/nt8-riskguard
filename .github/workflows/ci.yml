@@ -19,7 +19,12 @@ jobs:
     # product can never run would only prove something about the runner.
     runs-on: windows-latest
     steps:
+      # fetch-depth: 0 -- check_version_matches_tag.py needs TAGS, and the default
+      # shallow checkout has none. It FAILS rather than skips when it cannot see one,
+      # so a shallow clone would break the build instead of quietly proving nothing.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -36,6 +41,13 @@ jobs:
       # Plan section 6, check 2: exactly one copy of each addon source.
       - name: No stray addon copies
         run: python tools/check_no_stray_copies.py
+
+      # The version an operator reads off the live box must be the release that is
+      # deployed. On 2026-08-13 the constant said 1.1.0 while v1.2.0 was tagged, deployed
+      # and compiled -- the same "a report must match what it describes" defect as P0-68
+      # and P1-70, in a version string.
+      - name: Addon version matches the release tag
+        run: python tools/check_version_matches_tag.py
 
       # Cheap, and it exists because the block below was left incomplete twice.
       - name: Every mutation battery is wired into this workflow
