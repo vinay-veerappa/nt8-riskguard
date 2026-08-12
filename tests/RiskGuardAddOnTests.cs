@@ -1011,6 +1011,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi2_TheWindowConstructsNoDomainObject();
             TestUi2_TheWindowMutatesNoStoredObjectInPlace();
             TestUi2_TheWindowNeverLoadsFromDiskAndSurfacesARefusal();
+            TestUi2_ARowEditCannotDISARMALiveRelationship();
+            TestUi2_AGroupRowEditCannotDISARMALiveGroup();
+            TestUi2_ArmingStillRequiresConfirmation();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -2287,6 +2290,32 @@ namespace NinjaTrader.NinjaScript.AddOns
             grp.PerTickerRatios["MNQ"] = 6.0;
             TradeCopierEngine.Instance.UpsertGroup(grp, confirmLive: false);
 
+            // ADDED AFTER A MUTANT SURVIVED, AND IT RUNS FIRST FOR A REASON. "GroupEdit
+            // carries isEnabled even when the caller passed null" changed no test outcome,
+            // because every call in the suite and in the window passes a value -- so the ONE
+            // behaviour that makes these builders safe, that an absent argument writes no
+            // key, was asserted for RelationshipEdit and never for GroupEdit.
+            //
+            // The rule for a survivor is "write a test or delete the line", and this is
+            // deliberately the first. The nullable is not speculative surface: absent-means-
+            // unchanged is the whole contract of a request builder, GroupEdit is public, and
+            // the browser UI will send partial group edits. Narrowing the parameter to a
+            // plain bool would make it asymmetric with RelationshipEdit for no reason beyond
+            // today's single caller happening not to exercise it.
+            //
+            // ⚠️ THE ORDER IS LOAD-BEARING. The first draft asserted this AFTER the disable
+            // below, where the group is already disabled -- and the mutant survives that,
+            // because `isEnabled ?? false` and "leave it alone" give the same answer once
+            // the stored value is already false. The null edit has to run against an ENABLED
+            // group or it distinguishes nothing. That is Rule 1 from UI1 wearing a
+            // different hat: assert the state that can actually differ.
+            var untouched = TradeCopierEngine.Instance.ApplyGroupRequest(
+                CopierRequests.GroupEdit("Ui2EditGroup", isEnabled: null), confirmLive: false);
+
+            Assert(untouched != null && untouched.IsEnabled
+                   && untouched.QuantityRatio == 2.5,
+                "a group edit naming no field leaves an ENABLED group enabled -- an absent argument writes no key");
+
             var merged = TradeCopierEngine.Instance.ApplyGroupRequest(
                 CopierRequests.GroupEdit("Ui2EditGroup", isEnabled: false), confirmLive: false);
 
@@ -2396,6 +2425,94 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(readable && !loads && dispatchCount >= 4 && checkedCount == dispatchCount,
                 "the window never calls LoadFromDisk, and every config write it dispatches tests the refusal it can now receive");
+        }
+
+        private static void TestUi2_ARowEditCannotDISARMALiveRelationship()
+        {
+            Console.WriteLine("\n[TEST] UI2: a row edit that never mentions arming cannot disarm a live relationship");
+
+            // WRITTEN BECAUSE A REVIEW FINDING WAS WRONG, WHICH IS THE INTERESTING PART.
+            //
+            // The UI2 panel filed THREE BLOCKERs claiming that an edit request omitting
+            // ArmedForLive would hit ApplyArmingGate's disarming branch and silently drop
+            // a live relationship to sim. That is a misreading -- the gate is
+            // `if (armed && armingWasRequested && !confirmLive)`, and armingWasRequested
+            // is FALSE for an edit that does not mention arming, so the branch is
+            // unreachable by the described path.
+            //
+            // But the INVARIANT the finding pointed at is real, safety-critical, and was
+            // pinned by nothing: toggling a checkbox must never change whether a
+            // relationship can lose real money. A wrong finding aimed at an unpinned
+            // invariant is still worth the test. So this asserts it with confirmLive FALSE
+            // -- the paranoid case, stricter than what the window actually passes -- which
+            // is what makes the assertion about the gate rather than about the caller.
+            Ui1Clean();
+            var armed = Ui1Rel("Ui2ArmLeader", "Ui2ArmFollower", 1.0, armed: true);
+            armed.IsQuarantined = true;
+            armed.QuarantineReason = "margin";
+
+            var toggled = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.RelationshipEdit("Ui2ArmLeader", "Ui2ArmFollower",
+                    isEnabled: false, releaseQuarantine: null),
+                confirmLive: false);
+
+            var released = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.RelationshipEdit("Ui2ArmLeader", "Ui2ArmFollower",
+                    isEnabled: null, releaseQuarantine: true),
+                confirmLive: false);
+
+            Assert(toggled != null && released != null
+                   && toggled.ArmedForLive && released.ArmedForLive,
+                "an enable/disable or quarantine-release edit leaves ArmedForLive untouched even at confirmLive:false");
+        }
+
+        private static void TestUi2_AGroupRowEditCannotDISARMALiveGroup()
+        {
+            Console.WriteLine("\n[TEST] UI2: the same, group half");
+
+            Ui1Clean();
+            var grp = new CopierGroup
+            {
+                GroupName = "Ui2ArmGroup",
+                LeaderAccountName = "Ui2ArmGrpLeader",
+                FollowerAccounts = new List<string> { "Ui2ArmGrpA" },
+                IsEnabled = true,
+                ArmedForLive = true
+            };
+            TradeCopierEngine.Instance.UpsertGroup(grp, confirmLive: true);
+
+            var toggled = TradeCopierEngine.Instance.ApplyGroupRequest(
+                CopierRequests.GroupEdit("Ui2ArmGroup", isEnabled: false), confirmLive: false);
+
+            Assert(toggled != null && toggled.ArmedForLive,
+                "a group enable/disable edit leaves ArmedForLive untouched even at confirmLive:false");
+        }
+
+        private static void TestUi2_ArmingStillRequiresConfirmation()
+        {
+            Console.WriteLine("\n[TEST] UI2: the arming gate still bites when arming IS what was requested");
+
+            // The control for the two tests above. Without it, "edits never disarm" would
+            // also pass against a gate that had been deleted outright -- and the gate is
+            // the thing standing between an unchecked checkbox and a live account.
+            Ui1Clean();
+            Ui1Rel("Ui2GateLeader", "Ui2GateFollower", 1.0, armed: false);
+
+            var unconfirmed = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.Relationship("Ui2GateLeader", "Ui2GateFollower",
+                    CopierSizingMode.QuantityRatio, 1.0, 10, false, true,
+                    armedForLive: true, isEnabled: true),
+                confirmLive: false);
+
+            var confirmed = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.Relationship("Ui2GateLeader", "Ui2GateFollower",
+                    CopierSizingMode.QuantityRatio, 1.0, 10, false, true,
+                    armedForLive: true, isEnabled: true),
+                confirmLive: true);
+
+            Assert(unconfirmed != null && confirmed != null
+                   && !unconfirmed.ArmedForLive && confirmed.ArmedForLive,
+                "an Add request asking to arm is refused without confirmLive and honoured with it");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

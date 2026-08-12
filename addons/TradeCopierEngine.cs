@@ -55,8 +55,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             double quantityRatio, int maxPositionSize, bool autoSymbolConversion,
             bool stealthMode, bool armedForLive, bool isEnabled)
         {
-            // STUB -- UI2.
-            return new JObject();
+            bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
+            int fixedLotSize = (int)Math.Round(quantityRatio);
+
+            return new JObject
+            {
+                { "leaderAccount", leaderAccount },
+                { "followerAccount", followerAccount },
+                { "sizingMode", sizingMode.ToString() },
+                { "quantityRatio", quantityRatio },
+                { "maxPositionSize", maxPositionSize },
+                { "autoSymbolConversion", autoSymbolConversion },
+                { "stealthMode", stealthMode },
+                { "armedForLive", armedForLive },
+                { "isEnabled", isEnabled },
+                { "fixedLotMode", fixedLotMode },
+                { "fixedLotSize", fixedLotSize }
+            };
         }
 
         /// <summary>Everything the window's "Add Group" form collects, and nothing else.</summary>
@@ -65,8 +80,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             CopierSizingMode sizingMode, double quantityRatio, int maxPositionSize,
             bool autoSymbolConversion, bool stealthMode, bool armedForLive, bool isEnabled)
         {
-            // STUB -- UI2.
-            return new JObject();
+            bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
+            int fixedLotSize = (int)Math.Round(quantityRatio);
+
+            var followers = new JArray();
+            if (followerAccounts != null)
+            {
+                foreach (var follower in followerAccounts)
+                {
+                    followers.Add(follower);
+                }
+            }
+
+            return new JObject
+            {
+                { "groupName", groupName },
+                { "leaderAccount", leaderAccount },
+                { "followerAccounts", followers },
+                { "sizingMode", sizingMode.ToString() },
+                { "quantityRatio", quantityRatio },
+                { "maxPositionSize", maxPositionSize },
+                { "autoSymbolConversion", autoSymbolConversion },
+                { "stealthMode", stealthMode },
+                { "armedForLive", armedForLive },
+                { "isEnabled", isEnabled },
+                { "fixedLotMode", fixedLotMode },
+                { "fixedLotSize", fixedLotSize }
+            };
         }
 
         /// <summary>
@@ -77,15 +117,39 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static JObject RelationshipEdit(string leaderAccount, string followerAccount,
                                                bool? isEnabled, bool? releaseQuarantine)
         {
-            // STUB -- UI2.
-            return new JObject();
+            var req = new JObject
+            {
+                { "leaderAccount", leaderAccount },
+                { "followerAccount", followerAccount }
+            };
+
+            if (isEnabled.HasValue)
+            {
+                req["isEnabled"] = isEnabled.Value;
+            }
+
+            if (releaseQuarantine == true)
+            {
+                req["isQuarantined"] = false;
+            }
+
+            return req;
         }
 
         /// <summary>The group row's enable/disable button. Same defect, group half.</summary>
         public static JObject GroupEdit(string groupName, bool? isEnabled)
         {
-            // STUB -- UI2.
-            return new JObject();
+            var req = new JObject
+            {
+                { "groupName", groupName }
+            };
+
+            if (isEnabled.HasValue)
+            {
+                req["isEnabled"] = isEnabled.Value;
+            }
+
+            return req;
         }
     }
 
@@ -1899,6 +1963,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             ClearCollectionsNamedIn(normalized, rel);
             JsonConvert.PopulateObject(normalized.ToString(), rel);
 
+            // UI2: a reason without a quarantine is stale data; state this as a domain invariant.
+            if (!rel.IsQuarantined)
+                rel.QuarantineReason = null;
+
             // As in ApplyGroupRequest: the key re-assertions were inert (the
             // fallbacks are byte-identical to the initialiser defaults), the
             // comparer guard is not.
@@ -1942,9 +2010,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         public static string ConfigFilePath
         {
-            // STUB -- UI2. Returns null so the acceptance tests are RED rather than
-            // failing to build.
-            get { return null; }
+            get { return Path.Combine(Globals.UserDataDir, "RiskGuard", "copier_config.json"); }
         }
 
         /// <summary>
@@ -1963,7 +2029,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </remarks>
         public void SaveToDisk()
         {
-            // STUB -- UI2.
+            SaveToDisk(ConfigFilePath);
         }
 
         public void SaveToDisk(string filePath)

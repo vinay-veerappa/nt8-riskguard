@@ -53,6 +53,15 @@ jobs:
       - name: Every mutation battery is wired into this workflow
         run: python tools/check_ci_runs_every_battery.py
 
+      # TradeCopierWindow.cs is one 1100-line `#if !TESTING` block, so the Build and Test
+      # steps below compile it to NOTHING -- a stray brace there passes every other gate
+      # in this file and is first reported by NinjaTrader, where a compile error in ANY
+      # addon .cs stops EVERY addon loading, RiskGuard included. This is a PARSER check
+      # only (CS1xxx); it is not a compile and does not replace NT8's. Watched failing on
+      # a deliberately removed semicolon before being added here.
+      - name: Code the test build compiles away still parses
+        run: python tools/check_window_parses.py
+
       - name: Build
         run: dotnet build tests/RiskGuardTests.csproj -v q --nologo
 
@@ -102,6 +111,15 @@ jobs:
       # describes something the platform cannot produce.
       - name: Mutation battery UI1
         run: python mutation/mutate_ui1.py
+
+      # UI2 (one config owner; the window dispatches requests). The FIRST battery here to
+      # mutate two files: four of its mutants edit TradeCopierWindow.cs, whose whole body is
+      # `#if !TESTING`, so the suite compiles it away and four acceptance tests read it as
+      # TEXT instead. Those four mutants put each original defect back verbatim, because
+      # "does the source-text check actually fail when the defect returns?" is the one
+      # question a source-text check cannot answer about itself.
+      - name: Mutation battery UI2
+        run: python mutation/mutate_ui2.py
 
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on

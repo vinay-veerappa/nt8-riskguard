@@ -834,10 +834,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 };
                 resetBtn.Click += (s, e) =>
                 {
-                    rel.IsQuarantined = false;
-                    rel.QuarantineReason = null;
-                    TradeCopierEngine.Instance.UpsertRelationship(rel, rel.ArmedForLive);
-                    TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                    var req = CopierRequests.RelationshipEdit(rel.LeaderAccountName, rel.FollowerAccountName, null, true);
+                    var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive);
+                    if (result == null)
+                    {
+                        MessageBox.Show("The engine refused to release this quarantine.", "Release Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    TradeCopierEngine.Instance.SaveToDisk();
                     RefreshUI();
                 };
                 actions.Children.Add(resetBtn);
@@ -854,9 +858,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             toggleBtn.Click += (s, e) =>
             {
-                rel.IsEnabled = !rel.IsEnabled;
-                TradeCopierEngine.Instance.UpsertRelationship(rel, rel.ArmedForLive);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                bool nextEnabled = !rel.IsEnabled;
+                var req = CopierRequests.RelationshipEdit(rel.LeaderAccountName, rel.FollowerAccountName, nextEnabled, null);
+                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive);
+                if (result == null)
+                {
+                    MessageBox.Show("The engine refused to toggle this relationship.", "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                TradeCopierEngine.Instance.SaveToDisk();
                 RefreshUI();
             };
             actions.Children.Add(toggleBtn);
@@ -872,7 +882,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             deleteBtn.Click += (s, e) =>
             {
                 TradeCopierEngine.Instance.RemoveRelationship(rel.LeaderAccountName, rel.FollowerAccountName);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                TradeCopierEngine.Instance.SaveToDisk();
                 RefreshUI();
             };
             actions.Children.Add(deleteBtn);
@@ -937,9 +947,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             toggleBtn.Click += (s, e) =>
             {
-                grp.IsEnabled = !grp.IsEnabled;
-                TradeCopierEngine.Instance.UpsertGroup(grp, grp.ArmedForLive);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                bool nextEnabled = !grp.IsEnabled;
+                var req = CopierRequests.GroupEdit(grp.GroupName, nextEnabled);
+                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive);
+                if (result == null)
+                {
+                    MessageBox.Show("The engine refused to toggle this group.", "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                TradeCopierEngine.Instance.SaveToDisk();
                 RefreshUI();
             };
             actions.Children.Add(toggleBtn);
@@ -955,7 +971,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             deleteBtn.Click += (s, e) =>
             {
                 TradeCopierEngine.Instance.RemoveGroup(grp.GroupName);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                TradeCopierEngine.Instance.SaveToDisk();
                 RefreshUI();
             };
             actions.Children.Add(deleteBtn);
@@ -994,23 +1010,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 var mode = _newSizingModeCombo.SelectedItem?.ToString() == "FixedLot" ? CopierSizingMode.FixedLot : CopierSizingMode.QuantityRatio;
 
-                var rel = new CopierRelationship
-                {
-                    LeaderAccountName = leader,
-                    FollowerAccountName = follower,
-                    SizingMode = mode,
-                    QuantityRatio = ratio,
-                    FixedLotMode = (mode == CopierSizingMode.FixedLot),
-                    FixedLotSize = (int)Math.Round(ratio),
-                    MaxPositionSize = maxPos,
-                    AutoSymbolConversion = autoSymbol,
-                    StealthMode = stealth,
-                    ArmedForLive = armed,
-                    IsEnabled = true
-                };
+                var req = CopierRequests.Relationship(
+                    leader, follower, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
 
-                TradeCopierEngine.Instance.UpsertRelationship(rel, armed);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, armed);
+                if (result == null)
+                {
+                    MessageBox.Show("The engine refused this relationship (possible group overlap).", "Relationship Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                TradeCopierEngine.Instance.SaveToDisk();
 
                 RefreshUI();
             }
@@ -1053,24 +1063,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 var mode = _groupSizingModeCombo.SelectedItem?.ToString() == "FixedLot" ? CopierSizingMode.FixedLot : CopierSizingMode.QuantityRatio;
 
-                var grp = new CopierGroup
-                {
-                    GroupName = grpName,
-                    LeaderAccountName = leader,
-                    FollowerAccounts = selectedFollowers,
-                    SizingMode = mode,
-                    QuantityRatio = ratio,
-                    FixedLotMode = (mode == CopierSizingMode.FixedLot),
-                    FixedLotSize = (int)Math.Round(ratio),
-                    MaxPositionSize = maxPos,
-                    AutoSymbolConversion = autoSymbol,
-                    StealthMode = stealth,
-                    ArmedForLive = armed,
-                    IsEnabled = true
-                };
+                var req = CopierRequests.Group(
+                    grpName, leader, selectedFollowers, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
 
-                TradeCopierEngine.Instance.UpsertGroup(grp, armed);
-                TradeCopierEngine.Instance.SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"));
+                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, armed);
+                if (result == null)
+                {
+                    MessageBox.Show("The engine refused this group (possible follower overlap).", "Group Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                TradeCopierEngine.Instance.SaveToDisk();
 
                 RefreshUI();
             }
