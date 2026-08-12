@@ -241,6 +241,16 @@ namespace NinjaTrader.Cbi
             }
         }
 
+        /// <summary>As <see cref="ProviderStopPrice"/>, for the target leg's limit price.</summary>
+        public double ProviderLimitPrice(Order o)
+        {
+            lock (_ordersLock)
+            {
+                ProviderHeld held;
+                return _providerHeld.TryGetValue(o, out held) ? held.LimitPrice : double.NaN;
+            }
+        }
+
         /// <summary>
         /// The change round trip completing. NT8 raises OrderUpdate when an order leaves
         /// ChangeSubmitted/ChangePending, carrying whatever the PROVIDER holds -- which on a
@@ -884,6 +894,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P0_63_ASilentlyIgnoredChangeIsCaughtOnSettleAndReplaced();
             TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange();
             TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace();
+            TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored();
 
             // CM1: copier ratio converter, slice 1 -- RED until the fix lands
             TestCM1_MatrixSizesFromTheTableWithoutTheSymbolMultiplier();
@@ -11475,6 +11486,71 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "got {0}.", follower.ProviderStopPrice(original)));
             Assert(RiskGuardAddOn.OccupiesSlot(original.OrderState),
                 "And it is still the live leg -- it was never cancelled.");
+        }
+
+        /// <summary>
+        /// The TARGET leg carries the same `Change()` and therefore the same defect. It gets its own
+        /// test rather than riding on the stop's: the two legs are deliberately asymmetric
+        /// throughout this file -- the stop is risk and always wins, the target is upside and is
+        /// never allowed to disturb the stop -- so a fix applied to one is not evidence about the
+        /// other. Without this, the target half of remedy 3 would ship on a reviewer's opinion.
+        ///
+        /// A stale target is not naked risk. It is the follower failing to take the profit the
+        /// leader took, which is the copier silently not doing its job.
+        /// </summary>
+        private static void TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: the mirrored TARGET is also replaced when its Change() is ignored (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063T");
+
+            leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17990.00));
+            var leaderTarget = LeaderTarget(mnq, OrderAction.Sell, 1, 18030.00);
+            leader.TriggerOrderUpdate(leaderTarget);
+
+            var target = follower.Orders.Single(o => o.Name == "COPIER_TARGET");
+            Assert(Math.Abs(follower.ProviderLimitPrice(target) - 18032.00) < 1e-9,
+                string.Format(
+                    "Precondition: the mirrored target is at 18032.00 (follower entry 18002 + the "
+                    + "leader's 30-point distance), got {0}.", follower.ProviderLimitPrice(target)));
+
+            follower.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // The leader lowers its target by 10 points; the follower's should follow to 18022.
+                leaderTarget.LimitPrice = 18020.00;
+                leader.TriggerOrderUpdate(leaderTarget);
+                follower.SettleChange(target);
+            }
+            finally { follower.SimulateChangeIsSilentNoOp = false; }
+
+            var liveTargets = follower.Orders
+                .Where(o => o.Name == "COPIER_TARGET" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(liveTargets.Count == 1,
+                string.Format("Exactly one target is live after the fallback (got {0}).", liveTargets.Count));
+            Assert(Math.Abs(follower.ProviderLimitPrice(liveTargets[0]) - 18022.00) < 1e-9,
+                string.Format(
+                    "The broker holds the moved target: expected 18022.00, got {0}. At baseline it "
+                    + "holds 18032.00 -- the follower would sit through the leader's exit.",
+                    follower.ProviderLimitPrice(liveTargets[0])));
+
+            // The asymmetry, and the thing a target fix is most likely to break.
+            var liveStops = follower.Orders
+                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(liveStops.Count == 1,
+                string.Format(
+                    "The RISK leg is untouched by the target's fallback: exactly one live stop "
+                    + "(got {0}). Cancelling the target must never take the stop with it.",
+                    liveStops.Count));
         }
 
         private static void TestReconcile_SurvivorPrefersTheLegThatActuallyCovers()

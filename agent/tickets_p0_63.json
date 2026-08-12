@@ -10,7 +10,8 @@
       "context": "The stop sync's Change() is at addons/TradeCopierEngine.cs:1993 inside `SyncFollowerStopOnce`; the target's is at :2312 inside `SyncFollowerTargetOnce`. Both sit in a try/catch whose catch already implements the cancel-then-create fallback for the case where Change() THROWS -- that is `SimulateChangeFailure` in the stub, and it is a different case from this one. This ticket adds the case where Change() does not throw and does not work.\n\n`RiskGuardAddOn.AcceptsModification(OrderState)` (addons/RiskGuardAddOn.cs:2370) already documents a RELATED but distinct NT8 behaviour: a SECOND Change() while one is in flight is dropped AND reverts the order. That is P0-61 and it is already fixed. P0-63 is the FIRST change being ignored. Do not conflate them, and do not weaken P0-61's deferral -- `TestBracket_P0_61_ADeferredChangeIsReappliedWhenTheLegSettles` must stay green.\n\nThe OCO rule, which the cancel-then-create path depends on: an id can be JOINED while its group still has a live member, and is REJECTED once every leg has gone terminal. `ResolveOcoIdForRecreatedLeg` already implements this. A re-created leg that reuses a retired group id is rejected by the broker, which is a naked follower.",
       "expect_green": [
         "The broker is actually holding the trailed stop",
-        "The second trail step is holding at the broker with no round trip"
+        "The second trail step is holding at the broker with no round trip",
+        "The broker holds the moved target"
       ],
       "regions": [
         {

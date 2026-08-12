@@ -886,6 +886,63 @@ read the wrong layer. **Advertised by the connection ≠ honoured by the provide
    the question, and turns a silent no-op into an observable one. **Cheapest honest option, and it
    composes with 1 and 2.**
 
+> ⚠️ **This entry's "Where" clause was short by one call site.** See `P0-67` immediately below.
+
+---
+
+### P0-67. `DynamicAtmManager` has the THIRD `Account.Change()` call, and its cache records the price the broker refused — OPEN
+*(found 2026-08-13 by grepping for `.Change(` across `addons/` instead of trusting `P0-63`'s "Where" clause, which named the two copier leg syncs and `McpBridgeAddOn.ChangeOrder` and missed this one entirely.)*
+
+**Where**: `addons/DynamicAtmManager.cs:622`, inside `ModifyStopPrice`, reached from both
+`AtmStrategyType` branches of the bracket monitor (`:547`, `:577`, `:591`).
+
+`P0-63` applies here unchanged — same API, same provider, same silent no-op. But the consequences
+are **worse than in the copier**, for three reasons that are specific to this file:
+
+**1. The cache is updated whether or not the broker agreed.** Every call site is the same shape:
+
+```csharp
+ModifyStopPrice(account, bracket.StopOrderId, newStop);
+bracket.CurrentStopPrice = newStop;      // <-- unconditional
+```
+
+`ModifyStopPrice` returns `void` and swallows its own exceptions, so the caller cannot tell. After
+one refused change, `bracket.CurrentStopPrice` is a value no order anywhere holds.
+
+**2. So the trail's own gate is computed against a fiction, and latches.** The trail only acts when
+`stopMoved`, and `stopMoved` compares the new price to `bracket.CurrentStopPrice` (`:588`). Having
+just written the refused price into that field, the manager believes it has already trailed. It will
+not try again until price moves past a stop that does not exist. Net effect on a `Simulator`
+provider: **the ATM stop sits at its original price for the whole trade while the cached state
+claims it is trailing.** The copier at least re-drives from the leader on every update; this does
+not.
+
+**3. Breakeven is one-shot and never verified.** `bracket.BreakevenTriggered = true` is set
+immediately after the same unchecked call (`:549`, `:579`). A refused breakeven move is therefore
+**permanent** — the flag guarantees it is never attempted again.
+
+Two further defects in the same 18-line method, found while reading it:
+
+- **It keys on `order.OrderId == orderId`** (`:619`). `RiskGuardAddOn.cs:4481` carries the warning
+  that NT8's `OrderId` is neither unique nor stable across the historical→live transition, and the
+  settled decision in `agent/nt8_riskguard.py` says protective legs are tracked **by object
+  reference, never by id**. This is the only place left that keys a protective stop by id.
+- **It requires the literal state `OrderState.Working`** (`:619`), so a stop at `Accepted` or
+  `TriggerPending` is skipped in silence. `TriggerPending` is *a stop waiting on its trigger — the
+  most protective state a stop can be in* (`Classify`'s own comment), and `AcceptsModification`
+  exists to answer precisely this question. It is not used here.
+
+**Remedy**: the same read-back as `P0-63`, but it cannot be lifted across as-is — this file has no
+settle hook and no per-leg pending-request state to hang one on, which is why it was deliberately
+left out of `P0-63`'s ticket rather than bolted on. At minimum, and in this order: make
+`ModifyStopPrice` return whether it found and changed an order; stop updating `CurrentStopPrice` and
+`BreakevenTriggered` on a call that did not demonstrably take; switch the lookup to
+`AcceptsModification` and to reference identity.
+
+> **Not yet established: whether this path is live.** `DynamicAtmManager` is driven by
+> `nt8-mcp-bridge`, whose harness does not execute any of it (`P2-27`). Decide that before ranking
+> this against the rest of the P0 band — if nothing calls it, it is dormant rather than dangerous.
+
 ---
 
 ### ~~P0-62. `Account.Change()` applies the price but silently refuses a quantity INCREASE~~ — SUPERSEDED by `P0-63`

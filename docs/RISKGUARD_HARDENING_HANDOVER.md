@@ -231,16 +231,34 @@ deliberately, and run a shadow session on it first.
 dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo
 
 # deploy: verify first, then sync, then recompile in NT8 (hot-swaps)
-.\.venv\Scripts\python.exe scripts\utils\sync_nt8_strategies.py --verify --only addons
-.\.venv\Scripts\python.exe scripts\utils\sync_nt8_strategies.py --only addons
+python tools\sync_nt8.py --verify
+python tools\sync_nt8.py
 #   then nt_compile, and read errorCount
+#   NOTE: if the BRIDGE also changed, deploy it from nt8-mcp-bridge with
+#   `python tools/deploy.py`, which pushes the bridge AND its vendored core.
+#   Deploying either repo alone fails the whole NT8 Custom assembly, which stops
+#   EVERY addon loading -- the risk guard included.
 
-# free, ~2 min, no models: is the loop tool itself sound?
-.\.venv\Scripts\python.exe -m scripts.agent_loop.selftest
+# the structural checks (free, instant)
+python tools\check_direction.py          # no addon may name a bridge-owned type
+python tools\check_no_stray_copies.py    # no addon .cs outside addons/
 
-# free: do all 18 ticket regions still resolve?
-.\.venv\Scripts\python.exe -m scripts.agent_loop --list
+# the mutation batteries. Both exit NON-ZERO on a survivor -- they printed
+# `SURVIVORS: [...]` and exited 0 until 2026-08-12, i.e. the gate was decorative.
+python mutation\mutate_cm3.py            # 14 killed
+python mutation\mutate_cm4.py            # 10 killed
+
+# free: do all ticket regions still resolve? READ THE LINE RANGES -- a degenerate
+# one-line region also prints OK, and only `kind: line` regions should be one line.
+$PY = "C:\Users\vinay\tvDownloadOHLC\.venv\Scripts\python.exe"   # agent-loop lives there
+& $PY -m agent_loop --profile nt8-riskguard --profile-module agent.nt8_riskguard `
+    --tickets agent\tickets_p0_63.json --list
 ```
+
+> ⚠️ **This repo has no `.venv`.** `agent-loop` is installed in *tvDownloadOHLC's* venv, and it
+> must be invoked with **this repo as the working directory** so that `--profile-module
+> agent.nt8_riskguard` resolves. There is no `scripts.agent_loop` module and no `selftest`
+> entry point here; both were paths into the archived predecessor loop.
 
 **The arbiter recommends; it never ships.** A run that ends `ARBITER_SHIP` has *not* applied
 anything — and `--resume-raw … --apply` is **not** a promote-what-I-read command, it is a fresh run
@@ -2856,3 +2874,104 @@ two definitions that drift, which is exactly what `P2-38` was. Ordered remedy:
   because the sync tool globbed `*.cs` from a directory that held both. The new tools
   correctly do not. Deleting them from the NT8 folder is a one-line manual step, deliberately
   left to the operator rather than done by a script reaching into a live install.
+
+---
+
+## 5.8 Session 17 — 2026-08-13: `P0-63` and `P?-66`, and four things found on the way in
+
+Opened on §5.6's item 1 and item 2, as §5.5 directed. Both were driven through the agent loop
+with the acceptance tests written **by hand first** and red at baseline, per §6.0.
+
+### The loop could not start in this repo, and had not been able to since the split
+
+`agent/__init__.py` still carried `from .python_tvdownloadohlc import PYTHON_TVDOWNLOADOHLC`,
+inherited from tvDownloadOHLC's `scripts/agent_loop_config/__init__.py`. That profile stayed
+behind with the Python code it describes, so importing the package raised
+`ModuleNotFoundError` and **every** `--profile-module agent.nt8_riskguard` invocation died at
+import.
+
+Session 16's verification covered the suite, both mutation batteries, deploy parity and a
+fresh clone of each repo — and none of that touches the loop. `--list` is free, takes two
+seconds, and catches it; it belongs in CI. **The general lesson: a split's verification has to
+include starting every tool that was moved, not just the ones that produce the artifact you
+were looking at.**
+
+Also repathed §0's `Commands` block, which still named `scripts\utils\sync_nt8_strategies.py
+--only addons` and `-m scripts.agent_loop.selftest`. Neither exists here — the first is
+tvDownloadOHLC's tool, whose addon half now exits 2, and the second was an entry point into
+the archived predecessor loop.
+
+### The test double could not express `P0-63` at all
+
+This is why 926 tests passed while the mirrored stop had never trailed once, and it is worth
+stating precisely because the shape recurs.
+
+`Account.Change()` is a **request**. The caller writes the desired values onto the `Order`
+object, and `Change()` asks the provider to honour them; the provider then either applies them
+or leaves the order at the values **it** holds. The stub kept no provider-side copy of those
+fields, so the caller's own writes were the only thing a test could ever read back — every
+`Change()` "worked" by construction, and no test could have failed.
+
+The stub now holds the provider's copy, captured at `Submit` and at an honoured `Change`, with
+`ProviderStopPrice(order)` exposing it. **That is the only honest thing to assert on.**
+`order.StopPrice` is just what we asked for; a test that reads it back is testing our own
+assignment statement. Both `P0-63` acceptance tests assert against the provider's value, and
+the second one is what discriminates the three candidate implementations from each other.
+
+One deliberate design choice in the double: the revert is applied by a new `SettleChange(order)`
+and **not** inside `Change()`. Live, the order is still carrying the desired values on the line
+after `Change()` returns — the revert arrives with the settle event. A stub that reverted
+synchronously would let a synchronous read-back pass the suite and still fail live, which is
+the worst available outcome. **A double has to make the wrong fix fail, not just let the right
+one pass.** Same lesson as the six `OrderState`s this stub used to omit.
+
+### `P0-63`'s "Where" clause was short by one call site — now `P0-67`
+
+Found by grepping `.Change(` across `addons/` instead of trusting the plan's prose, which named
+the two copier leg syncs and `McpBridgeAddOn.ChangeOrder`. The third is
+`DynamicAtmManager.ModifyStopPrice` (`addons/DynamicAtmManager.cs:622`), and its consequences
+are **worse** than the copier's, for reasons specific to that file:
+
+* every call site writes the refused price into `bracket.CurrentStopPrice` **unconditionally**,
+  so the cache holds a value no order anywhere has;
+* the trail's own gate compares against that field, so the manager believes it has already
+  trailed and **latches** — the ATM stop sits at its original price for the whole trade while
+  the cached state claims otherwise;
+* `BreakevenTriggered = true` is set after the same unchecked call, making a refused breakeven
+  move **permanent**.
+
+Plus two more in the same 18-line method: it keys on `order.OrderId`, the one place left that
+identifies a protective leg by id, and it requires the literal state `OrderState.Working`, so a
+stop at `TriggerPending` — *the most protective state a stop can be in* — is skipped in
+silence while `AcceptsModification` exists to answer exactly that question.
+
+**Deliberately out of scope for `P0-63`'s ticket**, because it has no settle hook and no
+per-leg pending-request state to hang a read-back on; bolting the copier's fix on would have
+been the wrong shape. Full entry and ordered remedy in the plan. **First establish whether the
+path is live at all** — `DynamicAtmManager` is driven by `nt8-mcp-bridge`, whose harness
+executes none of it (`P2-27`), so it may be dormant rather than dangerous.
+
+### `P?-64` is no longer an inference — it is measured, with timestamps
+
+§5.2 recorded that the UI and the bridge use different files and that "both files exist on this
+box with different contents". They now have numbers:
+
+| | Path | Written by | mtime | Both relationships |
+|---|---|---|---|---|
+| **Live** | `<UserDataDir>/RiskGuard/copier_config.json` | `McpBridgeAddOn.cs:3600`, and the startup load at `:245` | **2026-08-11 20:27** | `IsEnabled: true` |
+| **Orphan** | `<UserDataDir>/CopierConfig.json` | `TradeCopierWindow.cs`, 7 call sites | **2026-08-04 20:15** | `IsEnabled: false` |
+
+The bridge's path is the one `LoadFromDisk` is called with at startup, so it is authoritative.
+**Every change made in the NT8 window since 2026-08-04 has been written to a file nothing
+reads, and discarded at the next restart** — and the two files disagree about whether the
+copier is enabled at all. This does not change §5.6's ordering, but it does mean item 3 is
+config loss that has already happened, not a hazard that might.
+
+### One `P?-66` hypothesis ruled out before spending a ticket on it
+
+§5.2 offered two candidate causes. The first — that `rel` fails to resolve because a
+group-derived relationship is a fresh object from `ToRelationships()` — **is not the live
+cause**: the live config has `Groups: {}` and two direct entries under `Relationships`, so
+`_relationships` does contain the pair. That leaves the pending-map miss and the latency sanity
+bound, which is what the instrumentation is there to separate. Recorded so the next reader does
+not re-derive it.
