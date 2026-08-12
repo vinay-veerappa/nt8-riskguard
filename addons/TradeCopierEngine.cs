@@ -82,7 +82,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         Shadow = 2,      // IsEnabled true, ArmedForLive false: configured, will not act
         Diverged = 3,    // both non-flat, quantity or side disagrees
         Orphan = 4,      // leader FLAT, follower NOT. Ranks above Diverged, deliberately.
-        Quarantined = 5  // not copying at all, so agreement is meaningless
+        Quarantined = 5, // not copying at all, so agreement is meaningless
+        NotApplicable = 6 // instrument is not configured for this relationship
     }
 
     /// <summary>
@@ -105,6 +106,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string LeaderAccountName { get; set; }
         public string FollowerAccountName { get; set; }
         public string GroupName { get; set; }          // null for a DIRECT relationship
+        public string InstrumentFullName { get; set; }   // null when no instrument could be derived
         public CopierSizingMode SizingMode { get; set; }
         public double EffectiveRatio { get; set; }
         public bool IsEnabled { get; set; }
@@ -363,11 +365,472 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         public CopierSnapshot GetSnapshot()
         {
+            List<CopierRelationship> relationshipsCopy;
+            List<CopierGroup> groupsCopy;
+            Dictionary<string, int> slippageCountsCopy;
+            Dictionary<string, int> latencyCountsCopy;
+            Dictionary<string, double> latencyValuesCopy;
+            Dictionary<string, double> slippageValuesCopy;
+
+            lock (_lock)
+            {
+                relationshipsCopy = new List<CopierRelationship>(_relationships);
+                groupsCopy = new List<CopierGroup>(_groups);
+                slippageCountsCopy = new Dictionary<string, int>(_slippageSampleCounts);
+                latencyCountsCopy = new Dictionary<string, int>(_latencySampleCounts);
+
+                latencyValuesCopy = new Dictionary<string, double>();
+                slippageValuesCopy = new Dictionary<string, double>();
+                foreach (var r in relationshipsCopy)
+                {
+                    latencyValuesCopy[r.Id] = r.LatencyMs;
+                    slippageValuesCopy[r.Id] = r.AvgSlippageTicks;
+                }
+                foreach (var g in groupsCopy)
+                {
+                    foreach (var gr in g.ToRelationships())
+                    {
+                        if (!latencyValuesCopy.ContainsKey(gr.Id))
+                            latencyValuesCopy[gr.Id] = gr.LatencyMs;
+                        if (!slippageValuesCopy.ContainsKey(gr.Id))
+                            slippageValuesCopy[gr.Id] = gr.AvgSlippageTicks;
+                    }
+                }
+            }
+
+            var leaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in relationshipsCopy)
+                leaders.Add(r.LeaderAccountName);
+            foreach (var g in groupsCopy)
+                leaders.Add(g.LeaderAccountName);
+
+            var activeRels = new List<CopierRelationship>();
+            var groupNameByRelId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var metricIdByRelId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var leader in leaders)
+            {
+                var active = GetActiveRelationshipsForLeaderFromCopies(leader, relationshipsCopy, groupsCopy, includeQuarantined: true);
+                foreach (var rel in active)
+                {
+                    string groupName = DeriveGroupName(rel, groupsCopy);
+                    string canonicalId = ResolveCanonicalRelationshipId(rel, relationshipsCopy);
+                    activeRels.Add(CloneRelationship(rel));
+                    groupNameByRelId[rel.Id] = groupName;
+                    metricIdByRelId[rel.Id] = canonicalId ?? rel.Id;
+                }
+            }
+
+            Account[] accounts = null;
+            try
+            {
+                accounts = Account.All != null ? Account.All.ToArray() : null;
+            }
+            catch (Exception ex)
+            {
+                CopierLog(null, "SNAPSHOT_ACCOUNT_READ_FAILED",
+                    string.Format("Failed to read Account.All for snapshot: {0}", ex.Message));
+            }
+
+            var positionsByAccount = new Dictionary<string, Position[]>(StringComparer.OrdinalIgnoreCase);
+            if (accounts != null)
+            {
+                foreach (var account in accounts)
+                {
+                    if (account == null || string.IsNullOrEmpty(account.Name))
+                        continue;
+                    Position[] positions = null;
+                    try
+                    {
+                        positions = account.Positions != null ? account.Positions.ToArray() : null;
+                    }
+                    catch (Exception ex)
+                    {
+                        CopierLog(account.Name, "SNAPSHOT_POSITION_READ_FAILED",
+                            string.Format("Failed to read positions for account {0}: {1}", account.Name, ex.Message));
+                    }
+                    positionsByAccount[account.Name] = positions ?? new Position[0];
+                }
+            }
+
+            var rows = new List<CopierSnapshotRow>();
+            foreach (var rel in activeRels)
+            {
+                string groupName;
+                groupNameByRelId.TryGetValue(rel.Id, out groupName);
+                string metricId;
+                metricIdByRelId.TryGetValue(rel.Id, out metricId);
+
+                double latencyValue;
+                latencyValuesCopy.TryGetValue(metricId, out latencyValue);
+                int latencySamples;
+                latencyCountsCopy.TryGetValue(metricId, out latencySamples);
+                double slippageValue;
+                slippageValuesCopy.TryGetValue(metricId, out slippageValue);
+                int slippageSamples;
+                slippageCountsCopy.TryGetValue(metricId, out slippageSamples);
+
+                rows.AddRange(BuildRowsForRelationship(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, positionsByAccount));
+            }
+
             return new CopierSnapshot
             {
-                Rows = new List<CopierSnapshotRow>(),
+                Rows = rows,
                 TakenUtc = DateTime.UtcNow
             };
+
+            List<CopierRelationship> GetActiveRelationshipsForLeaderFromCopies(string leader, List<CopierRelationship> relationships, List<CopierGroup> groups, bool includeQuarantined)
+            {
+                var result = new List<CopierRelationship>();
+                var directFollowers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var r in relationships)
+                {
+                    if (!string.Equals(r.LeaderAccountName, leader, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!includeQuarantined && r.IsQuarantined)
+                        continue;
+                    result.Add(r);
+                    directFollowers.Add(r.FollowerAccountName);
+                }
+
+                foreach (var g in groups)
+                {
+                    if (!string.Equals(g.LeaderAccountName, leader, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    foreach (var gr in g.ToRelationships())
+                    {
+                        if (!includeQuarantined && gr.IsQuarantined)
+                            continue;
+                        if (directFollowers.Contains(gr.FollowerAccountName))
+                            continue;
+                        result.Add(gr);
+                    }
+                }
+
+                return result;
+            }
+
+            string DeriveGroupName(CopierRelationship rel, List<CopierGroup> groups)
+            {
+                foreach (var g in groups)
+                {
+                    if (g.FollowerAccounts == null)
+                        continue;
+                    if (string.Equals(g.LeaderAccountName, rel.LeaderAccountName, StringComparison.OrdinalIgnoreCase)
+                        && g.FollowerAccounts.Any(f => string.Equals(f, rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase)))
+                        return g.GroupName;
+                }
+                return null;
+            }
+
+            string ResolveCanonicalRelationshipId(CopierRelationship rel, List<CopierRelationship> relationships)
+            {
+                var canonical = relationships.FirstOrDefault(r => r.Id == rel.Id);
+                if (canonical != null)
+                    return canonical.Id;
+                canonical = relationships.FirstOrDefault(r =>
+                    string.Equals(r.LeaderAccountName, rel.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.FollowerAccountName, rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                return canonical != null ? canonical.Id : null;
+            }
+
+            CopierRelationship CloneRelationship(CopierRelationship source)
+            {
+                return new CopierRelationship
+                {
+                    Id = source.Id,
+                    LeaderAccountName = source.LeaderAccountName,
+                    FollowerAccountName = source.FollowerAccountName,
+                    IsEnabled = source.IsEnabled,
+                    ArmedForLive = source.ArmedForLive,
+                    Mode = source.Mode,
+                    SizingMode = source.SizingMode,
+                    QuantityRatio = source.QuantityRatio,
+                    FixedLotMode = source.FixedLotMode,
+                    FixedLotSize = source.FixedLotSize,
+                    AutoSymbolConversion = source.AutoSymbolConversion,
+                    PerTickerRatios = source.PerTickerRatios != null
+                        ? new Dictionary<string, double>(source.PerTickerRatios, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase),
+                    CustomSymbolMappings = source.CustomSymbolMappings != null
+                        ? new Dictionary<string, string>(source.CustomSymbolMappings, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    StealthMode = source.StealthMode,
+                    MaxPositionSize = source.MaxPositionSize,
+                    DailyLossLimit = source.DailyLossLimit,
+                    IsQuarantined = source.IsQuarantined,
+                    QuarantineReason = source.QuarantineReason,
+                    LatencyMs = source.LatencyMs,
+                    AvgSlippageTicks = source.AvgSlippageTicks,
+                    MaxSlippageTicks = source.MaxSlippageTicks
+                };
+            }
+
+            List<CopierSnapshotRow> BuildRowsForRelationship(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Dictionary<string, Position[]> positionsByAccount)
+            {
+                var rows = new List<CopierSnapshotRow>();
+
+                Position[] leaderPositions;
+                positionsByAccount.TryGetValue(rel.LeaderAccountName, out leaderPositions);
+                if (leaderPositions == null)
+                    leaderPositions = new Position[0];
+
+                Position[] followerPositions;
+                positionsByAccount.TryGetValue(rel.FollowerAccountName, out followerPositions);
+                if (followerPositions == null)
+                    followerPositions = new Position[0];
+
+                var followerRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var fp in followerPositions)
+                {
+                    string root = GetRootFromPosition(fp);
+                    if (!string.IsNullOrEmpty(root))
+                        followerRoots.Add(root);
+                }
+
+                if (rel.CustomSymbolMappings != null && rel.CustomSymbolMappings.Count > 0)
+                {
+                    var mappedLeaderRoots = new HashSet<string>(rel.CustomSymbolMappings.Keys, StringComparer.OrdinalIgnoreCase);
+                    var mappedFollowerRoots = new HashSet<string>(rel.CustomSymbolMappings.Values, StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var kvp in rel.CustomSymbolMappings)
+                    {
+                        Position leaderPos = FindPositionByRoot(leaderPositions, kvp.Key);
+                        Position followerPos = FindPositionByRoot(followerPositions, kvp.Value);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, kvp.Key, kvp.Value, false));
+                    }
+
+                    foreach (var root in followerRoots)
+                    {
+                        if (mappedFollowerRoots.Contains(root))
+                            continue;
+                        Position leaderPos = FindPositionByRoot(leaderPositions, root);
+                        Position followerPos = FindPositionByRoot(followerPositions, root);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root, false));
+                    }
+
+                    foreach (var lp in leaderPositions)
+                    {
+                        string root = GetRootFromPosition(lp);
+                        if (string.IsNullOrEmpty(root))
+                            continue;
+                        if (mappedLeaderRoots.Contains(root))
+                            continue;
+                        if (followerRoots.Contains(root))
+                            continue;
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root, true));
+                    }
+                }
+                else
+                {
+                    foreach (var root in followerRoots)
+                    {
+                        Position leaderPos = FindPositionByRoot(leaderPositions, root);
+                        Position followerPos = FindPositionByRoot(followerPositions, root);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root, false));
+                    }
+
+                    foreach (var lp in leaderPositions)
+                    {
+                        string root = GetRootFromPosition(lp);
+                        if (string.IsNullOrEmpty(root))
+                            continue;
+                        if (followerRoots.Contains(root))
+                            continue;
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root, true));
+                    }
+
+                    if (rows.Count == 0)
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, null, null, null, null, false));
+                }
+
+                return rows;
+            }
+
+            CopierSnapshotRow BuildSnapshotRow(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Position leaderPos, Position followerPos, string leaderRoot, string followerRoot, bool notApplicable)
+            {
+                Instrument instrument = leaderPos != null ? leaderPos.Instrument : (followerPos != null ? followerPos.Instrument : null);
+                string rawSymbol = instrument != null ? instrument.FullName : leaderRoot;
+
+                MarketPosition leaderSide = leaderPos != null ? leaderPos.MarketPosition : MarketPosition.Flat;
+                int leaderQty = leaderPos != null ? Math.Abs(leaderPos.Quantity) : 0;
+
+                MarketPosition actualSide = followerPos != null ? followerPos.MarketPosition : MarketPosition.Flat;
+                int actualQty = followerPos != null ? Math.Abs(followerPos.Quantity) : 0;
+
+                if (notApplicable)
+                {
+                    return new CopierSnapshotRow
+                    {
+                        RelationshipId = rel.Id,
+                        LeaderAccountName = rel.LeaderAccountName,
+                        FollowerAccountName = rel.FollowerAccountName,
+                        GroupName = groupName,
+                        InstrumentFullName = instrument != null ? instrument.FullName : null,
+                        SizingMode = rel.SizingMode,
+                        EffectiveRatio = 0.0,
+                        IsEnabled = rel.IsEnabled,
+                        ArmedForLive = rel.ArmedForLive,
+                        IsQuarantined = rel.IsQuarantined,
+                        QuarantineReason = rel.QuarantineReason,
+                        StealthMode = rel.StealthMode,
+                        LeaderSide = leaderSide,
+                        LeaderQuantity = leaderQty,
+                        ExpectedSide = MarketPosition.Flat,
+                        ExpectedQuantity = 0,
+                        ExpectedIsClamped = false,
+                        ActualSide = actualSide,
+                        ActualQuantity = actualQty,
+                        Latency = new CopierMetric { Value = latencyValue, Samples = latencySamples },
+                        Slippage = new CopierMetric { Value = slippageValue, Samples = slippageSamples },
+                        Verdict = CopierConformance.NotApplicable
+                    };
+                }
+
+                bool expectedIsClamped;
+                int expectedQty;
+                MarketPosition expectedSide;
+
+                if (leaderQty > 0 && !string.IsNullOrEmpty(rawSymbol))
+                {
+                    bool rawClamped;
+                    int rawTarget = CalculateFollowerQuantity(rel, leaderQty, rawSymbol, 0, false, out rawClamped);
+
+                    bool isExit;
+                    if (actualSide == MarketPosition.Flat)
+                        isExit = false;
+                    else if (actualSide != leaderSide)
+                        isExit = true;
+                    else
+                        isExit = actualQty > rawTarget;
+
+                    expectedQty = CalculateFollowerQuantity(rel, leaderQty, rawSymbol, actualQty, isExit, out expectedIsClamped);
+                    expectedSide = expectedQty > 0 ? leaderSide : MarketPosition.Flat;
+                }
+                else
+                {
+                    expectedQty = 0;
+                    expectedSide = MarketPosition.Flat;
+                    expectedIsClamped = false;
+                }
+
+                string ratioRoot = !string.IsNullOrEmpty(leaderRoot) ? leaderRoot : GetRootFromInstrument(instrument);
+                double effectiveRatio = !string.IsNullOrEmpty(ratioRoot) ? ComputeEffectiveRatio(rel, ratioRoot) : 0.0;
+
+                CopierConformance verdict;
+                if (rel.IsQuarantined)
+                    verdict = CopierConformance.Quarantined;
+                else if (leaderSide == MarketPosition.Flat && actualSide != MarketPosition.Flat)
+                    verdict = CopierConformance.Orphan;
+                else if (rel.IsEnabled && !rel.ArmedForLive)
+                    verdict = CopierConformance.Shadow;
+                else
+                {
+                    MarketPosition effectiveExpectedSide = expectedSide;
+                    int effectiveExpectedQty = expectedQty;
+                    if (expectedIsClamped && expectedQty == 0)
+                    {
+                        effectiveExpectedSide = actualSide;
+                        effectiveExpectedQty = actualQty;
+                    }
+
+                    if (effectiveExpectedSide != actualSide || effectiveExpectedQty != actualQty)
+                        verdict = CopierConformance.Diverged;
+                    else if (leaderSide == MarketPosition.Flat && actualSide == MarketPosition.Flat)
+                        verdict = CopierConformance.Idle;
+                    else
+                        verdict = CopierConformance.Match;
+                }
+
+                return new CopierSnapshotRow
+                {
+                    RelationshipId = rel.Id,
+                    LeaderAccountName = rel.LeaderAccountName,
+                    FollowerAccountName = rel.FollowerAccountName,
+                    GroupName = groupName,
+                    InstrumentFullName = instrument != null ? instrument.FullName : null,
+                    SizingMode = rel.SizingMode,
+                    EffectiveRatio = effectiveRatio,
+                    IsEnabled = rel.IsEnabled,
+                    ArmedForLive = rel.ArmedForLive,
+                    IsQuarantined = rel.IsQuarantined,
+                    QuarantineReason = rel.QuarantineReason,
+                    StealthMode = rel.StealthMode,
+                    LeaderSide = leaderSide,
+                    LeaderQuantity = leaderQty,
+                    ExpectedSide = expectedSide,
+                    ExpectedQuantity = expectedQty,
+                    ExpectedIsClamped = expectedIsClamped,
+                    ActualSide = actualSide,
+                    ActualQuantity = actualQty,
+                    Latency = new CopierMetric { Value = latencyValue, Samples = latencySamples },
+                    Slippage = new CopierMetric { Value = slippageValue, Samples = slippageSamples },
+                    Verdict = verdict
+                };
+            }
+
+            string GetRootFromPosition(Position p)
+            {
+                if (p == null || p.Instrument == null || p.Instrument.MasterInstrument == null)
+                    return null;
+                return p.Instrument.MasterInstrument.Name;
+            }
+
+            string GetRootFromInstrument(Instrument instrument)
+            {
+                if (instrument == null || instrument.MasterInstrument == null)
+                    return null;
+                return instrument.MasterInstrument.Name;
+            }
+
+            Position FindPositionByRoot(Position[] positions, string root)
+            {
+                if (positions == null || string.IsNullOrEmpty(root))
+                    return null;
+                foreach (var p in positions)
+                {
+                    if (p == null)
+                        continue;
+                    string pRoot = GetRootFromPosition(p);
+                    if (string.Equals(pRoot, root, StringComparison.OrdinalIgnoreCase))
+                        return p;
+                }
+                return null;
+            }
+
+            double ComputeEffectiveRatio(CopierRelationship rel, string symbolRoot)
+            {
+                if (rel.SizingMode == CopierSizingMode.PerTickerMatrix)
+                {
+                    double ratio;
+                    if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out ratio)
+                        && !double.IsNaN(ratio) && !double.IsInfinity(ratio) && ratio > 0.0)
+                        return ratio;
+                    return 0.0;
+                }
+
+                if (rel.FixedLotMode || rel.SizingMode == CopierSizingMode.FixedLot)
+                    return 0.0;
+
+                if (rel.SizingMode == CopierSizingMode.NetLiquidationRatio || rel.SizingMode == CopierSizingMode.AvailableCashPercent)
+                    return 0.0;
+
+                double absRatio = Math.Abs(rel.QuantityRatio);
+                if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out double tickerRatio))
+                    absRatio = Math.Abs(tickerRatio);
+
+                double symbolMultiplier = 1.0;
+                if (rel.AutoSymbolConversion)
+                {
+                    if (symbolRoot == "NQ" || symbolRoot == "ES" || symbolRoot == "YM" || symbolRoot == "CL" || symbolRoot == "GC" || symbolRoot == "RTY")
+                        symbolMultiplier = 10.0;
+                    else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")
+                        symbolMultiplier = 0.1;
+                }
+
+                return absRatio * symbolMultiplier;
+            }
         }
 
         // ── P1-76: a follower belongs to a direct relationship OR a group, never both ──
@@ -3345,6 +3808,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// from the leader, and quarantines the relationship if an ENTRY slipped past
         /// `MaxSlippageTicks`.
         /// </summary>
+        private Dictionary<string, int> _latencySampleCounts = new Dictionary<string, int>();
+
         private void ObserveFollowerFill(Execution exec)
         {
             if (exec == null || exec.Order == null)
@@ -3360,6 +3825,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool pendingFound = false;
             lock (_lock)
             {
+                PruneMetricCountsLocked();
+
                 // Matched on the Order object, never on OrderId -- see OrderReferenceComparer.
                 pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
                 if (pendingFound)
@@ -3408,7 +3875,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Recording it would make the UI lie in a new direction.
             bool latencyAccepted = latencyMs >= 0 && latencyMs < 600000;
             if (latencyAccepted)
-                rel.LatencyMs = latencyMs;
+            {
+                lock (_lock)
+                {
+                    rel.LatencyMs = latencyMs;
+                    int n;
+                    _latencySampleCounts.TryGetValue(rel.Id, out n);
+                    n++;
+                    _latencySampleCounts[rel.Id] = n;
+                }
+            }
             else if (latencyMs < 0 || latencyMs >= 600000)
             {
                 CopierLog(rel.FollowerAccountName, "LATENCY_REJECTED",
@@ -3488,6 +3964,43 @@ namespace NinjaTrader.NinjaScript.AddOns
                     $"{rel.LeaderAccountName} -> {rel.FollowerAccountName} exit slipped {ticks:F1} "
                     + $"ticks (limit {rel.MaxSlippageTicks:F1}). Deliberately NOT quarantining: that "
                     + "would strand the follower in a position the leader has left.");
+            }
+        }
+
+        private void PruneMetricCountsLocked()
+        {
+            var validIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in _relationships)
+            {
+                if (r == null)
+                    continue;
+                validIds.Add(r.Id);
+            }
+
+            foreach (var g in _groups)
+            {
+                if (g == null || g.FollowerAccounts == null)
+                    continue;
+                foreach (var f in g.FollowerAccounts)
+                {
+                    if (string.IsNullOrWhiteSpace(f))
+                        continue;
+                    validIds.Add(string.Format("{0}_{1}", g.Id, f.Trim()));
+                }
+            }
+
+            var latencyKeys = new List<string>(_latencySampleCounts.Keys);
+            foreach (var k in latencyKeys)
+            {
+                if (!validIds.Contains(k))
+                    _latencySampleCounts.Remove(k);
+            }
+
+            var slippageKeys = new List<string>(_slippageSampleCounts.Keys);
+            foreach (var k in slippageKeys)
+            {
+                if (!validIds.Contains(k))
+                    _slippageSampleCounts.Remove(k);
             }
         }
 
