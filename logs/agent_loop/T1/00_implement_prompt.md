@@ -537,6 +537,14 @@ Purpose: the target leg's Change() at :2312, same treatment, but it must never d
             }
         }
 ```
+### REGION id="ResetBracketsForTest"  file=addons/TradeCopierEngine.cs  lines 2491-2494
+Purpose: MUST also clear the new account-level state. It is session-scoped in production, which is correct, but that means it LEAKS BETWEEN TESTS: one test that provokes a no-op leaves every later test's follower marked as a provider that ignores Change(). Round 1 of this ticket failed exactly here -- the honoured-change regression guard saw cancel-then-create because the previous test's verdict was still set.
+```csharp
+        internal void ResetBracketsForTest()
+        {
+            lock (_lock) { _followerBrackets.Clear(); }
+        }
+```
 ### REGION id="OnFollowerOrderUpdate"  file=addons/TradeCopierEngine.cs  lines 1325-1379
 Purpose: where the settle event arrives and the read-back belongs -- inside the AcceptsModification block, BEFORE the OccupiesSlot early return
 ```csharp
@@ -597,3 +605,10 @@ Purpose: where the settle event arrives and the read-back belongs -- inside the 
         }
 ```
 Return one block per region id above, in the same order. No other output.
+
+## ORCHESTRATOR DIRECTIVE (overrides the reviewer if they conflict)
+Round 1 of this ticket (discarded) got the shape RIGHT and failed on ONE thing, so do not redesign it. It recorded the requested price/quantity on the bracket, verified on the settle event in OnFollowerOrderUpdate, kept an account-level set of providers known to ignore Change(), and bypassed Change() for accounts in that set. All of that is correct and is what the ticket asks for.
+
+It failed because the account-level set is SESSION-SCOPED and nothing clears it, so it LEAKED BETWEEN TESTS: a test that provokes a no-op leaves the follower account marked for every later test, and the honoured-change regression guard then saw cancel-then-create where it required modify-in-place. That is why ResetBracketsForTest is now an editable region -- clear the new state there, alongside _followerBrackets. Session-scoped is the correct PRODUCTION behaviour; do not make it per-bracket or self-expiring to work around the test.
+
+DO NOT weaken or remove the bypass in order to make TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace pass. That test asserts exactly one COPIER_STOP order is ever created when the provider HONOURS the change, and it is green at baseline. Always-cancel-then-create is remedy 1, it was considered and rejected, and it reopens the naked window on the risk leg that section 4o closed. Both behaviours must hold at once: modify in place where the provider honours it, cancel-then-create only once it has demonstrably refused.

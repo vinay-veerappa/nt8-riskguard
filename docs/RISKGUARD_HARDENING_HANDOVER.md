@@ -2975,3 +2975,52 @@ cause**: the live config has `Groups: {}` and two direct entries under `Relation
 `_relationships` does contain the pair. That leaves the pending-map miss and the latency sanity
 bound, which is what the instrumentation is there to separate. Recorded so the next reader does
 not re-derive it.
+
+### The regression guard earned its keep on round 1, and the reason is worth keeping
+
+Round 1's candidate made **both** `P0-63` acceptance tests pass and broke
+`TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace`. That guard is green at baseline and
+exists solely to stop the fix becoming *remedy 1* — always cancel-then-create — which passes
+every test about trailing while silently reopening the naked window on the risk leg that §4o
+closed. **Two acceptance tests plus no guard would have shipped the wrong remedy under the
+right ticket number.**
+
+Then the more interesting part: the candidate was not actually remedy 1. Its shape was right —
+it recorded the requested price on the bracket, verified on the settle event, and kept an
+account-level set of providers known to ignore `Change()`. It failed because **that set is
+session-scoped and nothing cleared it, so it leaked between tests.** One earlier test provokes
+a no-op, the follower account is marked, and every later test in the file inherits that
+verdict. The guard was reading the previous test's state.
+
+Session-scoped is the *correct* production behaviour and must not be weakened to make the guard
+pass. The fix is that `ResetBracketsForTest` has to clear it, which meant **adding that method
+to the ticket's editable regions** — round 2 could not have fixed it otherwise, because the
+method was outside the region set, so it would have been forced to either thrash or weaken the
+bypass. Recognising that and restarting with the region added cost one round; letting it run
+would have cost several and might have landed the weakening.
+
+**The general rule: any new session-scoped state in the engine has to join the existing
+`*ForTest` reset, or it becomes a landmine under every later test.** The same is true of a
+`--list` region set: if the ticket's spec implies touching a method, that method has to be in
+`regions`, or the loop is being asked for something it cannot deliver.
+
+### Both mutation batteries were vacuous whenever the baseline was red — now they refuse to run
+
+`mutate_cm3.py` and `mutate_cm4.py` score a mutant with
+`killed = 'Failed = 0' not in res`. That is correct **only from a green baseline**. With any
+pre-existing failure, every mutant scores `KILLED` whether or not the suite detected it, and the
+battery reports a clean sweep having tested nothing.
+
+This is reachable in ordinary use, not a corner case: **test-first work leaves acceptance tests
+red by design**, and running a battery in that window is exactly when you would most want
+reassurance. Found here with the 8 `P0-63`/`P?-66` assertions red — both batteries would have
+reported 14 and 10 killed, and both would have been lying.
+
+Both now check the baseline first and **exit 2** with an explanation if it is not green. Verified
+in both directions, and note that verifying it needs care: `python mutation/mutate_cm3.py | tail`
+reports *tail's* exit status, so the first check of the fix read `exit=0` and looked like the gate
+had not worked. Redirect to a file and read `$?` directly.
+
+This is the third time a gate in this repo has turned out to prove nothing — after the batteries
+exiting 0 on survivors (2026-08-12) and `test_version_alignment` raising `FileNotFoundError`
+instead of asserting. **When a check passes, establish that it can fail before believing it.**

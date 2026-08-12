@@ -40,6 +40,12 @@
           "note": "the target leg's Change() at :2312, same treatment, but it must never delay or disturb the stop leg"
         },
         {
+          "id": "ResetBracketsForTest",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal void ResetBracketsForTest()",
+          "note": "MUST also clear the new account-level state. It is session-scoped in production, which is correct, but that means it LEAKS BETWEEN TESTS: one test that provokes a no-op leaves every later test's follower marked as a provider that ignores Change(). Round 1 of this ticket failed exactly here -- the honoured-change regression guard saw cancel-then-create because the previous test's verdict was still set."
+        },
+        {
           "id": "OnFollowerOrderUpdate",
           "file": "addons/TradeCopierEngine.cs",
           "anchor": "private void OnFollowerOrderUpdate(Account followerAcc, Order order)",

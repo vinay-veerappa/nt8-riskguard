@@ -90,7 +90,24 @@ def run():
 
 original = open(ENGINE, encoding='utf-8').read()
 print('=== baseline ===')
-print(' ', run())
+baseline = run()
+print(' ', baseline)
+
+# A RED baseline makes this entire battery vacuous, and it is reachable in normal
+# use. `killed` below is computed as "Failed = 0 is absent from the result line", so
+# if the suite already has failures then EVERY mutant scores KILLED whether or not
+# anything detected it, and the run reports a clean sweep having tested nothing.
+#
+# Test-first work reaches this state by design: acceptance tests are written red and
+# stay red until the fix lands. Running a battery in that window is how you get a
+# green light that proves nothing -- the same lying-harness shape these batteries
+# exist to catch, one level up. Found 2026-08-13 with 8 P0-63/P?-66 assertions red.
+if 'Failed = 0' not in baseline:
+    print()
+    print('REFUSING TO RUN: the baseline suite is NOT GREEN, so every mutant would be')
+    print('scored KILLED regardless of whether the suite actually detected it. Land the')
+    print('fix first (or stash the red acceptance tests), then re-run this battery.')
+    sys.exit(2)
 
 survivors = []
 for name, old, new in MUTANTS:
