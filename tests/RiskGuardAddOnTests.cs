@@ -987,6 +987,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCM2_AnEmptySectionIsNotAParseFailure();
 
             // CM3: copier bridge merge semantics, slice 3b -- RED until the fix lands
+            // UI1: the conformance snapshot. RED until GetSnapshot() is implemented.
+            TestUi1_VerdictsFromThePositionComparison();
+            TestUi1_OrphanIsTheWorstStateAndOutranksDiverged();
+            TestUi1_ConfiguredButNotActingIsItsOwnVerdict();
+            TestUi1_ExpectedComesFromTheEnginesOwnSizingPath();
+            TestUi1_EnumerationMatchesWhatTheEngineActuallyCopies();
+            TestUi1_MetricsCarryTheirSampleCount();
+            TestUi1_TheSnapshotIsAReadAndOnlyARead();
+
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
             TestCM3_APartialRelationshipUpdateKeepsEveryUnmentionedField();
@@ -1496,6 +1505,338 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Name = "COPIER_FOLLOW",
                 Time = SlipT0.AddMilliseconds(msAfterLeader)
             });
+        }
+
+        // ── UI1: the conformance snapshot ──────────────────────────────────────────
+        // These are written RED, before GetSnapshot() does anything, on purpose. The
+        // agent-loop gate matches `expect_green` against this runner's [FAIL] lines and
+        // refuses a ticket whose tests already pass -- which is the only thing standing
+        // between this repo and a suite that asserts what the implementation happens to
+        // do. Contract: agent/tickets_ui_snapshot.json, docs/UI_REDESIGN_DESIGN.md SS2.
+        //
+        // Every assertion below is written to REACH its Assert even when GetSnapshot
+        // returns nothing, so the failure line matches. A test that throws instead of
+        // failing produces no [FAIL] line and silently removes itself from the gate.
+
+        private static CopierSnapshotRow Ui1Row(string follower)
+        {
+            var snap = TradeCopierEngine.Instance.GetSnapshot();
+            if (snap == null || snap.Rows == null) return null;
+            return snap.Rows.FirstOrDefault(r => r != null
+                && string.Equals(r.FollowerAccountName, follower, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static Instrument Ui1Clean()
+        {
+            var engine = TradeCopierEngine.Instance;
+            foreach (var g in engine.GetGroups().ToList()) engine.RemoveGroup(g.GroupName);
+            foreach (var r in engine.GetRelationships().ToList())
+                engine.RemoveRelationship(r.LeaderAccountName, r.FollowerAccountName);
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+            return new Instrument("NQ 03-26");
+        }
+
+        private static Account Ui1Account(string name, Instrument inst, MarketPosition side, int qty)
+        {
+            var acc = new Account { Name = name, Provider = Provider.Simulator };
+            if (side != MarketPosition.Flat)
+                acc.Positions.Add(new Position { Instrument = inst, MarketPosition = side, Quantity = qty });
+            Account.All.Add(acc);
+            return acc;
+        }
+
+        private static CopierRelationship Ui1Rel(
+            string leader, string follower, double ratio, bool armed = true, bool enabled = true)
+        {
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = leader,
+                FollowerAccountName = follower,
+                IsEnabled = enabled,
+                ArmedForLive = armed,
+                SizingMode = CopierSizingMode.QuantityRatio,
+                QuantityRatio = ratio,
+                AutoSymbolConversion = false,
+                MaxPositionSize = 100
+            };
+            TradeCopierEngine.Instance.UpsertRelationship(rel, confirmLive: armed);
+            return rel;
+        }
+
+        private static void TestUi1_VerdictsFromThePositionComparison()
+        {
+            Console.WriteLine("\n[TEST] UI1: the conformance verdict, from expected vs actual");
+
+            // IDLE -- both flat. A PASS, not a blank row: "nothing is happening because
+            // nothing should" is a different statement from "nothing is happening".
+            var inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1Flat", inst, MarketPosition.Flat, 0);
+            Ui1Rel("Ui1Leader", "Ui1Flat", 1.0);
+            var row = Ui1Row("Ui1Flat");
+            Assert(row != null && row.Verdict == CopierConformance.Idle,
+                "snapshot reports IDLE when the leader and the follower are both flat");
+
+            // MATCH -- ratio 2.0, leader long 1, follower long 2.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1Match", inst, MarketPosition.Long, 2);
+            Ui1Rel("Ui1Leader", "Ui1Match", 2.0);
+            row = Ui1Row("Ui1Match");
+            Assert(row != null && row.Verdict == CopierConformance.Match,
+                "snapshot reports MATCH when the follower holds the configured multiple of the leader");
+
+            // DIVERGED on quantity -- follower is one contract short of the configured 2.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1Short", inst, MarketPosition.Long, 1);
+            Ui1Rel("Ui1Leader", "Ui1Short", 2.0);
+            row = Ui1Row("Ui1Short");
+            Assert(row != null && row.Verdict == CopierConformance.Diverged,
+                "snapshot reports DIVERGED when the follower quantity is short of the configured multiple");
+
+            // DIVERGED on SIDE -- right size, opposite direction. Quantity alone cannot
+            // catch this, and it is the more dangerous of the two.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1Wrong", inst, MarketPosition.Short, 1);
+            Ui1Rel("Ui1Leader", "Ui1Wrong", 1.0);
+            row = Ui1Row("Ui1Wrong");
+            Assert(row != null && row.Verdict == CopierConformance.Diverged,
+                "snapshot reports DIVERGED when the follower holds the right quantity on the wrong side");
+        }
+
+        private static void TestUi1_OrphanIsTheWorstStateAndOutranksDiverged()
+        {
+            Console.WriteLine("\n[TEST] UI1: leader flat + follower not = ORPHAN, and it outranks DIVERGED");
+
+            // The leader is FLAT and the follower is not: a live position on a funded
+            // account that nothing is managing. CopierReconciler exists for exactly this
+            // and has never had a UI.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1Orphan", inst, MarketPosition.Long, 3);
+            Ui1Rel("Ui1Leader", "Ui1Orphan", 1.0);
+            var row = Ui1Row("Ui1Orphan");
+            Assert(row != null && row.Verdict == CopierConformance.Orphan,
+                "snapshot reports ORPHAN when the leader is flat and the follower is not");
+
+            // Expected is 0 and actual is 3, so a naive implementation that checks
+            // "actual != expected" first reports DIVERGED and buries the hazard in the
+            // same bucket as a rounding difference. Severity ordering is the fix.
+            Assert(row != null && row.Verdict == CopierConformance.Orphan
+                   && (int)CopierConformance.Orphan > (int)CopierConformance.Diverged,
+                "snapshot ranks ORPHAN above DIVERGED when both could describe the same row");
+        }
+
+        private static void TestUi1_ConfiguredButNotActingIsItsOwnVerdict()
+        {
+            Console.WriteLine("\n[TEST] UI1: SHADOW and QUARANTINED are states, not footnotes");
+
+            // Enabled and NOT armed: the relationship is configured and will not act.
+            // Reporting MATCH here would be true about the positions and a lie about the
+            // system -- this is the EVALUATED-but-not-ENFORCING state.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1Shadow", inst, MarketPosition.Flat, 0);
+            Ui1Rel("Ui1Leader", "Ui1Shadow", 1.0, armed: false);
+            var row = Ui1Row("Ui1Shadow");
+            Assert(row != null && row.Verdict == CopierConformance.Shadow,
+                "snapshot reports SHADOW when the relationship is enabled but not armed for live");
+
+            // Quarantined: not copying at all, so agreement is meaningless. The positions
+            // below AGREE, which is precisely why this must not report MATCH.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1Quar", inst, MarketPosition.Long, 1);
+            var qrel = Ui1Rel("Ui1Leader", "Ui1Quar", 1.0);
+            qrel.IsQuarantined = true;
+            qrel.QuarantineReason = "slippage";
+            row = Ui1Row("Ui1Quar");
+            Assert(row != null && row.Verdict == CopierConformance.Quarantined,
+                "snapshot reports QUARANTINED in preference to any position comparison");
+        }
+
+        private static void TestUi1_ExpectedComesFromTheEnginesOwnSizingPath()
+        {
+            Console.WriteLine("\n[TEST] UI1: expected quantity is CALCULATED, not reimplemented");
+
+            var inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 4);
+            Ui1Account("Ui1Sized", inst, MarketPosition.Long, 2);
+            var rel = Ui1Rel("Ui1Leader", "Ui1Sized", 0.5);
+
+            // The cross-check that makes a second implementation impossible to hide: ask
+            // the sizing function directly and demand the snapshot agree with it. If the
+            // snapshot ever grows its own arithmetic, this is what catches the drift.
+            bool clamped;
+            int expected = TradeCopierEngine.Instance.CalculateFollowerQuantity(
+                rel, 4, inst.FullName, 0, false, out clamped);
+            var row = Ui1Row("Ui1Sized");
+            Assert(row != null && row.ExpectedQuantity == expected,
+                "snapshot derives expected quantity from the engine's own sizing path rather than a second copy");
+
+            // MaxPositionSize 2 against a 10-lot leader: the sizing function clamps and
+            // says so. A clamped expectation is a different statement from an unclamped
+            // one and the operator needs to see which, so the flag is carried, not hidden.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 10);
+            Ui1Account("Ui1Clamp", inst, MarketPosition.Long, 2);
+            var crel = Ui1Rel("Ui1Leader", "Ui1Clamp", 1.0);
+            crel.MaxPositionSize = 2;
+            row = Ui1Row("Ui1Clamp");
+            Assert(row != null && row.ExpectedIsClamped,
+                "snapshot carries the clamped flag when the sizing function reports one");
+
+            // A follower with NO Position row is FLAT, which is a fact, not an error.
+            // NT8 simply does not carry a position object for a flat account.
+            inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1NoPos", inst, MarketPosition.Flat, 0);
+            Ui1Rel("Ui1Leader", "Ui1NoPos", 1.0);
+            row = Ui1Row("Ui1NoPos");
+            Assert(row != null && row.ActualSide == MarketPosition.Flat && row.ActualQuantity == 0,
+                "snapshot treats a missing follower position as flat rather than as an error");
+        }
+
+        private static void TestUi1_EnumerationMatchesWhatTheEngineActuallyCopies()
+        {
+            Console.WriteLine("\n[TEST] UI1: group expansion and P1-76 precedence, through the engine's own path");
+
+            // A group of two must produce TWO rows. A snapshot that lists groups as
+            // groups cannot be compared against positions, which are per account.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1GLeader", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1GF1", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1GF2", inst, MarketPosition.Flat, 0);
+            TradeCopierEngine.Instance.UpsertGroup(new CopierGroup
+            {
+                GroupName = "Ui1Group",
+                LeaderAccountName = "Ui1GLeader",
+                FollowerAccounts = new List<string> { "Ui1GF1", "Ui1GF2" },
+                QuantityRatio = 1.0,
+                IsEnabled = true
+            }, confirmLive: false);
+
+            var snap = TradeCopierEngine.Instance.GetSnapshot();
+            int groupRows = snap == null || snap.Rows == null ? 0 : snap.Rows.Count(r =>
+                r != null && string.Equals(r.LeaderAccountName, "Ui1GLeader", StringComparison.OrdinalIgnoreCase));
+            Assert(groupRows == 2,
+                "snapshot expands a group into one entry per follower account");
+
+            // P1-76: a follower belongs to a direct relationship OR a group, never both.
+            // The engine already resolves this; a snapshot that walks _relationships and
+            // _groups separately reports the follower TWICE and disagrees with what
+            // actually copies -- which is worse than not reporting it at all.
+            inst = Ui1Clean();
+            Ui1Account("Ui1PLeader", inst, MarketPosition.Flat, 0);
+            Ui1Account("Ui1PDual", inst, MarketPosition.Flat, 0);
+            TradeCopierEngine.Instance.UpsertGroup(new CopierGroup
+            {
+                GroupName = "Ui1PGroup",
+                LeaderAccountName = "Ui1PLeader",
+                FollowerAccounts = new List<string> { "Ui1PDual" },
+                QuantityRatio = 1.0,
+                IsEnabled = true
+            }, confirmLive: false);
+            Ui1Rel("Ui1PLeader", "Ui1PDual", 3.0);
+
+            snap = TradeCopierEngine.Instance.GetSnapshot();
+            int dualRows = snap == null || snap.Rows == null ? 0 : snap.Rows.Count(r =>
+                r != null && string.Equals(r.FollowerAccountName, "Ui1PDual", StringComparison.OrdinalIgnoreCase));
+            Assert(dualRows == 1,
+                "snapshot reports a follower once when a direct relationship shadows a group membership");
+        }
+
+        private static void TestUi1_MetricsCarryTheirSampleCount()
+        {
+            Console.WriteLine("\n[TEST] UI1: a zero metric is not a reading (P?-66, at the reporting layer)");
+
+            // Before any fill: the values are 0 AND nothing has been measured. Those two
+            // facts are indistinguishable in the current UI, which renders both as 0.00
+            // -- and a recompile resets the metrics, so a fresh NT8 reads as a perfect
+            // score. The sample count is what separates them.
+            var mnq = new Instrument("MNQ 03-26");
+            var rel0 = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel0, 0, null, MarketPosition.Flat);
+            var row = Ui1Row("SimFollower");
+            Assert(row != null && row.Latency != null && row.Slippage != null
+                   && row.Latency.Samples == 0 && row.Slippage.Samples == 0,
+                "snapshot reports latencySamples 0 and slippageSamples 0 before any fill is observed");
+
+            // One clean round trip: latency is recorded, so it counts.
+            var rel1 = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel1, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            var lead = LeaderExec(leader, mnq, OrderAction.Buy, 1, "UI1-M");
+            lead.Time = SlipT0;
+            lead.Price = 18000.00;
+            TradeCopierEngine.Instance.OnExecution(lead);
+            FillFollowerCopy(follower, mnq, 18000.00, 143, "UI1-M-F");
+            row = Ui1Row("SimFollower");
+            Assert(row != null && row.Latency != null && row.Latency.Samples == 1,
+                "snapshot reports latencySamples 1 after one measured fill");
+
+            // The sanity-bound case, which is the whole reason the counter cannot simply
+            // be "did a fill arrive". A leader clock five hours ahead produces an absurd
+            // latency the bound REFUSES to record -- so LatencyMs stays at its previous
+            // value. Counting that fill would put a stale number behind a sample count
+            // that claims it is current, which is the exact lie this ticket removes.
+            var rel2 = SlipRelationship(0);
+            var f2 = SetupCopyPath("SimLeader", "SimFollower", rel2, 0, null, MarketPosition.Flat);
+            var l2 = Account.All.First(a => a.Name == "SimLeader");
+            var lead2 = LeaderExec(l2, mnq, OrderAction.Buy, 1, "UI1-R");
+            lead2.Time = SlipT0.AddHours(5);
+            lead2.Price = 18000.00;
+            TradeCopierEngine.Instance.OnExecution(lead2);
+            FillFollowerCopy(f2, mnq, 18001.00, 250, "UI1-R-F");
+            row = Ui1Row("SimFollower");
+            Assert(row != null && row.Latency != null && row.Latency.Samples == 0,
+                "snapshot does not count a latency rejected by the sanity bound as a sample");
+
+            // Same fill: the SLIPPAGE was measured fine. The two counters are independent
+            // because the two measurements can succeed and fail independently -- one
+            // shared "fills observed" counter would report the rejected latency as sound.
+            Assert(row != null && row.Slippage != null && row.Slippage.Samples == 1,
+                "snapshot counts a slippage sample independently of the latency sample count");
+        }
+
+        private static void TestUi1_TheSnapshotIsAReadAndOnlyARead()
+        {
+            Console.WriteLine("\n[TEST] UI1: a read must not mutate (P1-69, P1-75 -- third time)");
+
+            // P1-69: the bridge's `get` called LoadFromDisk and destroyed the in-memory
+            // measurements it had been asked to report. P1-75: reading the prop-firm
+            // rules DISARMED them. Both were reads that wrote. This is the third surface
+            // to get the same chance, so it gets a test rather than a comment.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1Leader", inst, MarketPosition.Long, 1);
+            Ui1Account("Ui1Pure", inst, MarketPosition.Long, 1);
+            var rel = Ui1Rel("Ui1Leader", "Ui1Pure", 1.0);
+            rel.LatencyMs = 142.86;
+            rel.AvgSlippageTicks = -4.0;
+
+            int relsBefore = TradeCopierEngine.Instance.GetRelationships().Count;
+            TradeCopierEngine.Instance.GetSnapshot();
+            TradeCopierEngine.Instance.GetSnapshot();
+
+            var stored = TradeCopierEngine.Instance.GetRelationships()
+                .FirstOrDefault(r => string.Equals(r.FollowerAccountName, "Ui1Pure", StringComparison.OrdinalIgnoreCase));
+
+            // The `Ui1Row(...) != null` clause is load-bearing for the GATE, not for the
+            // property. Without it this assertion passes against a stub that returns
+            // nothing -- trivially true, because a snapshot that reports nothing cannot
+            // mutate anything -- and a test that is green at baseline is excluded from
+            // expect_green and therefore proves nothing about the change that follows.
+            Assert(stored != null
+                   && Ui1Row("Ui1Pure") != null
+                   && TradeCopierEngine.Instance.GetRelationships().Count == relsBefore
+                   && stored.LatencyMs == 142.86
+                   && stored.AvgSlippageTicks == -4.0
+                   && stored.ArmedForLive
+                   && !stored.IsQuarantined,
+                "snapshot leaves the engine unmutated and never reloads config from disk");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

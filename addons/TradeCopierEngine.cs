@@ -63,6 +63,76 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double MaxSlippageTicks { get; set; } = 0.0;
     }
 
+    // ── UI1: the conformance read model ────────────────────────────────────────────
+    // docs/UI_REDESIGN_DESIGN.md SS2. The UI's job is not to display numbers, it is to
+    // answer "is each follower doing what I configured it to do". That is a comparison
+    // -- configured vs actual vs verdict -- so it is computed HERE, once, against the
+    // same enumeration and the same sizing function the copy path uses. A consumer that
+    // recomputes it is a second implementation of the rule and will drift from the first.
+
+    /// <summary>
+    /// One relationship's verdict. Ordered by SEVERITY, not alphabetically, because the
+    /// UI ranks by it: `Orphan` MUST outrank `Diverged`. An orphan is a live position on a
+    /// funded account that nothing is managing -- the worst state this system can report.
+    /// </summary>
+    public enum CopierConformance
+    {
+        Idle = 0,        // leader flat AND follower flat. A PASS, not a blank row.
+        Match = 1,       // actual == expected
+        Shadow = 2,      // IsEnabled true, ArmedForLive false: configured, will not act
+        Diverged = 3,    // both non-flat, quantity or side disagrees
+        Orphan = 4,      // leader FLAT, follower NOT. Ranks above Diverged, deliberately.
+        Quarantined = 5  // not copying at all, so agreement is meaningless
+    }
+
+    /// <summary>
+    /// A measurement AND the number of samples behind it. The pair is the point: these
+    /// metrics are SESSION-SCOPED and a recompile resets them, so a bare 0 cannot
+    /// distinguish "no fill observed yet" from "a fill was observed and was perfect".
+    /// That confusion was misdiagnosed as a broken measurement and cost two sessions as
+    /// `P?-66`. `Samples == 0` means NEVER MEASURED and the UI must render it as "--".
+    /// </summary>
+    public class CopierMetric
+    {
+        public double Value { get; set; }
+        public int Samples { get; set; }
+        public bool Measured { get { return Samples > 0; } }
+    }
+
+    public class CopierSnapshotRow
+    {
+        public string RelationshipId { get; set; }
+        public string LeaderAccountName { get; set; }
+        public string FollowerAccountName { get; set; }
+        public string GroupName { get; set; }          // null for a DIRECT relationship
+        public CopierSizingMode SizingMode { get; set; }
+        public double EffectiveRatio { get; set; }
+        public bool IsEnabled { get; set; }
+        public bool ArmedForLive { get; set; }
+        public bool IsQuarantined { get; set; }
+        public string QuarantineReason { get; set; }
+        public bool StealthMode { get; set; }
+
+        public MarketPosition LeaderSide { get; set; }
+        public int LeaderQuantity { get; set; }        // ABSOLUTE; side is carried separately
+        public MarketPosition ExpectedSide { get; set; }
+        public int ExpectedQuantity { get; set; }
+        public bool ExpectedIsClamped { get; set; }
+        public MarketPosition ActualSide { get; set; }
+        public int ActualQuantity { get; set; }
+
+        public CopierMetric Latency { get; set; }
+        public CopierMetric Slippage { get; set; }
+
+        public CopierConformance Verdict { get; set; }
+    }
+
+    public class CopierSnapshot
+    {
+        public List<CopierSnapshotRow> Rows { get; set; }
+        public DateTime TakenUtc { get; set; }
+    }
+
     public class CopierGroup
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -264,6 +334,40 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return new List<CopierRelationship>(_relationships);
             }
+        }
+
+        /// <summary>
+        /// UI1 -- NOT IMPLEMENTED YET. Deliberately returns an EMPTY snapshot so the
+        /// eighteen conformance tests compile and FAIL rather than failing to build:
+        /// the agent-loop gate matches `expect_green` against the runner's failure
+        /// lines and refuses a ticket whose tests are not already red, and a broken
+        /// build is not a red test.
+        ///
+        /// The contract this must satisfy is agent/tickets_ui_snapshot.json (UI1).
+        /// Four points that are easy to get wrong and are each a defect this repo has
+        /// already paid for:
+        ///   1. Enumerate through the SAME path the copier acts on -- the group
+        ///      expansion plus `P1-76`'s direct-over-group precedence. A snapshot that
+        ///      enumerates differently can report Match while the engine copies
+        ///      something else, which is worse than no snapshot.
+        ///   2. Derive expected quantity by CALLING `CalculateFollowerQuantity`, never
+        ///      by reimplementing it. Note it opens `if (leaderQty <= 0) return 0`, so
+        ///      it takes an ABSOLUTE quantity -- pass a signed one for a short leader
+        ///      and it silently reports the follower should be flat.
+        ///   3. Every metric carries its sample count. A latency rejected by the sanity
+        ///      bound must NOT count as a sample; that path deliberately records no
+        ///      number, and counting it restores the exact lie `P?-66` was.
+        ///   4. THIS MUST NOT MUTATE. No `LoadFromDisk`, no config write, no counter
+        ///      reset. `P1-69` destroyed the measurements it was asked to report and
+        ///      `P1-75` DISARMED the prop-firm rules -- both were reads that mutated.
+        /// </summary>
+        public CopierSnapshot GetSnapshot()
+        {
+            return new CopierSnapshot
+            {
+                Rows = new List<CopierSnapshotRow>(),
+                TakenUtc = DateTime.UtcNow
+            };
         }
 
         // ── P1-76: a follower belongs to a direct relationship OR a group, never both ──
