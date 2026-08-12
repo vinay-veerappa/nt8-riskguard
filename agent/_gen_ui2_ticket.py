@@ -1,0 +1,127 @@
+"""Generates agent/tickets_ui_config.json. Kept so the prose can be edited as prose
+rather than as JSON string escapes; delete it once UI2 lands if it is in the way."""
+import json
+
+spec = """Make the copier config path single-owner in core, and make the NT8 window a surface that renders and dispatches rather than one that builds domain objects and names files.
+
+A. ONE PATH, OWNED BY CORE. Implement `TradeCopierEngine.ConfigFilePath` (the stub returns null) as `Path.Combine(Globals.UserDataDir, "RiskGuard", "copier_config.json")`. That is THE file the bridge's six write sites and the startup load already use -- do NOT invent a third location, and do NOT migrate or merge the stale `UserDataDir/CopierConfig.json`. Migration is a separate decision the operator has not taken; this ticket makes the window write where everything reads.
+
+B. THE PARAMETERLESS SAVE DELEGATES. `SaveToDisk()` must be a one-line call to `SaveToDisk(ConfigFilePath)`. Do not copy the serialisation. A second serializer is how two surfaces drift while both look correct, and a test compares the two files byte for byte.
+
+C. THERE IS DELIBERATELY NO PARAMETERLESS LOAD. Do NOT add `LoadFromDisk()`. `P1-69` was a read that destroyed what it was asked to report: the bridge's `get` action called `LoadFromDisk` and threw away the in-memory latency and slippage measurements. Making that call convenient is how the next surface repeats it. The path-taking overload stays, and its two legitimate callers say `LoadFromDisk(TradeCopierEngine.ConfigFilePath)` so they are visible in a grep. A test asserts the asymmetry by reflection.
+
+D. THE REQUEST BUILDERS. Implement the four `CopierRequests` stubs. Each returns a `JObject` whose keys are the ones `BuildConfigAliasMap` accepts, and NOTHING ELSE.
+
+  A KEY THAT DOES NOT MATCH A PROPERTY IS DROPPED WITHOUT AN ERROR. `NormalizeRequest` maps camelCase aliases to canonical property names and silently discards anything it does not recognise. That is `P1-74`: `nt_copier_config` advertised an `autoConversion` argument that was not a field on anything, so the argument had never done a single thing for as long as it had existed. Use the alias map (region R6) or the canonical PascalCase names; do not guess.
+
+  NULL MEANS "NOT MENTIONED", AND `NormalizeRequest` STRIPS NULL-VALUED PROPERTIES. So for the `bool?` parameters on `RelationshipEdit` and `GroupEdit`, OMIT the property entirely when the argument is null rather than writing a null into the JObject. That is what makes a row edit carry only its own field: merge semantics treat absent and null identically, and every field not mentioned keeps its stored value.
+
+  `Relationship(...)`: the leader, the follower, `SizingMode`, `QuantityRatio`, `MaxPositionSize`, `AutoSymbolConversion`, `StealthMode`, `ArmedForLive`, `IsEnabled`. Note that the window's form ALSO derives `FixedLotMode` and `FixedLotSize` from the sizing mode and the ratio today -- carry those too, from `sizingMode == CopierSizingMode.FixedLot` and `(int)Math.Round(quantityRatio)`, so the behaviour of the Add button is unchanged.
+
+  `Group(...)`: the same fields plus `GroupName` and `FollowerAccounts`. `FollowerAccounts` must be a `JArray` of strings. `ApplyGroupRequest` REPLACES the follower list when the request names it (`ClearCollectionsNamedIn`), which is correct for a form that shows checkboxes for every account.
+
+  `RelationshipEdit(leader, follower, bool? isEnabled, bool? releaseQuarantine)`: always carries the two identity keys; carries `IsEnabled` only when `isEnabled` has a value; carries `IsQuarantined = false` only when `releaseQuarantine == true`. Nothing else, ever.
+
+  `GroupEdit(groupName, bool? isEnabled)`: the group name, plus `IsEnabled` only when it has a value.
+
+E. RELEASING A QUARANTINE MUST CLEAR ITS REASON -- AND THIS IS AN ENGINE CHANGE, NOT A BUILDER ONE. A request cannot clear a string field: `NormalizeRequest` strips null-valued properties, so a `quarantineReason` of null is removed before it is applied and the stored reason survives. The result is a released relationship still carrying "Margin / Order Rejection", which the window renders. That is a config that lies about its own state -- the class of defect this project treats as worse than a missing feature.
+
+  Fix it as a DOMAIN INVARIANT in `ApplyRelationshipRequest` (region R7): a reason without a quarantine is stale data, so when the merge leaves `IsQuarantined == false`, `QuarantineReason` must be null. Do not special-case the request key; state the invariant once, where it holds for every caller including the bridge.
+
+F. THE WINDOW NAMES NO PATH. Replace all seven `SaveToDisk(Path.Combine(Globals.UserDataDir, "CopierConfig.json"))` calls with `SaveToDisk()`. After this, `TradeCopierWindow.cs` must contain no `UserDataDir`, no `CopierConfig.json`, and no `LoadFromDisk`.
+
+G. THE WINDOW BUILDS NO DOMAIN OBJECT. `OnAddRelationshipClick` and `OnAddGroupClick` currently build a fresh `CopierRelationship`/`CopierGroup` from the eight fields the form collects and `Upsert` it. Replace both with `CopierRequests.Relationship(...)`/`CopierRequests.Group(...)` handed to `ApplyRelationshipRequest`/`ApplyGroupRequest`, passing the form's armed checkbox as `confirmLive`. Keep the existing validation and MessageBox warnings that run BEFORE the write -- they are about the form, not the domain.
+
+H. THE WINDOW MUTATES NOTHING IN PLACE. The Reset-Quarantine, Enable/Disable and group Enable/Disable buttons currently assign to the STORED object (for example `rel.IsEnabled = !rel.IsEnabled;`) and then `Upsert` it, so a write the engine goes on to refuse has already landed in memory and the redraw shows it. Replace each with `CopierRequests.RelationshipEdit(...)` / `CopierRequests.GroupEdit(...)`. Read the CURRENT value off the row object to compute the new one -- reading is fine; assigning is not.
+
+I. A REFUSAL MUST BE SURFACED. `ApplyRelationshipRequest` and `ApplyGroupRequest` return NULL when the engine refuses -- `P1-76`'s overlap check does exactly that. `Upsert` could not fail, so no window call site has ever checked a result. Every dispatch must test for null and tell the operator (a MessageBox, consistent with the file's existing error handling), and must NOT save or redraw as though it had succeeded. A test requires a null test within 600 characters of each of the four call sites.
+
+J. THE DELETE BUTTONS ARE UNCHANGED except for their save call. `RemoveRelationship`/`RemoveGroup` are not subset writes and are not in scope."""
+
+context = """THE SCAFFOLD ALREADY EXISTS -- DO NOT REDECLARE ANYTHING. Commit `3082cb1` added, in `addons/TradeCopierEngine.cs`: the property `ConfigFilePath` (returns null), the method `SaveToDisk()` (empty body), and the static class `CopierRequests` with four methods that return an empty JObject. Your job is to REPLACE THOSE BODIES. Declaring any of them again is `error CS0102`/`CS0111` and cost the previous ticket four rounds.
+
+TWO KINDS OF FILE ARE IN SCOPE AND THEY HAVE DIFFERENT EVIDENCE.
+  * `addons/TradeCopierEngine.cs` is compiled and executed by the suite. Everything in sections A-E is really tested.
+  * `addons/TradeCopierWindow.cs` has its ENTIRE body inside `#if !TESTING` -- there is no WPF in a net8.0 console app -- so the suite compiles it away and cannot run one line of it. Sections F-I are checked by reading that file AS TEXT. This means two things for you: a syntax error there will NOT show up in `dotnet build`, so re-read what you write; and the text checks are literal, so `SaveToDisk()` must appear verbatim.
+
+EXACT MEMBER NAMES -- DO NOT GUESS. `CopierRelationship` (region R4) and `CopierGroup` (region R5) are included READ-ONLY so their real names are visible. It is `GroupName`, not `Name`. It is `FollowerAccounts` (a `List<string>`), not `Followers`. It is `LeaderAccountName`/`FollowerAccountName`, singular, both `string`. The request aliases are `leaderAccount`/`followerAccount`, which is what `BuildConfigAliasMap` maps.
+
+WHY THE MERGE PATH IS THE FIX AND `Upsert` IS NOT. `ApplyRelationshipRequest` (region R7) clones the STORED object, populates only the keys present in the request over the clone, and upserts that. So a field the request never mentions keeps its stored value. `UpsertRelationship` replaces wholesale -- correct for `LoadFromDisk` and for test fixtures, which is why it stays public, and wrong for an operator surface. This is the same repair slice 3b made in the bridge; the window is the fifth and sixth instance of one defect, and the point of this ticket is that there is no seventh.
+
+`Globals` is `NinjaTrader.Core.Globals`. `TradeCopierEngine.cs` already imports it in BOTH the TESTING and the non-TESTING branch as of the scaffold commit. In the test build `Globals.UserDataDir` is stubbed to `BaseDirectory/MockUserData`, so the acceptance tests round-trip through the real `ConfigFilePath` property rather than through a path they were handed.
+
+THE FILES ARE REAL, ON THE OPERATOR'S BOX, WITH DIFFERENT CONTENTS. `UserDataDir/CopierConfig.json` (what the window wrote) and `UserDataDir/RiskGuard/copier_config.json` (what everything reads). Neither is deleted by this ticket.
+
+OUT OF SCOPE, do not touch: the bridge repo (`McpBridgeAddOn.cs` is not in this repo -- its `CopierConfigFile` will be made to delegate to `ConfigFilePath` in a separate commit there), `GetSnapshot()` and anything UI1 added, any HTTP route, any change to what the copier submits to a broker, and the window's layout, colours or control tree. Adding, moving or restyling a control is not in this ticket."""
+
+defect = """Two defects, one structure. (1) `P?-64`: THE WINDOW WRITES A FILE NOTHING READS. `TradeCopierWindow.cs` saves to `Globals.UserDataDir` + "CopierConfig.json" at seven sites (:840, :859, :875, :942, :958, :1013, :1073), while the bridge's six write sites and the startup load at `McpBridgeAddOn.cs:245` use `Globals.UserDataDir` + "RiskGuard" + "copier_config.json". The window never calls `LoadFromDisk` at all. Both files exist on the operator's box with different contents, so every change made in the UI is silently discarded at the next NT8 restart -- no error, no log line, the configuration is simply not there any more. That is `P2-41`'s shape: operator config vanishing without a report.
+
+(2) `P?-65`: ITS TWO ADD SITES ARE THE FIFTH AND SIXTH REMEMBERED SUBSET. `OnAddRelationshipClick` (:997-1012) and `OnAddGroupClick` (:1056-1072) build a FRESH `CopierRelationship`/`CopierGroup` from the eight fields the form can show and hand it to `UpsertRelationship`/`UpsertGroup`, which replaces the stored object wholesale. Everything the form cannot see reverts to a property default: `PerTickerRatios`, `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit`, `IsQuarantined`. The ratio matrix is reachable ONLY through the bridge today, so clicking Add/Update in the UI destroys configuration the UI cannot even display. Slice 3b deleted the third and fourth instances of this exact pattern from the bridge; `P1-72`...`P1-75` were more of it.
+
+A third, smaller defect belongs with them: the row buttons assign to the STORED object (`rel.IsQuarantined = false;` at :837, `rel.IsEnabled = !rel.IsEnabled;` at :857, `grp.IsEnabled = !grp.IsEnabled;` at :940) BEFORE the write, so a write the engine refuses has already taken effect in memory and the redraw shows it as applied."""
+
+ticket = {
+    "_comment": "UI redesign, landing 2. See docs/UI_REDESIGN_DESIGN.md section 5 and section 10 item 1. This is the WRITE half of the host-agnostic core layer, and it closes P?-64 and P?-65, the two highest open defects. UI1 (the read model) is already green on feat/ui-core-snapshot. The window is REWIRED here, not deleted -- deleting it now would leave no GUI at all until the browser page lands; it is removed in the same landing that makes it redundant.",
+    "tickets": [
+        {
+            "id": "UI2",
+            "title": "One owner for the copier config path, and a window that dispatches requests instead of building objects",
+            "defect": defect,
+            "spec": spec,
+            "context": context,
+            "expect_green": [
+                "the copier config path is owned by core and resolves to UserDataDir/RiskGuard/copier_config.json",
+                "SaveToDisk() with no argument writes the same file the bridge and startup read",
+                "SaveToDisk() delegates to SaveToDisk(path) rather than serializing a second time",
+                "the Add-relationship request updates the form's fields and preserves the ones it cannot see",
+                "the Add-group request updates the form's fields, replaces the follower list, and preserves the rest",
+                "every field the Add form collects reaches the stored relationship under the right key",
+                "a row edit carries only the field the button changes and leaves the rest of the stored relationship alone",
+                "the group row edit carries only IsEnabled and preserves the group's followers and sizing",
+                "the copier window names no file path and saves through the engine's own SaveToDisk() (P?-64)",
+                "the copier window builds no domain object and writes only through ApplyRelationshipRequest/ApplyGroupRequest (P?-65)",
+                "the copier window mutates no stored domain object in place and edits through CopierRequests instead",
+                "the window never calls LoadFromDisk, and every config write it dispatches tests the refusal it can now receive",
+            ],
+            "regions": [
+                {"id": "R1", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public static string ConfigFilePath",
+                 "note": "THE PATH STUB -- ALREADY DECLARED, returns null. Replace the getter body only. Its doc comment records why it exists; keep it."},
+                {"id": "R2", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public void SaveToDisk()",
+                 "note": "THE PARAMETERLESS SAVE -- ALREADY DECLARED, empty body. One line: delegate to SaveToDisk(ConfigFilePath). Its remarks explain why there is no matching parameterless load; keep them, and do not add one."},
+                {"id": "R3", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public static class CopierRequests",
+                 "note": "THE FOUR REQUEST BUILDERS -- ALL FOUR ALREADY DECLARED, each returning an empty JObject. Replace the four bodies. Do not add a fifth method; the window needs exactly these."},
+                {"id": "R4", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public class CopierRelationship",
+                 "note": "READ-ONLY. Included so the exact property names and their defaults are visible -- the defaults are what a wholesale replace reverts to, which is P?-65. Do not modify."},
+                {"id": "R5", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public class CopierGroup",
+                 "note": "READ-ONLY, for its real member names: GroupName (not Name), FollowerAccounts (not Followers). Do not modify."},
+                {"id": "R6", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "private static Dictionary<string, string> BuildConfigAliasMap()",
+                 "note": "READ-ONLY. THE AUTHORITATIVE LIST OF KEYS A REQUEST MAY USE. Anything not here is dropped without an error -- that is P1-74. Read it before writing a single key name."},
+                {"id": "R7", "file": "addons/TradeCopierEngine.cs",
+                 "anchor": "public CopierRelationship ApplyRelationshipRequest(JObject req, bool confirmLive)",
+                 "note": "The merge write path. Read it to understand clone-then-populate semantics. ONE CHANGE IS REQUIRED HERE, spec section E: releasing a quarantine must clear QuarantineReason, because NormalizeRequest strips nulls and no request can clear a string field. State it as an invariant -- no quarantine, no reason -- not as a special case for one key."},
+                {"id": "R8", "file": "addons/TradeCopierWindow.cs",
+                 "anchor": "private void OnAddRelationshipClick",
+                 "note": "Builds a fresh CopierRelationship from the form and Upserts it. Replace the construction + Upsert + path-naming save with CopierRequests.Relationship -> ApplyRelationshipRequest -> null check -> SaveToDisk(). Keep the two validation MessageBoxes above it unchanged. WARNING: this file is compiled away in the test build, so dotnet build will NOT catch a syntax error here."},
+                {"id": "R9", "file": "addons/TradeCopierWindow.cs",
+                 "anchor": "private void OnAddGroupClick",
+                 "note": "Same repair, group half. ApplyGroupRequest replaces the follower list when the request names it, which is what the checkbox form means. WARNING: not compile-checked by the suite."},
+                {"id": "R10", "file": "addons/TradeCopierWindow.cs",
+                 "anchor": "private UIElement CreateRelationshipCard",
+                 "note": "The relationship row: Reset Quarantine (:835-842), Enable/Disable (:855-861), Delete (:872-877). The first two assign to the STORED object before writing -- replace with CopierRequests.RelationshipEdit. Delete keeps RemoveRelationship and only loses its path. All three saves become SaveToDisk(). WARNING: not compile-checked by the suite."},
+                {"id": "R11", "file": "addons/TradeCopierWindow.cs",
+                 "anchor": "private UIElement CreateGroupCard",
+                 "note": "The group row: Enable/Disable (:938-944) and Delete (:955-960). Same repair via CopierRequests.GroupEdit. WARNING: not compile-checked by the suite."},
+            ],
+        }
+    ],
+}
+
+with open("agent/tickets_ui_config.json", "w", encoding="utf-8") as f:
+    json.dump(ticket, f, indent=2, ensure_ascii=False)
+print("wrote agent/tickets_ui_config.json")
