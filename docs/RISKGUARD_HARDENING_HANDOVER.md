@@ -2160,10 +2160,16 @@ was exactly that until 2026-08-07.
   `nt8-mcp-bridge/tools/deploy.py` deploys the bridge **and its vendored core**, so a submodule pin
   behind `nt8-riskguard` overwrites a newer live core with an older one. On 2026-08-12 the pin sat at
   `v1.0.1` while `v1.0.2` — carrying `P0-63`, without which the mirrored stop had never trailed — was
-  live. **Nothing would have warned.** Now blocked: `deploy.py` exits 2 when the pinned commit is a
-  strict ancestor of the sibling core's `main`. `--verify`/`--dry-run` are never blocked, and a
-  missing sibling checkout only warns. **Keep the pin bumped whenever this repo moves**, tag first —
-  a submodule cannot resolve a tag that exists only locally.
+  live. **Nothing would have warned.** Now blocked: `deploy.py` exits 2 when the pinned commit is
+  behind the sibling core's `main` **in `addons/`**. `--verify`/`--dry-run` are never blocked, a
+  missing sibling checkout only warns, and being behind only in docs proceeds. **Keep the pin bumped
+  whenever this repo's `addons/` moves**, and tag first — a submodule cannot resolve a tag that
+  exists only locally.
+  > **This guard was itself broken on arrival and shipped with a passing three-direction test** — it
+  > asked the vendored clone, which cannot see commits it has not fetched, so it answered "not
+  > behind" for the one case that matters. Then the fix over-fired on docs-only commits. Both are
+  > written up in §5.10. **Two rounds of getting a nine-line check wrong is the strongest argument in
+  > this file for watching a gate fail before trusting it.**
 - **A gate that cannot fail is worse than no gate**, and this repo has shipped four of them. The
   mutation batteries printed `SURVIVORS: [...]` and exited **0** until 2026-08-12; then `mutate_cm3`
   and `mutate_cm4` were found to be **vacuous from a red baseline**, because `killed = 'Failed = 0'
@@ -3277,8 +3283,31 @@ The order matters and is not obvious: **the tag must be pushed before the submod
 behind the sibling checkout** (exit 2, remedy printed). Local check, no network — it asks git whether
 the pinned commit is a *strict ancestor* of `nt8-riskguard`'s `main`, because strictly-behind is the
 only unsafe case. No sibling checkout only warns; refusing on "I could not tell" would make the tool
-unusable on a machine that has just the bridge. Verified in all three directions: in sync → exit 0;
-pin rolled back and deploying → exit 2; same stale pin with `--verify` → not blocked. See §8.
+unusable on a machine that has just the bridge.
+
+> ⚠️ **That guard was broken on arrival, and its own "verified in three directions" is why it took a
+> day to notice.** It ran `merge-base --is-ancestor` inside the **vendored clone** — a submodule
+> checkout that only fetches when told to, so it does not know commits the core has made since the
+> last bump. `--is-ancestor` against an unresolvable revision **exits non-zero**, and the code read
+> any non-zero as "not an ancestor", i.e. *not behind*. **The guard therefore inverted in exactly the
+> case it exists for.** The original three-direction test passed only because the vendor happened to
+> have fetched the newer tag during it. **A guard verified under a condition you have not isolated is
+> not verified** — this is §5.12's lesson 2 again, one day later, in code I had just written.
+>
+> Found by watching it pass when it should have failed: the core took a docs-only commit and
+> `--dry-run` still said "not behind". Now it asks the **sibling**, which authored both commits, and
+> distinguishes three outcomes rather than two — returncode 1 is a definitive "not an ancestor", and
+> anything else is "could not evaluate" and prints a loud WARN instead of passing quietly.
+>
+> **And then it over-fired.** "Behind main" was the wrong question: this tool deploys `addons/*.cs`
+> and nothing else, so a pin trailing only docs is harmless, and refusing on it would make every
+> documentation commit in this repo require a tag-and-bump before the bridge could deploy. A guard
+> that fires when nothing is wrong is one people learn to bypass — the same argument `file_hash()`
+> already carries about line endings. It now asks
+> `rev-list --count <pinned>..<main> -- addons/`. Verified four ways: in sync → exit 0; behind
+> docs-only → proceeds, saying so; **11 behind with 3 touching `addons/` → exit 2, refuses**; same
+> stale pin with `--verify` → exit 1, not blocked, and it names `TradeCopierEngine.cs` as the drifted
+> file, which is precisely the `P0-63` revert. See §8.
 
 ### The two stale files in the live `AddOns/` folder
 
@@ -3379,3 +3408,12 @@ an append-only historical layer, and hence §4a is now explicitly *not* a plan.
 carried a ⚠️ STALE banner, and §5.3 listed "Doc consolidation" as an item. A known-stale document
 that stays in place is read by whoever does not notice the banner. **Fix it or delete it; a warning
 label is not a fix.**
+
+**6. Lesson 2 recurred inside this very session, in code written the day before.** The stale-pin
+guard shipped on 2026-08-12 with "verified in all three directions" written next to it — and it was
+inverted, because the check ran in a repo that could not see the commits it was asked about, and the
+three-direction test happened to run under the one condition that hid it. Then the fix over-fired on
+docs-only commits, which would have trained everyone to bypass it. **Two rounds of getting a nine-line
+check wrong.** The pattern is not carelessness, it is that *"I verified it"* is a claim of the same
+kind as *"it is mirrored into X"*: it names an outcome without naming the conditions. Record the
+conditions, and make the gate fail in front of you at least once. §5.10 has the detail.
