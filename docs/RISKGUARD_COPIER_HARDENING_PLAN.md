@@ -826,7 +826,7 @@ suite green until the end-to-end test existed. Suite 762/0 → **787/0**.
 
 ---
 
-### P0-63. `Account.Change()` is a SILENT NO-OP on `provider: Simulator` accounts — so the mirrored stop has never trailed — OPEN
+### ~~P0-63. `Account.Change()` is a SILENT NO-OP on `provider: Simulator` accounts — so the mirrored stop has never trailed~~ — **FIXED 2026-08-13** (remedy 3)
 *(found 2026-08-10 by an isolated probe designed to check `P0-62`'s premise. It disproved it, and found something larger.)*
 
 **Where**: every `followerAcc.Change(...)` call in `TradeCopierEngine` (both leg syncs), and
@@ -885,6 +885,27 @@ read the wrong layer. **Advertised by the connection ≠ honoured by the provide
    fall back to cancel-then-create when it did not. Works on both provider types without deciding
    the question, and turns a silent no-op into an observable one. **Cheapest honest option, and it
    composes with 1 and 2.**
+
+> ✅ **FIXED 2026-08-13 via remedy 3, the operator's choice.** The requested price/quantity AND the
+> pre-change values are recorded on the bracket with the `Order` they belong to; `OnFollowerOrderUpdate`
+> verifies on the settle event; a leg still sitting at its pre-change values is positive evidence the
+> change was ignored, and is replaced by cancel-then-create through `SyncFollowerStop` (the wrapper,
+> so `P1-56`'s in-flight reservation still holds). An account observed ignoring a change is never
+> asked again. Modify-in-place is preserved where the provider honours it, so `§4o`'s naked-window
+> fix is intact. **The `Provider31` question stays open on purpose and remedy 3 does not need it.**
+>
+> Detection is deliberately "still at the PRE-CHANGE values" rather than "not at the requested ones":
+> a false positive costs a real naked window plus a permanently marked account, so it must not fire on
+> a rounding difference or a partial honour — and this way the check degrades to today's behaviour if
+> NT8 ever stops reverting, instead of cancel-then-creating on every trail step.
+>
+> Suite **926 → 953**, four new acceptance tests (stop, target, quantity-only, six-step trail) plus a
+> two-step honoured-change guard. New battery `mutation/mutate_p0_63.py`: 7 killed, no survivors.
+>
+> **Two gaps recorded in that battery, both in the SUITE rather than the fix**: the
+> wrapper-vs-`Once` distinction is invisible to a suite with no concurrent settle-path test (and that
+> was the most serious defect in the candidate — no reviewer found it), and the quantity half of the
+> detection guards a PARTIAL honour, which the stub cannot express.
 
 > ⚠️ **This entry's "Where" clause was short by one call site.** See `P0-67` immediately below.
 

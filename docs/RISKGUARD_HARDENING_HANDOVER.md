@@ -2702,7 +2702,7 @@ limitation, not a documentation gap.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| **`P0-63`** | **`Account.Change()` is a silent no-op on `provider: Simulator` — the mirrored stop has NEVER trailed** | P0 | Highest risk item open. Supersedes `P0-62`. **Blocked on a decision, not on work** — see 5.4. |
+| ~~**`P0-63`**~~ | ~~`Account.Change()` is a silent no-op on `provider: Simulator` — the mirrored stop has NEVER trailed~~ | P0 | **FIXED 2026-08-13 via remedy 3** — §5.9. The mirrored stop trails. Not deployed. |
 | `P1-57` | We would mirror another copier's mirror; the "not ours" test is a name substring | P1 | Live on this box: a third-party copier fans `Sim101 → Sim-ORB → {SimCopyTest1, SimCopy2}` copying names verbatim |
 | `P1-13` | Guard evaluation on the WPF dispatcher — **threading half only** | P1 | The fail-open half is closed |
 | `P2-24` | Written-but-never-called safety machinery | P2 | |
@@ -2724,7 +2724,7 @@ Take the next free numbers from `P0-64` onward; **do not extend a band in place*
 |---|---|---|
 | **`P?-64`** | **The copier UI writes to a DIFFERENT FILE than everything else reads.** UI → `UserDataDir/CopierConfig.json` (7 call sites); bridge + `State.Configure` startup load → `UserDataDir/RiskGuard/copier_config.json`. `TradeCopierWindow` **never calls `LoadFromDisk`**. | **Every UI change is silently lost on the next NT8 restart.** Both files exist on this box with different contents. This is operator config vanishing without an error — `P2-41`'s shape. |
 | **`P?-65`** | **`TradeCopierWindow`'s two save sites are a 5th and 6th remembered subset** (`:997`, `:1055`): fresh object → `UpsertRelationship` → `SaveToDisk`. | Exactly the destructive pattern slice 3b deleted from the bridge. Clicking Add/Update **wipes** `PerTickerRatios`, `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit`, `IsQuarantined`. |
-| **`P?-66`** | **`P1-22`'s slippage/latency metrics produced NO reading on the live path** and the cause is unresolved. | Either `_pendingCopies` misses (keyed on the cached **`Order` reference** — the `P0-59`/`P3-30` shape again) or latency is rejected by its sanity bound on a `DateTimeKind` mismatch. **A zero is not a pass.** Cheap first step: log the hit AND the miss inside `ObserveFollowerFill`. |
+| ~~**`P?-66`**~~ | ~~`P1-22`'s slippage/latency metrics produced NO reading on the live path~~ | **INSTRUMENTED 2026-08-13** — §5.9. All five silent returns now emit distinct events, so the next live run distinguishes them. The group-derived-relationship hypothesis is ruled out; the pending-map miss and the latency bound remain the live suspects. Not deployed, so **still unanswered**. |
 
 ## 5.3 NEW — enhancements, not defects
 
@@ -3024,3 +3024,108 @@ had not worked. Redirect to a file and read `$?` directly.
 This is the third time a gate in this repo has turned out to prove nothing — after the batteries
 exiting 0 on survivors (2026-08-12) and `test_version_alignment` raising `FileNotFoundError`
 instead of asserting. **When a check passes, establish that it can fail before believing it.**
+
+---
+
+## 5.9 What shipped in session 17, and what it cost
+
+**Both items §5.6 named are done.** `P0-63` is fixed via remedy 3 and `P?-66` is instrumented.
+Suite **926 → 953 / 0 failed**. Three mutation batteries, **31 mutants killed, no survivors**. Both
+structural checks green. **Neither is deployed** — `tools/sync_nt8.py --verify` reports
+`TradeCopierEngine.cs` as the only drift, which is exactly this work.
+
+### The loop produced the code; it did not decide what shipped
+
+Neither ticket ended in a promotable verdict, and both were arbitrated by hand — which the loop
+itself asked for.
+
+`P0-63` ran to **`NOT_CONVERGING`**: *blocking findings 4 → 5 → 7 with zero overlap between
+consecutive rounds*, and its own diagnosis was that each revision was exposing new surface rather
+than closing the defect. That was correct, and the numbers show it: across four rounds the patch
+grew **755 → 899 lines while the acceptance tests stayed identically green**, accreting three
+budget refreshes and ten clear-points for the request record. Defensive state, added to answer
+review, pinned by nothing.
+
+`P?-66` ran to **`MAX_ROUNDS_EXHAUSTED`** — rounds 2 and 3 both reached 950/0 with every
+acceptance test green; round 4 broke the build, so round 3 was exported.
+
+**Read the panel composition before reading the verdicts.** Every blocking verdict on `P0-63`'s
+later rounds came from `deepseek-v4-flash`, which the package catalogue lists as
+`suited=('compactor',)` — **not a reviewer**. `glm-5.2`, the only catalogued reviewer, returned
+**APPROVE with zero findings on three consecutive rounds**. On one earlier round deepseek emitted
+**170 findings against a cap of 60**, which the loop correctly refused as "repetition, not review".
+A second panel member from a different family is the policy; a second member the catalogue does not
+recommend for the job is a configuration accident worth fixing.
+
+### Mutation testing decided what was load-bearing, and it beat four rounds of review
+
+`mutation/mutate_p0_63.py` was written to answer one question: which of those 424 changed lines can
+the suite actually tell the absence of?
+
+* **All three budget refreshes were decorative.** Deleting each changed no test outcome. They were
+  added to chase a finding that is false — `OnLeaderOrderUpdate` already zeroes the budget whenever
+  the leader's offset changes, which is every trail step. All three deleted; the new six-step trail
+  test pins the behaviour they were meant to protect.
+* **It found a real hole four review rounds missed.** Forcing the detection to fire *always* left
+  every test green. A spurious detection is self-limiting for the current step — the re-drive is a
+  reconcile and finds the leg already correct — but it **marks the account for the session**,
+  silently downgrading every later trail step to cancel-then-create. One honoured step could not see
+  that. The guard now drives two, and the mutant dies.
+
+**The lesson, stated plainly: on this codebase a mutation battery is worth more than a review
+round, and it is cheaper.** Four rounds of panel review produced 4→5→7 non-overlapping findings and
+one real defect; one battery produced seven kills, three deletions and a coverage hole nobody saw.
+
+### The claim the panel escalated on was false, and the repo already contained the refutation
+
+An earlier `P0-63` run ended `ESCALATED` on the finding that **NT8 leaves the desired values on the
+`Order` object**, so no read-back could ever detect a no-op — i.e. that the stub encodes a false
+model and the fix is theatre. The arbiter's whole rationale rested on it.
+
+The live trace in `AcceptsModification`'s docstring, the basis of `P0-61`, says otherwise: an order
+settling to `Working` read back its **original** quantity and price. `P0-63`'s probe table says it
+three more times, and stop `34410` was created at 29753.5, logged `stop moved to 1@29754.5`, and
+ended at 29753.5. The trace is now quoted in the stub itself and in the ticket context, so the next
+panel sees the evidence rather than reasoning about NT8 internals.
+
+**Do not take a reviewer's model of an external system over a recorded trace of it.**
+
+### Two known gaps, in the SUITE rather than in the fix
+
+Both are recorded in `mutation/mutate_p0_63.py` beside the mutants that measured them, and both are
+deliberate rather than overlooked:
+
+1. **The wrapper-vs-`Once` distinction is unpinnable here.** That the re-drive must go through
+   `SyncFollowerStop` — whose only job is to take `P1-56`'s in-flight reservation — was the most
+   serious defect in the candidate, and **no reviewer found it**; it was caught by reading. Nothing
+   in the suite drives two syncs concurrently through the settle path, so the mutant survives.
+   Closing it means an S7-style test that parks one sync inside `CreateOrder` and drives a settle
+   from another thread.
+2. **The quantity half of the detection guards a PARTIAL honour** — the provider applying the
+   quantity but not the price — which the stub cannot express because it is all-or-nothing. Remedy:
+   a `SimulateChangeAppliesQuantityOnly` flag. Consequence if wrong is bounded: one unnecessary
+   cancel-then-create.
+
+### Three infrastructure notes, because four "failures" were not about the code
+
+* **Ollama auto-updated itself 0.32.7 → 0.32.9 mid-session**, shutting the server down and opening a
+  GUI installer. Two runs died `IMPLEMENTER_UNREACHABLE` (`WinError 10061`) either side of it.
+* **`ollama serve` started from inside a tool call dies with that call.** Start it detached.
+* **`think=true` on the implementer exhausted its whole budget on reasoning** — 408,089 chars,
+  **empty content**, `done_reason=length` — once the ticket grew a hardened spec and a long
+  orchestrator note. This repo now carries `agent_loop.config.json` setting `think: false` for that
+  role. It is the same failure that once justified raising the role 48000 → 96000, at 3.3× the
+  scale, and the package's own advice is to turn thinking off before raising the ceiling again
+  because reasoning expands to fill whatever it is given. Every round since has returned a complete
+  patch.
+
+### Next
+
+1. **Deploy and validate live.** `python tools/sync_nt8.py --verify`, then without `--verify`, then
+   `nt_compile` and read `errorCount`. `P0-63` has never been exercised against a real broker, and
+   `P?-66`'s instrumentation only answers its question once a live copy runs through it — **until
+   then `P?-66` is still unanswered, just no longer invisible.**
+2. **`P0-67`** — the third `Change()` site, in `DynamicAtmManager`, where the cache records the price
+   the broker refused and the trail therefore latches. Establish whether that path is live first.
+3. Then §5.6 items 3-6 unchanged: `P?-64` + `P?-65` together, the MCP wrapper, the UI redesign,
+   then `P3-31`.
