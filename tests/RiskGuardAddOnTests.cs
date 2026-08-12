@@ -995,6 +995,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi1_EnumerationMatchesWhatTheEngineActuallyCopies();
             TestUi1_MetricsCarryTheirSampleCount();
             TestUi1_TheSnapshotIsAReadAndOnlyARead();
+            TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror();
+            TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -1800,6 +1802,92 @@ namespace NinjaTrader.NinjaScript.AddOns
             // shared "fills observed" counter would report the rejected latency as sound.
             Assert(row != null && row.Slippage != null && row.Slippage.Samples == 1,
                 "snapshot counts a slippage sample independently of the latency sample count");
+        }
+
+        // ── UI1b: the blind spots the review panel found, which the first 18 could not ──
+        // Every one of the original eighteen used ONE instrument, ONE relationship and a
+        // fresh engine. All 18 were green against code the arbiter upheld ten findings
+        // against. A green suite is not a reviewed change, and the structural reason it
+        // missed them is that the tests could not REPRESENT the failure -- the same
+        // lesson as the NT8 stub that omitted six OrderStates.
+
+        private static void TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror()
+        {
+            Console.WriteLine("\n[TEST] UI1b: instrument filtering (arbiter #1/#2/#11/#12)");
+
+            // Leader holds NQ. The follower holds ES -- a different instrument entirely,
+            // and with AutoSymbolConversion off there is no mapping between them. A
+            // snapshot that reads Positions.FirstOrDefault() without filtering compares
+            // the leader's NQ against the follower's ES and calls it a match.
+            var engine = TradeCopierEngine.Instance;
+            foreach (var g in engine.GetGroups().ToList()) engine.RemoveGroup(g.GroupName);
+            foreach (var r in engine.GetRelationships().ToList())
+                engine.RemoveRelationship(r.LeaderAccountName, r.FollowerAccountName);
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+
+            var nq = new Instrument("NQ 03-26");
+            var es = new Instrument("ES 03-26");
+
+            var lead = new Account { Name = "Ui1bLeader", Provider = Provider.Simulator };
+            lead.Positions.Add(new Position { Instrument = nq, MarketPosition = MarketPosition.Long, Quantity = 1 });
+            var foll = new Account { Name = "Ui1bFoll", Provider = Provider.Simulator };
+            foll.Positions.Add(new Position { Instrument = es, MarketPosition = MarketPosition.Long, Quantity = 5 });
+            Account.All.Add(lead);
+            Account.All.Add(foll);
+
+            Ui1Rel("Ui1bLeader", "Ui1bFoll", 1.0);
+            var row = Ui1Row("Ui1bFoll");
+
+            // The follower holds NOTHING in NQ, so the mirror quantity is 0 -- not 5.
+            Assert(row != null && row.ActualQuantity == 0 && row.Verdict != CopierConformance.Match,
+                string.Format("snapshot does not count a follower position in an unrelated instrument as the mirror (row={0} actualQty={1} verdict={2})",
+                    row == null ? "NULL" : "ok", row == null ? -1 : row.ActualQuantity,
+                    row == null ? "n/a" : row.Verdict.ToString()));
+
+            // The mirror image, and the more dangerous direction: the leader is flat in
+            // NQ while the follower holds ES. Reading the first position back would call
+            // that an ORPHAN and send the operator to flatten a position that is not
+            // this relationship's business at all.
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+            var lead2 = new Account { Name = "Ui1bLeader", Provider = Provider.Simulator };
+            var foll2 = new Account { Name = "Ui1bFoll2", Provider = Provider.Simulator };
+            foll2.Positions.Add(new Position { Instrument = es, MarketPosition = MarketPosition.Long, Quantity = 5 });
+            Account.All.Add(lead2);
+            Account.All.Add(foll2);
+
+            foreach (var r in engine.GetRelationships().ToList())
+                engine.RemoveRelationship(r.LeaderAccountName, r.FollowerAccountName);
+            Ui1Rel("Ui1bLeader", "Ui1bFoll2", 1.0);
+            row = Ui1Row("Ui1bFoll2");
+            Assert(row != null && row.Verdict != CopierConformance.Orphan,
+                string.Format("snapshot does not report ORPHAN for a follower position in an unrelated instrument (row={0} verdict={1})",
+                    row == null ? "NULL" : "ok", row == null ? "n/a" : row.Verdict.ToString()));
+        }
+
+        private static void TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt()
+        {
+            Console.WriteLine("\n[TEST] UI1b: a disarmed relationship reports SHADOW, not DIVERGED (arbiter #2/#14)");
+
+            // My original spec ranked Diverged ABOVE Shadow, and the reviewer's argument
+            // was better than mine: a disarmed relationship is EXPECTED to diverge,
+            // because not copying is exactly what produces the divergence. Reporting
+            // DIVERGED states the consequence and hides the cause, and the operator then
+            // hunts a copier fault that does not exist.
+            //
+            // The original 18 could not catch this: the only SHADOW case they exercised
+            // was flat/flat, where no divergence exists to compete with.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1bSLeader", inst, MarketPosition.Long, 4);
+            Ui1Account("Ui1bShadow", inst, MarketPosition.Flat, 0);
+            Ui1Rel("Ui1bSLeader", "Ui1bShadow", 1.0, armed: false);
+
+            var row = Ui1Row("Ui1bShadow");
+            Assert(row != null && row.Verdict == CopierConformance.Shadow,
+                string.Format("snapshot reports SHADOW for a disarmed relationship that also diverges (row={0} verdict={1} armed={2} enabled={3})",
+                    row == null ? "NULL" : "ok", row == null ? "n/a" : row.Verdict.ToString(),
+                    row == null ? "n/a" : row.ArmedForLive.ToString(), row == null ? "n/a" : row.IsEnabled.ToString()));
         }
 
         private static void TestUi1_TheSnapshotIsAReadAndOnlyARead()
