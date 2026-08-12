@@ -43,27 +43,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**71 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**75 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 68 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 72 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 68 + 3 = 71. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+write-up yet. 72 + 3 = 75. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
 but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-71` | 31 | **2** | ✅ `P1-69`, `P1-70`, `P1-71` all closed 2026-08-13 (§5.14); two of the three are live-validated. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**, `OnExecution` is covered but CI is still parked and `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are excluded from the test build. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-75` | 35 | **2** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
-| | | **71** | **14** | **57 closed or superseded** |
+| | | **75** | **14** | **61 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1342,6 +1342,145 @@ at 5.
 
 `P2-46` (one order counted once across `Submitted`/`Accepted`), `P1-45` (`LockoutUntil` paired with
 the flag) and `P1-44` (never cancel a protective order to enforce a rate limit) all still hold.
+
+---
+
+### P1-72. `nt_copier_config` advertised a `quarantine` action that nothing implemented — ✅ FIXED 2026-08-13
+
+*(found 2026-08-13 while widening the MCP wrapper's argument surface — §5.6 item 3 — by comparing the
+tool's declared `action` enum against the branches that exist.)*
+
+**What it was**: the tool schema offered `action: ['get', 'set', 'quarantine']`. There is **no
+`quarantine` branch anywhere** — not in `McpBridgeAddOn.CopierConfig`, not on `TradeCopierEngine`.
+`CopierConfig`'s if-chain ends in `else { read }`, so `action: 'quarantine'` fell through to the read
+branch and returned the config with **`success: true`**.
+
+**Why it matters**: quarantine is what an operator reaches for when a follower is filling badly —
+`MaxSlippageTicks` does it automatically, and a human does it manually. So the failure mode is: a
+relationship known to be misbehaving is told to stop, reports that it stopped, and **keeps sending
+orders to a real account**. That is `P0-68`'s shape (claiming an outcome that never happened) on a
+safety control rather than on a stop order.
+
+**The mechanism is the general defect, and it is worth more than the instance**: a dispatcher whose
+default arm is a *read* converts every typo and every unimplemented action into a silent success.
+`action: 'quarrantine'` behaved identically.
+
+**Fix**: two halves.
+1. The wrapper resolves `quarantine`/`unquarantine` to `set` + `isQuarantined`, which the engine does
+   honour — pinned by `TestP1_74_QuarantineIsSettableThroughTheRequestPath`, because a remedy that
+   assumed the field arrived would have been a second no-op dressed as a fix.
+2. **An unknown action now throws** rather than degrading to a read, in
+   `mcp/ninjatrader-mcp/lib/copier-config-request.js`. The bridge applies the same rule to GET: a
+   write action over GET is refused with `method not allowed`, whitelisted rather than blacklisted,
+   so `?action=remove_group` cannot mutate config over a read verb.
+
+**Where**: `mcp/ninjatrader-mcp/nt-mcp-server.js` (schema), `lib/copier-config-request.js` (mapping),
+`McpBridgeAddOn.cs` `CopierReadFromQuery`. Live-verified: `?action=remove_group` → `success: false`.
+
+---
+
+### P1-73. The wrapper's schema defaults could silently reset stored config — ✅ FIXED 2026-08-13
+
+*(found 2026-08-13 in the same pass, by asking what `ApplyRelationshipRequest`'s merge semantics imply
+about a schema that declares defaults.)*
+
+**What it was**: the tool declared `quantityRatio: { default: 1.0 }` and
+`autoConversion: { default: true }`. `ApplyRelationshipRequest` **merges**: an absent key preserves
+the stored value, a present key overwrites it (that is slice 3b's whole point, `CM3`). So a default
+that reaches the request body is not a convenience — it is **silent data loss**. A caller nudging
+`maxSlippageTicks` would reset a `quantityRatio` of 3 to 1, and re-enable a conversion the operator
+had turned off.
+
+**This is the destructive save pattern slice 3b deleted from the bridge, re-entering through a tool
+schema.** `P?-65` is the same pattern in the WPF window. Three surfaces, one rule.
+
+**Fix**: **no `default:` on any value field**, and the builder sends only keys the caller supplied.
+`false` and `0` are values and are sent; only absence means absence. Verified over stdio against the
+real server: `properties still carrying a default: none`.
+
+**Also fixed here — the wrapper refuses to guess an account.** The engine falls back to
+`leaderAccount` `"Sim101"` and `followerAccount` `"SimCopy2"`, both **real accounts on this box**, so
+an underspecified write edited a live relationship silently. A relationship write now requires both
+names explicitly, and arming requires `confirmLive` at the boundary instead of being quietly
+downgraded to `armedForLive: false` in a response that contradicts its own request.
+
+**Where**: `mcp/ninjatrader-mcp/nt-mcp-server.js` `TOOLS`, `lib/copier-config-request.js`.
+33 tests in `tests/copier-config-request.test.js`.
+
+---
+
+### P1-74. `autoConversion` is not a field, and had never done anything — ✅ FIXED 2026-08-13
+
+*(found 2026-08-13 by checking, rather than assuming, which camelCase keys the engine reads — the
+wrapper's correctness depended on it.)*
+
+**What it was**: the engine's property is **`AutoSymbolConversion`**. `ConfigAliasMap` contains
+`autoSymbolConversion` (lower-cased first letter of the canonical name) and **not `autoConversion`**,
+so `NormalizeConfigObject` copied the unknown key through verbatim and `JsonConvert.PopulateObject`
+discarded it as an unknown member. The MCP tool has advertised `autoConversion` since it was written.
+
+**Why it matters more than a spelling slip**: that parameter names the exact feature that dropped a
+live copy the day before. `SimCopy2` has `AutoSymbolConversion: true` and maps to NQ, so one MNQ at
+ratio 1.0 rounds below a whole contract and is dropped (`P1-71`'s live answer). **The one control an
+operator would reach for to fix that was inert, and reported success.** Same "config must not lie"
+class as `P1-23` and the deleted `EnableFollowerAtm`.
+
+**Fix**: the wrapper keeps `autoConversion` as its documented argument name and **translates** it to
+`autoSymbolConversion` on the wire; an explicit `autoSymbolConversion` wins. Translating rather than
+renaming keeps existing callers working.
+
+**Pinned in both repos, deliberately.**
+`TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped` asserts the engine **still drops**
+`autoConversion` — it pins the defect, not a fix, because the remedy lives in another repo, and it
+tells whoever adds an alias later that the translation can then be simplified.
+`TestP1_74_EveryDocumentedCamelCaseArgumentReachesTheRelationship` pins all thirteen keys the wrapper
+can now send. **A wrapper verified only against my reading of an alias map is verified against
+nothing** — the JS tests can prove what is emitted, never what is read.
+
+**Where**: `TradeCopierEngine.cs:703` `BuildConfigAliasMap`, `lib/copier-config-request.js`
+`translateAutoConversion`.
+
+---
+
+### P1-75. Reading the prop-firm rules DISARMED them — ✅ FIXED 2026-08-13 (latent, never fired in production)
+
+*(found 2026-08-13 by enumerating **every** `LoadFromDisk` call site after `P1-69` turned out to have
+been fixed in only one of the bridge's two copier read branches. Fix the class, not the instance.)*
+
+**What it was**: `McpBridgeAddOn.PropLimits`'s read branch called
+`PropFirmProtectionSuite.LoadFromDisk`, which ends in `UpdateConfig(cfg)` **with no `confirmLive`** —
+and `UpdateConfig`'s safety gate forces `ArmedForLive = false` without it. So a **read** of the
+prop-firm configuration turned enforcement **off**.
+
+**Every other field survives the reload.** `EvaluationTargetProfit`, both news-shield buffers, the
+giveback cap — all intact. The only thing lost is whether any of them is *enforced*. That is why it
+could sit in a read path unnoticed: the response looks right.
+
+⚠️ **It has never fired on this box, and that is luck, not design.** `prop_limits.json` does not exist
+here, and `LoadFromDisk` returns early on a missing file. **The defect is self-arming**: the `set`
+branch calls `SaveToDisk`, so the first prop-limits write creates the file, and from that moment every
+read disarms. It was one POST away from live.
+
+**The gate is correct and stays.** Refusing to arm from a file is exactly what it is for — otherwise
+a config could arm itself at startup, which is the failure `P1-47` and the copier's
+`ArmedForLive = false` default both exist to prevent. The defect is a **read path invoking it**.
+`TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem` asserts the disarm on purpose, so that nobody
+"fixes" a future report of this by weakening the gate.
+
+**Fix**: the read branch returns `PropFirmProtectionSuite.Instance.Config` directly. In-memory *is*
+the live config — loaded at `State.Configure`, written by every save path. A hand-edit to
+`prop_limits.json` is picked up at the next NT8 start, deliberately not by a reader.
+
+**`P1-69`'s second half went with it**: the copier's `get_groups` branch still called `LoadFromDisk`,
+so listing the **groups** still discarded the relationship latency/slippage measurements that
+`ObserveFollowerFill` writes. Only the two `State.Configure` startup loads remain in the bridge.
+
+**Where**: `McpBridgeAddOn.cs` `PropLimits` (read branch), `CopierConfig` (`get_groups` branch),
+`PropFirmProtectionSuite.cs:128` `LoadFromDisk` → `:68` `UpdateConfig`.
+
+**Not live-validated, and it cannot be cheaply**: proving it needs an armed prop config plus a saved
+file, and arming live risk rules to demonstrate a fixed defect is not a trade worth making. Compile
+clean, deployed, pinned by an executed test.
 
 ---
 

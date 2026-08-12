@@ -23,7 +23,7 @@ docs/       hardening plan (the defect index), session handover, design docs
 
 ```bash
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build     # 1003 passed / 0 failed
+dotnet run --project tests/RiskGuardTests.csproj --no-build     # 1028 passed / 0 failed
 python mutation/mutate_cm3.py                                   # 14 mutants, all killed
 python mutation/mutate_cm4.py                                   # 10 mutants, all killed
 python mutation/mutate_p0_63.py                                 #  7 mutants, all killed
@@ -109,8 +109,8 @@ repos become mutually recursive and the split is dead.
 ## Status
 
 This code manages real money on live funded accounts, and it is **not finished hardening**.
-**71 defect IDs; 57 closed, 14 open.** Tag `v1.1.0` is the deployed code, live in NT8 in
-`shadow` mode; suite 1003/0, five mutation batteries with 0 survivors.
+**75 defect IDs; 61 closed, 14 open.** Tag `v1.1.0` is the deployed code, live in NT8 in
+`shadow` mode; suite 1028/0, five mutation batteries with 0 survivors.
 
 **`P0-63` was validated live on 2026-08-13** by one 1-lot MNQ round trip on `Sim101 -> Sim-ORB`.
 `Account.Change()` being a silent no-op meant the mirrored stop had **never trailed**; the log
@@ -124,6 +124,12 @@ uncovered (two `Change()` calls landing on one stop order in a single sweep, whi
 `nt_change_order` no longer claims `"modified"` without observing it; the copier's audit log can
 no longer drop a copy in silence; and the latency/slippage metrics are readable over a GET. See
 the handover's section 5.14.
+
+Four more (`P1-72`…`P1-75`) were opened and closed on 2026-08-13 by widening the MCP wrapper's
+argument surface -- a pass whose *subject* was tooling and whose *output* was defects, because
+stating what each field does forces you to check. The one worth reading is **`P1-75`: reading the
+prop-firm rules DISARMED them**, latent only because `prop_limits.json` does not exist on this box
+and the first write creates it. See the handover's section 5.16.
 
 The highest open defects are now **`P?-64`/`P?-65`**: the copier UI writes to a different file
 than anything reads, so every UI change is lost on restart, and its two save sites destroy the

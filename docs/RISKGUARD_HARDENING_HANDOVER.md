@@ -1,6 +1,9 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (session 20 — **the whole `P0` band is now closed**. `P0-63` and `P?-66`
+**Last updated**: 2026-08-13 (session 21 — **the MCP wrapper**, §5.6 item 3, which turned up **four
+more defects** (`P1-72`…`P1-75`) and closed all of them; §5.16. The one to know about is **`P1-75`:
+reading the prop-firm rules DISARMED them**, latent only because `prop_limits.json` does not exist on
+this box. Suite **1028/0**. Session 20 — **the whole `P0` band closed**. `P0-63` and `P?-66`
 were validated by one live 1-lot MNQ round trip (**§5.13**), that trade opened four defects, and all
 four plus `P0-67` and a sixth found by a test are fixed and deployed as core **`v1.1.0`** (**§5.14**).
 Suite **1003/0**, five mutation batteries, 0 survivors. The next code work is **`P?-64` + `P?-65`**,
@@ -18,7 +21,7 @@ and the live box rather than copying them forward; everything they used to claim
 > | 2 | **[§5 — THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13)** | the authoritative answer to *what is left?* Start at **§5.6**, the order |
 > | 3 | **§7 — Decisions already made** | do not re-litigate; the review panel will try every round |
 > | 4 | **§8 — Known traps** | each one cost a session to find |
-> | 5 | session records, newest first: **§5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+> | 5 | session records, newest first: **§5.16, §5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
 >
 > ⚠️ **This file accretes, and a later section supersedes an earlier one.** Where two disagree, the
 > higher-numbered §5.x wins. **§4a is now HISTORICAL** — its "START HERE" pointed at `P0-62`, which
@@ -36,7 +39,7 @@ and the live box rather than copying them forward; everything they used to claim
 >
 > The split's one behavioural consequence: `TestP2_38`'s three assertions against
 > `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge`, which is why the suite went 929 → 926
-> with nothing broken. It is **1003** now.
+> with nothing broken. It is **1028** now.
 
 ---
 
@@ -48,8 +51,8 @@ Every row was checked, not carried forward. The command that checks it is in the
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **1003 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **71 IDs — 57 closed, 14 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14) | — |
+| **Suite** | **1028 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **75 IDs — 61 closed, 14 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14). **4 more opened and closed by the MCP wrapper pass** (§5.16) | — |
 | **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite (§5.13). Then **`P0-68`, `P1-69` and `P1-71`** on the deployed `v1.1.0` (§5.14) | §5.13, §5.14 |
 | **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` **`v1.1.0`** (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
 | **Deployed** | **`v1.1.0` code is live in NT8** (was `v1.0.2`; §5.14). 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
@@ -165,7 +168,7 @@ and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verifie
 # the suite -- ALWAYS build first; --no-build after a failed build silently
 # reports the PREVIOUS assembly's result
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1003/0
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1028/0
 
 # deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
 python tools\sync_nt8.py --verify        # expect ALL IN SYNC (7 files)
@@ -2253,6 +2256,21 @@ was exactly that until 2026-08-07.
   > behind" for the one case that matters. Then the fix over-fired on docs-only commits. Both are
   > written up in §5.10. **Two rounds of getting a nine-line check wrong is the strongest argument in
   > this file for watching a gate fail before trusting it.**
+- **A RED BASELINE FROM THE HARNESS IS NOT A RED BASELINE.** `node --test tests/` failed with
+  `MODULE_NOT_FOUND` on the *directory*, which looked exactly like "my new tests fail because the code
+  does not exist yet" — the evidence test-first work depends on. It proved nothing. The real red was
+  6 assertion failures against 27 passes. **Read what the failure says, not that there was one**; this
+  is the same class as a mutation battery scoring a crash as a survivor.
+- **A dispatcher whose default arm is a READ turns every typo into a silent success.**
+  `CopierConfig`'s if-chain ends in `else { read }`, so `action: 'quarantine'` — never implemented
+  anywhere — returned the config with `success: true`, and so did `action: 'quarrantine'`. That is
+  `P1-72`. Whitelist read actions and **throw on the rest**, at both the tool and the route.
+- **`LoadFromDisk` DISARMS.** `PropFirmProtectionSuite.LoadFromDisk` ends in `UpdateConfig(cfg)` with
+  no `confirmLive`, and that gate forces `ArmedForLive = false`. The gate is correct — it is what stops
+  a config arming itself from a file. So **no read path may call `LoadFromDisk`** (`P1-75`), and the
+  same is true of the copier's for a different reason (it discards live measurements, `P1-69`). Only
+  the two `State.Configure` startup loads are legitimate. ⚠️ `P1-69` was fixed in **one of two** copier
+  read branches and shipped as done: when a rule is "a read must not mutate", enumerate the reads.
 - **A MUTANT that cannot fail is as useless as a test that cannot fail** — and it reads as the
   opposite. The `P0-67` mutant written to reinstate the defect verbatim read
   `bracket.RequestedStopPrice` *after* the reconcile resets it to `NaN`, so it could not change
@@ -2874,16 +2892,16 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 68, re-run 2026-08-13
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 72, re-run 2026-08-13
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **68** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **72** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **71** | 4 opened by the live validation, §5.13 |
-| **Open** | **14** | §5.1 + `P?-64`, `P?-65`. **`P?-66` and five more closed 2026-08-13** (§5.13, §5.14) |
-| **Closed or superseded** | **57** | `P0-67`, `P0-68`, `P1-69`, `P1-70`, `P1-71` closed in §5.14 |
+| **Total IDs** | **75** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16) |
+| **Open** | **14** | §5.1 + `P?-64`, `P?-65`. **`P?-66` and nine more closed 2026-08-13** (§5.13, §5.14, §5.16) |
+| **Closed or superseded** | **61** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -3025,9 +3043,10 @@ deployed; everything else shifts up unchanged.
    `CopierConfigFile`. Doing 64 without 65 leaves a UI that persists correctly and destroys the
    payload on the way. ⚠️ `TradeCopierWindow.cs` is excluded from `RiskGuardTests.csproj`, so the
    mapping must go on the ENGINE or it cannot be pinned by an executed test.
-3. **MCP wrapper.** ✅ The `GET` on `/api/copier/config` and `P1-69` are **done** (§5.14) — what
-   remains is `nt_copier_config`'s own argument surface, which still cannot express `sizingMode`,
-   `perTickerRatios`, `customSymbolMappings`, `maxSlippageTicks` or any group action.
+3. ~~**MCP wrapper.**~~ ✅ **DONE 2026-08-13 — §5.16.** `nt_copier_config` went from 5 arguments to
+   19 and from 3 actions to 11; reads go over `GET`; an unknown action is refused instead of silently
+   reading. It opened four defects on the way (`P1-72`…`P1-75`), which is the return this project
+   keeps getting from *widening* a surface: you have to state what each field does, and then check.
 4. **UI redesign**, on top of a UI that no longer loses or destroys config.
 5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
@@ -3890,3 +3909,108 @@ fourth level.
 - **The copier's metrics are session-scoped and a recompile resets them.** A zero is
   indistinguishable from "no fill observed yet", which is a conclusion already drawn wrongly once.
 - **The stale-pin guard fired for real** and was right, with the working order written down.
+
+---
+
+## 5.16 Session 21 — 2026-08-13: the MCP wrapper, and the four defects widening it exposed
+
+**§5.6 item 3 is done.** `nt_copier_config` went from **5 arguments to 19** and from **3 actions to
+11**, reads go over `GET`, and an unknown action is now refused rather than silently read. Suite
+**1003 → 1028/0**. Deployed and NT8-compiled (0 errors); three of the four fixes are live-verified
+against the box.
+
+**The wrapper was not the work.** Widening it meant writing down what each field does and which key
+the engine reads, and that produced four defects — `P1-72`…`P1-75`, all closed the same day, **none
+findable by a review of the diff** because each was a mismatch between two artifacts that no single
+file contains.
+
+### The four, shortest first
+
+| | What | How it was found |
+|---|---|---|
+| **`P1-72`** | The tool advertised `action: 'quarantine'`. **Nothing implemented it anywhere.** `CopierConfig`'s if-chain ends in `else { read }`, so it returned the config with `success: true` — a misbehaving follower told to stop, reporting that it stopped, still sending orders. | Comparing the declared `action` enum against the branches that exist |
+| **`P1-73`** | The schema declared `quantityRatio: {default: 1.0}` and `autoConversion: {default: true}`. `ApplyRelationshipRequest` **merges**, so a default that reaches the body is silent data loss: nudge one field, reset the other. | Asking what merge semantics imply about a schema with defaults |
+| **`P1-74`** | **`autoConversion` is not a field.** The property is `AutoSymbolConversion`; the alias map has `autoSymbolConversion` and not `autoConversion`, so Json.NET dropped it as an unknown member. The parameter had **never done anything** — on the exact feature that dropped a live copy the day before. | Checking which camelCase keys the engine reads instead of assuming |
+| **`P1-75`** | **Reading the prop-firm rules DISARMED them.** `LoadFromDisk` → `UpdateConfig(cfg)` with no `confirmLive` → the safety gate forces `ArmedForLive = false`. Every other field survives, so the only thing lost is whether anything is *enforced*. | Enumerating **every** `LoadFromDisk` call site after `P1-69` turned out to be half-fixed |
+
+### `P1-69` was fixed in one of two read branches, and I shipped it as done
+
+The copier's **`get_groups`** branch still called `LoadFromDisk`. Yesterday's fix went into the `get`
+branch only, so listing the **groups** still replaced the in-memory relationships that
+`ObserveFollowerFill` writes its latency/slippage measurements onto — the same defect, one branch
+over, in a fix I had reported as complete and live-validated.
+
+The live validation was real; it exercised `get`, which is why it passed. **"A read must not mutate"
+had been applied to *the* read, not to *every* read.** Enumerating the call sites — three found, two
+were defects, one was the legitimate `State.Configure` startup load — took two minutes and is what
+found `P1-75` as well. Only the two startup loads remain.
+
+### `P1-75` is latent, and that is luck rather than design
+
+`prop_limits.json` **does not exist on this box**, and `LoadFromDisk` returns early on a missing file,
+so the disarm has never fired in production. **The defect is self-arming**: the `set` branch calls
+`SaveToDisk`, so the first prop-limits write creates the file, and from that moment every read
+disarms. It was one POST away.
+
+⚠️ **The gate is correct and must stay.** `UpdateConfig` refusing to arm without `confirmLive` is
+exactly what prevents a config arming itself from a file — the same rule as `P1-47` and the copier's
+`ArmedForLive = false` default. `TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem` **asserts the
+disarm on purpose** so that a future report of this cannot be "fixed" by weakening the gate. The
+defect was a read path invoking it.
+
+### Where the tests had to live, and why it is split across two repos
+
+The mapping is in **`mcp/ninjatrader-mcp/lib/copier-config-request.js`**, not inline in
+`nt-mcp-server.js` — importing that file starts its stdin readline loop, so a test of a function
+defined there hangs. Same rule the bridge follows for `ApplyRelationshipRequest`: put the mapping
+where an executed test can reach it. **33 tests**, `node --test`, zero new dependencies.
+
+But those tests can only prove **what is emitted**. Whether the engine *reads* those keys is a
+different claim, in a different repo, and it is where `P1-74` was hiding. So three tests went into the
+core suite: every documented key lands on the relationship; `autoConversion` is **still dropped**
+(pinning the defect, since the remedy is in the wrapper, and telling whoever adds an alias later that
+the translation can be simplified); and `isQuarantined`/`quarantineReason` arrive through `set` —
+which is what makes `P1-72`'s remedy real rather than a second no-op dressed as a fix.
+
+**A wrapper verified against my reading of an alias map is verified against nothing.**
+
+### The bridge's GET now answers the question it was asked
+
+Measured before changing anything: `GET /api/copier/config?leaderAccount=Sim-ORB` returned
+**Sim101's** relationship in `config`, with `leaderAccount: "Sim101"` echoed back and
+`success: true`. The route passed `null`, so the read fell back to the default leader. That is
+`P0-68`'s shape — a confident answer to a question nobody asked.
+
+⚠️ **The action is whitelisted, not forwarded.** `CopierConfig`'s if-chain holds every write branch, so
+passing a query action straight through would let `GET ...?action=remove_group&groupName=X` **mutate
+config over a GET** — turning the read this route exists to provide into the write it exists to avoid.
+Live-verified refusal:
+
+```
+GET /api/copier/config?leaderAccount=Sim-ORB       -> leaderAccount: Sim-ORB, config: Sim-ORB  ✅
+GET /api/copier/config?action=remove_group&...     -> success: false, "method not allowed"     ✅
+GET /api/copier/config?action=get_groups           -> action: get_groups, keys: [action, groups, success]  ✅
+```
+
+### Two method notes worth keeping
+
+**1. A red baseline from the harness is not a red baseline.** My first "the tests fail before the
+module exists" was `node --test tests/` failing to *resolve the directory* — a `MODULE_NOT_FOUND`, not
+an assertion. It looked exactly like the evidence I wanted. The real red came later, with 6 assertion
+failures against 27 passes, and only then did the fix mean anything. Same class as the vacuous
+mutation batteries in §8: **check what the failure says, not that there was one.**
+
+**2. A failed build plus `--no-build` reports the previous assembly.** A field-name typo made the
+build fail and the suite print `RESULTS: Passed = 1023, Failed = 0` from the **stale** binary — the
+exact trap §0 records, met while working on the file that records it. Grep the error count, not just
+`RESULTS:`.
+
+### Not validated live
+
+- **`P1-75`** — proving it needs an armed prop config *and* a saved file. Arming live risk rules to
+  demonstrate a fixed defect is not a trade worth making. Compile-clean, deployed, pinned by test.
+- **`P1-69`'s second half** — needs a fill to produce a non-zero metric, then a `get_groups`, then a
+  re-read. Worth folding into the next live copy rather than booking a trade for it.
+- ⚠️ **The MCP server change needs the server process restarted** to take effect. A client that
+  spawned `nt-mcp-server.js` before this is still running the 5-argument, POST-everything version, and
+  will report success on `action: 'quarantine'` exactly as before.
