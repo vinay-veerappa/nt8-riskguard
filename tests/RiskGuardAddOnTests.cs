@@ -188,6 +188,86 @@ namespace NinjaTrader.Cbi
         // Counts Flatten calls so a test can prove the fail-closed fallback ran.
         public int FlattenCallCount { get; private set; }
 
+        // P0-63. The broker ACCEPTS the change and then silently ignores it. Distinct from
+        // SimulateChangeFailure above in the only way that matters: no exception, no rejection,
+        // no log line -- the order settles back at the values it already had. This is what
+        // `provider: Simulator` does to every Account.Change(), which is why the mirrored stop
+        // has never trailed once.
+        //
+        // This stub could not express that until 2026-08-13, and that is the whole reason a
+        // 926-test suite never saw the defect. `Account.Change()` is a REQUEST: the caller writes
+        // the desired values onto the Order object and Change() asks the provider to honour them.
+        // The stub had no provider-side copy of those fields, so the caller's own writes were the
+        // only thing any test could read back and every Change() "worked" by construction.
+        // Same lesson as the six OrderStates this stub used to omit -- a double that cannot
+        // represent the failure is not coverage.
+        public bool SimulateChangeIsSilentNoOp { get; set; }
+
+        /// <summary>The provider's copy of the mutable order fields, which is the authoritative one.</summary>
+        private class ProviderHeld
+        {
+            public double StopPrice;
+            public double LimitPrice;
+            public int Quantity;
+        }
+
+        // Reference-keyed: the stub Order does not override equality, so this is object identity
+        // by construction. Keying on OrderId would reproduce P0-59/P3-30 inside the harness.
+        private readonly Dictionary<Order, ProviderHeld> _providerHeld =
+            new Dictionary<Order, ProviderHeld>();
+        private readonly HashSet<Order> _unhonouredChanges = new HashSet<Order>();
+
+        private void CaptureProviderValues(Order o)
+        {
+            _providerHeld[o] = new ProviderHeld
+            {
+                StopPrice = o.StopPrice, LimitPrice = o.LimitPrice, Quantity = o.Quantity
+            };
+        }
+
+        /// <summary>
+        /// What price the broker would actually TRIGGER this order at -- the provider's copy, not
+        /// the caller's request. This is the only honest question to assert on: `order.StopPrice`
+        /// is whatever we last wrote onto the object, so reading it back proves nothing about
+        /// whether the broker agreed. Asserting on it is what would have made a P0-63 test pass
+        /// while the live stop sat unmoved.
+        /// </summary>
+        public double ProviderStopPrice(Order o)
+        {
+            lock (_ordersLock)
+            {
+                ProviderHeld held;
+                return _providerHeld.TryGetValue(o, out held) ? held.StopPrice : double.NaN;
+            }
+        }
+
+        /// <summary>
+        /// The change round trip completing. NT8 raises OrderUpdate when an order leaves
+        /// ChangeSubmitted/ChangePending, carrying whatever the PROVIDER holds -- which on a
+        /// Simulator account is the pre-change values.
+        ///
+        /// The revert is deliberately applied HERE and not inside Change(). If Change() reverted
+        /// synchronously, a fix that read the order back on the line after Change() would pass
+        /// this suite and still fail live, because live the revert has not happened yet at that
+        /// point. Verification has to hang off the settle event, so the double has to make the
+        /// synchronous shortcut fail.
+        /// </summary>
+        public void SettleChange(Order o)
+        {
+            lock (_ordersLock)
+            {
+                ProviderHeld held;
+                if (_unhonouredChanges.Remove(o) && _providerHeld.TryGetValue(o, out held))
+                {
+                    o.StopPrice = held.StopPrice;
+                    o.LimitPrice = held.LimitPrice;
+                    o.Quantity = held.Quantity;
+                }
+            }
+            o.OrderState = OrderState.Working;
+            TriggerOrderUpdate(o);
+        }
+
         /// <summary>
         /// Fires on every call that reaches the broker (Cancel/Flatten/CreateOrder/Submit).
         /// Lets a test assert the invariant the design doc claims but the code did not keep:
@@ -285,7 +365,8 @@ namespace NinjaTrader.Cbi
                 o.OrderState = OrderState.Submitted;
                 if (SimulateExitRejection && (o.Name.StartsWith("Stop_") || o.Name.StartsWith("Target_")))
                     o.OrderState = OrderState.Rejected;
-                lock (_ordersLock) { Orders.Add(o); }
+                // What the provider now holds. A later Change() is measured against this.
+                lock (_ordersLock) { Orders.Add(o); CaptureProviderValues(o); }
             }
         }
 
@@ -305,6 +386,15 @@ namespace NinjaTrader.Cbi
                 throw new Exception("Simulated broker rejection at Change.");
             foreach (var o in orders)
             {
+                lock (_ordersLock)
+                {
+                    // The caller's desired values are LEFT IN PLACE either way -- that is what
+                    // makes a read-back on the next line indistinguishable between the two cases,
+                    // and it is exactly the trap P0-63 set live. Only SettleChange tells them
+                    // apart, because only settling asks the provider what it actually holds.
+                    if (SimulateChangeIsSilentNoOp) _unhonouredChanges.Add(o);
+                    else CaptureProviderValues(o);
+                }
                 o.OrderState = OrderState.Working;
             }
         }
@@ -712,6 +802,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCopierSlip_FavourableFillIsNegativeAndDoesNotQuarantine();
             TestCopierSlip_EntryQuarantinesButExitStillCopies();
             TestCopierSlip_IncomparableSymbolsRecordNoSlippage();
+
+            // P?-66: every silent path out of ObserveFollowerFill -- RED until it is instrumented
+            TestCopierSlip_P66_AMeasuredFillIsAnnouncedNotJustStored();
+            TestCopierSlip_P66_AFillForAnUnregisteredOrderIsLoggedAsAMiss();
+            TestCopierSlip_P66_ALatencyRejectedBySanityBoundSaysSo();
+            TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo();
             TestCopierSlip_FillIsMatchedWhenOrderIdChanges();
 
             // -- BRACKET REPLICATION TESTS (P0-9) --
@@ -783,6 +879,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P3_30_ACachedLegAlsoInAccountOrdersCountsOnce();
             TestBracket_P0_50_AFlatFollowerStandsTheBracketDown();
             TestBracket_P0_61_ADeferredChangeIsReappliedWhenTheLegSettles();
+
+            // P0-63: Change() accepted and silently ignored -- RED until remedy 3 lands
+            TestBracket_P0_63_ASilentlyIgnoredChangeIsCaughtOnSettleAndReplaced();
+            TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange();
+            TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace();
 
             // CM1: copier ratio converter, slice 1 -- RED until the fix lands
             TestCM1_MatrixSizesFromTheTableWithoutTheSymbolMultiplier();
@@ -1438,6 +1539,166 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(rel.LatencyMs > 0,
                 string.Format("Latency is still measured -- it does not depend on price (got {0:F0}ms).", rel.LatencyMs));
+        }
+
+        // ------------------------------------------------------------------
+        // P?-66. P1-22's measurement produced NO reading at all on the live path, and every
+        // candidate explanation is indistinguishable from every other because ObserveFollowerFill
+        // returns SILENTLY five different ways. A zero in the UI can mean the copy was clean, the
+        // pending map missed, the relationship did not resolve, the latency was thrown out by its
+        // sanity bound, or the two instruments were not price-comparable. Until they are told
+        // apart, no slippage number in the UI means anything -- which is the same class of defect
+        // P1-22 itself was: a displayed figure nothing computes reads as evidence.
+        //
+        // Ruled out by inspection, 2026-08-13: the group-derived-relationship hypothesis. The
+        // live CopierConfig has `Groups: {}` and two direct Relationships, so `_relationships`
+        // does contain the pair and `rel` resolves. The pending-map miss and the latency bound
+        // are still live suspects, and instrumenting is what separates them.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Captures every CopierLog event type raised while `body` runs. The log IS the deliverable
+        /// for this defect, so it is what the tests assert on.
+        /// </summary>
+        private static List<string> CaptureCopierLog(Action body)
+        {
+            var seen = new List<string>();
+            var previous = TradeCopierEngine.CopierLogObserver;
+            TradeCopierEngine.CopierLogObserver = (acct, evt, msg) => seen.Add(evt + "|" + msg);
+            try { body(); }
+            finally { TradeCopierEngine.CopierLogObserver = previous; }
+            return seen;
+        }
+
+        private static bool LoggedEventContaining(List<string> log, string needle)
+        {
+            return log.Any(l => l.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static void TestCopierSlip_P66_AMeasuredFillIsAnnouncedNotJustStored()
+        {
+            Console.WriteLine("\n[TEST] COPIER SLIP: a fill that WAS measured says so, with its numbers (P?-66)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+            {
+                var lead = LeaderExec(leader, mnq, OrderAction.Buy, 1, "P66-A");
+                lead.Time = SlipT0;
+                lead.Price = 18000.00;
+                TradeCopierEngine.Instance.OnExecution(lead);
+                FillFollowerCopy(follower, mnq, 18001.00, 250, "P66-A-F");
+            });
+
+            Assert(LoggedEventContaining(log, "FILL_MEASURED"),
+                "A successful measurement is announced as FILL_MEASURED. Without the positive case "
+                + "an absent log line cannot be told from a log line that was never reached, so the "
+                + "miss below proves nothing on its own.");
+            Assert(LoggedEventContaining(log, "250") && LoggedEventContaining(log, "4"),
+                "And it carries the numbers it measured (250ms, 4 ticks), so the live log answers "
+                + "the question without a debugger attached.");
+        }
+
+        /// <summary>
+        /// The MISS, which is the single most likely live cause: a follower fill arriving for an
+        /// order that is not in `_pendingCopies`. The map is keyed on the Order object reference,
+        /// which is correct (OrderId is neither unique nor stable) but means anything that hands
+        /// back a different instance measures nothing and says nothing -- the P0-59/P3-30 shape.
+        /// </summary>
+        private static void TestCopierSlip_P66_AFillForAnUnregisteredOrderIsLoggedAsAMiss()
+        {
+            Console.WriteLine("\n[TEST] COPIER SLIP: a follower fill with no pending copy is logged as a MISS (P?-66)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            // An order this engine never submitted, so nothing registered it as a pending copy.
+            var stranger = follower.CreateOrder(mnq, OrderAction.Buy, OrderType.Market,
+                TimeInForce.Day, 1, 0, 0, "", "NOT_A_COPY", null);
+            follower.Submit(new[] { stranger });
+
+            var log = CaptureCopierLog(() =>
+            {
+                TradeCopierEngine.Instance.OnExecution(new Execution
+                {
+                    Account = follower, Instrument = mnq, Order = stranger, Quantity = 1,
+                    Price = 18001.00, ExecutionId = "P66-B-F", Name = "NOT_A_COPY",
+                    Time = SlipT0.AddMilliseconds(250)
+                });
+            });
+
+            Assert(LoggedEventContaining(log, "FILL_NOT_MEASURED"),
+                "The miss is announced. At baseline this path returns in silence, which is exactly "
+                + "why the live run could not be diagnosed: a 0 in the UI and a fill that was never "
+                + "matched look identical from outside.");
+        }
+
+        /// <summary>
+        /// The other named suspect. `exec.Time`'s DateTimeKind is not dependable, and a leader
+        /// timestamp in a different frame from the follower's produces a latency of several hours,
+        /// which the sanity bound then throws out -- correctly, and silently, leaving the UI at 0.
+        /// Discarding a reading and never taking one must not look the same.
+        /// </summary>
+        private static void TestCopierSlip_P66_ALatencyRejectedBySanityBoundSaysSo()
+        {
+            Console.WriteLine("\n[TEST] COPIER SLIP: a latency thrown out by the sanity bound is logged, not swallowed (P?-66)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+            {
+                var lead = LeaderExec(leader, mnq, OrderAction.Buy, 1, "P66-C");
+                // Five hours ahead of the follower's clock: the exact shape of a UTC-vs-local
+                // mismatch, and a 5-hour "latency" the bound rejects.
+                lead.Time = SlipT0.AddHours(5);
+                lead.Price = 18000.00;
+                TradeCopierEngine.Instance.OnExecution(lead);
+                FillFollowerCopy(follower, mnq, 18001.00, 250, "P66-C-F");
+            });
+
+            Assert(rel.LatencyMs == 0.0,
+                string.Format("Precondition: the absurd latency is still rejected, not recorded (got {0:F0}ms).",
+                    rel.LatencyMs));
+            Assert(LoggedEventContaining(log, "LATENCY_REJECTED"),
+                "But the rejection is now visible, and names the figure it refused. A silent "
+                + "rejection here is indistinguishable from a copy that was never measured.");
+        }
+
+        /// <summary>
+        /// The fifth silent path: latency measured, slippage deliberately not computed because the
+        /// two instruments' prices are unrelated. Legitimate behaviour that must still be legible,
+        /// or a permanent 0.0 slippage on a mapped relationship reads as a permanently clean fill.
+        /// </summary>
+        private static void TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo()
+        {
+            Console.WriteLine("\n[TEST] COPIER SLIP: slippage skipped for incomparable prices is logged (P?-66)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(2.0, autoConvert: true);
+            rel.CustomSymbolMappings["MNQ"] = "ES";
+
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+            {
+                var lead = LeaderExec(leader, mnq, OrderAction.Buy, 1, "P66-D");
+                lead.Time = SlipT0;
+                lead.Price = 18000.00;
+                TradeCopierEngine.Instance.OnExecution(lead);
+                FillFollowerCopy(follower, Instrument.GetInstrument("ES 03-26"), 5000.00, 90, "P66-D-F");
+            });
+
+            Assert(LoggedEventContaining(log, "SLIPPAGE_NOT_COMPARABLE"),
+                "The skipped slippage says why. The relationship still reports 0.0 ticks forever, "
+                + "and without this line that is indistinguishable from never slipping.");
         }
 
         // NT8's Order.OrderId is not guaranteed unique and CAN CHANGE over an order's lifetime
@@ -11044,6 +11305,176 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "(follower entry 18002 - the leader's new 5-point distance), got {0}. "
                     + "Losing it here leaves the follower on a stale stop for the life of the trade.",
                     live[0].StopPrice));
+        }
+
+        // ------------------------------------------------------------------
+        // P0-63. Account.Change() is ACCEPTED and then silently ignored on a
+        // `provider: Simulator` account. The order goes ChangeSubmitted -> Accepted carrying its
+        // ORIGINAL price and quantity: no exception, no rejection, no log line. Established
+        // 2026-08-10 by an isolated probe on `Sim_All_Day_ORB`, an account in no copier
+        // relationship, so nothing else could have been reverting it -- including a resting limit
+        // 300 points from the market, which has no trigger-proximity or margin rule to blame.
+        //
+        // Every account this project has ever validated on is a Simulator account. So the
+        // mirrored stop has NEVER trailed: a leader moving its stop up to lock in profit left the
+        // follower carrying the original risk for the life of the trade, and §4o's whole
+        // "modify in place, so no unprotected window" design was a no-op that logged success.
+        //
+        // Remedy 3, which is the operator's decision (handover §5.5): read the order back once
+        // the change settles and fall back to cancel-then-create when it did not take. Correct on
+        // both provider types without placing an order on a funded account to find out which one
+        // we are on, and it turns a silent no-op into an observable one.
+        // ------------------------------------------------------------------
+
+        private static void TestBracket_P0_63_ASilentlyIgnoredChangeIsCaughtOnSettleAndReplaced()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: a Change() the broker accepts and ignores is caught when the leg settles (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063A");
+
+            var leaderStop = LeaderStop(mnq, OrderAction.Sell, 1, 17990.00);
+            leader.TriggerOrderUpdate(leaderStop);
+
+            var original = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+            Assert(Math.Abs(original.StopPrice - 17992.00) < 1e-9,
+                "Precondition: the mirrored stop is at 17992.00 (follower entry 18002 - the leader's 10-point distance).");
+
+            follower.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // The leader trails its stop to 5 points below its own entry, locking in half the
+                // move. Mirrored on the follower's entry that is 17997.
+                leaderStop.StopPrice = 17995.00;
+                leader.TriggerOrderUpdate(leaderStop);
+
+                // The round trip completes. Live, THIS is the moment the order comes back at its
+                // original values, and it is the only moment the no-op is visible at all.
+                follower.SettleChange(original);
+            }
+            finally { follower.SimulateChangeIsSilentNoOp = false; }
+
+            var live = follower.Orders
+                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(live.Count == 1,
+                string.Format(
+                    "Exactly one stop is live after the fallback (got {0}). Two stops behind one lot "
+                    + "over-covers and FLIPS the follower when both fire.", live.Count));
+            // The PROVIDER's price, not ours. `live[0].StopPrice` would read back whatever the
+            // engine last wrote onto the object and would pass while the broker still held 17992.
+            double held = follower.ProviderStopPrice(live[0]);
+            Assert(Math.Abs(held - 17997.00) < 1e-9,
+                string.Format(
+                    "The broker is actually holding the trailed stop: expected 17997.00, got {0}. "
+                    + "At baseline it holds 17992.00 -- the stop never moved and the leader's "
+                    + "locked-in gain stayed as open risk on the follower.", held));
+        }
+
+        /// <summary>
+        /// The trail must not need a failed round trip PER STEP. Asserted as behaviour rather than
+        /// as mechanism: after the first ignored change, a further trail step has to reach the
+        /// desired price without any settle event driving it. An implementation that re-asks the
+        /// same provider every time leaves the stop stale for the length of a broker round trip on
+        /// every single step of a trailing stop, which is most of the trade.
+        /// </summary>
+        private static void TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: once a provider has ignored a change, later trail steps do not wait on it (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063B");
+
+            var leaderStop = LeaderStop(mnq, OrderAction.Sell, 1, 17990.00);
+            leader.TriggerOrderUpdate(leaderStop);
+            var original = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+
+            follower.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // Step one: ignored, then caught on settle.
+                leaderStop.StopPrice = 17995.00;
+                leader.TriggerOrderUpdate(leaderStop);
+                follower.SettleChange(original);
+
+                // Step two. No settle event this time -- the engine has already been shown that
+                // this account does not honour a change, so it must not be waiting on one.
+                leaderStop.StopPrice = 17998.00;
+                leader.TriggerOrderUpdate(leaderStop);
+            }
+            finally { follower.SimulateChangeIsSilentNoOp = false; }
+
+            var live = follower.Orders
+                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(live.Count == 1,
+                string.Format("Still exactly one live stop after the second trail step (got {0}).", live.Count));
+
+            // Asked of the provider with NO settle event for step two. This is what discriminates
+            // the three implementations: baseline holds 17992 (nothing ever moved); a fix that
+            // re-asks this provider on every step holds 17997 (step one's price, step two still in
+            // its doomed round trip); only a fix that stops asking holds 18000.
+            double held = follower.ProviderStopPrice(live[0]);
+            Assert(Math.Abs(held - 18000.00) < 1e-9,
+                string.Format(
+                    "The second trail step is holding at the broker with no round trip: expected "
+                    + "18000.00, got {0}. Anything else means the follower's stop is stale for a "
+                    + "broker round trip on every step of a trailing stop.", held));
+        }
+
+        /// <summary>
+        /// The regression guard, and the reason remedy 1 was not simply adopted. Where the
+        /// provider DOES honour a change, the leg must still be modified in place: cancel-then-
+        /// create leaves the follower with no protective stop between the cancel and the new
+        /// order's acceptance, on every trail step. That naked window is the defect §4o shipped
+        /// modify-in-place to close, and "always cancel-then-create" would reopen it as the price
+        /// of fixing this one.
+        /// </summary>
+        private static void TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: where the provider honours a change, the leg is still modified in place (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063C");
+
+            var leaderStop = LeaderStop(mnq, OrderAction.Sell, 1, 17990.00);
+            leader.TriggerOrderUpdate(leaderStop);
+            var original = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+
+            // SimulateChangeIsSilentNoOp stays FALSE: this provider honours the request.
+            leaderStop.StopPrice = 17995.00;
+            leader.TriggerOrderUpdate(leaderStop);
+            follower.SettleChange(original);
+
+            Assert(follower.Orders.Count(o => o.Name == "COPIER_STOP") == 1,
+                string.Format(
+                    "No second stop order was ever created (got {0} in total). Falling back to "
+                    + "cancel-then-create here would leave the follower naked on every trail step.",
+                    follower.Orders.Count(o => o.Name == "COPIER_STOP")));
+            Assert(Math.Abs(follower.ProviderStopPrice(original) - 17997.00) < 1e-9,
+                string.Format(
+                    "The broker holds the new price against the ORIGINAL order: expected 17997.00, "
+                    + "got {0}.", follower.ProviderStopPrice(original)));
+            Assert(RiskGuardAddOn.OccupiesSlot(original.OrderState),
+                "And it is still the live leg -- it was never cancelled.");
         }
 
         private static void TestReconcile_SurvivorPrefersTheLegThatActuallyCovers()

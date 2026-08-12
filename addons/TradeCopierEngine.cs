@@ -2883,10 +2883,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// explained from the logs. Everything routed through here also lands in RiskGuard's
         /// structured log, and so in the bridge's event stream.
         /// </summary>
+        /// <summary>
+        /// Test seam, same shape and same justification as the stub broker's BrokerCallObserver.
+        /// Several behaviours in this file are observable ONLY as a log line, and P1-22's
+        /// measurement is the extreme case: the entire defect there is that a silent early return
+        /// is indistinguishable from a clean copy. A test cannot assert against an NT8 Output tab
+        /// or a background log-writer thread, so it asserts here.
+        /// </summary>
+        internal static Action<string, string, string> CopierLogObserver;
+
         private static void CopierLog(string account, string eventType, string message)
         {
             NinjaTrader.Code.Output.Process($"[CopierEngine] {eventType}: {message}", PrintTo.OutputTab1);
             RiskGuardAddOn.LogFromComponent(account, "COPIER_" + eventType, message);
+            var obs = CopierLogObserver;
+            if (obs != null) obs(account, eventType, message);
         }
 
         public void OnExecution(Execution exec)
