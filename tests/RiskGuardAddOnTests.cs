@@ -998,6 +998,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror();
             TestUi1b_AShortLeaderIsMirroredRatherThanReadAsFlat();
             TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt();
+            TestUi2_TheConfigPathHasOneOwnerInCore();
+            TestUi2_TheParameterlessSaveWritesTheFileEverythingElseReads();
+            TestUi2_TheTwoSaveOverloadsAreOneSerializerNotTwo();
+            TestUi2_ThereIsDeliberatelyNoParameterlessLoad();
+            TestUi2_TheAddFormPreservesWhatTheFormCannotSee();
+            TestUi2_TheGroupFormPreservesWhatTheFormCannotSee();
+            TestUi2_EveryFormFieldActuallyReachesTheStoredRelationship();
+            TestUi2_ARowEditNeverMutatesTheStoredObjectFirst();
+            TestUi2_AGroupRowEditCarriesOnlyItsOwnField();
+            TestUi2_TheWindowNamesNoFilePath();
+            TestUi2_TheWindowConstructsNoDomainObject();
+            TestUi2_TheWindowMutatesNoStoredObjectInPlace();
+            TestUi2_TheWindowNeverLoadsFromDiskAndSurfacesARefusal();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -1996,6 +2009,393 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && stored.ArmedForLive
                    && !stored.IsQuarantined,
                 "snapshot leaves the engine unmutated and never reloads config from disk");
+        }
+
+        // ================================================================================
+        // UI2 -- one owner for the config path, and no surface builds a domain object.
+        // Closes `P?-64` (the window wrote a file nothing read) and `P?-65` (its two save
+        // sites were the 5th and 6th remembered subset).
+        //
+        // TWO KINDS OF TEST LIVE BELOW AND THEY ARE NOT WORTH THE SAME.
+        //
+        //   * The `CopierRequests` / `ConfigFilePath` tests EXECUTE. They are real.
+        //   * The `TheWindow*` tests read TradeCopierWindow.cs as TEXT, because its whole
+        //     body is `#if !TESTING` -- no WPF in a net8.0 console app -- so this suite
+        //     cannot run a line of it. That is the `P1-47` shape and the honest options
+        //     are to check nothing or to check what can be checked. A source assertion
+        //     proves less than an execution would; it proves the exact thing that
+        //     regressed, which is that a surface named a path and built an object.
+        //
+        // EVERY source test carries a POSITIVE clause as well as a forbidden one. A
+        // "must not contain" set passes trivially against an empty file -- the same way
+        // check_ci_runs_every_battery.py passed against an empty mutation/ directory
+        // until its third probe was written.
+        // ================================================================================
+
+        /// <summary>
+        /// Absolute path of an addon source, resolved at COMPILE time. Same reasoning as
+        /// AddonSourcePath() further down: the exe runs from bin/ and the csproj links the
+        /// sources in from elsewhere, so a runtime path walk would be guessing.
+        /// </summary>
+        private static string CopierWindowSource(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            return Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons", "TradeCopierWindow.cs"));
+        }
+
+        /// <summary>
+        /// The window source with `//` comments stripped. The comments are where the
+        /// defect gets DESCRIBED, and a check that forbids describing the bug it prevents
+        /// is a check that gets the comment deleted instead.
+        /// </summary>
+        private static string Ui2WindowCode()
+        {
+            var path = CopierWindowSource();
+            if (!File.Exists(path)) return null;
+            return string.Join("\n", File.ReadAllText(path)
+                .Split('\n')
+                .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }));
+        }
+
+        private static void TestUi2_TheConfigPathHasOneOwnerInCore()
+        {
+            Console.WriteLine("\n[TEST] UI2: the copier config path has exactly one owner, and it is core (P?-64)");
+
+            var path = TradeCopierEngine.ConfigFilePath;
+
+            // It must be THE file the bridge and the startup load already use --
+            // UserDataDir/RiskGuard/copier_config.json -- not a third new one. Compared
+            // against a Path.Combine rather than a string literal so that a separator
+            // difference is not mistaken for a defect.
+            var expected = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "RiskGuard", "copier_config.json");
+
+            Assert(!string.IsNullOrEmpty(path)
+                   && string.Equals(path, expected, StringComparison.OrdinalIgnoreCase),
+                "the copier config path is owned by core and resolves to UserDataDir/RiskGuard/copier_config.json");
+        }
+
+        private static void TestUi2_TheParameterlessSaveWritesTheFileEverythingElseReads()
+        {
+            Console.WriteLine("\n[TEST] UI2: SaveToDisk() with no argument writes the one config file");
+
+            Ui1Clean();
+            var rel = Ui1Rel("Ui2Leader", "Ui2Follower", 2.0);
+
+            var path = TradeCopierEngine.ConfigFilePath;
+            if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path);
+
+            TradeCopierEngine.Instance.SaveToDisk();
+
+            bool wrote = !string.IsNullOrEmpty(path) && File.Exists(path);
+            string onDisk = wrote ? File.ReadAllText(path) : "";
+
+            Assert(wrote && onDisk.Contains("Ui2Follower") && onDisk.Contains("Ui2Leader"),
+                "SaveToDisk() with no argument writes the same file the bridge and startup read");
+        }
+
+        private static void TestUi2_TheTwoSaveOverloadsAreOneSerializerNotTwo()
+        {
+            Console.WriteLine("\n[TEST] UI2: the parameterless save DELEGATES rather than serializing a second time");
+
+            // A second serializer is how two surfaces drift apart while both look correct.
+            // The overload must be a one-line delegation, and the cheapest proof is that
+            // the bytes are identical.
+            Ui1Clean();
+            Ui1Rel("Ui2DelegateLeader", "Ui2DelegateFollower", 3.5);
+
+            var scratch = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ui2_scratch_config.json");
+            TradeCopierEngine.Instance.SaveToDisk(scratch);
+            TradeCopierEngine.Instance.SaveToDisk();
+
+            var path = TradeCopierEngine.ConfigFilePath;
+            bool both = File.Exists(scratch) && !string.IsNullOrEmpty(path) && File.Exists(path);
+
+            Assert(both && File.ReadAllText(scratch) == File.ReadAllText(path),
+                "SaveToDisk() delegates to SaveToDisk(path) rather than serializing a second time");
+        }
+
+        private static void TestUi2_ThereIsDeliberatelyNoParameterlessLoad()
+        {
+            Console.WriteLine("\n[TEST] UI2: a parameterless SAVE exists; a parameterless LOAD deliberately does not (P1-69)");
+
+            // ⚠️ THIS TEST IS GREEN AT BASELINE BY CONSTRUCTION and is therefore NOT in
+            // the ticket's expect_green -- it pins a DECISION, not an acceptance criterion,
+            // and a decision pin cannot be red before the decision is taken. It is here so
+            // the reasoning survives, and it is pinned for real by the mutation battery,
+            // which INSERTS a parameterless LoadFromDisk and requires this to fail.
+            //
+            // The decision: `P1-69` was a read that destroyed what it was asked to report
+            // -- the bridge's `get` called LoadFromDisk and dropped the in-memory latency
+            // and slippage. Making that call convenient is how the seventh surface repeats
+            // it. The two legitimate loaders say LoadFromDisk(ConfigFilePath) and show up
+            // in a grep.
+            var t = typeof(TradeCopierEngine);
+            bool hasSave = t.GetMethod("SaveToDisk", Type.EmptyTypes) != null;
+            bool hasLoad = t.GetMethod("LoadFromDisk", Type.EmptyTypes) != null;
+
+            Assert(hasSave && !hasLoad,
+                "there is a parameterless SaveToDisk and deliberately NO parameterless LoadFromDisk (P1-69)");
+        }
+
+        private static void TestUi2_TheAddFormPreservesWhatTheFormCannotSee()
+        {
+            Console.WriteLine("\n[TEST] UI2: the Add form no longer wipes the fields it cannot display (P?-65)");
+
+            // THIS IS `P?-65` ITSELF, executed. The window's Add button built a fresh
+            // CopierRelationship from eight form fields and Upserted it. Everything the
+            // form cannot see -- the ratio matrix, the symbol map, the slippage cap, the
+            // daily loss limit, the quarantine flag -- reverted to a default, silently.
+            Ui1Clean();
+            var stored = Ui1Rel("Ui2KeepLeader", "Ui2KeepFollower", 1.0);
+            stored.PerTickerRatios["MNQ"] = 4.0;
+            stored.CustomSymbolMappings["ES"] = "MES";
+            stored.MaxSlippageTicks = 7;
+            stored.DailyLossLimit = 250.0;
+
+            // The operator re-submits the Add form for the same pair with a new ratio.
+            var merged = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.Relationship("Ui2KeepLeader", "Ui2KeepFollower",
+                    CopierSizingMode.QuantityRatio, 2.0, 50, false, true, false, true),
+                confirmLive: false);
+
+            Assert(merged != null
+                   && merged.QuantityRatio == 2.0
+                   && merged.MaxPositionSize == 50
+                   && merged.PerTickerRatios != null && merged.PerTickerRatios.ContainsKey("MNQ")
+                   && merged.PerTickerRatios["MNQ"] == 4.0
+                   && merged.CustomSymbolMappings != null && merged.CustomSymbolMappings.ContainsKey("ES")
+                   && merged.MaxSlippageTicks == 7
+                   && merged.DailyLossLimit == 250.0,
+                "the Add-relationship request updates the form's fields and preserves the ones it cannot see");
+        }
+
+        private static void TestUi2_TheGroupFormPreservesWhatTheFormCannotSee()
+        {
+            Console.WriteLine("\n[TEST] UI2: the Add Group form no longer wipes the fields it cannot display (P?-65)");
+
+            Ui1Clean();
+            var grp = new CopierGroup
+            {
+                GroupName = "Ui2KeepGroup",
+                LeaderAccountName = "Ui2GrpLeader",
+                FollowerAccounts = new List<string> { "Ui2GrpA" },
+                QuantityRatio = 1.0,
+                MaxPositionSize = 10
+            };
+            grp.PerTickerRatios["MNQ"] = 5.0;
+            grp.MaxSlippageTicks = 9;
+            TradeCopierEngine.Instance.UpsertGroup(grp, confirmLive: false);
+
+            var merged = TradeCopierEngine.Instance.ApplyGroupRequest(
+                CopierRequests.Group("Ui2KeepGroup", "Ui2GrpLeader",
+                    new List<string> { "Ui2GrpA", "Ui2GrpB" },
+                    CopierSizingMode.QuantityRatio, 2.0, 50, false, true, false, true),
+                confirmLive: false);
+
+            Assert(merged != null
+                   && merged.QuantityRatio == 2.0
+                   && merged.FollowerAccounts != null && merged.FollowerAccounts.Count == 2
+                   && merged.FollowerAccounts.Contains("Ui2GrpB")
+                   && merged.PerTickerRatios != null && merged.PerTickerRatios.ContainsKey("MNQ")
+                   && merged.PerTickerRatios["MNQ"] == 5.0
+                   && merged.MaxSlippageTicks == 9,
+                "the Add-group request updates the form's fields, replaces the follower list, and preserves the rest");
+        }
+
+        private static void TestUi2_EveryFormFieldActuallyReachesTheStoredRelationship()
+        {
+            Console.WriteLine("\n[TEST] UI2: every field the form collects arrives -- a misspelled key is silent (P1-74)");
+
+            // `P1-74`: `nt_copier_config` advertised an `autoConversion` argument that was
+            // not a field on anything. NormalizeRequest dropped it and the argument had
+            // never done a single thing, for as long as it had existed. A request key that
+            // does not match a property is IGNORED WITHOUT ERROR, so the only way to know
+            // the builder's keys are right is to assert each one arrives.
+            Ui1Clean();
+
+            var merged = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.Relationship("Ui2FieldLeader", "Ui2FieldFollower",
+                    CopierSizingMode.FixedLot, 3.0, 42, false, false, false, false),
+                confirmLive: false);
+
+            Assert(merged != null
+                   && string.Equals(merged.LeaderAccountName, "Ui2FieldLeader", StringComparison.OrdinalIgnoreCase)
+                   && string.Equals(merged.FollowerAccountName, "Ui2FieldFollower", StringComparison.OrdinalIgnoreCase)
+                   && merged.SizingMode == CopierSizingMode.FixedLot
+                   && merged.QuantityRatio == 3.0
+                   && merged.MaxPositionSize == 42
+                   && merged.AutoSymbolConversion == false
+                   && merged.StealthMode == false
+                   && merged.ArmedForLive == false
+                   && merged.IsEnabled == false,
+                "every field the Add form collects reaches the stored relationship under the right key");
+        }
+
+        private static void TestUi2_ARowEditNeverMutatesTheStoredObjectFirst()
+        {
+            Console.WriteLine("\n[TEST] UI2: a row edit is a request, not an in-place mutation of stored state");
+
+            // The Enable/Disable and Reset-Quarantine buttons did `rel.IsEnabled = !rel.IsEnabled`
+            // on the STORED object and then Upserted it. If the engine went on to refuse the
+            // write -- P1-76's overlap check does exactly that -- the mutation had already
+            // landed in memory and the UI would redraw showing it. A request carries the
+            // intent; the engine decides.
+            Ui1Clean();
+            var stored = Ui1Rel("Ui2EditLeader", "Ui2EditFollower", 1.0);
+            stored.IsQuarantined = true;
+            stored.QuarantineReason = "margin";
+            stored.PerTickerRatios["MNQ"] = 8.0;
+
+            var disabled = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.RelationshipEdit("Ui2EditLeader", "Ui2EditFollower",
+                    isEnabled: false, releaseQuarantine: null),
+                confirmLive: false);
+
+            var released = TradeCopierEngine.Instance.ApplyRelationshipRequest(
+                CopierRequests.RelationshipEdit("Ui2EditLeader", "Ui2EditFollower",
+                    isEnabled: null, releaseQuarantine: true),
+                confirmLive: false);
+
+            Assert(disabled != null && released != null
+                   // the disable request touched IsEnabled and NOTHING else
+                   && disabled.IsEnabled == false
+                   && disabled.IsQuarantined
+                   && disabled.PerTickerRatios["MNQ"] == 8.0
+                   // the release request cleared the quarantine and left IsEnabled alone
+                   && released.IsQuarantined == false
+                   && released.QuarantineReason == null
+                   && released.IsEnabled == false
+                   && released.PerTickerRatios["MNQ"] == 8.0,
+                "a row edit carries only the field the button changes and leaves the rest of the stored relationship alone");
+        }
+
+        private static void TestUi2_AGroupRowEditCarriesOnlyItsOwnField()
+        {
+            Console.WriteLine("\n[TEST] UI2: the group Enable/Disable button is a request too");
+
+            Ui1Clean();
+            var grp = new CopierGroup
+            {
+                GroupName = "Ui2EditGroup",
+                LeaderAccountName = "Ui2EditGrpLeader",
+                FollowerAccounts = new List<string> { "Ui2EditGrpA" },
+                QuantityRatio = 2.5,
+                MaxPositionSize = 33,
+                IsEnabled = true
+            };
+            grp.PerTickerRatios["MNQ"] = 6.0;
+            TradeCopierEngine.Instance.UpsertGroup(grp, confirmLive: false);
+
+            var merged = TradeCopierEngine.Instance.ApplyGroupRequest(
+                CopierRequests.GroupEdit("Ui2EditGroup", isEnabled: false), confirmLive: false);
+
+            Assert(merged != null
+                   && merged.IsEnabled == false
+                   && merged.QuantityRatio == 2.5
+                   && merged.MaxPositionSize == 33
+                   && merged.FollowerAccounts != null && merged.FollowerAccounts.Count == 1
+                   && merged.PerTickerRatios != null && merged.PerTickerRatios["MNQ"] == 6.0,
+                "the group row edit carries only IsEnabled and preserves the group's followers and sizing");
+        }
+
+        private static void TestUi2_TheWindowNamesNoFilePath()
+        {
+            Console.WriteLine("\n[TEST] UI2: the copier window names no file path (P?-64)");
+
+            var code = Ui2WindowCode();
+            bool readable = code != null && code.Length > 5000;
+
+            bool namesAFile = code != null
+                && (code.Contains("CopierConfig.json")
+                    || code.Contains("copier_config.json")
+                    || code.Contains("UserDataDir"));
+
+            // The positive half. Without it an empty file passes.
+            bool usesTheEngineSave = code != null && code.Contains("SaveToDisk()");
+
+            Assert(readable && !namesAFile && usesTheEngineSave,
+                "the copier window names no file path and saves through the engine's own SaveToDisk() (P?-64)");
+        }
+
+        private static void TestUi2_TheWindowConstructsNoDomainObject()
+        {
+            Console.WriteLine("\n[TEST] UI2: the copier window constructs no domain object (P?-65)");
+
+            var code = Ui2WindowCode();
+            bool readable = code != null && code.Length > 5000;
+
+            // The one rule: a surface renders and dispatches. Both halves are forbidden --
+            // building the object, and calling the wholesale-replace write path with it.
+            // Upsert* stays public because LoadFromDisk and 40-odd test fixtures build
+            // objects legitimately; what is forbidden is an OPERATOR SURFACE using it.
+            bool builds = code != null
+                && (code.Contains("new CopierRelationship") || code.Contains("new CopierGroup"));
+            bool replaces = code != null
+                && (code.Contains("UpsertRelationship(") || code.Contains("UpsertGroup("));
+
+            bool dispatches = code != null
+                && code.Contains("ApplyRelationshipRequest(") && code.Contains("ApplyGroupRequest(");
+
+            Assert(readable && !builds && !replaces && dispatches,
+                "the copier window builds no domain object and writes only through ApplyRelationshipRequest/ApplyGroupRequest (P?-65)");
+        }
+
+        private static void TestUi2_TheWindowMutatesNoStoredObjectInPlace()
+        {
+            Console.WriteLine("\n[TEST] UI2: the copier window assigns to no field of a stored relationship or group");
+
+            var code = Ui2WindowCode();
+            bool readable = code != null && code.Length > 5000;
+
+            // `rel.IsEnabled = !rel.IsEnabled;` and friends. Deliberately narrow: it matches
+            // an assignment to a Pascal-cased member of a variable named rel/grp/relationship/
+            // group, which is what every one of these sites looked like, and does not match
+            // WPF property setting on locals named btn/card/info.
+            var inPlace = new System.Text.RegularExpressions.Regex(
+                @"\b(rel|grp|relationship|group)\.[A-Z]\w*\s*=(?!=)");
+            int hits = code == null ? 0 : inPlace.Matches(code).Count;
+
+            bool dispatches = code != null
+                && code.Contains("CopierRequests.");
+
+            Assert(readable && hits == 0 && dispatches,
+                "the copier window mutates no stored domain object in place and edits through CopierRequests instead");
+        }
+
+        private static void TestUi2_TheWindowNeverLoadsFromDiskAndSurfacesARefusal()
+        {
+            Console.WriteLine("\n[TEST] UI2: the window never loads config, and a refused write is not swallowed");
+
+            var code = Ui2WindowCode();
+            bool readable = code != null && code.Length > 5000;
+
+            // Half one. The obvious reading of P?-64 is "the window never loads, so make it
+            // load". That recreates P1-69 exactly: a load throws away the in-memory latency
+            // and slippage the snapshot is there to report. The engine is a singleton,
+            // already loaded at startup; the window renders live state.
+            bool loads = code != null && code.Contains("LoadFromDisk");
+
+            // Half two. Apply*Request returns NULL when the engine refuses -- P1-76's
+            // overlap check does, and the window is the surface with no other way to say so.
+            // Upsert could not fail, so no call site ever checked. Every dispatch must test
+            // its result within sight of the call, or a refused write redraws as a success.
+            var dispatch = new System.Text.RegularExpressions.Regex(
+                @"Apply(Relationship|Group)Request\(");
+
+            int dispatchCount = 0, checkedCount = 0;
+            if (code != null)
+            {
+                foreach (System.Text.RegularExpressions.Match mt in dispatch.Matches(code))
+                {
+                    dispatchCount++;
+                    int len = Math.Min(600, code.Length - mt.Index);
+                    if (code.Substring(mt.Index, len).Contains("null")) checkedCount++;
+                }
+            }
+
+            Assert(readable && !loads && dispatchCount >= 4 && checkedCount == dispatchCount,
+                "the window never calls LoadFromDisk, and every config write it dispatches tests the refusal it can now receive");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

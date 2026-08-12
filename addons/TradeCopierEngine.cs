@@ -11,6 +11,10 @@ using Newtonsoft.Json;
 // RiskGuardAddOnTests.cs under the same namespace.
 using NinjaTrader.Cbi;
 using NinjaTrader.Code;
+// UI2: ConfigFilePath is rooted in Globals.UserDataDir, which the test build stubs to
+// BaseDirectory/MockUserData -- so the acceptance tests round-trip through the real
+// property rather than through a path they were handed.
+using NinjaTrader.Core;
 #else
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -22,6 +26,68 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
     public enum CopierExecutionMode { Executions, Orders }
     public enum CopierSizingMode { QuantityRatio, FixedLot, NetLiquidationRatio, AvailableCashPercent, PerTickerMatrix }
+
+    /// <summary>
+    /// The operator surfaces' request builders. UI2 / `P?-65`.
+    ///
+    /// WHY THIS IS IN CORE AND NOT IN THE WINDOW. The design's one rule is that a surface
+    /// renders and dispatches: it never constructs a domain object. The window broke that
+    /// at two sites -- build a fresh `CopierRelationship`/`CopierGroup` from the eight
+    /// fields the Add form collects, `Upsert` it, save -- which WIPED `PerTickerRatios`,
+    /// `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit` and
+    /// `IsQuarantined`, because the form cannot see them and a fresh object carries
+    /// defaults. That is the fifth and sixth instance of one defect; slice 3b deleted the
+    /// third and fourth from the bridge.
+    ///
+    /// A request is a JObject, and `ApplyRelationshipRequest` merges it over what is
+    /// stored, so a field the form does not mention survives. But an untested builder has
+    /// its own failure mode, and it has already shipped once: `P1-74`'s `autoConversion`
+    /// argument was not a field on anything, so `NormalizeRequest` dropped it and the
+    /// argument had never done a thing. A MISSPELLED KEY IS SILENTLY IGNORED. That is why
+    /// the mapping is here, where a test can assert every field arrives, rather than
+    /// inline in a window the test build compiles away.
+    /// </summary>
+    public static class CopierRequests
+    {
+        /// <summary>Everything the window's "Add Relationship" form collects, and nothing else.</summary>
+        public static JObject Relationship(
+            string leaderAccount, string followerAccount, CopierSizingMode sizingMode,
+            double quantityRatio, int maxPositionSize, bool autoSymbolConversion,
+            bool stealthMode, bool armedForLive, bool isEnabled)
+        {
+            // STUB -- UI2.
+            return new JObject();
+        }
+
+        /// <summary>Everything the window's "Add Group" form collects, and nothing else.</summary>
+        public static JObject Group(
+            string groupName, string leaderAccount, IEnumerable<string> followerAccounts,
+            CopierSizingMode sizingMode, double quantityRatio, int maxPositionSize,
+            bool autoSymbolConversion, bool stealthMode, bool armedForLive, bool isEnabled)
+        {
+            // STUB -- UI2.
+            return new JObject();
+        }
+
+        /// <summary>
+        /// The row buttons: enable/disable, and releasing a quarantine. These used to mutate
+        /// the STORED object in place and then Upsert it, so a write the engine went on to
+        /// refuse had already taken effect in memory.
+        /// </summary>
+        public static JObject RelationshipEdit(string leaderAccount, string followerAccount,
+                                               bool? isEnabled, bool? releaseQuarantine)
+        {
+            // STUB -- UI2.
+            return new JObject();
+        }
+
+        /// <summary>The group row's enable/disable button. Same defect, group half.</summary>
+        public static JObject GroupEdit(string groupName, bool? isEnabled)
+        {
+            // STUB -- UI2.
+            return new JObject();
+        }
+    }
 
     public class CopierRelationship
     {
@@ -1860,6 +1926,44 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (armed && armingWasRequested && !confirmLive)
                 set(false);
+        }
+
+        /// <summary>
+        /// THE copier config file. One owner, in core, so that every surface -- the NT8
+        /// window, the bridge's six write sites, and the startup load -- names the same
+        /// file by naming this instead of a path.
+        ///
+        /// UI2 / `P?-64`. Before this existed the window wrote
+        /// `UserDataDir/CopierConfig.json` at seven call sites while the bridge and the
+        /// startup load read `UserDataDir/RiskGuard/copier_config.json`. Both files
+        /// existed on the operator's box with different contents, and every change made
+        /// in the window was silently discarded at the next NT8 restart. Nothing errored;
+        /// the config simply was not there any more.
+        /// </summary>
+        public static string ConfigFilePath
+        {
+            // STUB -- UI2. Returns null so the acceptance tests are RED rather than
+            // failing to build.
+            get { return null; }
+        }
+
+        /// <summary>
+        /// Save to <see cref="ConfigFilePath"/>. This is the overload every surface should
+        /// call; the path-taking one stays for the tests, which need to write somewhere
+        /// disposable.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE ASYMMETRY IS DELIBERATE: there is a parameterless SAVE and there is
+        /// deliberately NO parameterless LOAD. A convenient `LoadFromDisk()` is exactly
+        /// the footgun `P1-69` fired -- the bridge's `get` action called it and threw away
+        /// the in-memory latency and slippage measurements it had been asked to report.
+        /// A save is safe to make easy. A load is not, so the two callers that legitimately
+        /// need one (startup, and an explicit operator reload) say
+        /// `LoadFromDisk(TradeCopierEngine.ConfigFilePath)` and are visible in a grep.
+        /// </remarks>
+        public void SaveToDisk()
+        {
+            // STUB -- UI2.
         }
 
         public void SaveToDisk(string filePath)
