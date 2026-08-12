@@ -14,10 +14,20 @@
 > so this suite reports **926**, not 929. The three live in that repo's harness.
 
 
-**Last updated**: 2026-08-12 (session 15 — **the copier RATIO CONVERTER IS COMPLETE and DEPLOYED**:
+**Last updated**: 2026-08-12 (session 16 — **the REPO SPLIT IS EXECUTED**: this file now lives in
+[nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard), 162 commits, tagged `v1.0.0`,
+suite **926/0** (929 minus three assertions that moved to the bridge). A migration, not a defect:
+no `P`-number, nothing closed. **Read §5.7 for what it exposed, then §5.5 and §5.6 — which stand
+unchanged: the next session opens with `P0-63` remedy 3 + the `P?-66` log line.**)
+
+<details><summary>Session 15's header, kept for the record</summary>
+
+**Was last updated**: 2026-08-12 (session 15 — **the copier RATIO CONVERTER IS COMPLETE and DEPLOYED**:
 slices 1, 2, 3a, 3b, suite **929/0**, `nt_compile` 0 errors, and validated on the sim accounts —
 §4w, §4x, §4y, **§4z**. A feature, not a defect: no `P`-number, nothing closed.
 **Next work is the open `P1-22` metrics question in §4z, then the still-open `P0-62` — §4a.**)
+
+</details>
 
 > ⚠️ **NEW SESSION? GO STRAIGHT TO §5 — start with §5.5 (DECIDED) then §5.6 (order). [§5, THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-12).**
 > It is the authoritative answer to "what is left?" and it **supersedes §4a's START HERE and the
@@ -2775,3 +2785,74 @@ and `P?-65` together and makes the redesign testable.
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
 `P1-57`, `P1-13`, and the `P2` band are real but none is naked-risk; schedule them after the above.
+
+## 5.7 Session 16 record — 2026-08-12: the repo split executed, and what it exposed
+
+**The split went first**, per §8's choice between the two defensible orders. The reason to
+prefer it: every commit made after the split lands in the new repos already, so the `P0-63`
+work does not have to be migrated afterwards. Nothing about `P0-63` changed; §5.5 and §5.6
+stand exactly as written, and **the next session still opens with `P0-63` remedy 3 + the
+`P?-66` log line**.
+
+Where things are now:
+
+| | |
+|---|---|
+| This repo | [nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard), public, **162 commits**, tagged `v1.0.0` |
+| The bridge | [nt8-mcp-bridge](https://github.com/vinay-veerappa/nt8-mcp-bridge), public, 34 commits, vendors this repo at `vendor/nt8-riskguard` pinned to `v1.0.0` |
+| `tvDownloadOHLC` | keeps no addon source, no csproj, no tickets, no addons sync path. Its `CLAUDE.md` holds a pointer |
+| Suite | **926 passed / 0 failed** (was 929 — see below), `mutate_cm3` 14 killed, `mutate_cm4` 10 killed, no survivors |
+| Deploy parity | all 8 deployed addon sources verified identical to the live NT8 tree after the move |
+
+### Five things worth carrying forward
+
+**1. `git subtree split` would have thrown away history it was chosen to preserve.** The
+addon lineage spans three paths — `ninjatrader-addon/` → `scripts/strategies/nt8/addons/`
+(`671d8a18`) → `scripts/ninjatrader/addons/` (`a19c2adc`) — and subtree follows neither
+renames nor anything outside its single `-P` path. Used `git-filter-repo` with a
+`--commit-callback` instead.
+
+**2. Collapsing those three paths silently deleted two files, and reported success.**
+`a19c2adc` *copied* the addons to the new path without deleting the old ones; the stale
+duplicates were tidied up later by unrelated commits (`671d8a18`, `b8f410f4`). Mapped onto
+one target, those cleanups delete the **live** file. It cost `RiskManagerAddOn.cs` and
+`TradeCopierWindow.cs` — precisely the two files no later commit happened to rewrite, so
+nothing resurrected them. **Only a blob-level diff of every migrated path against the source
+catches this.** If either addon repo is ever re-extracted, run that diff.
+
+**3. The suite depended on the bridge, which is the one direction the split forbids.**
+`TestP2_38` regex-asserted on `McpBridgeAddOn.cs`'s source text. Its three source assertions
+moved to `nt8-mcp-bridge/tests/BridgeSourceTests.cs`; the behavioural half — that the shared
+classifier gets `SimpsonFund` right — stayed here. **That is the whole of the 929 → 926
+change.** `tools/check_direction.py` now fails the build if a core source names a
+bridge-owned type (comments excepted; four of them explain why code sits on this side).
+
+**4. Both mutation batteries were a lying gate.** They printed `SURVIVORS: [...]` and exited
+**0** regardless, so any CI step running them was a green light that proved nothing — the
+same shape the batteries exist to catch. They now exit 1 when anything survives, an
+unappliable ANCHOR included. Verified in both directions.
+
+**5. `P2-27`'s bridge half is now measured, not just open.** §5 of the split plan feared the
+split would bless the bridge's untestability. It is instead quantified: compiling
+`McpBridgeAddOn.cs` against the vendored core gives **330 errors / 23 distinct missing
+types**. Two useful results — **WPF is not the blocker** (`net8.0-windows` + `UseWPF` supplies
+every WPF type it touches, so the WPF/HTTP separation the plan proposed is unnecessary), and
+**16 of 19 missing types are already stubbed** inside this repo's 663 KB
+`tests/RiskGuardAddOnTests.cs`, unreachable from there only because that file owns a
+`Main()`. So the first step is a move, not new code: **extract the NT8 stub block out of
+`RiskGuardAddOnTests.cs` into `tests/TestingStubs.cs`**, then re-verify 926 + both batteries,
+tag, and re-pin the submodule. Duplicating the stubs on the bridge side instead would create
+two definitions that drift, which is exactly what `P2-38` was. Ordered remedy:
+`nt8-mcp-bridge/tests/README.md`.
+
+### Two loose ends, neither naked-risk
+
+* **CI is parked.** Both repos carry `ci/github-workflow-ci.yml`, not
+  `.github/workflows/ci.yml`, because the OAuth token that created them lacks the `workflow`
+  scope. Activate with `gh auth refresh -s workflow` then `git mv`. Until then the checks run
+  by hand.
+* **Two stale files sit in the live NT8 `AddOns/` folder**: `RiskGuardAddOnTests.cs` and
+  `TestingStubs.cs`. The old flat layout deployed the test suite into the trading assembly
+  because the sync tool globbed `*.cs` from a directory that held both. The new tools
+  correctly do not. Deleting them from the NT8 folder is a one-line manual step, deliberately
+  left to the operator rather than done by a script reaching into a live install.
