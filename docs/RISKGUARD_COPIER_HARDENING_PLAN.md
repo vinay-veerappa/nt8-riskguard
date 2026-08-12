@@ -9,52 +9,53 @@
 > time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
 > would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 
-**Status** (2026-08-10, branch `harden/riskguard-p0-51`, suite **637 passed / 0 failed**): **43 of 56 closed**.
-**`P0-51`/`P1-52` are VALIDATED LIVE** (replay, 2026-08-10 — see handover §4n). That replay opened
-`P0-55` and `P1-54`, both since **closed**.
-Deployed, `shadow`, armed and guarding; NT8 compiles clean (0 errors, net48).
-**`P0-51`, `P1-52` and `P0-53` are all CLOSED and deployed.** The suite is fully green again.
-Live progress: [RISKGUARD_HARDENING_HANDOVER.md](RISKGUARD_HARDENING_HANDOVER.md).
+**Status** (2026-08-13, `main` @ `978ed3a` = tag `v1.0.2`, suite **953 passed / 0 failed**):
+**51 of 67 closed.** Deployed and live in NT8, `shadow`, armed and guarding; NT8 compiles clean
+(0 errors, net48). Latest closure: **`P0-63`** (`Account.Change()` silently ignored — the mirrored
+stop had never trailed), fixed 2026-08-13 via remedy 3 and deployed. Highest open defect:
+**`P0-67`**, the third `Change()` call site.
 
-> ✅ **`P0-48` is closed and verified live.** The restart cleared all 57 orphans, and a subsequent
-> recompile — the exact event that used to add one every time — left `TradeCopierEngine` at
-> exactly **1** handler. No operational items outstanding except `P2-41`.
+**For "what is left?" read the handover's
+[§5, THE OPEN BACKLOG](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-13),
+starting at §5.6.** This plan is the reference for *each defect's mechanism and evidence*; the
+handover is the reference for *state and order of work*. Keeping both authoritative for both is what
+made them disagree.
+
 **Created**: 2026-08-06
 
-## Defect inventory — the count of record
+## Defect inventory — regenerated from the entries, 2026-08-13
 
-> ⚠️ **STALE, 2026-08-12. For "what is left?" read
-> [`RISKGUARD_HARDENING_HANDOVER.md` §5](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-12).**
-> This table drifted out of agreement with itself and with the entries it summarises: it says
-> "58 defects" where the handover header says 62, and it calls `P0-51`/`P1-52` OPEN in one
-> paragraph and FIXED in the note four lines below. `P0-62` is also SUPERSEDED by `P0-63`.
-> The per-defect entries in §1–§4 below are still accurate and remain the reference; only this
-> summary is not. Regenerating it from the entries is itself a backlog item (§5.3).
+> **This table used to carry a ⚠️ STALE banner instead of being fixed.** It said "58 defects" where
+> the handover said 62, listed `P0-51`/`P1-52` as OPEN and then FIXED four lines below, and predated
+> `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
+> accurate part. A warning label is not a fix; see the handover §5.12.
 
+**67 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+trusting it:
 
-**58 defects.** Numbered once, never renumbered, never reused. `P0-49` and `P0-50` were opened
-and closed on 2026-08-07 (session 8); **`P0-51` and `P1-52` were opened on 2026-08-09 and are
-OPEN**. All four were found by a live operator ATM trade rather than by any test — see the
-entries at the end of §1.
+```bash
+grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 64 entries here
+```
 
-**`P1-57` and `P2-58` were opened 2026-08-10** by watching a third-party copier (Replikanto) fan a
-bracket out on the same box — see §4p of the handover. Neither was found by a test, and neither
-could have been: they are both about what *another* program's orders look like to us.
+The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
+yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
+write-up yet. 64 + 3 = 67.
 
-> ✅ **`P0-51` is FIXED and deployed (2026-08-09).** Shadow no longer cancels or flattens: one
-> `IsActingMode()` predicate gates both the sweep and, via `DrainPendingCancels`, the deferred
-> cancel queue. `P1-52` is fixed with it.
->
-> ✅ **`P0-53` is also fixed (2026-08-09).** The lockout's `CancelAllOrders` no longer cancels a
-> protective stop while its position is open, so arming live no longer exposes a naked-flatten
-> window.
+| Band | IDs | Count | Open | Status |
+|---|---|---|---|---|
+| **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67` | 21 | **1** | All closed except **`P0-67`** (the third `Account.Change()` site, in `DynamicAtmManager`). `P0-62` is **superseded** by `P0-63`, which is fixed and deployed. `P0-9` has both legs — stop and target — closed and live-validated. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57` | 28 | **2** | Open: **`P1-57`** (we would mirror another copier's mirror — the "not ours" test is a name substring) and **`P1-13`'s threading half** (its fail-open half is closed). |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**, `OnExecution` is covered but CI is still parked and `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are excluded from the test build. |
+| **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
+| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **3** | Handover §5.2. `P?-66` is **instrumented and deployed but still open** — instrumentation is not an answer. |
+| | | **67** | **16** | **51 closed or superseded** |
 
-| Band | IDs | Count | Status |
-|---|---|---|---|
-| P0 — naked-risk / wrong-size | `P0-1` … `P0-9`, `P0-48` … `P0-51`, `P0-53`, `P0-55`, `P0-59` … `P0-62` | 19 | `P0-1`…`P0-9` closed; items (3) and (4) pinned session 8, and **`P0-9` item (1) — the mirrored target + OCO — CLOSED, deployed and live-validated 2026-08-10**. `P0-48` closed and verified live. **`P0-49`, `P0-50` opened and closed session 8**. **`P0-51` and `P0-53` both CLOSED 2026-08-09**. **`P0-59`/`P0-60` opened and CLOSED 2026-08-10** — two addons held opposite, non-total definitions of order liveness. **`P0-61` opened and CLOSED 2026-08-10** by a live trade — a second `Change()` against a mid-change leg is dropped AND reverts it; the third question `AcceptsModification`. **`P0-62` OPEN** — `Change()` applies the price but silently refuses a quantity increase, so a scaled-in follower stays under-sized |
-| P1 — real bugs, not yet live-risk | `P1-10` … `P1-23`, `P1-35` … `P1-37`, `P1-39`, `P1-40`, `P1-42` … `P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57` | 28 | **26 closed.** Open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half** — its fail-open half is closed. `P1-52`, `P1-54` and `P1-56` all closed 2026-08-09/10 |
-| P2 — structural | `P2-24` … `P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | `P2-28`, `P2-46`, `P2-38`, `P2-41` closed, and **`P2-58` opened and closed 2026-08-10**; `P2-27` half-done; `P2-24`, `P2-25`, `P2-26`, `P2-29` open |
-| P3 — enhancements | `P3-30` … `P3-34` | 5 | all open, but **`P3-30`'s copier half shipped 2026-08-10** and `P3-31`'s seam exists (both still open — the timer and the RiskGuard-side audit remain). `P3-32` may be **superseded by `P0-9`** — read it before scheduling it as work |
+> **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
+> plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
+> (2026-08-10), `P0-61` and `P0-62` (2026-08-10). **`P1-57` and `P2-58` were found by watching a
+> third-party copier work on the same box** — neither was findable by a test, because both are about
+> what *another program's* orders look like to us.
 
 > **ID collision, resolved 2026-08-07 — read this if you are following a git commit or an old
 > doc.** `P1-30` and `P1-31` were appended during the P0 work and collided with the pre-existing
@@ -70,7 +71,7 @@ could have been: they are both about what *another* program's orders look like t
 > **When adding a defect, take the next free number — do not extend a band in place.**
 **Scope**: `addons/{RiskGuardAddOn,TradeCopierEngine,TradeCopierWindow,PropFirmProtectionSuite,DynamicAtmManager}.cs`
 **Comparison baseline**: `github.com/mkalhitti-cloud/universal-or-strategy` (V12 Photon Kernel — SIMA fleet dispatch, REAPER defense, Symmetry Guard)
-**Related**: [RiskGuardAddOn.md](RiskGuardAddOn.md) (current design doc — contains drift, see §6), [NT8_FILE_ORGANIZATION.md](NT8_FILE_ORGANIZATION.md)
+**Related**: [RiskGuardAddOn.md](RiskGuardAddOn.md) (design doc — **contains drift; that is `P2-26`, still open**, and the drift is catalogued in its own header), [NT8_FILE_ORGANIZATION.md](NT8_FILE_ORGANIZATION.md)
 
 ---
 
@@ -864,8 +865,8 @@ read the wrong layer. **Advertised by the connection ≠ honoured by the provide
 - **`P0-62` was wrong** and is superseded by this entry — see below.
 - **§4p's "a trailed leg kept both its orderId and its oco"** is consistent with the change simply
   never happening, so it is not evidence that `Change()` preserves OCO membership.
-- The `profiles.py` invariant asserting modify-in-place has been corrected, or the review panel
-  would defend a no-op.
+- The loop profile's invariant asserting modify-in-place has been corrected (`agent/nt8_riskguard.py`),
+  or the review panel would defend a no-op.
 
 > ⚠️ **UNRESOLVED, and it decides the remedy: does `Change()` work on a non-`Simulator` provider?**
 > Every account validated on so far is `provider: Simulator`. The funded accounts are
@@ -1367,9 +1368,9 @@ the first stop it finds.
 > `GraceEmitted`** — dropping an action without clearing it is the T1/T2 trap that leaves a
 > position permanently naked.
 
-**The settled decision was retired in both places** (handover §5 and
-`scripts/agent_loop/profiles.py`), per the rule in §5: left standing it would instruct the review
-panel to approve reintroducing this.
+**The settled decision was retired in both places** (handover **§7** — renumbered from §5 on
+2026-08-13 — and the loop profile, now `agent/nt8_riskguard.py`), per the rule there: left standing
+it would instruct the review panel to approve reintroducing this.
 
 ### P1-37. The `MinShadowSessions` arming gate counts addon restarts, not sessions — CLOSED 2026-08-07
 *(found during the Phase A shadow deployment, 2026-08-07 — observed live, then confirmed in code)*
@@ -1931,8 +1932,9 @@ connection change instead of being silently dead while enabled in the config and
 > `UnsubscribeAllAccounts` was defensive housekeeping when written; inspecting the live event list
 > to confirm it worked found **57 orphaned handlers** from earlier reloads. That is **P0-48**.
 
-**Tests** (`RiskGuardAddOnTests.cs`, all three proven falsifiable by
-`scripts/agent_loop/verify_backfill_reverts.py`, which now reverts in `TradeCopierEngine.cs` too):
+**Tests** (`RiskGuardAddOnTests.cs`, all three proven falsifiable by a revert harness,
+`scripts/agent_loop/verify_backfill_reverts.py` — **which no longer exists**; it went with the
+archived predecessor loop. The equivalent today is a `mutation/` battery):
 `TestCopierSubs_LateConnectingLeaderIsCopied` (0 copies when the pass is one-shot),
 `TestCopierSubs_RepeatedRefreshAttachesOneHandler` (5 handlers when the `-=` is dropped),
 `TestCopierSubs_TeardownDetachesHandlers` (1 handler survives when the detach is dropped).
@@ -2046,9 +2048,10 @@ read. `IsInNewsWindow` therefore always returns `false` outside tests, so the
 Also unimplemented: `EnableConsistencyCap` / `MaxDailyProfitPctOfTarget` / `EnableAutoDayFiller`
 (parsed, never evaluated).
 **Fix**: load events from `LocalNewsEventsFilePath` on config load and refresh periodically.
-This repo already has an economic-calendar pipeline —
-[ECONOMIC_CALENDAR_ARCHITECTURE.md](ECONOMIC_CALENDAR_ARCHITECTURE.md) — so the correct move is
-to emit a JSON feed from it into the path the suite reads, not to build a second source.
+**tvDownloadOHLC** already has an economic-calendar pipeline
+(`docs/architecture/ECONOMIC_CALENDAR_ARCHITECTURE.md` there — it did not move here in the split),
+so the correct move is to emit a JSON feed from it into the path the suite reads, not to build a
+second source. Note that this makes the fix **cross-repo**, which it was not when written.
 
 ### P2-26. Design-doc drift ([RiskGuardAddOn.md](RiskGuardAddOn.md))
 | Doc claim | Code reality |
@@ -2299,8 +2302,8 @@ connected, subscribed, not locked, and has a resolvable instrument.
 > **Superseded for P0, which is complete.** The original phases 1–2 were the P0 work and landed
 > as tickets T1–T5 (see [RISKGUARD_HARDENING_HANDOVER.md](RISKGUARD_HARDENING_HANDOVER.md) §1).
 > The table below is the **remaining** work, re-ordered for what P0 changed and for test-first
-> development. The live roadmap with current status is handover §4a; this is the reference
-> version with exit gates.
+> development. The live roadmap with current status is handover **§5.6** (§4a is
+> historical as of 2026-08-13); this is the reference version with exit gates.
 
 ### 6.0 Development model: test-first, suite as a first-class artifact
 
@@ -2366,9 +2369,25 @@ broker is the single highest-value addition in this document. Consider promoting
 
 ---
 
-## 7. Quick-reference defect index
+## 7. Quick-reference defect index — ⚠️ FROZEN P0-era snapshot, do NOT read as current
 
-| ID | Severity | File:line | One-line |
+> **Frozen 2026-08-13. Kept as a record, not as an index.** It is a third hand-maintained copy of
+> information the per-defect entries already hold, and it went stale the same way the inventory table
+> did (handover §5.12):
+>
+> - **It omits eleven defects** — `P0-49`, `P0-50`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`,
+>   `P1-54`, `P1-56`, `P1-57`, `P2-58`. Scanning it would tell you `P0-63` does not exist.
+> - **The `CLOSED` markers are incomplete**: `P0-1`…`P0-9`, `P1-36` and others are closed and are not
+>   marked here.
+> - **Every `file:line` predates the repo split** and most predate several thousand lines of change.
+>   `RiskGuardAddOn.cs` is no longer 4,108 lines. Treat every number as an archaeological hint and
+>   `grep` for the symbol instead.
+>
+> **For the current list:** the band table at the top of this file for counts, the §1–§5 entries for
+> mechanisms, and the handover's §5 for what is open. Do not add rows here — a fourth copy is the
+> problem, not the fix.
+
+| ID | Severity | File:line *(pre-split, unreliable)* | One-line |
 |---|---|---|---|
 | P0-1 | naked risk | RiskGuardAddOn.cs:1667, 1763 | `Protected→Unprotected` never re-arms grace; watchdog is log-only |
 | P0-2 | naked risk | RiskGuardAddOn.cs:2595 | FSM state written after submit, overwrites reject; null submit silent |

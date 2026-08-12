@@ -9,6 +9,44 @@
 > time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
 > would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 
+> # ⚠️ THIS DOCUMENT HAS DRIFTED FROM THE CODE — that is open defect `P2-26`
+>
+> **Do not make a decision from this file without checking the code.** It is "the artifact most
+> likely to cause a wrong decision under pressure", and it describes behaviour that several closed
+> defects changed. Re-checked 2026-08-13; the catalogue below is what is known to be wrong.
+>
+> **Corrected in this pass** (single verified fact, safe to change in isolation):
+>
+> * ~~"1-second sweep"~~ → **5-second**. The code is `new Timer(OnSafetySweep, null, 5000, 5000)` at
+>   `addons/RiskGuardAddOn.cs:358` — a `System.Threading.Timer`, not a WPF `DispatcherTimer`. The doc
+>   said "1-second" in five places.
+>
+> **Still wrong, and deliberately NOT patched here** — the hardening plan is explicit that closing
+> `P2-26` means *a rewrite against the code as it now stands, not a patch of the drift table*, and a
+> partially-corrected design doc reads as trustworthy while still being wrong:
+>
+> | Claim in this doc | Reality |
+> |---|---|
+> | §3 data-flow: sweep → `EvaluateRules` | the sweep no longer calls `EvaluateRules` |
+> | §6.5: the sweep keeps aggregate sizing, firm-mirror and grace-expiry polling | all three moved to event handlers / per-FSM timers. The sweep keeps only heartbeat, log flush, session reset, persist, lockout watchdog and FSM watchdog |
+> | §6.7: `EvaluateGraceExpiry` "called from a per-FSM Timer **or the sweep**" | the sweep never calls it — that "defensive" path does not exist |
+> | §9.1: automatic relationship quarantine on execution error / risk breach | not implemented (`P2-24`) |
+> | §9.3: news / target / giveback auto-lockout and auto-flatten | news is unreachable (`P2-25`); giveback was mis-wired (`P0-7`); target semantics were wrong (`P1-17`) |
+> | §2/§4/§8: "87 unit tests" / "84 comprehensive test methods" / "60 original + 24 FSM" | three different numbers **in one document**. The suite is **953** |
+> | "central `v1.1.0` version info" | accurate as a *constant*, but it is **not the version of anything** — git says `v1.0.2`. See [VERSION.md](VERSION.md) |
+>
+> **Entirely undescribed here**, all of it live behaviour: the pending-cancel queue and
+> `DrainPendingCancels` (`P1-35`), the sweep's three-phase lockout ordering (`P1-11`),
+> provider-based simulation detection (`P1-20`), FSM re-seeding on arm (`P1-15`),
+> `LastShadowSessionDate` in the persisted state (`P1-37`), the whole mirrored-bracket stop **and
+> target** with OCO pairing (`P0-9`), the total `OrderState` classification with `OccupiesSlot` /
+> `ProvidesCoverage` / `AcceptsModification` (`P0-60`, `P0-61`), `CopierReconciler` (`P3-30`), and
+> the ignored-`Change()` detection and recovery (`P0-63`). **Anyone reading this doc to understand
+> the current lockout or copier path will be wrong about all of them.**
+>
+> When `P2-26` is done, add the doc-drift check the plan asks for: assert the documented sweep
+> interval against the constant, so this cannot silently rot again.
+
 ## 1. Overview
 The `RiskGuardAddOn` is a centralized, robust risk management module for NinjaTrader that actively monitors positions, orders, and PnL across multiple accounts. It enforces strict trading rules (max size, daily loss, consecutive losses, trading windows, stop-loss attachments) and automatically takes defensive actions (flattening positions, cancelling orders) when thresholds are breached.
 
@@ -16,7 +54,7 @@ The `RiskGuardAddOn` is a centralized, robust risk management module for NinjaTr
 - **Rule Evaluation**: Continuously assesses account states against per-account and aggregate risk configurations.
 - **Action Execution**: Cancels orders and flattens positions when breaches occur.
 - **StopGuard**: Automatically attaches missing stop-loss orders to unprotected positions, or flattens them after a grace period.
-- **Lockout Enforcement & Sweep Watchdog**: Locks out accounts when severe limits (daily loss, consecutive losses) are hit, actively polling locked accounts on a 1-second sweep to ensure positions are fully flattened to 0.
+- **Lockout Enforcement & Sweep Watchdog**: Locks out accounts when severe limits (daily loss, consecutive losses) are hit, actively polling locked accounts on a 5-second sweep to ensure positions are fully flattened to 0.
 - **Position-Reducing Order Permissibility**: Always permits orders that reduce open position exposure (manual flatten/close), even when an account is locked out.
 - **Trade Lifecycle Debouncing**: Tracks trade counts on genuine `Flat -> Non-Flat` transitions so multi-contract entries and split orders do not trigger false overtrading lockouts.
 - **Versioning System**: Exposes central `v1.1.0` version info across WPF UI title bars, output logs, and REST inspection endpoints.
@@ -30,9 +68,12 @@ graph TD;
   EventHandlers --> StateModel[Update AccountState];
   StateModel --> EvaluateRules[EvaluateRules()];
   
-  Timer[DispatcherTimer: 1 sec pulse] --> SafetySweep[ExecuteSafetySweep()];
+  Timer[System.Threading.Timer: 5 sec pulse] --> SafetySweep[ExecuteSafetySweep()];
   SafetySweep --> SyncPnL[Sync Realized / Unrealized PnL];
   SyncPnL --> EvaluateRules;
+  %% DRIFT (P2-26): the edge below is WRONG -- the sweep no longer calls
+  %% EvaluateRules. Left in place because correcting the diagram piecemeal
+  %% is the half-rewrite the plan warns against. See the header.
   
   EvaluateRules --> GenerateActions[Generate GuardActions];
   GenerateActions --> ProcessAction[ProcessAction()];
@@ -49,13 +90,13 @@ graph TD;
 
 ## 5. Technology & Constraints
 - **Concurrency**: Relies heavily on `lock (_stateLock)` because NinjaTrader fires events on different threads. Deadlocks are avoided by yielding the lock before calling NinjaTrader's `Flatten` or `Cancel`.
-- **Latency**: A safety sweep runs on a 1-second `Timer` for time-based rules that cannot be derived from events (aggregate sizing, firm-mirror, session reset, heartbeat, watchdog). Protective-stop enforcement has been migrated to an event-driven finite-state machine (see -6) to eliminate the race that produced duplicate SL orders on OCO entries.
+- **Latency**: A safety sweep runs on a 5-second `System.Threading.Timer` for time-based rules that cannot be derived from events (aggregate sizing, firm-mirror, session reset, heartbeat, watchdog). Protective-stop enforcement has been migrated to an event-driven finite-state machine (see -6) to eliminate the race that produced duplicate SL orders on OCO entries.
 - **Exclusions**: Specific accounts can be excluded from evaluation. The sweep loop explicitly bypasses these to avoid mutating state (e.g., triggering cooldowns) on ignored accounts.
 
 ## 6. Event-Driven Stop-Guard State Machine
 
 ### 6.1 Why a state machine
-The original design evaluated the protective-stop rule from both `OnPositionUpdate` and the 1-second sweep by snapshotting `account.Orders`. When a bracket (OCO) entry filled, the stop leg typically arrived in `Submitted`/`Initialized` state slightly after the position update. The sweep - and a re-entrant position update - saw "position open, no working stop" and placed a *second* standalone stop, producing duplicate SL orders. Re-running the same snapshot check on every event is inherently racy because the question "is there a covering stop?" is answered against a stale collection.
+The original design evaluated the protective-stop rule from both `OnPositionUpdate` and the 5-second sweep by snapshotting `account.Orders`. When a bracket (OCO) entry filled, the stop leg typically arrived in `Submitted`/`Initialized` state slightly after the position update. The sweep - and a re-entrant position update - saw "position open, no working stop" and placed a *second* standalone stop, producing duplicate SL orders. Re-running the same snapshot check on every event is inherently racy because the question "is there a covering stop?" is answered against a stale collection.
 
 The fix is to make the protective-stop lifecycle an explicit per-position state machine that *remembers* it saw the stop leg's `Submitted` event, so a later sweep or duplicate position update finds the FSM already in `ProtectedPending`/`Protected` and never places a duplicate.
 
@@ -137,7 +178,7 @@ Non-transition edge cases covered:
 - If `State == Unprotected` and `now >= GraceDeadline` and position still non-flat: emit `MISSING_STOP_ATTACH` (AutoStop) or `MISSING_STOP_FLATTEN` (Flatten) action, transition to `ProtectedPending` (AutoStop path) so a duplicate call does not re-emit.
 
 ### 6.5 What stays on the sweep
-The 1-second sweep no longer runs StopGuard. It keeps only:
+The 5-second sweep no longer runs StopGuard. It keeps only:
 - Heartbeat write (liveness, FR-33).
 - Persisted-state flush (`_stateDirty`).
 - Aggregate cross-account sizing (no single-account event knows the others' positions).
@@ -154,7 +195,7 @@ NinjaTrader's `Order.Oco` (string) identifies the OCO group. `McpBridgeAddOn` al
 
 ### 6.8 Lockout Safety Sweep Watchdog & Immediate Phase Transition
 - **Background Polling**: `OnSafetySweep` actively polls all subscribed non-excluded accounts. If `stateModel.IsLockedOut == true`, the sweep executes `EvaluateLockoutPhase(account, stateModel)` every second.
-- **Eliminating Event Silence Deadlocks**: If working orders are cancelled during lockout, order events stop firing. The 1-second sweep watchdog takes over and repeatedly emits `FlattenPosition` until `account.Positions` shows quantity = 0.
+- **Eliminating Event Silence Deadlocks**: If working orders are cancelled during lockout, order events stop firing. The 5-second sweep watchdog takes over and repeatedly emits `FlattenPosition` until `account.Positions` shows quantity = 0.
 - **Immediate Action Emission**: Upon transitioning to `PendingFlatten`, `stateModel.LastLockoutFlattenAttempt` is reset to `DateTime.MinValue` so `FlattenPosition` emits on the immediate cycle without a 5-second delay.
 
 ### 6.9 Multi-Contract Trade Lifecycle Debouncing

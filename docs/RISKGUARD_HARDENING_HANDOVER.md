@@ -1,148 +1,89 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
-> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
-> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
-> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
-> repathed. **Paths inside historical records -- "what landed", migration steps, closed
-> defects -- are deliberately left as they were written**: that is what the record said at the
-> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
-> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md)
->
-> **One thing the split did change behaviourally**: `TestP2_38`'s three assertions against
-> `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge` (that file is not in this repo),
-> so this suite reports **926**, not 929. The three live in that repo's harness.
+**Last updated**: 2026-08-13 (session 18 — **a documentation pass; no code changed**. This header,
+§0, §4a, §5, §7 and §8 were re-derived from the repo and from the live box rather than copied
+forward. Everything they used to claim that was false is listed in **§5.10**, because the *pattern*
+of how this file went stale is more useful than the corrections. **`P0-63` and `P?-66` are fixed,
+deployed and compiling clean.** The next item is **`P0-67`** — §5.6.)
 
+> ### Read in this order
+>
+> | | Where | What it gives you |
+> |---|---|---|
+> | 1 | **§0**, below | verified current state, the five things that will bite you, the commands |
+> | 2 | **[§5 — THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13)** | the authoritative answer to *what is left?* Start at **§5.6**, the order |
+> | 3 | **§7 — Decisions already made** | do not re-litigate; the review panel will try every round |
+> | 4 | **§8 — Known traps** | each one cost a session to find |
+> | 5 | session records, newest first: **§5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+>
+> ⚠️ **This file accretes, and a later section supersedes an earlier one.** Where two disagree, the
+> higher-numbered §5.x wins. **§4a is now HISTORICAL** — its "START HERE" pointed at `P0-62`, which
+> `P0-63` superseded and which is fixed; its counts and repo-hygiene notes were three sessions out
+> of date. The reasoning in it still stands and is why the reconciler exists, so it is kept, marked,
+> and no longer navigational.
 
-**Last updated**: 2026-08-12 (session 16 — **the REPO SPLIT IS EXECUTED**: this file now lives in
-[nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard), 162 commits, tagged `v1.0.0`,
-suite **926/0** (929 minus three assertions that moved to the bridge). A migration, not a defect:
-no `P`-number, nothing closed. **Read §5.7 for what it exposed, then §5.5 and §5.6 — which stand
-unchanged: the next session opens with `P0-63` remedy 3 + the `P?-66` log line.**)
-
-<details><summary>Session 15's header, kept for the record</summary>
-
-**Was last updated**: 2026-08-12 (session 15 — **the copier RATIO CONVERTER IS COMPLETE and DEPLOYED**:
-slices 1, 2, 3a, 3b, suite **929/0**, `nt_compile` 0 errors, and validated on the sim accounts —
-§4w, §4x, §4y, **§4z**. A feature, not a defect: no `P`-number, nothing closed.
-**Next work is the open `P1-22` metrics question in §4z, then the still-open `P0-62` — §4a.**)
-
-</details>
-
-> ⚠️ **NEW SESSION? GO STRAIGHT TO §5 — start with §5.5 (DECIDED) then §5.6 (order). [§5, THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-12).**
-> It is the authoritative answer to "what is left?" and it **supersedes §4a's START HERE and the
-> plan's inventory table**, both of which had drifted out of agreement with themselves. Read §5
-> first and the session records only when you need the reasoning behind an entry.
+> **Path note (repo split, 2026-08-12).** Most of this document was written while the addons lived
+> in `tvDownloadOHLC` at `scripts/ninjatrader/addons/`, with the test project at `ninjatrader-addon/`.
+> They now live here as `addons/` and `tests/`, and the deploy tool is `tools/sync_nt8.py`. Operative
+> commands and source-of-truth statements have been repathed. **Paths inside historical records —
+> "what landed", migration steps, closed defects — are deliberately left as they were written**: that
+> is what the record said at the time, and the hardening plan keys defects to `file:line` across that
+> history. Rewriting them would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 >
-> ⚠️ For the session records: start at §4z, then §4y, §4x, §4w. This file accretes and earlier
-> sections are superseded: §4x's "Still open" describes slice 3b as a missing field list, which is
-> **wrong** (see the correction block inside it), and §4y's "not deployed" is now stale.
->
-> ⚠️ **Sessions 13, 14 and 15 touched NO defect.** The 62/49 counts below are unchanged and
-> correct. **The deployed build is no longer session 12's `f174ba68`** — session 15 synced and
-> recompiled, and `1 MNQ -> 3 MES` has copied on `Sim101 -> SimCopy2` for real.
->
-> ⚠️ **`P1-22`'s slippage/latency metrics produced NO reading on the live run and I could not
-> establish why** (§4z). Two candidate causes are recorded. Slice 2 and slice 3b are
-> live-validated; **`P1-22` is not** — do not read its zeros as a pass.
->
-> ⚠️ **Do not treat `ARBITER_SHIP` from the agent loop as a review on this addon.** Across four
-> SHIP rulings in session 13 the arbiter upheld **0 of 66 panel findings**, and on one plan the
-> panel was right about a signed exit quantity that would have **increased a follower position
-> sitting opposite the leader** — `P1-56`'s class, in a plan the arbiter shipped. Read the patch
-> against the file. §4w.
-
-**Branch**: `harden/riskguard-p0-51` — **not merged, not pushed.** `main` is untouched.
-**`wip/p09-oco-target` is SUPERSEDED** — its work was rebased and shipped as `86c6376f`; do not
-deploy or rebase that branch, it predates the holder split and lacks five fixes (§4r).
-**Plan of record**: [RISKGUARD_COPIER_HARDENING_PLAN.md](RISKGUARD_COPIER_HARDENING_PLAN.md) — **62 defects, 49 closed**
-(`P1-57` and `P2-58` opened 2026-08-10 by watching another copier work — §4p; `P2-58` closed same day)
-**Live state**: deployed, `shadow`, feed connected, **all accounts flat, no working orders**.
-NT8 compiles clean (0 errors, net48), all **10** addon files in sync (`CopierReconciler.cs` is new).
-**The deployed build is `f174ba68`** — session 12's `P0-61` fix, on `harden/riskguard-p0-51`.
-(`06c6a484` was the reconciler itself, 15:20–15:48.)
-(Earlier builds 2026-08-10: `b5c58ae0` the order-liveness model, `86c6376f` 13:12–14:32,
-`c9459121` 06:19–13:12, `995f6402` before that.)
-Suite **806 passed, 0 failed** (789 + 17 new CM1 acceptance tests, §4w; it was 787 before session 13 added two more alongside them).
-
-> ✅ **`P0-9`'s mirrored target is CLOSED and deployed (2026-08-10, `86c6376f`).** Followers now get
-> the leader's target as well as its stop, in one OCO group, anchored to their own fill. The
-> longest-standing "explicitly not done" item in the plan.
->
-> ✅ **Live-validated 2026-08-10 on `Sim101 -> Sim-ORB` (§4s), 3 signals of 4.** Both legs mirrored
-> into one OCO group at the right distances, on tick, 14 ms after the follower's fill. **The
-> single-member OCO group on the stop is accepted by NT8** — that was the one way this change could
-> have been worse than what it replaced, and it is now proven rather than inferred.
->
-> ✅ **The fourth signal failed, and the defect behind it (`P0-59`) turned out to be one half of a
-> larger one (`P0-60`). Both are now closed — see §4t.** NT8 has sixteen `OrderState`s; the two
-> addons classified eight between them and **inferred opposite things about the rest**. RiskGuard
-> counted a stop being cancelled as coverage (naked position reported as protected); the copier
-> counted a leg being modified as gone (duplicate protective leg). Replaced by **one total
-> classification with two derived predicates**, `OccupiesSlot` and `ProvidesCoverage`, because the
-> two questions callers ask have opposite fail-safe answers.
-
-> ✅ **Seven defects closed since the 2026-08-09 incident**, all deployed and compiling clean:
-> `P0-51` (shadow restrained neither the lockout sweep nor the deferred cancel queue), `P1-52` (a
-> 2-lot ATM bracket counted as an order flood), `P0-53` (the lockout cancelled a protective stop
-> while its position was open), `P1-54` (lockouts never lapsed), `P0-55` (a partial-fill entry left
-> the follower with no mirrored stop), `P1-56` (concurrent bracket syncs left **two** protective
-> stops — qty 1 *and* qty 2 behind 2 lots, which flips the follower when both fire), and `P0-9`
-> item (1) above.
->
-> **Only `P0-51` and `P1-52` of those are validated live** (§4n). The rest are unit + compile only.
-> Analysis in §4m–§4r; what shipped is in each plan entry.
->
-> ⚠️ **Two agent-loop candidates for `P1-56` would have shipped live defects, and both passed every
-> gate** — one leaked the reservation forever, one turned the submission bound into 9 attempts and
-> reintroduced the defect. The transferable lesson is in §3 and
-> [AGENT_PATCH_LOOP.md](AGENT_PATCH_LOOP.md) §9, not in the defect.
->
-> ⚠️ **`P1-57` (new) changes how any live validation behaves.** `Sim101 -> Sim-ORB -> {SimCopyTest1,
-> SimCopy2}` is a live chain, because `Sim-ORB` is our follower *and* another copier's leader. A
-> `Sim101` test trade now reaches **three** follower accounts.
->
-> ⚠️ **Do not book live validation outside the permitted edge window.** `EDGE_WINDOW_BREACH` fires on
-> an ordinary overnight entry and, armed live, would flatten the trade about a second after it fills
-> — destroying the test rather than the defect (§4p).
+> The split's one behavioural consequence: `TestP2_38`'s three assertions against
+> `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge`, which is why the suite went 929 → 926
+> with nothing broken. It is **953** now.
 
 ---
 
-## 0. Start here (read this, then §4a for what is pending)
+## 0. Start here
 
-**49 of 62 defects closed. Suite 787/0. NT8 compiles clean under net48, all 10 addon files in sync,
-and both of `P0-9`'s legs are implemented** — the stop validated on real fills (§4l), the target
-live-validated (§4s).
+### Verified state — 2026-08-13, re-measured for this pass
 
-**The count did not move this session and that is correct**: `P3-30` and `P3-31` are both still
-open, because only the copier's bracket half of the reconciler shipped (§4u). Resist the urge to
-tick them.
+Every row was checked, not carried forward. The command that checks it is in the last column.
 
-✅ **The reconciler has now had a live trade (§4v)** — the mirror is exact, and a stray leg the
-engine held no reference to was cancelled, which no previous build could do. That trade also found
-`P0-61` (fixed and re-validated live) and **`P0-62`, which is OPEN and leaves a scaled-in follower
-under-covered.**
+| | | How to re-check |
+|---|---|---|
+| **Suite** | **953 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **67 IDs — 51 closed, 16 open.** Derivation in §5.0, so you can check it instead of trusting it | — |
+| **Branch** | `main` @ `978ed3a`, **pushed, 0 unpushed**, tags `v1.0.0` `v1.0.1` `v1.0.2` | `git status -sb; git tag` |
+| **Deployed** | **`v1.0.2` is live in NT8.** 7 core files identical; 8 counting the bridge's; 2 orphans | `python tools/sync_nt8.py --verify` |
+| **NT8 compile** | 0 errors, net48 | `nt_compile`, and read `errorCount` |
+| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` | `GET /api/riskguard/version` |
+| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
+| **Mutation** | 3 batteries, **31 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py` |
 
-### 0.0 ⚠️ Commit SHAs cited in the older sections below no longer resolve
+> ⚠️ **There are THREE disagreeing version identifiers on this box, and none of them is wrong by
+> accident.** Git says **`v1.0.2`** (the real one — it is what `sync_nt8.py` deploys). `docs/VERSION.md`
+> said **`v1.7.0-ui-audit`** until this pass, from an unrelated pre-hardening scheme. The addon's own
+> constant reports **`1.1.0`** over `/api/riskguard/version`. **Trust the git tag and the file
+> hashes; never a version string.** `VERSION.md` now says so at the top.
 
-Getting session 7's push through required rewriting history twice — once to purge `data/` (a 126 MB
-`NQ1_1m.parquet` exceeded GitHub's 100 MB limit and had been silently rejecting every push for 202
-commits), and once to purge 88 MB of `.m4a`. Both rewrites changed every commit SHA in the range.
-`1d9566fe`, `76137575`, `922b2c44`, `c5a4f035`, `904d44bc`, `737533a3`, `a2a519fd`, `fb55d281` and
-the rest are **orphaned** — the *work* is all present in `main`, only the identifiers are dead. Do
-not cite them onward, and run `git cat-file -t <sha>` before trusting any SHA quoted below.
+### What is deployed but NOT validated live
 
-SHAs from session 9 onward (`995f6402`, `c9459121`, `86c6376f`) are on `harden/riskguard-p0-51` and
-are live.
+This distinction is the one this document has most often blurred, so it gets its own block.
 
-**The merge-ordering lesson stands**: that push happened *before* shadow validation, which is the
-opposite of what this document recommended. It was a deliberate call to get 282 unpushed commits off
-one machine, not a signal that anything was validated.
+* **`P0-63`** — the mirrored stop trails for the first time, but **it has never been exercised
+  against a real broker.** Every account validated on so far is `provider: Simulator`. Remedy 3 is
+  correct either way (§5.4), which is why it shipped without the funded-account test.
+* **`P?-66`** — the five silent paths out of `ObserveFollowerFill` now emit distinct events, but the
+  instrumentation only *answers* its question once a live copy runs through it. **`P?-66` is still
+  unanswered — it is merely no longer invisible.** Do not read a zero as a pass.
+* **`P0-53`, `P1-54`, `P0-55`, `P1-56`** — unit + compile only.
+* **`T5`'s fail-closed gate** — needs an acting mode; `IsGuardProtecting` requires `mode == "live"`.
+* **The firm-mirror rules** — loaded but unmapped, so none can fire.
+
+**Validated live**: `P0-9`'s mirrored **stop** (§4l) and **target** (§4s), `P0-51`, `P1-52`,
+`P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler + `P0-61`'s fix (§4v), and the ratio
+converter's slices 2 and 3b (§4z).
+
+> ⚠️ **The copier acts regardless of guard mode.** `shadow` restrains RiskGuard, not the copier.
+> That is `P3-34`, and it is still open.
 
 ### Five things to know before you touch anything
 
-**1. The plan's older `**Fix**:` notes are hypotheses, not instructions.** Three "settled"
-recommendations were retired this session because following them would have made things *worse*:
+**1. The plan's older `**Fix**:` notes are hypotheses, not instructions.** Several "settled"
+recommendations were retired because following them would have made things *worse*:
 
 - `P1-39` said prefer a serializer-level `ObjectCreationHandling.Replace`. That discards the
   `StringComparer.OrdinalIgnoreCase` dictionaries and silently makes instrument and firm lookups
@@ -155,8 +96,14 @@ recommendations were retired this session because following them would have made
 
 Verify the mechanism against the code before acting on any entry, including ones marked settled.
 Settled entries have since been retired for `P1-36`, `P1-13`, and `P0-9`'s "cancel-then-replace, not
-modify" — always in this file *and* in `scripts/agent_loop/profiles.py`. Retire from both places or
-the review panel keeps arguing for the closed defect.
+modify" — always in this file *and* in the loop profile's `settled` tuple, which is
+**`agent/nt8_riskguard.py:106`**. Retire from both places or the review panel keeps arguing for the
+closed defect.
+
+> The path above was `scripts/agent_loop/profiles.py` in every revision of this file until
+> 2026-08-13. **That file has not existed here since the repo split**, so for two sessions the
+> instruction "retire from both places" pointed at nothing — which is the exact failure it exists to
+> prevent. Checked: the tuple is at `agent/nt8_riskguard.py:106`.
 
 **2. A machine check is only as good as the paths driven through it.** The lock-scope invariant
 was already machine-enforced (`Account.BrokerCallObserver` + `TestIsStateLockHeld()`) and still
@@ -168,52 +115,22 @@ failed in net48, because the methods sat inside `#if TESTING`. **Always `nt_comp
 touching code near the test hooks**, and read `RESULTS:` from a *fresh* build — a `dotnet run
 --no-build` after a failed build silently reports the previous assembly's result.
 
-**4. No operational items remain. Both of the ones recorded here are DONE.**
-
-- ✅ **`ShadowSessionsCompleted` reset — done 2026-08-07, session 7.** It read `5`, inflated by
-  restarts before `P1-37` was fixed, which made `MinShadowSessions=3` read as satisfied and the
-  *live* arming gate untrustworthy. Now `0`, with `LastShadowSessionDate` at `DateTime.MinValue`.
-  Backup: `RiskGuard/state.json.bak_20260807_095249`. All 93 `AccountsData` entries and the empty
-  `LockedOutAccounts` list were verified unchanged. The next genuine shadow session counts as 1.
-
-  > **The obvious command for this is destructive — do not write `null`.**
-  > `LastShadowSessionDate` is a **non-nullable `DateTime`** (`RiskGuardAddOn.cs:4525`, default
-  > `DateTime.MinValue`). Json.NET throws converting `null` to it, `LoadPersistedState` catches
-  > that and logs `Failed to load persisted state`, and **the entire persisted state is
-  > discarded** — every account's PnL baseline and the locked-out list with it. Write
-  > `"0001-01-01T00:00:00"` instead. An earlier revision of this handover had the `null` version;
-  > it was caught by checking the C# field type before running it, not by testing.
-  >
-  > Both fields must move together (`P1-37`) — zeroing the count alone lets a restart re-count the
-  > same session. `IsArmed` is deliberately left alone: `P1-37` stops it being rehydrated at all,
-  > and `P1-47` derives the initial arm state from the resolved mode.
-  >
-  > **"NT8 closed" really means "the AddOn is not loaded".** The bridge not answering on
-  > `localhost:7890` is the reliable check — the listener starts at `State.Configure`. NT8 can sit
-  > at its login dialog with the process running and no AddOn loaded, which is when this reset was
-  > actually performed.
-- ✅ **`POST /api/riskguard/config` now merges (`P2-41`, closed 2026-08-07, verified live).** It
-  used to deserialize a partial body into a complete `RiskConfig`, so every omitted field became
-  its default and was written to disk while the response echoed your *request* and said
-  `"applied"`. The response now returns the **resulting** live config as `config` and your body as
-  `requested`.
-  > **`nt_riskguard_config` with no arguments POSTs an empty body.** Under the old code that one
-  > call flattened the entire live risk configuration. The GET-mutate-POST-GET-diff discipline
-  > recorded here is what stood between this box and that happening — and it is still the right
-  > habit, but it is no longer load-bearing.
+**4. A test double is not evidence, and this one hid a live P0 for months.** The NT8 stub could not
+express `P0-63` at all: `Change()` applied the caller's values, so a silent no-op was
+*unrepresentable* and 926 green tests said nothing about it. The stub now models the provider
+holding its own copy and reverting on settle (§5.8). Before trusting a green suite about broker
+behaviour, ask what the stub is physically able to get wrong.
 
 **5. `P0-9` is fully implemented; what is left is live validation, not code.** Followers get a
 mirrored **stop and target**, OCO-paired, both anchored to their own fill. Items (3) `StopLimit` and
-(4) leader-cancels-stop are pinned by test. **The stop is validated on real fills (§4l). The target
-is deployed and has never been seen on one (§4r)** — and the stop path changed with it, so watch the
-first live `COPIER_STOP` for a rejection before trusting either.
+(4) leader-cancels-stop are pinned by test.
 
 ### What the guard actually does right now
 
 Armed, `shadow`. It evaluates every rule and logs would-be actions; `ProcessAction` returns
-`SHADOW (SKIPPED)` before any broker call (`:2895`), so it cannot touch an account. Arming and
-acting are **separate switches** — `_isArmed` enables evaluation, `_mode == "live"` enables action.
-Since `P1-47` the guard comes up armed in shadow by itself and disarmed in acting modes;
+`SHADOW (SKIPPED)` before any broker call, so it cannot touch an account. Arming and acting are
+**separate switches** — `_isArmed` enables evaluation, `_mode == "live"` enables action. Since
+`P1-47` the guard comes up armed in shadow by itself and disarmed in acting modes;
 `/api/riskguard/version` reports `mode`, `isArmed` and `guarding`, and coming up disarmed logs
 `UNPROTECTED_ON_START`. Arming manually is still UI-only (`TOGGLE ARMED`); `nt_script_execute` does
 not work on this box.
@@ -223,30 +140,32 @@ but no account is mapped and the top-level sub-rules are disabled, so no firm ru
 `TAKEPROFITPRO524207503` → `TakeProfitTrader` turns on real enforcement with real numbers — do it
 deliberately, and run a shadow session on it first.
 
+**No operational items remain.** Both that were once tracked here are done: the
+`ShadowSessionsCompleted` reset (2026-08-07 — and the obvious command for it is destructive, see §8)
+and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verified live).
+
 ### Commands
 
 ```powershell
-# the suite, direct -- ALWAYS build first; --no-build after a failed build
-# silently reports the previous assembly's result
-dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo
+# the suite -- ALWAYS build first; --no-build after a failed build silently
+# reports the PREVIOUS assembly's result
+dotnet build tests/RiskGuardTests.csproj -v q --nologo
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 953/0
 
-# deploy: verify first, then sync, then recompile in NT8 (hot-swaps)
-python tools\sync_nt8.py --verify
+# deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
+python tools\sync_nt8.py --verify        # expect ALL IN SYNC (7 files)
 python tools\sync_nt8.py
 #   then nt_compile, and read errorCount
-#   NOTE: if the BRIDGE also changed, deploy it from nt8-mcp-bridge with
-#   `python tools/deploy.py`, which pushes the bridge AND its vendored core.
-#   Deploying either repo alone fails the whole NT8 Custom assembly, which stops
-#   EVERY addon loading -- the risk guard included.
 
 # the structural checks (free, instant)
 python tools\check_direction.py          # no addon may name a bridge-owned type
 python tools\check_no_stray_copies.py    # no addon .cs outside addons/
 
-# the mutation batteries. Both exit NON-ZERO on a survivor -- they printed
-# `SURVIVORS: [...]` and exited 0 until 2026-08-12, i.e. the gate was decorative.
-python mutation\mutate_cm3.py            # 14 killed
-python mutation\mutate_cm4.py            # 10 killed
+# the mutation batteries. All exit NON-ZERO on a survivor, and all three refuse
+# to run from a red baseline -- see §8, they were decorative until 2026-08-13.
+python mutation\mutate_cm3.py            # 14 killed   (copier matrix)
+python mutation\mutate_cm4.py            # 10 killed   (copier round-trip)
+python mutation\mutate_p0_63.py          #  7 killed   (ignored Change())
 
 # free: do all ticket regions still resolve? READ THE LINE RANGES -- a degenerate
 # one-line region also prints OK, and only `kind: line` regions should be one line.
@@ -255,21 +174,74 @@ $PY = "C:\Users\vinay\tvDownloadOHLC\.venv\Scripts\python.exe"   # agent-loop li
     --tickets agent\tickets_p0_63.json --list
 ```
 
+> ⚠️ **If the BRIDGE changed too, deploy it from `nt8-mcp-bridge` with `python tools/deploy.py`**,
+> which deploys the bridge **and its vendored core**. Deploying either repo alone fails the whole
+> NT8 Custom assembly, which stops **every** addon loading — the risk guard included. And keep the
+> bridge's submodule pin bumped when this repo moves: a stale pin makes `deploy.py` **overwrite a
+> newer live core with an older one**. That is now blocked mechanically (exit 2) — §8.
+
 > ⚠️ **This repo has no `.venv`.** `agent-loop` is installed in *tvDownloadOHLC's* venv, and it
 > must be invoked with **this repo as the working directory** so that `--profile-module
-> agent.nt8_riskguard` resolves. There is no `scripts.agent_loop` module and no `selftest`
-> entry point here; both were paths into the archived predecessor loop.
+> agent.nt8_riskguard` resolves. There is no `scripts.agent_loop` module and no `selftest` entry
+> point here; both were paths into the archived predecessor loop.
+
+> ⚠️ **This repo carries `agent_loop.config.json` setting `think: false` for the implementer.** With
+> thinking on, the role spent its entire 96000-token budget on reasoning — 408,089 chars, **empty
+> content**, `done_reason=length` — as soon as the ticket grew a hardened spec (§5.9). Do not turn it
+> back on without raising `max_tokens` in the same edit.
 
 **The arbiter recommends; it never ships.** A run that ends `ARBITER_SHIP` has *not* applied
 anything — and `--resume-raw … --apply` is **not** a promote-what-I-read command, it is a fresh run
 seeded with that raw (§4q). To promote an exact candidate, splice it with the loop's `regions.apply`
-and diff the result against the `final.patch` you reviewed.
+and diff the result against the `final.patch` you reviewed. Across four SHIP rulings in session 13
+the arbiter upheld **0 of 66** panel findings, and on one plan the panel was right about a signed
+exit quantity that would have **increased a follower position sitting opposite the leader**.
 
-> ✅ **Work is test-first from here.** A ticket declares `expect_green`; the loop refuses it
-> unless those tests are already failing at baseline, and fails any candidate that leaves one
-> red. Reviewers judge the tests' completeness and accuracy too. This closes the hole T5 went
-> through — it reached `ARBITER_SHIP` with its own acceptance test still red. See the plan's
-> §6.0.
+> ✅ **Work is test-first from here.** A ticket declares `expect_green`; the loop refuses it unless
+> those tests are already failing at baseline, and fails any candidate that leaves one red.
+> Reviewers judge the tests' completeness and accuracy too. This closes the hole T5 went through —
+> it reached `ARBITER_SHIP` with its own acceptance test still red. See the plan's §6.0.
+
+### Before booking any live validation
+
+- **`MAX_TRADES_BREACH` fires on entry on `Sim101`/`Sim-ORB`** (`MaxTradesPerSession` 8, both past
+  it), and **`EDGE_WINDOW_BREACH`** fires on an ordinary overnight entry. Armed live, either one
+  flattens the trade about a second after it fills — destroying the test rather than the defect
+  (§4p). In `shadow` they only log.
+- **A `Sim101` trade reaches THREE follower accounts.** `Sim101 → Sim-ORB → {SimCopyTest1,
+  SimCopy2}` is a live chain, because `Sim-ORB` is our follower *and* a third-party copier's
+  leader. That is `P1-57`, still open.
+
+<details><summary>Earlier headers, kept for the record</summary>
+
+**Session 16, 2026-08-12** — the repo split executed; this file moved to
+[nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard), tagged `v1.0.0`, suite 926/0 (929
+minus three assertions that moved to the bridge). A migration, not a defect.
+
+**Session 15, 2026-08-12** — the copier ratio converter complete and deployed (slices 1, 2, 3a, 3b),
+suite 929/0, validated on the sim accounts. A feature, not a defect.
+
+**Session 12–14** — `P0-61` fixed; ratio converter slices 1 and 3a. The deployed build was
+`f174ba68` on the old `harden/riskguard-p0-51` branch, in the pre-split repo.
+
+</details>
+
+### 0.0 ⚠️ Commit SHAs cited in the older sections below no longer resolve
+
+Two separate rewrites orphaned them. First, getting session 7's push through required purging
+`data/` (a 126 MB `NQ1_1m.parquet` exceeded GitHub's 100 MB limit and had been silently rejecting
+every push for 202 commits) and then 88 MB of `.m4a`. Both changed every commit SHA in the range.
+Second, **the 2026-08-12 repo split rewrote history again** with `git-filter-repo`, so SHAs from
+*before* the split — including `f174ba68`, `b5c58ae0`, `86c6376f`, `c9459121`, `995f6402` and
+`06c6a484` — do not exist in this repo at all. The *work* is all present; only the identifiers are
+dead.
+
+**Run `git cat-file -t <sha>` before trusting any SHA quoted below.** SHAs from `v1.0.0` onward
+(`978ed3a` and later) are live here.
+
+**The merge-ordering lesson stands**: that push happened *before* shadow validation, which is the
+opposite of what this document recommended. It was a deliberate call to get 282 unpushed commits off
+one machine, not a signal that anything was validated.
 
 ---
 
@@ -393,15 +365,25 @@ sit here was stale and its SHAs are orphaned — see §0.0. Current state is the
 
 ## 3. The loop, and what its history taught us
 
-**Use `python -m scripts.agent_loop`** — full documentation in
-[AGENT_PATCH_LOOP.md](AGENT_PATCH_LOOP.md), commands in §0. Its own backlog is that doc's §12.
+**The loop is `agent-loop`, an installed package — `python -m agent_loop`, run from this repo with
+`--profile-module agent.nt8_riskguard`.** Commands in §0.
 
-> ⚠️ **Do not run `scripts/agent_loop/ollama_patch_loop.py`.** Three of its gates were defective:
-> an empty reviewer response scored as a dissenting vote so no candidate could ever pass; the
-> lock-scope gate closed its scope before the Allman brace and was therefore inert for 28 of 32
-> sites; and `summary.json` was overwritten per invocation and is not a ledger. It is kept only so
-> the older `logs/ollama_loop/` artifacts stay readable, and **a green run from it is not
-> evidence**.
+> ⚠️ **Repathed 2026-08-13.** This section used to say "use `python -m scripts.agent_loop`" and link
+> to `AGENT_PATCH_LOOP.md` for full documentation. **Neither exists here.** `scripts.agent_loop` was
+> the in-repo predecessor, now archived at
+> `tvDownloadOHLC/scripts/agent_loop/_archive_predecessor/` and **not to be run**; its post-mortem
+> doc is `tvDownloadOHLC/docs/architecture/AGENT_PATCH_LOOP.md`, marked ARCHIVED. The current
+> package's docs live in the [agent-loop repo](https://github.com/vinay-veerappa/agent-loop) —
+> `docs/architecture/AGENT_LOOP_V2_PLAN.md` and `IMPLEMENTATION_DECISIONS.md`. The three
+> `AGENT_PATCH_LOOP.md` links elsewhere in this file (§3, §4j, §4q) are dead for the same reason;
+> the material they cited is reproduced where it is cited.
+>
+> Also gone with the predecessor: `ollama_patch_loop.py`, whose gates were defective in three ways
+> (an empty reviewer response scored as a dissent, so no candidate could pass; the lock-scope gate
+> closed its scope before the Allman brace and was inert for 28 of 32 sites; `summary.json` was
+> overwritten per invocation and was never a ledger). **A green run from it was never evidence** —
+> recorded because the same three shapes keep reappearing in new gates: see the mutation batteries
+> that exited 0 while printing `SURVIVORS` (§8).
 
 > **§4, §4b, §4c and §4d were retired on 2026-08-10.** They were per-round post-mortems of that
 > dead tool. The lessons below are what survived; nothing else referenced them. Section letters are
@@ -429,47 +411,42 @@ those defects existed at all. Passing gates is necessary, never sufficient.
 
 ---
 
-## 4a. What is pending — the current backlog
+## 4a. HISTORICAL — the reasoning that produced the reconciler
 
-> **Also pending, and NOT a defect:** the copier ratio converter, slices **2** (cross-instrument
-> `1 MNQ -> 3 MES`) and **3** (parsing `PerTickerRatios` from the config JSON and exposing it on
-> the bridge — today it is settable only from code, so the shipped slice 1 is **not reachable from
-> the UI**). Slice 1 is implemented, green and undeployed. See §4w for what is settled and what
-> will bite. Neither slice carries a `P`-number.
+> ## ⚠️ NOT THE BACKLOG. Do not plan from this section.
+>
+> **Superseded by [§5](#5-the-open-backlog--authoritative-as-of-2026-08-13), 2026-08-13.** Everything
+> navigational in here was stale, some of it by three sessions:
+>
+> | It said | Actually |
+> |---|---|
+> | "62 defects, 49 closed, 13 open" | **67 IDs, 51 closed, 16 open** (§5.0) |
+> | "START HERE: `P0-62` first — a live, open, naked-risk-adjacent defect" | `P0-62` is **SUPERSEDED** by `P0-63`, which is **fixed and deployed** |
+> | "ratio converter slices 2 and 3 pending, slice 1 undeployed" | all four slices **complete, deployed, sim-validated** (§4z) |
+> | "`harden/riskguard-p0-51` is unmerged and unpushed; the deployed build is `b5c58ae0`" | that branch does not exist in this repo; `main` @ `978ed3a` = `v1.0.2` is **deployed and pushed** |
+> | Repo-hygiene items keyed to `docs/ROADMAP.md`, `scripts/trader/…` | those paths are in **tvDownloadOHLC**, not here — see §5.11 |
+>
+> **What is kept, and why:** the structural finding below is the single most useful paragraph in this
+> document. It is why `CopierReconciler.cs` exists, and its argument — that 48 defects were closed by
+> teaching the fast path one more case, while the item addressing the *class* went unstarted — still
+> applies to the half of `P3-30` that remains. Read it as an argument, not as a plan.
 
-**62 defects, 49 closed, 13 open.** `P0-61` (closed) and `P0-62` (open) were both opened
-2026-08-10 by the live test in §4v. Band membership and the P1-30/31 → P1-35/36 renumbering are
-in the plan's inventory table. *(The phase list A–G that used to close this section was retired
-2026-08-10: A–G were all done or superseded and it had drifted out of agreement with this list.)*
-
-**What is validated live**: `P0-9`'s mirrored **stop** (§4l — 1 ms after the follower's fill, at
-exactly `followerEntry + (leaderStop - leaderAvgPrice)`, FSM created `ProtectedPending`), `P0-51`,
-`P1-52`, `P2-41`, `P0-48`, T3's giveback rule (§4g), and **`P0-9`'s mirrored target** (§4s — 3
-signals of 4; the fourth opened `P0-59`), and **the reconciler + `P0-61`'s fix** (§4v — the mirror
-is exact, a stray leg is cancelled, and a deferred change is re-applied when the leg settles).
-
-**What is NOT**: `P0-53`, `P1-54`, `P0-55`, `P1-56` (unit + compile only); `T5`'s fail-closed gate, which
-needs an acting mode (`IsGuardProtecting` requires `mode == "live"`); and the firm-mirror rules,
-which are loaded but unmapped. **The copier acts regardless of guard mode** — `shadow` restrains
-RiskGuard, not the copier.
-
-### START HERE — the reconciler is the primary path now; finish it
+### The reconciler is the primary path — the argument (2026-08-10)
 
 > 🔶 **`P3-30`'s copier half SHIPPED 2026-08-10 (§4u).** `CopierReconciler.cs` is new, and both leg
 > syncs decide through `ComputeDesiredBracket` + `Reconcile` instead of from one cached `Order`
 > reference. A duplicate leg is now self-healing. Suite 762/0, net48 clean, deployed.
 >
-> **The next four pieces, in order:**
-> 1. **`P0-62`** — a live, open, naked-risk-adjacent defect, so it outranks the enhancement work.
->    `Change()` applies the price but silently refuses a quantity INCREASE, so a scaled-in follower
->    keeps an under-sized protective leg. Two candidate remedies with real costs are written up in
->    the plan entry. **Do not just widen the retry budget.**
+> **The pieces that remain** — ordering now lives in §5.6; only the *dependency* below is durable:
+> 1. ~~**`P0-62`** — `Change()` applies the price but silently refuses a quantity INCREASE.~~
+>    **SUPERSEDED by `P0-63`** (the call is a silent no-op on `provider: Simulator` for price *and*
+>    quantity), which is **fixed and deployed**. The advice attached to it — *do not just widen the
+>    retry budget* — was right, and is why remedy 3 verifies the read-back instead: §5.9.
 > 2. **`P3-31`'s ledger** — required *before* the timer, not after. Between `Submit` and `Accepted`
 >    the order is in neither `Account.Orders` nor the cache, so a timer without the ledger creates
 >    the second leg. The seam in `Reconcile` is built and tested; the ledger is not.
 > 3. **The background timer** — events call the reconciler; nothing calls it on a clock. A
->    divergence arriving with no subsequent event is still permanent. `P0-62` is an example: after
->    the budget gives up, no event brings it back.
+>    divergence arriving with no subsequent event is still permanent.
 > 4. **The RiskGuard-side audit** — naked position, orphan stop, FSM/broker divergence. `P3-30`
 >    covers both addons; only the copier's bracket is done.
 >
@@ -518,24 +495,18 @@ our name in its own; a native `Stop1` would have gone straight through.
 > Armed live either one flattens the trade and cancels its mirrored legs. And a `Sim101` trade
 > reaches **three** follower accounts (`P1-57`).
 
-### Ready to code, in value order
+### ~~Ready to code, in value order~~ — superseded by §5.6
 
-| | What | Note |
-|---|---|---|
-| 1 | **`P3-30` — the reconciler: timer + RiskGuard-side audit** | 🔶 **The copier's bracket half is done (§4u).** What remains is the clock and the guard-side audit (naked position, orphan stop, FSM divergence). `P3-31`'s ledger comes *before* the timer. `P1-36` built the multi-stop coverage sum the audit needs; share that, do not rebuild it. |
-| 2 | **`P1-13` — the threading inversion** | **Two pieces of work, not one.** A concurrent-guard-event stress test has to exist first; see the warning below. |
-| 3 | **`P2-26` — design-doc drift** | Cheap, and `RiskGuardAddOn.md` is *actively misleading* right now: 8 claims contradicted by code. |
-| 4 | **`P2-24` — written-but-never-called safety machinery** | Includes `ReconcileFollowerPosition`. Needs a dispatcher seam to be testable (see §6). |
-| 5 | **`P2-25` — the news shield can never fire in production** | |
+The value-ordered table that stood here is replaced by **§5.6**, which is maintained. Three notes
+from it are worth carrying, because they are engineering constraints rather than priorities:
 
-### Low value or mechanical
-
-`P2-27`'s remaining CI job (the copy path itself is already covered), `P2-29` (split the two large
-files into `partial class` files), `P3-31`, `P3-33`, `P3-34`.
-
-> **`P3-32` ("follower risk anchored to the follower's own fill") looks SUPERSEDED by `P0-9`** —
-> that is precisely what the signed-offset mirror does. Read it before scheduling it as new work;
-> it may simply need closing. Flagged 2026-08-07, not yet verified.
+- **`P3-30`'s remaining half needs `P1-36`'s multi-stop coverage sum** — the guard-side audit asks
+  exactly the question `CoveredQuantity` already answers. Share it; do not rebuild it.
+- **`P1-13` is two pieces of work, not one.** A concurrent-guard-event stress test has to exist
+  before the threading inversion lands — see the S-series warning immediately below.
+- **`P3-32` looks SUPERSEDED by `P0-9`** — the signed-offset mirror is precisely "follower risk
+  anchored to the follower's own fill". Read it before scheduling it as new work; it may just need
+  closing. Flagged 2026-08-07, **still not verified**.
 
 ### ⚠️ The S-series is not concurrency coverage
 
@@ -548,18 +519,25 @@ Session 8 deferred `P1-13` explicitly on the grounds that the stress backlog was
 Once that backlog was written it was clear the reasoning was wrong: the tests are sequential and
 the risk is concurrent. **Doing the risky half before its coverage exists is how `P1-40` shipped.**
 
-### Repo hygiene — still open
+### ~~Repo hygiene — still open~~ — every item was stale or belongs to another repo
 
-- **`harden/riskguard-p0-51` is unmerged and unpushed**; the deployed build is `b5c58ae0`.
-  `main` is untouched. ✅ **`wip/p09-oco-target` was DELETED 2026-08-10** (its tip was `fca83e19`,
-  recoverable from reflog for the usual 90 days, but do not) — its work was rebased and shipped, and
-  the branch as it stood lacked five fixes (§4r). Rebasing it would have re-introduced them.
-- **The Gemini API key** scrubbed from history (`scripts/trader/chart_agent/test_vision.py`) still
-  needs **rotating**. It never reached GitHub; that is not the same as it being safe.
-- **0.28 GB of older parquet remains in published history** — the purges only covered the
-  then-unpushed range. Logged in `docs/ROADMAP.md` under Known Issues / Tech Debt.
-- `.githooks/pre-commit` is **not automatic**: run `git config core.hooksPath .githooks` in each
-  clone or it silently does nothing.
+Re-checked 2026-08-13; current hygiene lives in **§5.11**. For the record, this block was wrong in
+four ways, and the shape of the error is the point: **after the split, half of it described
+tvDownloadOHLC.**
+
+- ~~"`harden/riskguard-p0-51` is unmerged and unpushed; `main` is untouched; the deployed build is
+  `b5c58ae0`."~~ **That branch does not exist in this repo** — it was the pre-split branch name in
+  tvDownloadOHLC, which is still sitting on it. Here, `main` @ `978ed3a` = `v1.0.2` is deployed and
+  pushed, and `b5c58ae0` was orphaned by the filter-repo rewrite (§0.0).
+- ~~"`.githooks/pre-commit` is not automatic."~~ **There is no `.githooks/` here**, and
+  `core.hooksPath` is unset. It was never migrated.
+- ~~The Gemini API key needing rotation, and 0.28 GB of parquet in published history.~~ Both are
+  **tvDownloadOHLC's**, keyed to paths (`scripts/trader/chart_agent/test_vision.py`,
+  `docs/ROADMAP.md`) that do not exist here. Still real over there; tracked in §5.11 so they are not
+  simply dropped.
+- ✅ **`wip/p09-oco-target` was DELETED 2026-08-10** — its work was rebased and shipped, and the
+  branch as it stood lacked five fixes (§4r). Rebasing it would have re-introduced them. This one was
+  accurate, and is now history rather than hygiene.
 
 ---
 
@@ -927,8 +905,10 @@ account with no relationships, which every follower is.
 ### Loop `review` mode — built, and it earned its keep immediately
 
 `--mode review --review-base <ref>` puts a committed diff in front of the panel and arbiter. No
-implementer, no regions, no worktree, no apply path. Full design and properties:
-[AGENT_PATCH_LOOP.md](AGENT_PATCH_LOOP.md) §11; the mode backlog is §12.
+implementer, no regions, no worktree, no apply path. Full design and properties lived in `AGENT_PATCH_LOOP.md` §11-12, which **is not in this repo** —
+it documented the archived predecessor loop and stayed in tvDownloadOHLC
+(`docs/architecture/AGENT_PATCH_LOOP.md`, marked ARCHIVED). For the current package see the
+[agent-loop repo](https://github.com/vinay-veerappa/agent-loop).
 
 It exists because **`patch` mode's guarantee does not hold for hand-written work.** Gate 0 makes
 `*Tests.cs` unreachable to the implementer precisely so the grader is independent. When one author
@@ -1577,7 +1557,8 @@ This is the session's most transferable finding, and it is about the **process**
 > ⚠️ **`--resume-raw … --apply` is not a promote-what-I-read command.** It is a fresh run seeded with
 > that raw. If the panel says `REVISE`, you get a new implementation and *that* is what lands. To
 > promote an exact candidate, splice it yourself with `regions.apply` and diff the result against the
-> `final.patch` you reviewed. Mirrored into [AGENT_PATCH_LOOP.md](AGENT_PATCH_LOOP.md) §9.
+> `final.patch` you reviewed. (This was mirrored into `AGENT_PATCH_LOOP.md` §9, which is not in this
+> repo — see §3.)
 
 **The arbiter rubber-stamped the winning round**: 22 findings, 0 upheld. A 0-upheld ruling is not
 reassurance — on the round before it, the same arbiter upheld a finding and recommended a fix that
@@ -2033,10 +2014,15 @@ resolving when `P1-36`'s sum is shared with the reconciler.
 
 ---
 
-## 5. Decisions already made — do not re-litigate
+## 7. Decisions already made — do not re-litigate
 
-> **`P0-9` item (1)'s five invariants (closed 2026-08-10).** Mirrored verbatim into `profiles.py`'s
-> `settled`, per §10.2b of the loop doc. Retire from **both** places or the panel keeps arguing.
+> **Renumbered from §5 to §7 on 2026-08-13.** Two different sections were both called "§5" —
+> this one and [§5 THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13) — so a
+> cross-reference to "§5" was ambiguous for three sessions. Older text and transcripts saying
+> "§5" about a *settled decision* mean this section.
+
+> **`P0-9` item (1)'s five invariants (closed 2026-08-10).** Mirrored verbatim into the loop profile's
+> `settled` tuple (`agent/nt8_riskguard.py:106`). Retire from **both** places or the panel keeps arguing.
 >
 > 1. **The two legs are deliberately asymmetric.** Do not propose unifying the syncs, sharing
 >    `StopInFlight`/`StopAttempts` with the target, or making the target symmetric. Sharing lets an
@@ -2051,8 +2037,8 @@ resolving when `P1-36`'s sum is shared with the reconciler.
 > 5. **Leg prices are rounded to tick before the already-correct comparison**, not after — after
 >    would never match and would re-drive the leg forever.
 
-> **`P1-56`'s two invariants (closed 2026-08-10).** Mirrored verbatim into `profiles.py`'s `settled`,
-> per §10.2b of the loop doc.
+> **`P1-56`'s two invariants (closed 2026-08-10).** Mirrored verbatim into the loop profile's `settled`
+> tuple (`agent/nt8_riskguard.py:106`).
 >
 > 1. **`SyncFollowerStop` is the reservation holder; `SyncFollowerStopOnce` does the work and never
 >    touches the flags.** `StopInFlight` is published under `_lock` before any broker call and cleared
@@ -2125,15 +2111,36 @@ resolving when `P1-36`'s sum is shared with the reconciler.
 - **The TOCTOU window between the live position read and `account.Submit` cannot be closed**
   without holding a lock across a broker call, which is forbidden.
 
-Every one of these is also encoded in `scripts/agent_loop/profiles.py` under `settled`, which
-injects them into every review round. **Add to both places, and retire from both places.**
+These are also encoded in **`agent/nt8_riskguard.py`** under `settled` (**21 entries**, ~1.2k tokens),
+which injects them into every review round. **Add to both places, and retire from both places.**
 A settled decision that has since been settled the other way does not merely go stale — it
 actively instructs the panel to approve reintroducing a closed defect. The P1-35 entry above
 was exactly that until 2026-08-07.
 
+> ⚠️ **This claim was FALSE from the repo split until 2026-08-13, and it cost a real defect.** The
+> tuple carried **6** entries while this section asserted that `P0-9`'s five invariants and
+> `P1-56`'s two were "mirrored verbatim" into it. They were not there at all.
+>
+> That is not bookkeeping. `P1-56`'s invariant 1 — *`SyncFollowerStop` is the reservation holder;
+> `SyncFollowerStopOnce` never touches the flags* — is **exactly** the rule the `P0-63` candidate
+> broke, by re-driving through `...Once` and bypassing the in-flight reservation. It was the most
+> serious defect in that candidate, **no reviewer flagged it**, and it was caught by reading (§5.9).
+> The panel could not have flagged it: it was never told. The tuple is now reconciled against this
+> section, and the invariant is stated in the imperative form that would have caught it — *any new
+> caller that must respect the reservation calls the WRAPPER, never `...Once`*.
+>
+> **The lesson generalises past this file.** "Mirrored into the reviewer prompt" is a claim about a
+> second artifact, and nothing checks it. When a doc says two things agree, verify they still do
+> before relying on either — the split silently dropped 15 of 21 and no gate noticed.
+
 ---
 
-## 6. Known traps
+## 8. Known traps
+
+> **Renumbered from §6 to §8 on 2026-08-13**, with §7 above, so the two "§5"s no longer collide.
+> Note that §7 and §8 sit *physically before* §4w–§4z and §5; section letters and numbers are stable
+> identifiers cited from the plan and from older transcripts, so they are deliberately not reordered
+> on disk. Use the reading order in the header.
 
 - **NT8 raises `ExecutionUpdate` BEFORE `PositionUpdate`.** Any code that reads `account.Positions`
   from an execution handler is reading a position that does not exist yet on an entry fill. This
@@ -2142,9 +2149,31 @@ was exactly that until 2026-08-07.
   test raises, in whatever order the test chose** — and every bracket test drove
   position-then-execution, because that is the order a person writes it in. Subscribe to
   `PositionUpdate` for anything that needs the net position.
-- **Two unrelated background processes commit to this repo.** Stage explicit paths, never
+- **Two unrelated background processes commit to *tvDownloadOHLC*.** Stage explicit paths, never
   `git commit -a` and never `git add <dir>` — a `git add docs/architecture/` swept in an
-  unrelated agent's file during this work.
+  unrelated agent's file during this work. Less acute here since the split (this repo has no other
+  writers), but the loop *does* write `logs/agent_loop/` on every run: `.gitignore` excludes the
+  per-run artifacts and keeps only `ledger.jsonl` and `learning_feedback.jsonl`. **2,838 lines of
+  run artifacts were committed once before that rule existed**, and adding the rule did not untrack
+  them — `.gitignore` only governs paths git is not already tracking, so it took `git rm --cached`.
+- **A deploy tool that owns two trees can silently REVERT the other one.**
+  `nt8-mcp-bridge/tools/deploy.py` deploys the bridge **and its vendored core**, so a submodule pin
+  behind `nt8-riskguard` overwrites a newer live core with an older one. On 2026-08-12 the pin sat at
+  `v1.0.1` while `v1.0.2` — carrying `P0-63`, without which the mirrored stop had never trailed — was
+  live. **Nothing would have warned.** Now blocked: `deploy.py` exits 2 when the pinned commit is a
+  strict ancestor of the sibling core's `main`. `--verify`/`--dry-run` are never blocked, and a
+  missing sibling checkout only warns. **Keep the pin bumped whenever this repo moves**, tag first —
+  a submodule cannot resolve a tag that exists only locally.
+- **A gate that cannot fail is worse than no gate**, and this repo has shipped four of them. The
+  mutation batteries printed `SURVIVORS: [...]` and exited **0** until 2026-08-12; then `mutate_cm3`
+  and `mutate_cm4` were found to be **vacuous from a red baseline**, because `killed = 'Failed = 0'
+  not in res` scores every mutant as killed when the baseline is already failing. All three now
+  refuse to run unless the baseline is green (`mutate_p0_63.py` pins the failure *count*, since it
+  was written against a deliberately red baseline). The predecessor loop had the same shape three
+  times over (§3). **Watch a gate fail once before trusting it.**
+  > And verify the verification: `python mutation/mutate_cm3.py | tail` reports **`tail`'s** exit
+  > status, not the script's, so the fix looked like `exit=0` when it was really `exit=2`. Redirect
+  > to a file and check `$?` on the script itself.
 - **The test runner still exits non-zero on any failure**, which is correct, but it means a red
   suite masks nothing now that the mid-run exit is gone — read `RESULTS:` at the very end.
 - **Never diff the NT8 tree without normalising line endings.** The repo is LF, the NT8 tree is
@@ -2154,15 +2183,37 @@ was exactly that until 2026-08-07.
 - **Never put backups inside `bin/Custom/`.** NT8 compiles that tree *recursively*, so a folder
   of `.cs` backups produces duplicate-type errors. Use
   `Documents/NinjaTrader 8/_riskguard_backups/`.
-- **Never sync to NT8 unscoped.** `sync_nt8_strategies.py` without `--only addons` also pushes
-  strategies and indicators; during the shadow deployment that would have installed 21 unrelated
-  indicator files into a live NT8 mid-session.
+- **Never sync to NT8 unscoped** — historical, and the shape still matters. In tvDownloadOHLC,
+  `sync_nt8_strategies.py` without `--only addons` also pushed strategies and indicators; during the
+  shadow deployment that would have installed 21 unrelated indicator files into a live NT8
+  mid-session. **This repo's `tools/sync_nt8.py` owns only `addons/` and cannot do that**, and
+  `--only addons` over there now exits 2 because there are no addon sources there any more. Use
+  `tools/sync_nt8.py` here, `tools/deploy.py` in the bridge, and nothing else.
 - **`nt_compile` and `nt_script_execute` both reload every AddOn.** Expect a few minutes of
   `SHUTDOWN`/`INITIALIZE` churn after compiling; it settles on its own. That churn is what
   exposed P1-37. `nt_script_execute` is also unreliable (`NT8 timeout`, `ECONNRESET`) — prefer
   `GET /api/riskguard/config` for live state.
 - **`interventions.jsonl` grows without bound** — it reached 110 MB and was rotated on
   2026-08-07. Rotate it before a shadow session so the output is readable.
+- **Resetting `ShadowSessionsCompleted` by hand: do NOT write `null`.** `LastShadowSessionDate` is a
+  **non-nullable `DateTime`**. Json.NET throws converting `null` to it, `LoadPersistedState` catches
+  that and logs `Failed to load persisted state`, and **the entire persisted state is discarded** —
+  every account's PnL baseline and the locked-out list with it. Write `"0001-01-01T00:00:00"`. Both
+  fields must move together (`P1-37`) or a restart re-counts the same session. An earlier revision of
+  this handover carried the `null` version; it was caught by checking the C# field type, not by
+  testing. Back the file up first, and verify the `AccountsData` entries survived.
+  > **"NT8 closed" means "the AddOn is not loaded".** The reliable check is the bridge not answering
+  > on `localhost:7890` — the listener starts at `State.Configure`. NT8 can sit at its login dialog
+  > with the process running and no AddOn loaded.
+- **`nt_riskguard_config` with no arguments POSTs an EMPTY BODY.** Before `P2-41` that one call
+  flattened the entire live risk configuration to defaults while echoing your request back as
+  `"applied"`. It merges now, but the habit stands: **GET, mutate, POST, GET, diff.** And
+  `/api/copier/config` has **no GET at all** (§5.3), so the copier's live config cannot be inspected
+  without writing to it.
+- **Backticks in a `-m` commit message are executed by bash.** One message lost three fragments this
+  way: a backticked span was run as command substitution, and a glob inside it expanded to `/` and
+  tried to execute `/LICENSE.txt`. Use a single-quoted heredoc or `git commit -F file`. Heredocs have
+  their own failure mode — a terminator that does not match means the command silently does nothing.
 - 844 lines of WPF UI in `RiskGuardAddOn.cs` remain outside the test build (acceptable), as does
   `ReconcileFollowerPosition` (needs `Application.Current.Dispatcher`). If P2-24 wires that method
   up, it needs a dispatcher seam to stay testable.
@@ -2687,22 +2738,49 @@ limitation, not a documentation gap.
 
 ---
 
-# 5. THE OPEN BACKLOG — authoritative as of 2026-08-12
+# 5. THE OPEN BACKLOG — authoritative as of 2026-08-13
 
-> **This section supersedes §4a's "START HERE" and the plan's inventory table for the
-> question "what is left?".** Both had drifted: the plan says "58 defects" where the
-> header says 62, lists `P0-51`/`P1-52` as OPEN and then FIXED four lines later, and
-> §4a still points at `P0-62`, which `P0-63` superseded. Everything below was
-> re-derived from the entries themselves on 2026-08-12, not copied forward.
+> **This is the answer to "what is left?".** It supersedes §4a and the plan's inventory
+> table, both of which had drifted out of agreement with themselves and with the entries
+> they summarised. Everything below is re-derived from the per-defect entries, not copied
+> forward — most recently on **2026-08-13**.
 >
 > **Nothing here is a new defect discovered by a new review.** It is the residue of
-> sessions 1–15 plus what session 15's live run exposed.
+> sessions 1–17 plus what the live runs exposed.
+>
+> **Start at [§5.6](#56-order-of-work) for the order of work.**
+
+## 5.0 The count, and how to check it
+
+Three documents have carried three different totals (58, 62, 67) because each was
+maintained by hand. So here is the derivation instead of the number — if you doubt it,
+re-run the command rather than trusting the table.
+
+```bash
+# every defect ID that has an entry in the plan
+grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 64
+```
+
+| | Count | Which |
+|---|---|---|
+| Numbered entries in the plan | **64** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
+| **Total IDs** | **67** | |
+| **Open** | **16** | the 13 in §5.1 + `P?-64`, `P?-65`, `P?-66` |
+| **Closed or superseded** | **51** | 64 − 13 |
+
+`P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
+is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
+fixed. Numbers are **never reused and never renumbered** — `P0-64`…`P0-66` are held for
+the three above, which is why `P0-67` is the newest ID despite being opened before they
+were triaged.
 
 ## 5.1 Open defects, by band
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| ~~**`P0-63`**~~ | ~~`Account.Change()` is a silent no-op on `provider: Simulator` — the mirrored stop has NEVER trailed~~ | P0 | **FIXED 2026-08-13 via remedy 3** — §5.9. The mirrored stop trails. Not deployed. |
+| **`P0-67`** | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | **The highest open defect.** Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`) |
 | `P1-57` | We would mirror another copier's mirror; the "not ours" test is a name substring | P1 | Live on this box: a third-party copier fans `Sim101 → Sim-ORB → {SimCopyTest1, SimCopy2}` copying names verbatim |
 | `P1-13` | Guard evaluation on the WPF dispatcher — **threading half only** | P1 | The fail-open half is closed |
 | `P2-24` | Written-but-never-called safety machinery | P2 | |
@@ -2716,15 +2794,21 @@ limitation, not a documentation gap.
 | `P3-33` | Replace the global lock on the hot path | P3 | |
 | `P3-34` | Arm/shadow discipline extended to the copier | P3 | **The copier acts regardless of guard mode**; `shadow` restrains RiskGuard only |
 
-## 5.2 NEW — opened by session 15's live run (need `P`-numbers)
+**Closed since this section was created:** `P0-63` — fixed 2026-08-13 via remedy 3, **deployed in
+`v1.0.2` and compiling clean**. The mirrored stop trails for the first time. It has never been
+exercised against a real broker (§5.4), which remedy 3 was chosen to be correct in spite of.
 
-Take the next free numbers from `P0-64` onward; **do not extend a band in place**.
+## 5.2 Opened by the live runs — band letter still unassigned
 
-| Proposed | What | Why it matters |
+**The digits are final and reserved; only the band is untriaged.** `P0-67` took the next free number
+after these three were parked, so do not "fill the gap" — numbers are never reused. Triage the band
+when one is scheduled.
+
+| ID | What | Why it matters |
 |---|---|---|
 | **`P?-64`** | **The copier UI writes to a DIFFERENT FILE than everything else reads.** UI → `UserDataDir/CopierConfig.json` (7 call sites); bridge + `State.Configure` startup load → `UserDataDir/RiskGuard/copier_config.json`. `TradeCopierWindow` **never calls `LoadFromDisk`**. | **Every UI change is silently lost on the next NT8 restart.** Both files exist on this box with different contents. This is operator config vanishing without an error — `P2-41`'s shape. |
 | **`P?-65`** | **`TradeCopierWindow`'s two save sites are a 5th and 6th remembered subset** (`:997`, `:1055`): fresh object → `UpsertRelationship` → `SaveToDisk`. | Exactly the destructive pattern slice 3b deleted from the bridge. Clicking Add/Update **wipes** `PerTickerRatios`, `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit`, `IsQuarantined`. |
-| ~~**`P?-66`**~~ | ~~`P1-22`'s slippage/latency metrics produced NO reading on the live path~~ | **INSTRUMENTED 2026-08-13** — §5.9. All five silent returns now emit distinct events, so the next live run distinguishes them. The group-derived-relationship hypothesis is ruled out; the pending-map miss and the latency bound remain the live suspects. Not deployed, so **still unanswered**. |
+| **`P?-66`** | `P1-22`'s slippage/latency metrics produced NO reading on the live path, and the cause is unresolved | **INSTRUMENTED and DEPLOYED 2026-08-13** (§5.9) — but **STILL OPEN, because instrumentation is not an answer.** All five silent returns out of `ObserveFollowerFill` now emit distinct events (`FILL_MEASURED`, `FILL_ORDER_MISSING`, `FILL_NOT_MEASURED`, `FILL_RELATIONSHIP_MISSING`, `LATENCY_REJECTED`, `SLIPPAGE_NOT_COMPARABLE`), so the **next live copy** distinguishes them. The group-derived-relationship hypothesis is ruled out by inspection; the pending-map miss and the latency sanity bound remain the two suspects. **Do not read a zero as a pass.** |
 
 ## 5.3 NEW — enhancements, not defects
 
@@ -2732,51 +2816,59 @@ Take the next free numbers from `P0-64` onward; **do not extend a band in place*
 |---|---|
 | **UI redesign** | The operator's own assessment: *"not very usable or professional enough"*. On top of `P?-64`/`P?-65`, `PerTickerMatrix` is not in either sizing-mode combo (`:367`, `:459`) and `PerTickerRatios`/`CustomSymbolMappings`/`MaxSlippageTicks` have **no editor at all** — they appear only in a read-only status string. **The ratio converter is reachable ONLY through the bridge today.** |
 | **MCP wrapper gap** | `nt_copier_config` accepts only `leaderAccount`/`followerAccount`/`quantityRatio`/`autoConversion`. It cannot express `sizingMode`, `perTickerRatios`, `customSymbolMappings`, `maxSlippageTicks`, or any group action. Session 15 had to drive raw HTTP to `localhost:7890`, which `.agent/USER.md` asks agents not to do. **The preference is unfollowable until the wrapper is extended.** |
-| **Repo split** | The NT8 addons were never meant to live in `tvDownloadOHLC` — nothing there compiles, imports or tests them. **Decided 2026-08-12: TWO repos** (`nt8-mcp-bridge` separate, `nt8-riskguard` = guard + copier). Planned, not executed: **[NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md)**. The seam was measured, not guessed — two singleton facades, ~26 members. |
-| **Doc consolidation** | This section exists because the plan's inventory table and §4a contradict each other and themselves. The inventory should be regenerated from the entries, once. |
+| **`/api/copier/config` has NO read** | Found 2026-08-13 while verifying live state for this pass. The route is **`Post(method, …)` only** (`McpBridgeAddOn.cs:524`), whereas `/api/riskguard/config` handles `GET` explicitly (`:536`). **So there is no way to inspect the live copier config without issuing a write.** That directly defeats the GET-mutate-POST-GET-diff discipline this project relies on (§7), and it is why `P?-66`'s live metrics could not simply be read off the box during this pass. Fix with the wrapper gap above: `return method == "GET" ? CopierConfig(null) : Post(…)`. |
+| ~~**Repo split**~~ | ✅ **EXECUTED 2026-08-12** — §5.7. Two repos, both public: [nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard) and [nt8-mcp-bridge](https://github.com/vinay-veerappa/nt8-mcp-bridge), the latter consuming the former as a submodule pinned to a tag. Record: [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md). |
+| ~~**Doc consolidation**~~ | ✅ **DONE 2026-08-13** — §5.12. The plan's inventory table is regenerated from the entries, the count is now *derived* rather than maintained (§5.0), and the sections that contradicted each other (§4a, the two §5s) are marked or renumbered. |
 
-## 5.3a ⚠️ Deploy trap — `sync_nt8_strategies.py` silently dirties another repo
+## 5.3a ✅ RESOLVED — the `sync_nt8_strategies.py` hardlink trap
 
-`mcp/ninjatrader-mcp/nt8-addon/McpBridgeAddOn.cs` is a **hardlink to the deployed NT8
-file** (`Documents/NinjaTrader 8/bin/Custom/AddOns/McpBridgeAddOn.cs` — same inode, link
-count 2). It is the **only** linked file in that directory; `DynamicAtmManager.cs`,
-`RiskGuardAddOnTests.cs` and `TestingStubs.cs` are ordinary copies with 1 link.
+**Both halves of this trap are closed. Re-verified 2026-08-13**; kept because the *shape* recurs and
+because the resolution is what the current deploy rules are built on.
 
-**So every `sync_nt8_strategies.py --only addons` run dirties the `ninjatrader-mcp`
-repo without anyone editing it**, and the change then looks like a hand-edit there. Found
-2026-08-12 after session 15's deploy; the mirrored copy turned out to be **15 hunks
-behind** the deployed file, only 2 of which were that session's work.
+What it was: `mcp/ninjatrader-mcp/nt8-addon/McpBridgeAddOn.cs` was a **hardlink to the deployed NT8
+file** (same inode, link count 2). Every `sync_nt8_strategies.py --only addons` run therefore dirtied
+the `ninjatrader-mcp` repo with nobody editing it, and the change then looked like a hand-edit there.
+The mirrored copy was found **15 hunks behind** the deployed file, only 2 of which were that
+session's work.
 
-Two consequences worth holding onto:
+| Half | Now |
+|---|---|
+| The hardlink | **Broken.** The two paths have different inodes and link count 1 each; the deployed file is written by `nt8-mcp-bridge/tools/deploy.py`, which copies. |
+| `--only addons` | **Exits 2** in tvDownloadOHLC — there are no addon sources there any more, so the path that caused this cannot be driven. |
+| The missing `.gitmodules` | **Added 2026-08-12**, reconstructed from each checkout's own `origin`. `git submodule status` lists all five gitlinks instead of erroring, and a fresh clone can initialise them. |
 
-* That repo's `nt8-addon/` tracks whatever is **deployed**, not what is canonical in
-  `scripts/ninjatrader/addons/`. It is a fourth copy of the addon, and
-  [[nt8-addon-canonical-source]]'s rule — only `scripts/ninjatrader/addons/` is real —
-  applies to it. **Never edit it; never treat it as a source.**
-* `mcp/ninjatrader-mcp` is a **gitlink with no `.gitmodules` entry**, so
-  `git submodule status` errors on it and a fresh clone cannot initialise it. Pre-existing;
-  recorded, not fixed.
+**The durable rule, which now has teeth:** a copy of an addon that tracks what is *deployed* rather
+than what is *canonical* is a trap regardless of how it is linked, because deploy tools write to it.
+That is the same failure as a stale submodule pin overwriting a newer live core, and it is why
+`deploy.py` refuses on a stale pin (§8) rather than trusting anyone to remember.
 
-## 5.4 ⚠️ Blocked on the operator, not on engineering
+## 5.4 ⚠️ Still open on the operator, not on engineering
 
-**`P0-63` cannot be finished without a decision only the account holder can make.** Every account
-validated on so far is `provider: Simulator`. The funded accounts are `Provider31` and were
-`Disconnected`. If `Change()` is honoured there, the trail works in production and only our
-*testing* misleads; if not, the trail is broken everywhere. Establishing it means **placing a real
-order on a funded account**.
+**Two questions remain that only the account holder can settle. Neither blocks work.**
 
-Remedy option 3 — *after a `Change()`, verify the order actually took the new values and fall back
-to cancel-then-create when it did not* — **works on both provider types without answering the
-question**, turns a silent no-op into an observable one, and composes with the other two. That is
-the recommended path if the funded-account test is not wanted.
+1. **Is `Account.Change()` honoured on the funded accounts?** Every account validated on so far is
+   `provider: Simulator`. The funded accounts are `Provider31` and were `Disconnected`. If `Change()`
+   is honoured there, the trail works in production and only our *testing* ever misled us; if not, it
+   was broken everywhere. Establishing it means **placing a real order on a funded account**.
+   > **Deliberately still open**, and `P0-63` shipped anyway: remedy 3 — verify the settled order took
+   > the new values, fall back to cancel-then-create when it did not — **is correct under either
+   > answer**. That is exactly why it was the chosen remedy (§5.5). The question is now a
+   > *nice-to-know*, not a blocker.
+2. **A live copy has to run for `P?-66` to answer anything.** The instrumentation is deployed; it
+   emits nothing until a copy passes through `ObserveFollowerFill`. The cheapest test is a 1-lot MNQ
+   order on `Sim101` driving a copy to `Sim-ORB`, which should log `FILL_MEASURED` with real numbers
+   and — on a leader stop trail — `BRACKET_STOP_CHANGE_IGNORED` followed by a replacement at the
+   right price. **That is a trading action on an armed relationship**, so it needs the operator's
+   go-ahead. Read the pre-flight warnings in §0 first: `MAX_TRADES_BREACH` and `EDGE_WINDOW_BREACH`
+   both fire on entry here, and a `Sim101` trade reaches three follower accounts.
 
 ## 5.5 DECIDED by the operator, 2026-08-12 — do not re-litigate
 
-| Question | Decision |
-|---|---|
-| Where the redesigned UI lives | **Rewrite `TradeCopierWindow.cs` properly, in NT8.** Not the web app. The window stays offline-capable and no new surface is added. |
-| `P0-63` remedy | **Remedy 3 only** — after every `Change()`, read the order back and fall back to cancel-then-create when it did not take. **No funded-account order.** The `Provider31` question stays open on purpose; remedy 3 is correct either way. |
-| What the next session opens with | **`P0-63` + the `P?-66` log line.** Safety first: the trail has never worked and no slippage number currently means anything. |
+| Question | Decision | Status |
+|---|---|---|
+| Where the redesigned UI lives | **Rewrite `TradeCopierWindow.cs` properly, in NT8.** Not the web app. The window stays offline-capable and no new surface is added. | Not started |
+| `P0-63` remedy | **Remedy 3 only** — after every `Change()`, read the order back and fall back to cancel-then-create when it did not take. **No funded-account order.** The `Provider31` question stays open on purpose; remedy 3 is correct either way. | ✅ **Shipped and deployed 2026-08-13** exactly as decided. One refinement forced by the evidence: the read-back must happen **on settle**, not synchronously — NT8 leaves the caller's desired values on the `Order` until the provider settles, so an immediate read always says "it took" (§5.9). |
+| What the next session opens with | **`P0-63` + the `P?-66` log line.** Safety first: the trail has never worked and no slippage number currently means anything. | ✅ **Both done** — session 17. Superseded by §5.6, which now opens with `P0-67`. |
 
 ⚠️ **Consequence of the WPF decision, and it is the same trap as slice 3b:**
 `TradeCopierWindow.cs` is **excluded from `RiskGuardTests.csproj`** (as are
@@ -2787,26 +2879,43 @@ should call `ApplyGroupRequest`/`ApplyRelationshipRequest` and the single
 be pinned by source-text regex, which is not evidence. That single move closes `P?-64`
 and `P?-65` together and makes the redesign testable.
 
-## 5.6 Suggested order, and why
+## 5.6 Order of work
 
-1. **`P0-63` via remedy 3** ← **DECIDED, and the next session starts here.** Naked-risk-adjacent,
-   live, and it does not need the funded test.
-2. **`P?-66`** (one log line) ← **also next session.** Until it is answered, no slippage number in
-   the UI means anything.
-3. **`P?-64` + `P?-65` together.** Same fix, same shape as slice 3b: point the window at
+**Updated 2026-08-13.** Items 1 and 2 of the previous ordering (`P0-63`, `P?-66`) are done and
+deployed; everything else shifts up unchanged.
+
+0. **Live-validate what is already deployed** — the cheapest and highest-value thing available, and
+   it needs an operator, not an engineer. One 1-lot MNQ copy answers `P?-66`, exercises `P0-63`'s
+   detection path for the first time, and confirms the trail actually trails. **See §5.4 item 2 for
+   the pre-flight.** Until this happens, two P0-class fixes are unproven outside the suite.
+1. **`P0-67`** ← **the next code work.** The third `Account.Change()` call, in `DynamicAtmManager`,
+   where the cache records the price the broker refused so the trail latches at a stale value. Same
+   root cause as `P0-63`, and the fix should reuse the same detection rather than invent a second
+   one. **Establish whether that path is live first** — the bridge drives it and tests none of it
+   (`P2-27`), so it may be dead code, in which case say so and close it.
+2. **`P?-64` + `P?-65` together.** Same fix, same shape as slice 3b: point the window at
    `ApplyRelationshipRequest`/`ApplyGroupRequest` and the single `CopierConfigFile`. Doing 64
    without 65 leaves a UI that persists correctly and destroys the payload on the way.
-4. **MCP wrapper**, which is what makes 5 testable the way this repo prefers.
-5. **UI redesign**, on top of a UI that no longer loses or destroys config.
-6. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
+3. **MCP wrapper**, which is what makes 4 testable the way this repo prefers. Add the missing
+   `GET` on `/api/copier/config` in the same change (§5.3) — without it the live copier config
+   cannot be read without writing to it.
+4. **UI redesign**, on top of a UI that no longer loses or destroys config.
+5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
 `P1-57`, `P1-13`, and the `P2` band are real but none is naked-risk; schedule them after the above.
 
+> **Two suite gaps are worth closing alongside whatever comes next**, both recorded in
+> `mutation/mutate_p0_63.py` beside the mutants that measured them: an S7-style concurrency test for
+> the `SyncFollowerStop`-vs-`...Once` reservation (the most serious defect found in the `P0-63`
+> candidate, and unpinnable today), and a `SimulateChangeAppliesQuantityOnly` stub flag for the
+> partial-honour case. Neither is naked-risk; both are places where the suite currently cannot fail.
+
 ## 5.7 Session 16 record — 2026-08-12: the repo split executed, and what it exposed
 
-**The split went first**, per §8's choice between the two defensible orders. The reason to
+**The split went first**, per the **split plan's** §8 choice between the two defensible orders (not
+this file's §8, which is Known traps — the collision is why §7/§8 were renumbered). The reason to
 prefer it: every commit made after the split lands in the new repos already, so the `P0-63`
 work does not have to be migrated afterwards. Nothing about `P0-63` changed; §5.5 and §5.6
 stand exactly as written, and **the next session still opens with `P0-63` remedy 3 + the
@@ -3121,11 +3230,152 @@ deliberate rather than overlooked:
 
 ### Next
 
-1. **Deploy and validate live.** `python tools/sync_nt8.py --verify`, then without `--verify`, then
-   `nt_compile` and read `errorCount`. `P0-63` has never been exercised against a real broker, and
-   `P?-66`'s instrumentation only answers its question once a live copy runs through it — **until
-   then `P?-66` is still unanswered, just no longer invisible.**
+> **Superseded by §5.6.** Item 1 below — deploy — was done later the same day (§5.10). The rest is
+> unchanged: **live validation, then `P0-67`.**
+
+1. ✅ **Deploy.** Done 2026-08-13: `sync_nt8.py` 7/7 identical, `nt_compile` **0 errors**, ledger
+   `ARMED_ON_START` at 12:58:05Z, copier `loaded: true, enforcing: true`. Tagged `v1.0.2`.
+   **Live validation is still outstanding** — `P0-63` has never been exercised against a real broker,
+   and `P?-66`'s instrumentation only answers its question once a live copy runs through it, so
+   **`P?-66` is still unanswered, just no longer invisible.**
 2. **`P0-67`** — the third `Change()` site, in `DynamicAtmManager`, where the cache records the price
    the broker refused and the trail therefore latches. Establish whether that path is live first.
-3. Then §5.6 items 3-6 unchanged: `P?-64` + `P?-65` together, the MCP wrapper, the UI redesign,
+3. Then §5.6's remaining items: `P?-64` + `P?-65` together, the MCP wrapper, the UI redesign,
    then `P3-31`.
+
+---
+
+## 5.10 Session 18 record — 2026-08-13: deploy, the sync rule made mechanical, and this doc pass
+
+**No addon code changed.** Three things happened: `v1.0.2` went live, the "keep the bridge and the
+core in sync" rule stopped depending on memory, and this document was re-derived from the repo.
+
+### What was deployed, and the regression trap that surfaced doing it
+
+`sync_nt8.py` reported 7/7 identical, `nt_compile` returned **0 errors**, and the guard came back
+`ARMED_ON_START` in `shadow` with the copier `loaded: true, enforcing: true`. `main` was
+fast-forwarded, tagged **`v1.0.2`** and pushed.
+
+Then the standing instruction — *"always keep the mcp and the addons in sync"* — turned out to be
+protecting against something sharper than untidiness. `nt8-mcp-bridge`'s vendored core was pinned at
+**`v1.0.1`**, 10 commits behind and **without the `P0-63` fix**, and `deploy.py` deploys the core as
+well as the bridge. Running it would have **overwritten the live core with the pre-fix version and
+silently reverted a P0** on a live trading system.
+
+The order matters and is not obvious: **the tag must be pushed before the submodule can pin to it.**
+
+| # | Step | Result |
+|---|---|---|
+| 1 | core: `main` ← `harden/p0-63`, ff-only | `978ed3a` |
+| 2 | tag `v1.0.2`, push `main` **and** the tag | `[new tag] v1.0.2` |
+| 3 | bridge: fetch tags, check the submodule out at `v1.0.2` | pin now carries `_accountsIgnoringChange` (0 → 6 occurrences) |
+| 4 | bridge harness against the new core | **9 / 0** |
+| 5 | commit + push the pin bump | `74b76cf` |
+| 6 | `deploy.py --verify` | **ALL IN SYNC** (8 files, 2 orphans) |
+
+**Fix the class, not the instance:** `deploy.py` now **refuses to deploy a vendored core that is
+behind the sibling checkout** (exit 2, remedy printed). Local check, no network — it asks git whether
+the pinned commit is a *strict ancestor* of `nt8-riskguard`'s `main`, because strictly-behind is the
+only unsafe case. No sibling checkout only warns; refusing on "I could not tell" would make the tool
+unusable on a machine that has just the bridge. Verified in all three directions: in sync → exit 0;
+pin rolled back and deploying → exit 2; same stale pin with `--verify` → not blocked. See §8.
+
+### The two stale files in the live `AddOns/` folder
+
+`RiskGuardAddOnTests.cs` and `TestingStubs.cs` sit in the deployed folder and belong to neither tree.
+Both deploy tools report them as orphans. They compile clean and are harmless, but NT8 compiles
+`bin/Custom/` **recursively**, so they are two files away from a duplicate-type error. Not removed
+this session — removing files from a live NT8 install is a deploy action, and nothing needed it.
+
+---
+
+## 5.11 Repo hygiene — current, and which repo each item belongs to
+
+Re-checked 2026-08-13. The block this replaces (in §4a) had drifted so far that **half of it
+described a different repository**, so ownership is now explicit.
+
+### This repo (`nt8-riskguard`)
+
+| Item | State |
+|---|---|
+| Branches | `main` @ `978ed3a` (= `v1.0.2`), pushed, **0 unpushed**. `harden/p0-63` is merged and can be deleted. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
+| Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66`). The bridge pins one of these, so **never delete or move a tag.** |
+| CI | ⚠️ **Parked, not running.** The workflow sits at `ci/github-workflow-ci.yml` instead of `.github/workflows/` because pushing it needs `gh auth refresh -s workflow`. `P2-27`'s remaining half. Every gate is therefore local and manual. |
+| Git hooks | **None.** There is no `.githooks/` and `core.hooksPath` is unset; the pre-commit hook was never migrated at the split. |
+| Loop artifacts | `logs/agent_loop/*` is ignored except `ledger.jsonl` and `learning_feedback.jsonl`. See §8 for why that took two commits. |
+
+### `nt8-mcp-bridge`
+
+| Item | State |
+|---|---|
+| Submodule | `vendor/nt8-riskguard` pinned at `v1.0.2`, matching this repo's `main`. **Enforced** — `deploy.py` exits 2 on a stale pin (§8, §5.10). |
+| Tests | Harness 9/0, but `P2-27` still records that `McpBridgeAddOn.cs` has no real coverage; `tests/README.md` measures the gap. |
+| CI | Parked the same way, same reason. |
+
+### tvDownloadOHLC — **not this repo's problem, recorded so it is not lost**
+
+These were listed as this project's hygiene for months and are keyed to paths that do not exist here:
+
+- **The Gemini API key** scrubbed from history (`scripts/trader/chart_agent/test_vision.py`) still
+  needs **rotating**. It never reached GitHub; that is not the same as being safe.
+- **~0.28 GB of older parquet remains in published history** — the purges only covered the
+  then-unpushed range. Tracked there under `docs/ROADMAP.md`.
+- That repo has **unpushed commits** and two unrelated background processes that commit to it (§8).
+
+---
+
+## 5.12 What this documentation pass found, and the pattern under it
+
+**This section is the useful part of session 18.** Every correction is listed in the section it
+belongs to; what follows is *why* a 3,100-line handover went stale in ways its own rules were
+supposed to prevent.
+
+### The corrections
+
+| Where | Claimed | Actually |
+|---|---|---|
+| Header | suite 806, §0 said 787, path note said 926 — **three counts in one file** | **953 / 0** |
+| Header | `Branch: harden/riskguard-p0-51 — not merged, not pushed. main is untouched.` | that branch **does not exist here**; `main` = `v1.0.2`, deployed and pushed |
+| Header, §0 | "the deployed build is `f174ba68`" / `b5c58ae0` | both **orphaned by the split's history rewrite**; deployed build is `978ed3a` |
+| Header, §0 | "all **10** addon files in sync" | **7** in this repo, 8 counting the bridge's, plus 2 orphans |
+| §0, §7 | retire settled decisions from "this file *and* `scripts/agent_loop/profiles.py`" | that path **has not existed since the split**; it is `agent/nt8_riskguard.py:106` |
+| §7 | `P0-9`'s five and `P1-56`'s two invariants "mirrored verbatim" into `settled` | **they were not there at all** — 6 entries, none of them these. Now 21 |
+| §3 | "use `python -m scripts.agent_loop`", three links to `AGENT_PATCH_LOOP.md` | package is `agent_loop`; that doc is **not in this repo** |
+| §4a | "62 defects, 49 closed"; plan said "58"; **START HERE: `P0-62`** | **67 / 51 / 16**, and `P0-62` is superseded by `P0-63`, which is fixed and deployed |
+| §4a | ratio converter slices 2 and 3 pending, slice 1 undeployed | all four slices **complete, deployed, sim-validated** |
+| §4a | four repo-hygiene items | **all four stale**; two belonged to tvDownloadOHLC |
+| §5.3a | the hardlink trap and the missing `.gitmodules` | **both resolved** |
+| §5.5, §5.6 | "the next session opens with `P0-63` + `P?-66`" | **both done and deployed**; next is `P0-67` |
+| §5, §7 | two different sections both numbered **§5**; traps was §6 but sat before §5 | renumbered **§7** and **§8** |
+| `VERSION.md` | "Current Release: `v1.7.0-ui-audit`" | git says **`v1.0.2`**; the addon constant says `1.1.0` |
+
+### The pattern, which is worth more than the list
+
+**1. A count maintained by hand in three places will disagree in three places.** 58 / 62 / 67 were
+all written by someone summarising the same entries. §5.0 now records the `grep` that *derives* the
+count instead, so the next reader can check it in one command rather than trusting a table. Prefer a
+derivation to a number.
+
+**2. "Mirrored into X" is a claim about a second artifact, and nothing checked it.** The settled-list
+divergence is the most expensive finding here: `P1-56`'s reservation invariant was missing from the
+reviewer prompt, and that is precisely the rule the `P0-63` candidate broke — the panel never flagged
+it because **the panel was never told**. A doc that asserts two artifacts agree needs a check, or it
+is decoration. Same family as the mutation batteries that exited 0 while printing survivors (§8).
+
+**3. A repo split invalidates documentation silently.** Paths kept resolving in the *reader's* head
+while pointing at nothing on disk: `profiles.py`, `AGENT_PATCH_LOOP.md`, `.githooks/`,
+`docs/ROADMAP.md`, `scripts/trader/…`. The split's verification ran the tests — which passed — and
+never started the moved tooling, which is also how the agent loop stayed broken here for two sessions
+(§5.8). **Migrating code is not migrating a project.** After a move, run the tools and follow the
+links, not just the suite.
+
+**4. Stale navigation is worse than stale history.** The history in §1–§4v is fine: it is dated,
+scoped, and honest about what it knew. The damage was concentrated in the parts that told you *what to
+do next* — a header, a "START HERE", a "next four pieces". Those need an owner and a date; a
+post-mortem does not. Hence the split in this file between a short current layer (header, §0, §5) and
+an append-only historical layer, and hence §4a is now explicitly *not* a plan.
+
+**5. Two of these were flagged by the documents themselves and left.** The plan's inventory table
+carried a ⚠️ STALE banner, and §5.3 listed "Doc consolidation" as an item. A known-stale document
+that stays in place is read by whoever does not notice the banner. **Fix it or delete it; a warning
+label is not a fix.**

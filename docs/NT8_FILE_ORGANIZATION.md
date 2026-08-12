@@ -22,36 +22,67 @@
 
 ---
 
-## Source of truth and deployment (authoritative, 2026-08-07)
+## Source of truth and deployment (authoritative, updated 2026-08-13)
+
+> ⚠️ **Repathed 2026-08-13.** This section still described `scripts/ninjatrader/addons/` and
+> `sync_nt8_strategies.py --only addons` — **the pre-split layout in a different repository.** The
+> path note at the top of this file claimed operative statements had been repathed; this one had not,
+> and it is the most operative section in the document. `--only addons` over there now **exits 2**,
+> so following it would have failed rather than done damage — but a deployment doc that names a
+> nonexistent source of truth is exactly how the wrong copy of an addon gets treated as canonical.
+
+**Two repos deploy into one NT8 folder, and neither can be deployed alone.**
 
 ```
-scripts/ninjatrader/addons/*.cs          ← THE source of truth for NT8 AddOns
+nt8-riskguard/addons/*.cs        ← THE source of truth for the guard, copier, reconciler (7 files)
+        │                             tools/sync_nt8.py
         │
-        │  scripts/utils/sync_nt8_strategies.py --only addons
+        │   nt8-mcp-bridge/addons/McpBridgeAddOn.cs     ← THE source of truth for the bridge
+        │           +  its vendor/nt8-riskguard submodule (a pinned copy of the 7 above)
+        │                             tools/deploy.py
         ▼
 %USERPROFILE%/Documents/NinjaTrader 8/bin/Custom/AddOns/   ← live, untracked, compiled by NT8
 ```
 
-`ninjatrader-addon/RiskGuardTests.csproj` compiles the same canonical folder
-(`..\scripts\ninjatrader\addons\*.cs`, minus `McpBridgeAddOn.cs` and `RiskManagerAddOn.cs`), so
-the tests and NT8 build from one set of files. `bin/`, `obj/` and `*.exe` under
-`ninjatrader-addon/` are gitignored build output.
+**Every AddOn compiles into ONE assembly** (`NinjaTrader.Custom.dll`) and calls the others' types
+directly. So in NT8 a compile error is never local: the whole Custom assembly fails and **every**
+addon stops loading, the risk guard included. **A half-deploy does not degrade the bridge — it
+disarms the account.**
+
+`tests/RiskGuardTests.csproj` compiles the same canonical `addons/` folder, minus
+`McpBridgeAddOn.cs` (not in this repo) and `RiskManagerAddOn.cs` (compiling it alongside
+`RiskGuardAddOn.cs` duplicates types in the *test* build only — **it is still deployed**, and
+conflating a test-build exclusion with a deployment exclusion silently removes a live addon).
 
 **Deploying:**
 
 ```bash
-python scripts/utils/sync_nt8_strategies.py --verify --only addons   # what has drifted?
-python scripts/utils/sync_nt8_strategies.py --only addons            # deploy
-# then recompile in NT8 (F5, or the nt_compile MCP tool) and confirm 0 errors
+# the guard + copier (this repo)
+python tools/sync_nt8.py --verify      # what has drifted?  expect ALL IN SYNC (7 files)
+python tools/sync_nt8.py               # deploy
+
+# the bridge -- deploys the bridge AND its vendored core, together or not at all
+cd ../nt8-mcp-bridge
+python tools/deploy.py --verify        # expect ALL IN SYNC (8 files, 2 orphans)
+python tools/deploy.py
+
+# then recompile in NT8 (F5, or the nt_compile MCP tool) and confirm errorCount == 0
 ```
+
+> **Keep the bridge's submodule pin bumped whenever this repo moves**, and **push the tag first** —
+> a submodule cannot resolve a tag that exists only locally. A stale pin does not merely fail to
+> carry a fix across: because `deploy.py` owns the core too, it **overwrites a newer live core with
+> an older one**. On 2026-08-12 the pin sat at `v1.0.1` while `v1.0.2` — carrying `P0-63` — was live.
+> `deploy.py` now exits 2 rather than let that happen.
 
 **Rules learned the hard way (P2-28, and the 2026-08-07 deployment):**
 
 - **Never copy `.cs` into the NT8 tree by hand.** Use the script. Manual copies are how canonical
   and deployed drift apart in the first place.
-- **Always scope with `--only`.** An unscoped sync also pushes strategies and indicators. During
-  the RiskGuard shadow deployment that would have installed 21 unrelated indicator files into a
-  live NT8 mid-session.
+- **Always scope the sync.** Historical: an unscoped `sync_nt8_strategies.py` also pushed strategies
+  and indicators, and during the RiskGuard shadow deployment that would have installed 21 unrelated
+  indicator files into a live NT8 mid-session. **`tools/sync_nt8.py` owns only `addons/` and cannot
+  do this** — the hazard is gone by construction rather than by discipline, which is the better fix.
 - **Never put backups inside `bin/Custom/`.** NT8 compiles that tree *recursively*, so a folder of
   `.cs` backups produces duplicate-type errors. Backups belong in
   `Documents/NinjaTrader 8/_riskguard_backups/`.
@@ -60,8 +91,15 @@ python scripts/utils/sync_nt8_strategies.py --only addons            # deploy
   by hand, use `diff --strip-trailing-cr`.
 - **A hard link from repo to NT8 was considered and rejected.** It would make every keystroke
   change what the live trading system compiles next. The explicit deploy step is deliberate.
-- `mcp/ninjatrader-mcp/nt8-addon/` holds its own partial copies, but that path is a **git
-  submodule** — fix it in that repo, not this one.
+- **A copy that tracks what is DEPLOYED rather than what is CANONICAL is a trap regardless of how it
+  is linked.** `mcp/ninjatrader-mcp/nt8-addon/McpBridgeAddOn.cs` (in tvDownloadOHLC) was a *hardlink*
+  to the deployed NT8 file, so every sync dirtied that submodule with nobody editing it, and the copy
+  drifted 15 hunks behind. The hardlink is broken now and that sync path exits 2, but the same shape
+  recurs as a stale submodule pin. **Two things may write to `AddOns/`: `sync_nt8.py` and
+  `deploy.py`. Nothing else, ever.**
+- **Two files in the live `AddOns/` belong to neither repo** — `RiskGuardAddOnTests.cs` and
+  `TestingStubs.cs`, reported as orphans by both deploy tools. They compile clean today, but NT8
+  compiles `bin/Custom/` recursively, so they are two files away from a duplicate-type error.
 
 ---
 

@@ -12,6 +12,19 @@ Both are **public**.
 Core tagged **`v1.0.0`**; the bridge pins it at `vendor/nt8-riskguard` with a `.gitmodules`
 entry, verified by a fresh `--recurse-submodules` clone.
 
+> **The table above is the state AT the split (2026-08-12) and is deliberately not updated** — it is
+> the migration's record. Current state: core `main` @ `v1.0.2`, **suite 953/0**, three mutation
+> batteries (31 killed, 0 survivors); bridge pinned at `v1.0.2`, harness 9/0. See the handover's §0.
+>
+> **One thing the split got wrong that only showed up later:** its verification ran the test suites,
+> which passed, and **never started the moved tooling.** The agent loop was therefore broken in this
+> repo from the split until 2026-08-13 — `agent/__init__.py` still imported
+> `.python_tvdownloadohlc`, a module that stayed behind — so every invocation died at
+> `ModuleNotFoundError`. Fifteen of twenty-one settled review invariants were also silently dropped
+> from the loop profile, and several docs kept pointing at paths that had ceased to exist.
+> **Migrating code is not migrating a project: after a move, run the tools and follow the links, not
+> just the suite.** Handover §5.12.
+
 > ## What the plan got wrong, and what was done instead
 >
 > **1. `git subtree split` was the wrong tool** (§0, §4). It follows one path and does not

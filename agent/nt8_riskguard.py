@@ -102,7 +102,20 @@ NOT upheld.
 
 An unsound SHIP here reaches a live trading account, so prefer ESCALATE over a confident wrong
 answer. On naked-position risk, a model does not get the last word.""",
-    # Settled decisions (carried from the original profile)
+    # Settled decisions.
+    #
+    # These are injected into EVERY review round. The handover's rule is "add to
+    # both places, and retire from both places" -- because a settled decision that
+    # has since been settled the other way does not merely go stale, it instructs
+    # the panel to approve reintroducing a closed defect.
+    #
+    # Only SIX were carried across the 2026-08-12 repo split, while the handover
+    # claimed P0-9's five invariants and P1-56's two were "mirrored verbatim" here.
+    # They were not. That is not a bookkeeping slip: P1-56's invariant 1 is exactly
+    # the rule the P0-63 candidate broke (it re-drove through SyncFollowerStopOnce,
+    # bypassing the in-flight reservation), NO reviewer flagged it, and it was caught
+    # by reading. The panel could not have flagged it -- it was never told. Restored
+    # and reconciled against handover section 7 on 2026-08-13.
     settled=(
         "CoveredQuantity is the SUM over every live protective stop on the position, and both it "
         "and RecognizedStopOrder are DERIVED from PositionGuardFsm's stop list -- neither is "
@@ -117,6 +130,61 @@ answer. On naked-position risk, a model does not get the last word.""",
         "own fill. Never Math.Abs, never the leader's stop PRICE.",
         "Simulation accounts are identified by account.Provider == Provider.Simulator, never "
         "by a name prefix (P1-20, closed).",
+        # --- P1-56's two invariants (closed 2026-08-10) ---
+        "SyncFollowerStop is the RESERVATION HOLDER; SyncFollowerStopOnce does the work and "
+        "never touches the flags. StopInFlight is published under _lock before any broker call "
+        "and cleared exactly once in a finally that runs AFTER the bounded re-drive loop. Any "
+        "new caller that must respect the reservation calls the WRAPPER, never ...Once. Do not "
+        "clear it between passes (reopens the window); do not leave it for the re-drive to clear "
+        "(leaks forever -- the re-drive backs off before reaching any finally); do not make the "
+        "re-drive recursive; and do not let re-drive passes skip the StopAttempts increment "
+        "(P1-56, closed 2026-08-10).",
+        "bracket.WorkingStop is NEVER cleared before a broker call, nor in OnFollowerOrderUpdate "
+        "-- not even on catch or abort paths. An honest WorkingStop is what makes a concurrent "
+        "sync MODIFY the existing stop instead of creating a second one (P1-56).",
+        # --- P0-9 item (1)'s five invariants (closed 2026-08-10) ---
+        "The mirrored stop and target legs are DELIBERATELY ASYMMETRIC. Do not propose unifying "
+        "the syncs or sharing StopInFlight/StopAttempts with the target: sharing lets an in-flight "
+        "TARGET sync delay the risk leg, and lets target churn spend the stop's budget (P0-9).",
+        "A fresh OCO id is minted ONLY on the cancel-then-create path -- not per-generation on "
+        "every sync, and not never. Re-using an id whose group may be retired has the broker "
+        "reject the new STOP. The rule is about the group's life, not the id's history (P0-9).",
+        "A leg terminal while its sibling FILLED was RETIRED, not lost, and must not be "
+        "resubmitted. P0-50's live re-read does not catch this because ExecutionUpdate precedes "
+        "PositionUpdate (P0-9).",
+        "A MULTI-TARGET leader is not mirrored at all -- not nearest, not last-seen. This does "
+        "not apply to stops (P0-9).",
+        "Leg prices are rounded to tick BEFORE the comparison, never after; after would never "
+        "match and would re-drive the leg forever (P0-9).",
+        # --- P0-63 (fixed 2026-08-13, remedy 3) ---
+        "Account.Change() is a REQUEST, not a setter. The caller's desired values sit on the "
+        "Order until the provider settles, and on provider: Simulator the change can be silently "
+        "ignored and the order REVERTS to its pre-change values. So a synchronous read-back proves "
+        "nothing: detection is 'the SETTLED order is still at its pre-change values', which is "
+        "positive evidence and fails safe. Recovery marks the account once and bypasses "
+        "modify-in-place thereafter; modify-in-place is preserved for providers that honour it "
+        "(P0-63, fixed 2026-08-13 via remedy 3).",
+        # --- Lock-scope false positives the panel raises every round ---
+        "Orphan cancels are QUEUED, not inline: UpdateFsmOnPosition adds to _pendingCancels under "
+        "the lock and DrainPendingCancels sends them after it is released. Do not move the Cancel "
+        "back inline, and do not call the drain from inside the lock -- the lock is re-entrant, so "
+        "that reads as correct and changes nothing (P1-35, closed 2026-08-07).",
+        "ArmGraceTimer under _stateLock is CORRECT and required -- it only schedules a timer "
+        "callback and makes no broker call. Reviewers raise it as a lock-scope violation every "
+        "round; it is a false positive.",
+        "SeedFsmsForExistingPositions needs no lock of its own: every call site already holds "
+        "_stateLock and it makes no broker call. Reviewers flag this as a false positive.",
+        "Reading account.Positions outside _stateLock is ACCEPTED -- a stale read yields a safe "
+        "abort or a harmless spurious grace timer, not naked risk. The TOCTOU window between the "
+        "live position read and account.Submit CANNOT be closed without holding a lock across a "
+        "broker call, which is forbidden.",
+        "ValidateInvariant must NOT reject PlaceStopOrder when action.Quantity > liveQuantity. It "
+        "looks like a missing safety check and it leaves the position permanently NAKED; "
+        "ExecuteAction re-sizes from the live position.",
+        "The lockout sweep's three-phase order is deliberate: cancel risk-increasing orders, "
+        "flatten, then cancel reducing orders only for instruments confirmed flat. Cancelling "
+        "everything up front and then failing to flatten is the naked-position bug (P1-11).",
+        "No new GuardFsmState enum values -- existing tests assert on them.",
     ),
 )
 

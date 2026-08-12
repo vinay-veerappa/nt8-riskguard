@@ -9,7 +9,14 @@
 > time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
 > would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 
-**Status:** Draft v1.0  
+**Status:** ⚠️ **Draft v1.0, 2026-07 — a HISTORICAL requirements document. Not a description of the
+shipped system.** Much of what it specifies was written and never wired: see `P2-24`
+(written-but-never-called safety machinery), `P2-25` (the news shield can never fire in production)
+and `P1-22` (the latency/slippage fields were fake). The hardening plan exists because this PRD read
+as delivered and was not. **For what the copier actually does today, read
+[RISKGUARD_COPIER_HARDENING_PLAN.md](RISKGUARD_COPIER_HARDENING_PLAN.md) and the handover's §0.**
+The `v1.1.0` version cited below is the addon's hand-maintained constant, which drifts — see
+[VERSION.md](VERSION.md).  
 **Target Platform:** NinjaTrader 8 Desktop Add-On (C# / WPF)  
 **Author:** Antigravity AI & Pair Programmer  
 **Context:** Prop-firm futures trading across multiple funded/eval accounts (Apex, Topstep, Cash), local single-machine execution, integration with existing RiskGuard AddOn (`v1.1.0`).
