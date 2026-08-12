@@ -3355,7 +3355,7 @@ it described a different repository**, so ownership is now explicit.
 | Branches | ✅ **`main` only.** `harden/p0-63` was verified an ancestor of `main` and **deleted 2026-08-13**. Pushed, 0 unpushed. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
 | Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66` — **the deployed code**), `v1.0.3` (docs only). `main` carries docs commits on top of `v1.0.2`; **a tag moving is what would break the bridge's pin**, so never delete or move one. |
 | Git hooks | ✅ **Installed 2026-08-13.** `.githooks/pre-commit` refuses `dll/pdb/exe/zip/nupkg`, media, and anything over 50 MB. **Proven to fire in both directions** before it was committed: a staged 57 MB blob and a staged `.dll` were each rejected with exit 1, and `ALLOW_BIG_FILES=1` passed. ⚠️ `core.hooksPath` is **local config, not tracked** — a fresh clone silently has no hook until someone runs `git config core.hooksPath .githooks`. Both READMEs now say so. Neither repo tracks a single blocked extension today, so the guard cannot misfire on real work. |
-| CI | ⚠️ **Still parked, and blocked on a credential — not on work.** The workflow sits at `ci/github-workflow-ci.yml`. Measured 2026-08-13: the `gh` token holds `gist, read:org, repo` and **not `workflow`**, so an HTTPS push containing `.github/workflows/` is rejected; there is **no SSH key on this box** either (`ssh -T git@github.com` → `Permission denied (publickey)`), so the usual workaround is unavailable, and `gh ssh-key add` would need `admin:public_key`, also absent. **Deliberately not committed into place**, because a local commit that cannot be pushed would wedge every later push on this branch. One interactive `gh auth refresh -s workflow` unblocks it; `P2-27`'s remaining half. Until then every gate is local and manual. |
+| CI | ⚠️ **Still parked, and blocked on a credential — not on work.** The workflow sits at `ci/github-workflow-ci.yml`. **Proven 2026-08-13 by pushing a probe branch and reading GitHub's own refusal**, not inferred from the scope list: `! [remote rejected] ... refusing to allow an OAuth App to create or update workflow '.github/workflows/ci.yml' without 'workflow' scope`. HTTPS pushes here go through `gh auth git-credential`, so the `gh` token's scopes (`gist, read:org, repo`) govern them. A rejected push creates nothing, so the probe left no residue. **Deliberately not committed into place** — a local commit that cannot be pushed would wedge every later push on the branch. **One interactive `gh auth refresh -s workflow` unblocks it**; SSH is *not* required (it was only checked as a fallback, and there is no key on this box). `P2-27`'s remaining half; until then every gate is local and manual. |
 | Deployed tree | ✅ **No orphans.** The two stale test files were moved out of `bin/Custom/AddOns/` on 2026-08-13 and the guard re-verified after the recompile — §5.10. |
 | Loop artifacts | `logs/agent_loop/*` is ignored except `ledger.jsonl` and `learning_feedback.jsonl`. See §8 for why that took two commits. |
 
@@ -3375,10 +3375,16 @@ These were listed as this project's hygiene for months and are keyed to paths th
 - **The Gemini API key** scrubbed from history (`scripts/trader/chart_agent/test_vision.py`) still
   needs **rotating**. It never reached GitHub; that is not the same as being safe. **The operator has
   taken this one** (2026-08-13) — it is not waiting on an engineer.
-- **~0.28 GB of older parquet remains in published history** — the purges only covered the
-  then-unpushed range. Tracked there under `docs/ROADMAP.md`. ⚠️ **Left alone deliberately.** Removing
-  it means `filter-repo` plus a force-push over *published* history, which invalidates every existing
-  clone and every SHA anyone has cited — a decision, not a chore. It costs disk, not safety.
+- ~~**~0.28 GB of older parquet remains in published history.**~~ ✅ **Done by the operator, and this
+  entry was wrong for a day.** Measured 2026-08-13: `git rev-list --objects --remotes | grep -ci
+  '\.parquet$'` → **0**, and the same over `--all` → **0**. Largest published blob is now 39.2 MB
+  (`duckdb-mvp.wasm`). ⚠️ The GitHub API still reports `size: 423 MB` and the local `.git` is still
+  1.5 GB — both count objects the rewrite made *unreachable*, pending GC. **A big size number is not
+  evidence the purge failed;** ask git what is reachable. Detail in tvDownloadOHLC's `docs/ROADMAP.md`.
+  > **Why this was wrong:** I wrote it from a memory note rather than from a measurement, in the
+  > middle of a pass whose entire subject was doc claims nobody had re-checked. The rule the rest of
+  > §5.11 follows — *state the property and the command to re-measure it* — exists because of exactly
+  > this, and I broke it in the act of writing it down.
 - ✅ That repo's unpushed commits were **pushed 2026-08-13**. Two unrelated background processes still
   commit to it, so re-check rather than assume (§8).
 
