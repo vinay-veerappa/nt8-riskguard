@@ -2,28 +2,32 @@
 === UI1: Copier read model: a conformance snapshot, with measured-vs-unmeasured metrics
   [protected] 1 region file(s) clear of verifier
   [memory] 35 settled decisions (9 from prior runs)
-  [worktree] agentloop-UI1-20288 @ ba4bdcda
-  [baseline] 1053 passed, 18 failed at ba4bdcda; 18 expected failure(s)
+  [worktree] agentloop-UI1-34544 @ f9055591
+  [baseline] 1053 passed, 18 failed at f9055591; 18 expected failure(s)
   [test-first] 18 acceptance test(s) red at baseline
-    region R1                       addons/TradeCopierEngine.cs lines 331-337
+    region R1                       addons/TradeCopierEngine.cs lines 364-371
     region R2                       addons/TradeCopierEngine.cs lines 3348-3492
     region R3                       addons/TradeCopierEngine.cs lines 702-914
-    region R4                       addons/TradeCopierEngine.cs lines 26-64
-  round 1: implement kimi-k2.7-code:cloud 228.6s in=7731 out=30826 think=108370c
-           [static] ok - 4 block(s) well-formed
+    region R4                       addons/TradeCopierEngine.cs lines 102-128
+    region R5                       addons/TradeCopierEngine.cs lines 78-86
+    region R6                       addons/TradeCopierEngine.cs lines 95-100
+  round 1: implement kimi-k2.7-code:cloud 267.3s in=7860 out=37752 think=144088c
+           [static] ok - 6 block(s) well-formed
            [compile] FAIL - build FAILED
-  round 2: implement kimi-k2.7-code:cloud 66.7s in=15644 out=9732 think=19551c
-           [static] ok - 4 block(s) well-formed
+  round 2: implement kimi-k2.7-code:cloud 170.3s in=15720 out=22350 think=64847c
+           [static] ok - 6 block(s) well-formed
            [compile] ok - build succeeded
-           [test] FAIL - 18 acceptance test(s) still failing; 1053 passed, 18 failed
-           [compaction] 24822 -> 15815 tokens (pruned 9007)
-  round 3: implement kimi-k2.7-code:cloud 305.2s in=13832 out=47012 think=177621c
-           [static] ok - 4 block(s) well-formed
-           [compile] FAIL - build FAILED
-           [compaction] 26707 -> 20737 tokens (pruned 5970)
-  round 4: implement kimi-k2.7-code:cloud 112.7s in=17656 out=21027 think=55423c
-           [static] ok - 4 block(s) well-formed
-           [compile] FAIL - build FAILED
+           [test] FAIL - 3 acceptance test(s) still failing; 1068 passed, 3 failed, 15 expected failure(s) now green
+           [compaction] 28351 -> 19525 tokens (pruned 8826)
+  round 3: implement kimi-k2.7-code:cloud 91.8s in=16434 out=12172 think=20438c
+           [static] ok - 6 block(s) well-formed
+           [compile] ok - build succeeded
+           [test] FAIL - 1 acceptance test(s) still failing; 1070 passed, 1 failed, 17 expected failure(s) now green
+           [compaction] 29459 -> 19998 tokens (pruned 9461)
+  round 4: implement kimi-k2.7-code:cloud 113.8s in=16770 out=18139 think=45824c
+           [static] ok - 6 block(s) well-formed
+           [compile] ok - build succeeded
+           [test] FAIL - 1 acceptance test(s) still failing; 1070 passed, 1 failed, 17 expected failure(s) now green
   NOT APPLIED: verdict=ARBITER_NEVER_RAN. Patch for review: logs\agent_loop\UI1\final.patch
 
 ==== SUMMARY ====
