@@ -9,11 +9,18 @@
 > time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
 > would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 
-**Status** (2026-08-13, `main` @ `978ed3a` = tag `v1.0.2`, suite **953 passed / 0 failed**):
-**51 of 67 closed.** Deployed and live in NT8, `shadow`, armed and guarding; NT8 compiles clean
-(0 errors, net48). Latest closure: **`P0-63`** (`Account.Change()` silently ignored — the mirrored
-stop had never trailed), fixed 2026-08-13 via remedy 3 and deployed. Highest open defect:
-**`P0-67`**, the third `Change()` call site.
+**Status** (2026-08-13, tag `v1.0.2` deployed, suite **953 passed / 0 failed**):
+**52 of 71 closed.** Live in NT8, `shadow`, armed and guarding; NT8 compiles clean (0 errors, net48).
+
+**`P0-63` AND `P?-66` WERE VALIDATED LIVE on 2026-08-13** by a single 1-lot MNQ round trip on
+`Sim101 -> Sim-ORB` — the mirrored stop trailed for the first time on a real broker path, and both
+fills measured (`142.86 ms / 0 ticks` entry, `314.21 ms / -4 ticks` exit). `P?-66` is **closed**;
+handover §5.13 has the event-by-event record.
+
+That one trade also opened **four new defects** (`P0-68`, `P1-69`, `P1-70`, `P1-71`), which is the
+return this project keeps getting from a live trade over a test. Highest open defect:
+**`P0-68`** — `nt_change_order` reports `"status": "modified"` when the provider ignored the change,
+the **fourth** `Account.Change()` site and the only one with no verification at all.
 
 **For "what is left?" read the handover's
 [§5, THE OPEN BACKLOG](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-13),
@@ -30,26 +37,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**67 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**71 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 64 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 68 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 64 + 3 = 67.
+write-up yet. 68 + 3 = 71. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
-| **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67` | 21 | **1** | All closed except **`P0-67`** (the third `Account.Change()` site, in `DynamicAtmManager`). `P0-62` is **superseded** by `P0-63`, which is fixed and deployed. `P0-9` has both legs — stop and target — closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57` | 28 | **2** | Open: **`P1-57`** (we would mirror another copier's mirror — the "not ours" test is a name substring) and **`P1-13`'s threading half** (its fail-open half is closed). |
+| **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **2** | Open: **`P0-68`** (the fourth `Change()` site, in the bridge — reports success on a no-op) and **`P0-67`** (the third, in `DynamicAtmManager` — caches the refused price). **Fix them together**; one root cause, and `P0-63`'s remedy is written and now live-proven. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-71` | 31 | **5** | Open: **`P1-69`** (metrics computed then discarded — `P?-66`'s reporting half), **`P1-70`** (`BRACKET_MODIFIED` asserts success before settle), **`P1-71`** (four unlogged exits hid a dropped copy), **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**, `OnExecution` is covered but CI is still parked and `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are excluded from the test build. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
-| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **3** | Handover §5.2. `P?-66` is **instrumented and deployed but still open** — instrumentation is not an answer. |
-| | | **67** | **16** | **51 closed or superseded** |
+| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
+| | | **71** | **19** | **52 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -966,6 +974,153 @@ left out of `P0-63`'s ticket rather than bolted on. At minimum, and in this orde
 > this against the rest of the P0 band — if nothing calls it, it is dormant rather than dangerous.
 
 ---
+
+### P0-68. `nt_change_order` reports `"status": "modified"` when the provider ignored the change — OPEN
+
+*(found 2026-08-13 during the live validation of `P0-63`, by trying to trail a leader stop through
+MCP and watching it not move. Handover §5.13.)*
+
+**Where**: `McpBridgeAddOn.ChangeOrder` — the **fourth** `Account.Change()` call site, and the only
+one with no verification of any kind. `P0-63`'s "Where" clause named it; `P0-67` widened the search
+and found the third; this is the fourth and it was hiding behind a success response.
+
+**What happens**: the bridge calls `Change()`, then reads the order back **synchronously** and
+returns it. NT8 leaves the caller's desired values on the `Order` until the provider settles, so the
+read is meaningless — and on `provider: Simulator` the change is then silently discarded. The
+response says `"status": "modified"` and the order never moves.
+
+**Reproduced twice, the second time in isolation** with no position, no copier and no ATM strategy
+involved:
+
+```
+nt_place_order  Sim101 MNQ 09-26 buy 1 Limit @29500      -> Working
+nt_change_order <that orderId> limitPrice=29450
+  -> {"status": "modified", "limitPrice": 29500, "stopPrice": 0}
+nt_orders       Sim101                                    -> still Working @29500
+```
+
+⚠️ **The refutation is already inside the response.** `limitPrice: 29500` is the *unchanged* value and
+it sits directly beside `"status": "modified"`. Nothing compares the two.
+
+**Why this is P0 and not a reporting nit**: anything that trails a stop through MCP — an agent, a
+scheduled task, a strategy driven over the bridge — believes it has moved risk and has not. That is
+the same live exposure as `P0-63`, minus the detection. It is also **why the `P0-63` live test needed
+a cancel-and-replace on the leader**: the obvious way to trail the leader silently did nothing.
+
+**Remedy**: reuse `P0-63`'s. Verify **on settle**, not synchronously; on a detected no-op either fall
+back to cancel-then-create or return an honest failure. At an absolute minimum, stop claiming
+success: compare the settled values against the request and say which fields did not take.
+
+**Note the deeper fact this makes unavoidable**: there are **four** `Account.Change()` call sites and
+they have four different levels of rigour. The class fix is one verified helper that every site calls
+— see [[fix-the-class-not-the-instance]] reasoning in §7 — not a fourth bespoke check.
+
+### P1-69. The copier's latency and slippage metrics are computed, then discarded — OPEN
+
+*(found 2026-08-13 by the live validation. This is the half of `P?-66` that did NOT close.)*
+
+**Where**: `TradeCopierEngine.ObserveFollowerFill` writes `rel.LatencyMs` (`:3071`) and
+`rel.AvgSlippageTicks` (`:3110`) onto the canonical in-memory `CopierRelationship` — correctly, and
+onto the right object, which was itself a fixed defect. Nothing then persists or exposes them.
+
+**Evidence**: after a 1-lot round trip that logged `FILL_MEASURED` **twice** with real figures
+(`142.86 ms / 0 ticks` on the entry, `314.21 ms / -4 ticks` on the exit),
+`UserDataDir/RiskGuard/copier_config.json` still read `LatencyMs=0.0 AvgSlippageTicks=0.0` — with its
+**mtime unchanged from the previous day**.
+
+**Three defects compound into "the metrics do not work"**, which is what `P?-66` originally recorded:
+
+| Layer | State |
+|---|---|
+| Measured? | ✅ yes, on the live path |
+| Persisted to `copier_config.json`? | ❌ no writer |
+| Readable over HTTP? | ❌ `/api/copier/config` is `Post`-only (§5.3) |
+| Readable in the UI? | ❌ the UI reads a **different file** (`P?-64`) |
+
+**Remedy**: fold into the MCP-wrapper work (§5.6 item 4) — add the `GET`, and persist the metrics
+through the same `CopierConfigFile` path the ratio converter's slice 3b established. ⚠️ Do **not**
+write them on every fill: that is a disk write on the hot path. Snapshot them with the existing save,
+or expose them read-only over the endpoint and leave the file alone.
+
+**The general lesson, which is worth more than the fix**: a number that is computed correctly and
+cannot be read is indistinguishable from a number that was never computed — and for two sessions it
+was diagnosed as the latter.
+
+### P1-70. `BRACKET_MODIFIED` writes a false success line into the live audit log — OPEN
+
+*(found 2026-08-13 by the live validation, in the log of the trade that proved `P0-63` works.)*
+
+**Where**: the optimistic log in the stop/target modify path of `TradeCopierEngine`, emitted straight
+after `Change()` returns and **before the provider settles**.
+
+**What the audit log actually contained**, two lines, same millisecond, same account:
+
+```
+COPIER_BRACKET_MODIFIED            MNQ SEP26 stop moved to 1@29830.75 in place
+                                   (leader offset -10, follower entry 29840.75);
+                                   no cancel/replace, so no unprotected window.
+COPIER_BRACKET_STOP_CHANGE_IGNORED MNQ SEP26: provider ignored Change() for stop
+                                   (still 1@29820.75, requested 1@29830.75);
+                                   falling back to cancel-then-create.
+```
+
+The first line asserts three things it cannot yet know: that the stop moved, that it moved *in place*,
+and that there was therefore no unprotected window.
+
+**Not naked risk** — the detection immediately behind it is what makes the system correct. But this is
+the **same defect that was already fixed once** inside this very feature: `:3113-3119` records
+`FILL_MEASURED` being changed to print the figure *this* fill produced rather than the stored value,
+because "printing the stored value here would put a number in the log that nothing computed for this
+fill, in the line that claims the fill was measured: `P1-22`'s own defect, reproduced inside `P1-22`'s
+instrumentation."
+
+**Remedy**: log the *intent* before, and the *outcome* after settle — or emit nothing until settle.
+`BRACKET_MODIFY_REQUESTED` then `BRACKET_MODIFIED` on confirmation would make the log a record of
+what happened instead of what was hoped.
+
+### P1-71. A named active relationship produced no order and left no diagnosable trace — OPEN
+
+*(found 2026-08-13 by reading the live validation's log for what was **missing** rather than what was
+present.)*
+
+**What was observed**: on both the entry and the exit, the copier logged
+
+```
+COPIER_COPY_BEGIN  2 active relationship(s), isExit=False: Sim-ORB, SimCopy2
+```
+
+`Sim-ORB` then produced a full, correct chain of events. **`SimCopy2` produced nothing at all** — no
+order, no skip, no reason, on either leg of the round trip.
+
+**The obvious explanations are ruled out.** `SimCopy2` exists (`provider: Simulator`, cash
+98,140.50); `IsQuarantined: false`; `LockoutUntil` unset; `TradesToday` 1 against a
+`MaxTradesPerSession` of 8; `BlockedInstruments` and `InstrumentLimits` both empty. `ArmedForLive:
+false` does **not** exclude it — that gate only blocks **non-Sim** followers (`:3413`).
+
+**Why the cause is unknown, which is the actual defect**: every exit from the copy loop between
+`COPY_BEGIN` and order submission is invisible in the only readable sink.
+
+| Exit | Line | Logs where |
+|---|---|---|
+| `followerAcc == null` | `:3408` | **nowhere at all** |
+| leader locked (`CanTrade`) | `:3440` | `Output.Process` only |
+| follower locked (`CanTrade`) | `:3446` | `Output.Process` only |
+| `COPY_BLOCKED_NO_GUARD` | `:3452`, `:3460` | `Output.Process` only |
+
+`NinjaTrader.Code.Output.Process` reaches the NT8 Output tab and **nothing else** — not
+`interventions.jsonl`, not the bridge's event stream. That is verbatim the failure
+`RiskGuardAddOn.cs:4435-4440` says was fixed for the copier: *"on 2026-08-09 a leader exit failed to
+mirror to its follower and there was no record of why, because every candidate path either logged to
+a sink nobody can read or returned silently. Anything worth reading later belongs here."* Five paths
+were missed. **`nt_get_logs --tab Output` does not help**: it returns the guard's structured stream,
+not raw `Output.Process` output.
+
+**Remedy**: route all five through `CopierLog`, each with its own event type. Mechanical, cheap, and
+it converts this whole class from "undiagnosable" to "one grep". Then re-run the live test and read
+the answer.
+
+⚠️ **Do this BEFORE the next live validation** (§5.6 item 2). The next silence should cost one log
+line to explain, not a session.
 
 ### ~~P0-62. `Account.Change()` applies the price but silently refuses a quantity INCREASE~~ — SUPERSEDED by `P0-63`
 *(opened and superseded the same day. Kept, not deleted: IDs are never reused, and the reasoning error is worth keeping.)*

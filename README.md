@@ -102,18 +102,21 @@ repos become mutually recursive and the split is dead.
 ## Status
 
 This code manages real money on live funded accounts, and it is **not finished hardening**.
-**67 defect IDs; 51 closed, 16 open.** Current: `main` = tag `v1.0.2`, deployed and live in
-NT8 in `shadow` mode, suite 953/0.
+**71 defect IDs; 52 closed, 19 open.** Tag `v1.0.2` is the deployed code, live in NT8 in
+`shadow` mode; suite 953/0.
 
-The highest open defect is **`P0-67`**: `DynamicAtmManager` holds the third
-`Account.Change()` call site, and its cache records the price the broker refused, so the
-trail latches at a stale value.
+**`P0-63` was validated live on 2026-08-13** by one 1-lot MNQ round trip on `Sim101 -> Sim-ORB`.
+`Account.Change()` being a silent no-op meant the mirrored stop had **never trailed**; the log
+now shows the provider ignoring the change, the fallback detecting it on settle, and the stop
+replaced at the correct price with no unprotected window and no duplicate leg. `P?-66` closed
+in the same trade: both fills measured (142.86 ms / 0 ticks entry, 314.21 ms / -4 ticks exit).
 
-`P0-63` -- `Account.Change()` being a silent no-op on `provider: Simulator`, which meant the
-mirrored stop had **never trailed** -- was fixed on 2026-08-13 and is deployed. It has
-**never been exercised against a real broker**: every account validated on so far is
-`provider: Simulator`, and the chosen remedy is correct either way rather than the question
-being answered.
+That trade also opened **four new defects**, which is the usual return here. The highest is
+**`P0-68`**: `nt_change_order` reports `"status": "modified"` when the provider ignored the
+change -- the **fourth** `Account.Change()` call site, and the only one with no verification of
+any kind, so **nothing can currently trail a stop through MCP**. `P0-67` is the third site.
+Fix them together; one root cause.
 
-**Read the handover before trusting any of it.** In particular, a zero in the copier's
-latency/slippage fields is not a pass -- `P?-66` is instrumented but still open.
+**Read the handover before trusting any of it** -- in particular §5.13, and note that the
+copier's latency/slippage figures are still unreadable by every consumer (`P1-69`) even though
+they are now known to be computed correctly.

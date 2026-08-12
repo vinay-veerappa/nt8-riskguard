@@ -45,7 +45,8 @@ Every row was checked, not carried forward. The command that checks it is in the
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **953 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **67 IDs — 51 closed, 16 open.** Derivation in §5.0, so you can check it instead of trusting it | — |
+| **Defects** | **71 IDs — 52 closed, 19 open.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13) | — |
+| **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite | §5.13 |
 | **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
 | **Deployed** | **`v1.0.2` code is live in NT8.** 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
 | **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
@@ -64,19 +65,20 @@ Every row was checked, not carried forward. The command that checks it is in the
 
 This distinction is the one this document has most often blurred, so it gets its own block.
 
-* **`P0-63`** — the mirrored stop trails for the first time, but **it has never been exercised
-  against a real broker.** Every account validated on so far is `provider: Simulator`. Remedy 3 is
-  correct either way (§5.4), which is why it shipped without the funded-account test.
-* **`P?-66`** — the five silent paths out of `ObserveFollowerFill` now emit distinct events, but the
-  instrumentation only *answers* its question once a live copy runs through it. **`P?-66` is still
-  unanswered — it is merely no longer invisible.** Do not read a zero as a pass.
 * **`P0-53`, `P1-54`, `P0-55`, `P1-56`** — unit + compile only.
 * **`T5`'s fail-closed gate** — needs an acting mode; `IsGuardProtecting` requires `mode == "live"`.
 * **The firm-mirror rules** — loaded but unmapped, so none can fire.
 
-**Validated live**: `P0-9`'s mirrored **stop** (§4l) and **target** (§4s), `P0-51`, `P1-52`,
-`P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler + `P0-61`'s fix (§4v), and the ratio
-converter's slices 2 and 3b (§4z).
+**Validated live**: **`P0-63` and `P?-66` (§5.13, 2026-08-13 — the mirrored stop trails and both
+fills measured)**, `P0-9`'s mirrored **stop** (§4l) and **target** (§4s), `P0-50`'s orphan-stop
+release (§5.13), `P0-51`, `P1-52`, `P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler +
+`P0-61`'s fix (§4v), and the ratio converter's slices 2 and 3b (§4z).
+
+> **The remaining `provider: Simulator` caveat is now a narrow one, not a blanket one.** `P0-63`'s
+> detection and its cancel-then-create fallback are proven on a live broker path — a *simulated* one,
+> which is precisely where `Account.Change()` is silently ignored, so it is the **hostile** case, not
+> the easy one. What stays unknown is only whether a funded `Provider31` account honours `Change()`
+> at all (§5.4 item 1), and remedy 3 is correct under either answer.
 
 > ⚠️ **The copier acts regardless of guard mode.** `shadow` restrains RiskGuard, not the copier.
 > That is `P3-34`, and it is still open.
@@ -2781,11 +2783,11 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **64** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **68** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **67** | |
-| **Open** | **16** | the 13 in §5.1 + `P?-64`, `P?-65`, `P?-66` |
-| **Closed or superseded** | **51** | 64 − 13 |
+| **Total IDs** | **71** | 4 opened by the live validation, §5.13 |
+| **Open** | **19** | the 17 in §5.1 + `P?-64`, `P?-65`. **`P?-66` closed 2026-08-13** |
+| **Closed or superseded** | **52** | 68 − 17, plus `P?-66` |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -2797,7 +2799,11 @@ were triaged.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| **`P0-67`** | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | **The highest open defect.** Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`) |
+| **`P0-68`** | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13, and now the highest open defect.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
+| **`P0-67`** | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
+| **`P1-69`** | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
+| **`P1-70`** | **`BRACKET_MODIFIED` writes a false success line to the audit log** before the provider settles, and is contradicted milliseconds later | P1 | **NEW 2026-08-13.** Not naked risk — the detection catches the underlying no-op — but a live audit log that asserts "no unprotected window" before it can know is how the last three sessions lost time |
+| **`P1-71`** | **A named active relationship produced no order and left no diagnosable trace** (`SimCopy2`) — four unlogged exits in the copy loop | P1 | **NEW 2026-08-13.** `followerAcc == null` logs nothing; three `CanTrade`/`NO_GUARD` blocks log to the Output tab only, which no readable sink captures. Route them through `CopierLog` — the fix is mechanical and the payoff is that this class stops being invisible |
 | `P1-57` | We would mirror another copier's mirror; the "not ours" test is a name substring | P1 | Live on this box: a third-party copier fans `Sim101 → Sim-ORB → {SimCopyTest1, SimCopy2}` copying names verbatim |
 | `P1-13` | Guard evaluation on the WPF dispatcher — **threading half only** | P1 | The fail-open half is closed |
 | `P2-24` | Written-but-never-called safety machinery | P2 | |
@@ -2825,7 +2831,7 @@ when one is scheduled.
 |---|---|---|
 | **`P?-64`** | **The copier UI writes to a DIFFERENT FILE than everything else reads.** UI → `UserDataDir/CopierConfig.json` (7 call sites); bridge + `State.Configure` startup load → `UserDataDir/RiskGuard/copier_config.json`. `TradeCopierWindow` **never calls `LoadFromDisk`**. | **Every UI change is silently lost on the next NT8 restart.** Both files exist on this box with different contents. This is operator config vanishing without an error — `P2-41`'s shape. |
 | **`P?-65`** | **`TradeCopierWindow`'s two save sites are a 5th and 6th remembered subset** (`:997`, `:1055`): fresh object → `UpsertRelationship` → `SaveToDisk`. | Exactly the destructive pattern slice 3b deleted from the bridge. Clicking Add/Update **wipes** `PerTickerRatios`, `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit`, `IsQuarantined`. |
-| **`P?-66`** | `P1-22`'s slippage/latency metrics produced NO reading on the live path, and the cause is unresolved | **INSTRUMENTED and DEPLOYED 2026-08-13** (§5.9) — but **STILL OPEN, because instrumentation is not an answer.** All five silent returns out of `ObserveFollowerFill` now emit distinct events (`FILL_MEASURED`, `FILL_ORDER_MISSING`, `FILL_NOT_MEASURED`, `FILL_RELATIONSHIP_MISSING`, `LATENCY_REJECTED`, `SLIPPAGE_NOT_COMPARABLE`), so the **next live copy** distinguishes them. The group-derived-relationship hypothesis is ruled out by inspection; the pending-map miss and the latency sanity bound remain the two suspects. **Do not read a zero as a pass.** |
+| ~~**`P?-66`**~~ | ~~`P1-22`'s slippage/latency metrics produced NO reading on the live path~~ | ✅ **ANSWERED AND CLOSED 2026-08-13 by the live validation** (§5.13). The measurement was never broken: one 1-lot round trip produced `FILL_MEASURED` twice — `latency=142.86 ms, slippage=0 ticks` on the entry (a **true** zero, both legs filled at 29840.75) and `latency=314.21 ms, slippage=-4 ticks` on the exit, negative being *favourable*, which also confirmed the sign convention on live data. Neither suspect was the cause: no `FILL_NOT_MEASURED`, no `LATENCY_REJECTED`. **What was actually broken is the reporting**, and that is now `P1-69`: the figures are written to an in-memory relationship that nothing persists and no endpoint exposes, so every consumer reads 0. |
 
 ## 5.3 NEW — enhancements, not defects
 
@@ -2871,13 +2877,17 @@ That is the same failure as a stale submodule pin overwriting a newer live core,
    > the new values, fall back to cancel-then-create when it did not — **is correct under either
    > answer**. That is exactly why it was the chosen remedy (§5.5). The question is now a
    > *nice-to-know*, not a blocker.
-2. **A live copy has to run for `P?-66` to answer anything.** The instrumentation is deployed; it
-   emits nothing until a copy passes through `ObserveFollowerFill`. The cheapest test is a 1-lot MNQ
-   order on `Sim101` driving a copy to `Sim-ORB`, which should log `FILL_MEASURED` with real numbers
-   and — on a leader stop trail — `BRACKET_STOP_CHANGE_IGNORED` followed by a replacement at the
-   right price. **That is a trading action on an armed relationship**, so it needs the operator's
-   go-ahead. Read the pre-flight warnings in §0 first: `MAX_TRADES_BREACH` and `EDGE_WINDOW_BREACH`
-   both fire on entry here, and a `Sim101` trade reaches three follower accounts.
+2. ~~**A live copy has to run for `P?-66` to answer anything.**~~ ✅ **DONE 2026-08-13 — §5.13.** The
+   operator authorised it and it ran exactly as scripted here: `FILL_MEASURED` with real numbers, and
+   `BRACKET_STOP_CHANGE_IGNORED` followed by a replacement at the right price. **The prediction
+   written in this item was correct in every particular**, which is the strongest evidence in the file
+   that the instrumentation was designed against the right question.
+   > Two footnotes for whoever books the next one. **`shadow` is what made it survivable** — the guard
+   > logged `MISSING_STOP_FLATTEN` twice and, armed, would have flattened the position and destroyed
+   > the test rather than the defect. And **the "three follower accounts" warning did not
+   > materialise**: only `Sim-ORB` acted, `SimCopyTest1` got nothing because the third-party copier
+   > was not running, and `SimCopy2` was named as active and then silently dropped — which is now
+   > `P1-71`. Do not assume today's blast radius next time; re-measure it.
 
 ## 5.5 DECIDED by the operator, 2026-08-12 — do not re-litigate
 
@@ -2901,23 +2911,26 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13.** Items 1 and 2 of the previous ordering (`P0-63`, `P?-66`) are done and
 deployed; everything else shifts up unchanged.
 
-0. **Live-validate what is already deployed** — the cheapest and highest-value thing available, and
-   it needs an operator, not an engineer. One 1-lot MNQ copy answers `P?-66`, exercises `P0-63`'s
-   detection path for the first time, and confirms the trail actually trails. **See §5.4 item 2 for
-   the pre-flight.** Until this happens, two P0-class fixes are unproven outside the suite.
-1. **`P0-67`** ← **the next code work.** The third `Account.Change()` call, in `DynamicAtmManager`,
-   where the cache records the price the broker refused so the trail latches at a stale value. Same
-   root cause as `P0-63`, and the fix should reuse the same detection rather than invent a second
-   one. **Establish whether that path is live first** — the bridge drives it and tests none of it
-   (`P2-27`), so it may be dead code, in which case say so and close it.
-2. **`P?-64` + `P?-65` together.** Same fix, same shape as slice 3b: point the window at
+0. ~~**Live-validate what is already deployed**~~ ✅ **DONE 2026-08-13 — §5.13.** `P0-63` trails on a
+   real broker path; `P?-66` is answered and closed. It cost one 1-lot MNQ round trip and produced
+   four new defects, which is the return this project keeps getting from a live trade over a test.
+1. **`P0-68` + `P0-67` together** ← **the next code work.** They are the **third and fourth**
+   `Account.Change()` call sites and they share `P0-63`'s root cause, so fix them as one change and
+   reuse the settle-then-verify that is already written and now live-proven. `P0-68` first: it is
+   reproducible in ten seconds with no position, and until it is fixed **no agent or strategy can
+   trail a stop through MCP** — the call reports success and does nothing. For `P0-67`, establish
+   whether the `DynamicAtmManager` path is live at all; if it is dead code, say so and close it.
+2. **`P1-71`** — route the copy loop's four silent exits through `CopierLog`. Mechanical, and it is
+   what turns "SimCopy2 got nothing and we cannot say why" into a one-line answer. Do it **before**
+   the next live test, so the next silence is diagnosable.
+3. **`P?-64` + `P?-65` together.** Same fix, same shape as slice 3b: point the window at
    `ApplyRelationshipRequest`/`ApplyGroupRequest` and the single `CopierConfigFile`. Doing 64
    without 65 leaves a UI that persists correctly and destroys the payload on the way.
-3. **MCP wrapper**, which is what makes 4 testable the way this repo prefers. Add the missing
-   `GET` on `/api/copier/config` in the same change (§5.3) — without it the live copier config
-   cannot be read without writing to it.
-4. **UI redesign**, on top of a UI that no longer loses or destroys config.
-5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
+4. **MCP wrapper + the `GET` on `/api/copier/config`** (§5.3), which is what makes 5 testable the way
+   this repo prefers. **Fold `P1-69` into this**: the read path and the persistence are the same
+   problem, and a measured slippage figure nobody can read is worth exactly zero.
+5. **UI redesign**, on top of a UI that no longer loses or destroys config.
+6. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
@@ -3464,3 +3477,108 @@ docs-only commits, which would have trained everyone to bypass it. **Two rounds 
 check wrong.** The pattern is not carelessness, it is that *"I verified it"* is a claim of the same
 kind as *"it is mirrored into X"*: it names an outcome without naming the conditions. Record the
 conditions, and make the gate fail in front of you at least once. §5.10 has the detail.
+
+---
+
+## 5.13 Session 19 — 2026-08-13: THE LIVE VALIDATION. `P0-63` trails, `P?-66` measures, and four new defects
+
+**One 1-lot MNQ round trip on `Sim101 -> Sim-ORB`, RiskGuard in `shadow`.** The cheapest item on the
+board, and it settled two open questions and opened four. Everything below is quoted from
+`interventions.jsonl`; timestamps are ET on 2026-08-13.
+
+### ✅ `P0-63` IS VALIDATED LIVE. The mirrored stop trails.
+
+First time the fix has been exercised outside the suite. The sequence, in order:
+
+| Time | Account | Event | What it proves |
+|---|---|---|---|
+| 11:52:51 | Sim-ORB | `ORDER_UPDATE` `ChangePending` **@29830.75** | NT8 shows the *caller's desired* price the instant `Change()` is called |
+| 11:52:51 | Sim-ORB | `COPIER_BRACKET_MODIFIED` "stop moved to 1@29830.75 **in place** ... no cancel/replace, so no unprotected window" | the optimistic success line — **and it is wrong.** See `P1-70` |
+| 11:52:51 | Sim-ORB | `ORDER_UPDATE` `ChangeSubmitted` **@29820.75** | the provider settles it back. **This is `P0-63`, live** |
+| 11:52:51 | Sim-ORB | **`COPIER_BRACKET_STOP_CHANGE_IGNORED`** "provider ignored Change() for stop (still 1@29820.75, requested 1@29830.75); falling back to cancel-then-create" | **remedy 3's detection fires for the first time on a real broker path** |
+| 11:53:55 | Sim-ORB | **`COPIER_BRACKET_MODIFY_BYPASSED`** "provider ignored a previous Change() on Sim-ORB; falling back to cancel-then-create" | the account-level memory works: the next sync **spends no doomed `Change()` at all** |
+| 11:53:55 | Sim-ORB | `CancelSubmitted` (old) -> `Submitted @29830.75` (new) -> `Cancelled` (old) -> `Accepted @29830.75` | cancel-then-create, and the **new leg goes in before the old is confirmed gone** |
+| 11:53:55 | Sim-ORB | `FSM_TRANSITION` "stop COPIER_STOP Submitted -> **ProtectedPending (covered 1/1)**" | independent corroboration from the guard's FSM that **coverage never reached 0** |
+
+Final state: exactly **one** working follower stop at `29830.75`, matching the leader — new `orderId`
+and a **new OCO id** (`741e7930...`, was `b36843d8...`), which is the signature of a replacement
+rather than a modification. **No duplicate leg, no naked window, right price.**
+
+> ⚠️ **Read the first two rows together, because they are the trap §5.9 predicted.** NT8 leaves the
+> caller's desired values on the `Order` until the provider settles. A synchronous read-back would
+> have said *"it took"* — the log even contains that claim. Detection **on settle** is what made this
+> work, and it is the one refinement the evidence forced onto the operator's remedy-3 decision.
+
+### ✅ `P?-66` IS ANSWERED — the measurement works. The *reporting* never existed.
+
+Both fills measured, both figures real:
+
+```
+COPIER_FILL_MEASURED  entry: latency=142.86 ms, slippage=0 ticks
+COPIER_FILL_MEASURED  exit:  latency=314.21 ms, slippage=-4 ticks
+```
+
+**The entry's `0` is a TRUE zero** — leader and follower both filled at 29840.75 — and it sits beside
+a non-zero latency, which is exactly the distinction the instrumentation was built to make and the
+reason §5.2 says *do not read a zero as a pass*. The exit then produced a non-zero: `-4` ticks,
+**negative meaning FAVOURABLE**, because the follower sold at 29848.75 against the leader's 29847.75.
+That confirms the sign convention at `TradeCopierEngine.cs:3099-3102` on live data — *positive is
+always worse for the follower* — which no test could have established.
+
+So `P?-66` splits, and only half of it closes:
+
+| Half | Verdict |
+|---|---|
+| Is the metric computed on the live path? | ✅ **Yes.** Closed. |
+| Can anyone READ it? | ❌ **No.** New defect `P1-69`. |
+
+### 🆕 Four new defects, three found by looking at what the trade did NOT do
+
+**Numbers 68-71; the digits are reserved and never reused.** The bands are this session's triage.
+
+| ID | Band | What | Evidence |
+|---|---|---|---|
+| **`P0-68`** | **P0** | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change.** A **fourth** `Account.Change()` call site — in the bridge — carrying `P0-63`'s defect with **none of its detection.** Anything trailing a stop through MCP silently does not move. | Observed twice. First on the leader's stop mid-test. Then **reproduced in isolation** with no position, no copier, no ATM: a resting buy limit at 29500 was asked to move to 29450; the response said `"status": "modified"` and the order stayed `Working @29500`. ⚠️ **The response body carries `limitPrice: 29500` right next to `"status": "modified"` — the refutation is already in the payload and nothing reads it.** |
+| **`P1-69`** | P1 | **The copier's latency/slippage metrics are measured and then discarded.** `rel.LatencyMs` / `AvgSlippageTicks` are written to the in-memory relationship only; nothing persists them and there is no read path. | After two measured fills, `RiskGuard/copier_config.json` still reads `LatencyMs=0.0 AvgSlippageTicks=0.0`, with its **mtime unchanged from the previous day**. Compounded by two known defects: there is **no `GET` on `/api/copier/config`** (§5.3), and the UI reads a *different file* (`P?-64`). **Every consumer sees 0.** This is almost certainly what the original `P?-66` observation actually was. |
+| **`P1-70`** | P1 | **`BRACKET_MODIFIED` writes a false success line into the live audit log**, claiming "stop moved ... in place ... no cancel/replace, so no unprotected window" *before* the provider settles — then `BRACKET_STOP_CHANGE_IGNORED` contradicts it in the same millisecond. | Both lines are quoted in the table above. Same shape as the defect already fixed at `:3113-3119`, where `FILL_MEASURED` printed a stored value nothing had computed for that fill. **A log that states an outcome it has not yet observed is the thing this project keeps paying for.** |
+| **`P1-71`** | P1 | **A named active relationship produced no order and left no diagnosable trace.** `COPIER_COPY_BEGIN` logged *"2 active relationship(s): Sim-ORB, **SimCopy2**"* on both the entry and the exit. **Nothing followed for SimCopy2 — no order, no skip, no reason.** | `SimCopy2` exists (`provider: Simulator`, cash 98,140.50), is not quarantined, has no lockout, and stands at 1 trade of a `MaxTradesPerSession` of 8, so the obvious explanations are ruled out. **The cause is unreadable because every exit in that loop is invisible**: `followerAcc == null` (`:3408`) logs *nothing at all*, and the three `CanTrade` / `COPY_BLOCKED_NO_GUARD` blocks (`:3440`, `:3446`, `:3452`) go to `NinjaTrader.Code.Output.Process` **only** — not `CopierLog`, so not `interventions.jsonl`. That is precisely the sin the comment at `RiskGuardAddOn.cs:4435-4440` says was fixed for the copier. `nt_get_logs --tab Output` does not surface them either: it returns the guard's structured stream, not raw `Output.Process` lines. |
+
+### Two things that worked, stated plainly
+
+- **`shadow` is what made the test survivable, exactly as the pre-flight said.** The guard logged
+  `[SHADOW] Would execute action FlattenPosition triggered by MISSING_STOP_FLATTEN` twice: once for
+  the deliberately naked entry, once during the cancel-replace gap created on the leader. **Armed,
+  either would have flattened the position and destroyed the test rather than the defect** (§4p).
+- **`P0-50`'s orphan-stop release works.** The leader's exit copied, and the follower's mirrored stop
+  went `terminal (CancelSubmitted) -> Unprotected` -> `Cancelled` with the position. No orphan.
+
+### `P1-57`'s chain did NOT fire, so do not treat it as exercised
+
+`SimCopyTest1` received nothing. The `Sim101 -> Sim-ORB -> {SimCopyTest1, SimCopy2}` fan-out the
+pre-flight warns about is **live in configuration only** — the third-party copier was not running.
+`P1-57` stays open and stays unexercised; a future test must not assume today's blast radius.
+
+### Method note: the pre-flight paid for itself three times
+
+Reading the config and the code *before* trading predicted two behaviours that then happened, and
+disproved one suspicion for free:
+
+1. **Ruled out** `MaxSlippageTicks: 0.0` as a `P?-66` cause without spending a trade — `:3124` shows
+   it gates only the *quarantine* threshold, not the measurement.
+2. **Predicted the fan-out** from `GetActiveRelationshipsForLeader`, which filters on `IsEnabled`
+   **only**: `ArmedForLive` is checked later and blocks **non-Sim** followers alone (`:3413`). So
+   `SimCopy2` being `ArmedForLive: false` did *not* exclude it — which is why its silence is a defect
+   and not a setting.
+3. **Found `StealthMode` is dead config** — declared twice, copied, persisted in the remembered
+   subset, and **read by nothing**. A `P2-24` instance, recorded here rather than given its own ID.
+
+### Operational facts worth keeping
+
+- **The bridge's auth header is `Authorization: Bearer <token>`.** `X-Auth-Token` returns
+  `{"error":"Unauthorized: Invalid or missing Bearer token"}`. §4g named the token file but not the
+  header.
+- **`MaxAutoStopAttempts` is nested under `StopGuard`**, not top level, in the config response. §4g
+  uses its presence as the proof that post-T2 code is loaded; look in the right place.
+- **This box runs `PDT` (UTC-7) while the logs are stamped ET.** File mtimes therefore look 3 hours
+  behind the log timestamps. That is a timezone, not a stalled component — it briefly read as a dead
+  heartbeat during pre-flight.
