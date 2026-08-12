@@ -997,6 +997,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCM3_AnUnknownGroupIsStillCreated();
             TestCM3_APartialUpdateCannotArmForLive();
             TestCM3_AnUnrelatedEditDoesNotSilentlyDisarm();
+
+            // P1-74: which camelCase argument names the request path actually honours.
+            // The MCP wrapper is a separate repo with its own tests; those pin the JSON
+            // it EMITS, and can say nothing about whether this engine reads it. These do.
+            TestP1_74_EveryDocumentedCamelCaseArgumentReachesTheRelationship();
+            TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped();
+            TestP1_74_QuarantineIsSettableThroughTheRequestPath();
+
+            // P1-75: LoadFromDisk disarms, so no READ path may call it.
+            TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem();
             TestCM3_AMalformedRequestDoesNotDestroyTheStoredGroup();
 
             // CM4: cross-instrument ratio rules, slice 2 -- RED until the fix lands
@@ -13248,6 +13258,179 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(merged != null && merged.MaxSlippageTicks == 2.5, "MaxSlippageTicks survived");
             Assert(engine.GetRelationships().Count(r => r.FollowerAccountName == "Cm2Follower") == 1,
                 "the merge upserted rather than appending a duplicate relationship");
+        }
+
+        // ── P1-74 ────────────────────────────────────────────────────────────────
+        //
+        // `nt_copier_config` advertised an `autoConversion` argument whose description
+        // named the exact feature that dropped a live copy on 2026-08-13 (MNQ->NQ
+        // conversion). The engine's field is `AutoSymbolConversion`, and `autoConversion`
+        // is not in ConfigAliasMap, so Json.NET's PopulateObject ignored it as an unknown
+        // member: the parameter had never done anything, and the caller got success.
+        //
+        // These three tests exist because the wrapper lives in another repo. Its own
+        // tests pin the JSON it emits; only a test HERE can say whether this engine
+        // honours those key names. A wrapper verified against my reading of an alias map
+        // is a wrapper verified against nothing.
+
+        private static void TestP1_74_EveryDocumentedCamelCaseArgumentReachesTheRelationship()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-74: every camelCase argument the MCP tool sends lands on the relationship");
+
+            var engine = new TradeCopierEngine();
+            engine.UpsertRelationship(Cm2Relationship());
+
+            // Exactly the body lib/copier-config-request.js builds for a full `set`.
+            var merged = engine.ApplyRelationshipRequest(JObject.Parse(@"{
+                ""leaderAccount"": ""Cm2Leader"",
+                ""followerAccount"": ""Cm2Follower"",
+                ""quantityRatio"": 2.5,
+                ""autoSymbolConversion"": false,
+                ""sizingMode"": ""QuantityRatio"",
+                ""perTickerRatios"": { ""NQ"": 2.0 },
+                ""customSymbolMappings"": { ""MNQ"": ""NQ"" },
+                ""maxSlippageTicks"": 8.0,
+                ""dailyLossLimit"": 500.0,
+                ""isEnabled"": true,
+                ""maxPositionSize"": 42,
+                ""stealthMode"": true,
+                ""mode"": ""Executions""
+            }"), false);
+
+            Assert(merged != null, "the request produced a relationship");
+            Assert(merged != null && merged.QuantityRatio == 2.5, "quantityRatio");
+            Assert(merged != null && merged.AutoSymbolConversion == false,
+                "autoSymbolConversion -- the name P1-74 corrected the wrapper to send");
+            Assert(merged != null && merged.SizingMode == CopierSizingMode.QuantityRatio, "sizingMode");
+            double nq = 0.0;
+            Assert(merged != null && merged.PerTickerRatios != null
+                   && merged.PerTickerRatios.TryGetValue("NQ", out nq) && nq == 2.0, "perTickerRatios");
+            string mapped = null;
+            Assert(merged != null && merged.CustomSymbolMappings != null
+                   && merged.CustomSymbolMappings.TryGetValue("MNQ", out mapped) && mapped == "NQ",
+                "customSymbolMappings");
+            Assert(merged != null && merged.MaxSlippageTicks == 8.0, "maxSlippageTicks");
+            Assert(merged != null && merged.DailyLossLimit == 500.0, "dailyLossLimit");
+            Assert(merged != null && merged.IsEnabled, "isEnabled");
+            Assert(merged != null && merged.MaxPositionSize == 42, "maxPositionSize");
+            Assert(merged != null && merged.StealthMode, "stealthMode");
+            Assert(merged != null && merged.Mode == CopierExecutionMode.Executions, "mode");
+        }
+
+        private static void TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-74: `autoConversion` is NOT a field -- it is dropped, which is the defect");
+
+            var engine = new TradeCopierEngine();
+            var seed = Cm2Relationship();
+            seed.AutoSymbolConversion = true;
+            engine.UpsertRelationship(seed);
+
+            // The exact body the OLD wrapper sent to turn conversion off.
+            var merged = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Cm2Leader"",""followerAccount"":""Cm2Follower"",""autoConversion"":false}"), false);
+
+            Assert(merged != null && merged.AutoSymbolConversion,
+                "STILL TRUE: `autoConversion` is not a member of CopierRelationship and is ignored. "
+                + "This test pins the defect, not a fix -- the remedy is in the wrapper, which now "
+                + "sends `autoSymbolConversion`. If this ever starts failing, the engine grew an "
+                + "alias and the wrapper's translation can be simplified.");
+
+            // And the corrected name does what the caller meant, on the same relationship.
+            var corrected = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Cm2Leader"",""followerAccount"":""Cm2Follower"",""autoSymbolConversion"":false}"), false);
+            Assert(corrected != null && corrected.AutoSymbolConversion == false,
+                "the corrected key turns conversion off, so the wrapper's fix is sufficient");
+        }
+
+        private static void TestP1_74_QuarantineIsSettableThroughTheRequestPath()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-74/P1-72: isQuarantined and quarantineReason arrive through `set`");
+
+            var engine = new TradeCopierEngine();
+            engine.UpsertRelationship(Cm2Relationship());
+
+            // P1-72's remedy depends on this: the bridge has no `quarantine` branch, so
+            // the wrapper resolves the action to `set` + isQuarantined. If these two keys
+            // did not arrive, the wrapper would be a second no-op dressed as a fix.
+            var quarantined = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Cm2Leader"",""followerAccount"":""Cm2Follower"",""isQuarantined"":true,""quarantineReason"":""slippage""}"), false);
+
+            Assert(quarantined != null && quarantined.IsQuarantined, "isQuarantined arrived");
+            Assert(quarantined != null && quarantined.QuarantineReason == "slippage",
+                "quarantineReason arrived -- note it is NOT in ConfigAliasMap, so this also "
+                + "pins that Json.NET matches members case-insensitively");
+
+            var stored = engine.GetRelationships().FirstOrDefault(r => r.FollowerAccountName == "Cm2Follower");
+            Assert(stored != null && stored.IsQuarantined, "the ENGINE's copy is quarantined, not just the return value");
+            Assert(!engine.GetActiveRelationshipsForLeader("Cm2Leader").Any(r => r.FollowerAccountName == "Cm2Follower"),
+                "and a quarantined relationship is excluded from the active set, so it stops copying entries");
+
+            var released = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Cm2Leader"",""followerAccount"":""Cm2Follower"",""isQuarantined"":false}"), false);
+            Assert(released != null && released.IsQuarantined == false, "unquarantine clears it");
+            Assert(engine.GetActiveRelationshipsForLeader("Cm2Leader").Any(r => r.FollowerAccountName == "Cm2Follower"),
+                "and it is active again");
+        }
+
+        // ── P1-75 ────────────────────────────────────────────────────────────────
+        //
+        // Found while enumerating every LoadFromDisk call site after P1-69 turned out
+        // to have been fixed in only ONE of the bridge's two copier read branches.
+        //
+        // PropFirmProtectionSuite.LoadFromDisk calls UpdateConfig(cfg) with no
+        // confirmLive, and UpdateConfig's safety gate forces ArmedForLive to false
+        // without it. That gate is CORRECT -- coming up armed from a file is exactly
+        // what it prevents. The defect is that the bridge's PropLimits `get` branch
+        // calls LoadFromDisk, so READING the prop-firm rules silently DISARMS them.
+        // Enforcement stops because somebody looked.
+        //
+        // This test pins the disarm-on-reload behaviour so the remedy stays "no read
+        // path may reload" rather than "weaken the gate", which would let an armed
+        // config load itself at startup.
+        private static void TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem()
+        {
+            Console.WriteLine();
+            Console.WriteLine("[TEST] P1-75: LoadFromDisk DISARMS prop limits, so a read must never call it");
+
+            string file = Path.Combine(Path.GetTempPath(), "test_p1_75_prop_limits.json");
+            var suite = PropFirmProtectionSuite.Instance;
+
+            try
+            {
+                // Arm it the way the bridge's `set` branch does: explicit confirmation.
+                var armed = new PropFirmProtectionConfig { ArmedForLive = true, EvaluationTargetProfit = 4200.0 };
+                suite.UpdateConfig(armed, true);
+                Assert(suite.Config.ArmedForLive, "armed in memory, with confirmLive");
+
+                suite.SaveToDisk(file);
+                Assert(File.Exists(file), "and persisted");
+                string onDisk = File.ReadAllText(file);
+                Assert(onDisk.IndexOf("\"ArmedForLive\": true", StringComparison.OrdinalIgnoreCase) >= 0
+                       || onDisk.IndexOf("\"ArmedForLive\":true", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "the FILE says armed -- so a reload is not restoring a disarmed state, it is discarding an armed one");
+
+                // Exactly what the bridge's read branch did.
+                suite.LoadFromDisk(file);
+
+                Assert(suite.Config.ArmedForLive == false,
+                    "P1-75: a reload DISARMED it. UpdateConfig's gate fires because LoadFromDisk "
+                    + "cannot pass confirmLive -- correct for startup, catastrophic for a read path. "
+                    + "The remedy is that no READ calls LoadFromDisk (bridge PropLimits + copier "
+                    + "get_groups), NOT relaxing this gate.");
+                Assert(suite.Config.EvaluationTargetProfit == 4200.0,
+                    "the rest of the config survived, which is why this is easy to miss: only the "
+                    + "one field that decides whether anything is ENFORCED was lost");
+            }
+            finally
+            {
+                // Leave the singleton disarmed and clean -- it is shared across tests.
+                suite.UpdateConfig(new PropFirmProtectionConfig(), false);
+                try { File.Delete(file); } catch {}
+            }
         }
 
         private static void TestCM3_TheMatrixIsSettableThroughTheBridgeAtAll()
