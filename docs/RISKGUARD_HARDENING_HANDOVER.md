@@ -2797,6 +2797,11 @@ were triaged.
 
 ## 5.1 Open defects, by band
 
+> ✅ **`P0-67`, `P0-68`, `P1-69`, `P1-70` and `P1-71` were all FIXED, DEPLOYED and (where
+> observable) LIVE-VALIDATED on 2026-08-13 — §5.14.** They are struck from the table below rather
+> than deleted, because the digits are never reused. Suite **1003/0**, five mutation batteries,
+> 0 survivors. Core is tag **`v1.1.0`**, bridge pin bumped to match.
+
 | ID | What | Band | Notes |
 |---|---|---|---|
 | **`P0-68`** | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13, and now the highest open defect.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
