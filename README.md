@@ -23,10 +23,12 @@ docs/       hardening plan (the defect index), session handover, design docs
 
 ```bash
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build     # 953 passed / 0 failed
+dotnet run --project tests/RiskGuardTests.csproj --no-build     # 1003 passed / 0 failed
 python mutation/mutate_cm3.py                                   # 14 mutants, all killed
 python mutation/mutate_cm4.py                                   # 10 mutants, all killed
 python mutation/mutate_p0_63.py                                 #  7 mutants, all killed
+python mutation/mutate_p1_71.py                                 #  9 mutants, all killed
+python mutation/mutate_p0_67.py                                 # 10 mutants, all killed
 ```
 
 The suite is a plain `Main()` that calls every test method; there is no test framework.
@@ -102,8 +104,8 @@ repos become mutually recursive and the split is dead.
 ## Status
 
 This code manages real money on live funded accounts, and it is **not finished hardening**.
-**71 defect IDs; 52 closed, 19 open.** Tag `v1.0.2` is the deployed code, live in NT8 in
-`shadow` mode; suite 953/0.
+**71 defect IDs; 57 closed, 14 open.** Tag `v1.1.0` is the deployed code, live in NT8 in
+`shadow` mode; suite 1003/0, five mutation batteries with 0 survivors.
 
 **`P0-63` was validated live on 2026-08-13** by one 1-lot MNQ round trip on `Sim101 -> Sim-ORB`.
 `Account.Change()` being a silent no-op meant the mirrored stop had **never trailed**; the log
@@ -111,12 +113,15 @@ now shows the provider ignoring the change, the fallback detecting it on settle,
 replaced at the correct price with no unprotected window and no duplicate leg. `P?-66` closed
 in the same trade: both fills measured (142.86 ms / 0 ticks entry, 314.21 ms / -4 ticks exit).
 
-That trade also opened **four new defects**, which is the usual return here. The highest is
-**`P0-68`**: `nt_change_order` reports `"status": "modified"` when the provider ignored the
-change -- the **fourth** `Account.Change()` call site, and the only one with no verification of
-any kind, so **nothing can currently trail a stop through MCP**. `P0-67` is the third site.
-Fix them together; one root cause.
+That trade opened four new defects, and **all four are now fixed, deployed and -- where a live
+check is possible -- live-validated**, together with `P0-67` and a sixth defect the work
+uncovered (two `Change()` calls landing on one stop order in a single sweep, which reverts it).
+`nt_change_order` no longer claims `"modified"` without observing it; the copier's audit log can
+no longer drop a copy in silence; and the latency/slippage metrics are readable over a GET. See
+the handover's section 5.14.
 
-**Read the handover before trusting any of it** -- in particular §5.13, and note that the
-copier's latency/slippage figures are still unreadable by every consumer (`P1-69`) even though
-they are now known to be computed correctly.
+The highest open defects are now **`P?-64`/`P?-65`**: the copier UI writes to a different file
+than anything reads, so every UI change is lost on restart, and its two save sites destroy the
+ratio matrix.
+
+**Read the handover before trusting any of it** -- in particular sections 5.13 and 5.14.

@@ -44,15 +44,15 @@ Every row was checked, not carried forward. The command that checks it is in the
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **953 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **71 IDs — 52 closed, 19 open.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13) | — |
+| **Suite** | **1003 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **71 IDs — 57 closed, 14 open.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13) | — |
 | **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite | §5.13 |
 | **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
-| **Deployed** | **`v1.0.2` code is live in NT8.** 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
+| **Deployed** | **`v1.1.0` code is live in NT8** (was `v1.0.2`; §5.14).** 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
 | **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
-| **Mutation** | 3 batteries, **31 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py` |
+| **Mutation** | **5 batteries, 50 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py`, `mutate_p1_71.py`, `mutate_p0_67.py` |
 | **CI** | ✅ **Active in both repos** since 2026-08-13, `windows-latest`, every push and PR. Runs all of the above except deploy parity, in 4m39s. **Watched fail on purpose**, not just pass | `gh run list -R vinay-veerappa/nt8-riskguard -L 3` |
 
 > ⚠️ **There are THREE disagreeing version identifiers on this box, and none of them is wrong by
@@ -2786,8 +2786,8 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 | Numbered entries in the plan | **68** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
 | **Total IDs** | **71** | 4 opened by the live validation, §5.13 |
-| **Open** | **19** | the 17 in §5.1 + `P?-64`, `P?-65`. **`P?-66` closed 2026-08-13** |
-| **Closed or superseded** | **52** | 68 − 17, plus `P?-66` |
+| **Open** | **14** | §5.1 + `P?-64`, `P?-65`. **`P?-66` and five more closed 2026-08-13** (§5.13, §5.14) |
+| **Closed or superseded** | **57** | `P0-67`, `P0-68`, `P1-69`, `P1-70`, `P1-71` closed in §5.14 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -2804,11 +2804,11 @@ were triaged.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| **`P0-68`** | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13, and now the highest open defect.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
-| **`P0-67`** | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
-| **`P1-69`** | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
-| **`P1-70`** | **`BRACKET_MODIFIED` writes a false success line to the audit log** before the provider settles, and is contradicted milliseconds later | P1 | **NEW 2026-08-13.** Not naked risk — the detection catches the underlying no-op — but a live audit log that asserts "no unprotected window" before it can know is how the last three sessions lost time |
-| **`P1-71`** | **A named active relationship produced no order and left no diagnosable trace** (`SimCopy2`) — four unlogged exits in the copy loop | P1 | **NEW 2026-08-13.** `followerAcc == null` logs nothing; three `CanTrade`/`NO_GUARD` blocks log to the Output tab only, which no readable sink captures. Route them through `CopierLog` — the fix is mechanical and the payoff is that this class stops being invisible |
+| ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13, and now the highest open defect.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
+| ~~**`P0-67`**~~ ✅ | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
+| ~~**`P1-69`**~~ ✅ | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
+| ~~**`P1-70`**~~ ✅ | **`BRACKET_MODIFIED` writes a false success line to the audit log** before the provider settles, and is contradicted milliseconds later | P1 | **NEW 2026-08-13.** Not naked risk — the detection catches the underlying no-op — but a live audit log that asserts "no unprotected window" before it can know is how the last three sessions lost time |
+| ~~**`P1-71`**~~ ✅ | **A named active relationship produced no order and left no diagnosable trace** (`SimCopy2`) — four unlogged exits in the copy loop | P1 | **NEW 2026-08-13.** `followerAcc == null` logs nothing; three `CanTrade`/`NO_GUARD` blocks log to the Output tab only, which no readable sink captures. Route them through `CopierLog` — the fix is mechanical and the payoff is that this class stops being invisible |
 | `P1-57` | We would mirror another copier's mirror; the "not ours" test is a name substring | P1 | Live on this box: a third-party copier fans `Sim101 → Sim-ORB → {SimCopyTest1, SimCopy2}` copying names verbatim |
 | `P1-13` | Guard evaluation on the WPF dispatcher — **threading half only** | P1 | The fail-open half is closed |
 | `P2-24` | Written-but-never-called safety machinery | P2 | |
@@ -2919,23 +2919,21 @@ deployed; everything else shifts up unchanged.
 0. ~~**Live-validate what is already deployed**~~ ✅ **DONE 2026-08-13 — §5.13.** `P0-63` trails on a
    real broker path; `P?-66` is answered and closed. It cost one 1-lot MNQ round trip and produced
    four new defects, which is the return this project keeps getting from a live trade over a test.
-1. **`P0-68` + `P0-67` together** ← **the next code work.** They are the **third and fourth**
-   `Account.Change()` call sites and they share `P0-63`'s root cause, so fix them as one change and
-   reuse the settle-then-verify that is already written and now live-proven. `P0-68` first: it is
-   reproducible in ten seconds with no position, and until it is fixed **no agent or strategy can
-   trail a stop through MCP** — the call reports success and does nothing. For `P0-67`, establish
-   whether the `DynamicAtmManager` path is live at all; if it is dead code, say so and close it.
-2. **`P1-71`** — route the copy loop's four silent exits through `CopierLog`. Mechanical, and it is
-   what turns "SimCopy2 got nothing and we cannot say why" into a one-line answer. Do it **before**
-   the next live test, so the next silence is diagnosable.
-3. **`P?-64` + `P?-65` together.** Same fix, same shape as slice 3b: point the window at
-   `ApplyRelationshipRequest`/`ApplyGroupRequest` and the single `CopierConfigFile`. Doing 64
-   without 65 leaves a UI that persists correctly and destroys the payload on the way.
-4. **MCP wrapper + the `GET` on `/api/copier/config`** (§5.3), which is what makes 5 testable the way
-   this repo prefers. **Fold `P1-69` into this**: the read path and the persistence are the same
-   problem, and a measured slippage figure nobody can read is worth exactly zero.
-5. **UI redesign**, on top of a UI that no longer loses or destroys config.
-6. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
+1. ~~**`P0-68` + `P0-67` together**~~ ✅ **DONE 2026-08-13 — §5.14**, along with `P1-69`, `P1-70` and
+   `P1-71`. All five are deployed as core `v1.1.0` + bridge, and `P0-68`/`P1-69`/`P1-71` were
+   live-validated. A sixth defect (two `Change()` calls on one stop order in a single sweep) was found
+   by the `P0-67` trail test and fixed in the same change.
+2. **`P?-64` + `P?-65` together** ← **the next code work.** The copier UI writes to a different file
+   than anything reads, and its two save sites destroy the ratio matrix. Same fix, same shape as slice
+   3b: point the window at `ApplyRelationshipRequest`/`ApplyGroupRequest` and the single
+   `CopierConfigFile`. Doing 64 without 65 leaves a UI that persists correctly and destroys the
+   payload on the way. ⚠️ `TradeCopierWindow.cs` is excluded from `RiskGuardTests.csproj`, so the
+   mapping must go on the ENGINE or it cannot be pinned by an executed test.
+3. **MCP wrapper.** ✅ The `GET` on `/api/copier/config` and `P1-69` are **done** (§5.14) — what
+   remains is `nt_copier_config`'s own argument surface, which still cannot express `sizingMode`,
+   `perTickerRatios`, `customSymbolMappings`, `maxSlippageTicks` or any group action.
+4. **UI redesign**, on top of a UI that no longer loses or destroys config.
+5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
@@ -3587,3 +3585,122 @@ disproved one suspicion for free:
 - **This box runs `PDT` (UTC-7) while the logs are stamped ET.** File mtimes therefore look 3 hours
   behind the log timestamps. That is a timezone, not a stalled component — it briefly read as a dead
   heartbeat during pre-flight.
+
+---
+
+## 5.14 Session 20 — 2026-08-13: all five defects from the live trade, fixed and deployed
+
+**`P0-67`, `P0-68`, `P1-69`, `P1-70`, `P1-71` — closed, deployed as core `v1.1.0` + bridge, and
+live-validated where a live check is possible.** Suite **1003/0** (was 953 at the start of the day),
+**five** mutation batteries, 0 survivors.
+
+Not run through the agent loop. These were five small fixes with one root cause between them, on code
+whose failure modes had just been observed live — localisation was not the hard part, and the loop's
+value is localisation. Recorded so the choice is visible rather than assumed.
+
+### What each fix actually was
+
+| Defect | The fix, and the thing worth remembering |
+|---|---|
+| **`P1-71`** | Every relationship named in `COPY_BEGIN` now produces **exactly one terminal outcome event**, by naming convention (`COPY_SUBMITTED` / `COPY_SKIPPED_*` / `COPY_BLOCKED_*` / `COPY_FAILED_*`) rather than a hard-coded list — so a skip path added next year is counted automatically. **The entry said five unlogged exits; there were fourteen**, three of them completely silent. Two sites *outside* the copy loop were routed too, and both are worse than anything inside it: `SLIPPAGE_QUARANTINE`, which **blocks every future entry**, and `RECONCILER_DIRECTION_MISMATCH`, which **flattens a live follower position** — a broker action with no audit-log entry. |
+| **`P1-70`** | `BRACKET_MODIFY_REQUESTED` before the broker call; `BRACKET_MODIFY_CONFIRMED` only on settle, printing the **settled** values and flagging a partial honour. |
+| **`P0-67`** | `CurrentStopPrice` is now assigned **only from the live order**, in `ReconcileStopFromBroker` at the top of every sweep. A polling monitor does not need settle events — it needs to stop trusting its own writes. `ModifyStopPrice` returns a result instead of `void`-and-swallow, so "moved", "no such order" and "threw" are distinguishable. Refusals are counted and bounded at 3. |
+| **`P0-68`** | The bridge remembers the pre-change values, requests, waits a bounded **1500 ms** for settle, and reports what it **observed**: `modified` / `partially_modified` / `change_ignored` / `change_pending`. `change_pending` claims nothing. The response carries `requested`/`observed`/`before` blocks, and every outcome goes to `interventions.jsonl`. |
+| **`P1-69`** | Two things. `GET` added to `/api/copier/config`. And — the part the defect entry got wrong — **the `get` action was calling `LoadFromDisk`, which REPLACES the in-memory relationships that `ObserveFollowerFill` writes its measurements onto. Reading the config destroyed the thing being read.** A read must not mutate. |
+
+### 🆕 One new defect, found by a test rather than by reading
+
+Writing the bounded-retry test for `P0-67`'s **trailing** path (which nothing had ever exercised)
+turned up a second live defect at the same call site: in the `ScaledRunner` branch the breakeven move
+and the trailing move can **both fire in one sweep**, so two `Change()` calls landed on the same stop
+order back to back. Per the NT8 semantics a controlled live trade established on 2026-08-10
+(`P0-61`), **a second change while one is in flight is dropped AND reverts the order** — it ends at
+neither request's values. So the flood the attempt cap was meant to prevent was also silently undoing
+itself.
+
+Fixed in the same change: **one outstanding stop move per bracket**, the same reservation the copier
+keeps with `bracket.StopInFlight`. Folded into `P0-67` rather than given its own ID, because it is the
+same site, the same root cause, and was never open.
+
+### The live validations
+
+**`P0-68`** — the identical call that failed twice this morning:
+
+```
+BEFORE:  {"status": "modified",       "limitPrice": 29500}   # asked for 29450. Never moved.
+AFTER:   {"status": "change_ignored", "requested": {"limitPrice": 29450},
+                                      "observed":  {"limitPrice": 29500}}
+```
+
+…and now in `interventions.jsonl` as `BRIDGE_ORDER_CHANGE_CHANGE_IGNORED`.
+
+**`P1-69`** — one 1-lot MNQ copy, then a plain HTTP `GET`:
+
+```
+Sim101 -> Sim-ORB    latency=142.8423 ms  avgSlip=0.0 ticks
+```
+
+⚠️ **The first `GET` after deploying returned `0.0`** — the recompile had reset the session — which is
+exactly the trap the new `metricsNote` warns about, met immediately, by me.
+
+**`P1-71`, in production, on the exact case that motivated it.** `SimCopy2` had been named active and
+then dropped in silence, undiagnosably, for a whole session. Minutes after deploying:
+
+```
+COPIER_COPY_SKIPPED_SUB_MINIMUM: scaled quantity for NQ SEP26 on 'SimCopy2' came out
+below 1 contract from leader qty 1 (ratio 1, sizing QuantityRatio); nothing placed.
+```
+
+**Read the instrument: `NQ SEP26`, not MNQ.** That relationship has `AutoSymbolConversion: true`, so
+1 MNQ translated to NQ at ratio 1.0 rounds below one contract and is dropped. The relationship is
+**effectively non-functional for micros**, which is a configuration finding nobody could have reached
+before, and which no test would have produced. It is not a new code defect; it is the answer.
+
+### What the mutation batteries caught, because this is the part that keeps paying
+
+Two new batteries (`mutate_p1_71.py`, `mutate_p0_67.py`) — **19 mutants, 0 survivors** after four
+rounds of fixing what they found. Every test in this session was written *alongside* its fix and had
+therefore never been watched to fail; the batteries are the only thing that made "these tests work" a
+measurement instead of a claim. They found, in order:
+
+1. **Both "inflate the count" mutants survived.** Renaming a *non-terminal* event into the terminal
+   convention was unpinned — so a quarantined or clamped copy could report two outcomes and let a
+   second relationship drop in silence while the totals looked right. Two tests added.
+2. **A defect in the battery itself**: a mutant that *crashed* the runner produced no result line and
+   was scored a **SURVIVOR**. A crash is a kill. Fixed in both new batteries.
+3. **A test dereferencing a null after `Assert`** — which records a failure and *returns* rather than
+   halting — aborting every test after it. Guarded.
+4. **A broken mutant that read as a missing test.** The `P0-67` mutant meant to reinstate the defect
+   verbatim read `bracket.RequestedStopPrice` *after* the reconcile resets it to `NaN`, so it could
+   not change behaviour and survived. That looks identical to "your tests are decorative" until you
+   read it. **A mutant that cannot fail is as useless as a test that cannot fail**, and it is the same
+   error one level up.
+
+### One suite gap closed, one narrowed and named
+
+`mutate_p0_63.py` recorded two gaps. The settled-vs-requested divergence is now pinned via a new stub
+flag (`SimulateChangeSettlesOneTickAway` — a provider rounding to a tick boundary, which is ordinary
+behaviour). ⚠️ **The QUANTITY-refusal shape is still NOT covered** — `P0-62`'s exact live trace. Three
+attempts to make the mirrored stop *grow* all left the request at qty 1, because the size comes from
+`Math.Min(qty, livePos.Quantity)` where `qty` is the **bracket's** recorded quantity. `mutate_p1_71.py`
+records where to start, and it is **not** in the test.
+
+### Two log-design rules that came out of this
+
+1. **A message must not name other event types.** `grep BRACKET_MODIFY_CONFIRMED interventions.jsonl`
+   matched the `REQUESTED` line that merely mentioned it in a "watch for…" hint. In a file whose
+   entire purpose is post-hoc grepping, that is a defect. Tests now have `LoggedEventType` for
+   absence assertions, which matches the type rather than the whole line.
+2. **A message must not overstate its own outcome.** `deploy.py` printed `[FATAL] the vendored core is
+   STALE` and then exited 0 on `--verify`/`--dry-run`, where nothing is blocked. It says `WARN` unless
+   it is actually refusing. Same defect class as `P1-70`, in the tool that reports on it.
+
+### The sync rule earned its keep, mechanically
+
+The core moved to `v1.1.0` while the bridge pin sat at `v1.0.3`, and `deploy.py` **refused the
+deploy** — correctly, because deploying the bridge would have shipped a `v1.0.3` core over the top of
+three live fixes and silently reverted them. Tag core → push → bump pin → push → deploy → recompile,
+in that order, because a submodule cannot pin a tag that only exists locally.
+
+**Minor, not patch:** `BRACKET_MODIFIED` and `BRACKET_TARGET_MODIFIED` no longer exist. Anything
+parsing the log for them finds nothing, and that is a breaking change for a log consumer.

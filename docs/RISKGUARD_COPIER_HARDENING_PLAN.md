@@ -10,7 +10,7 @@
 > would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
 
 **Status** (2026-08-13, tag `v1.0.2` deployed, suite **953 passed / 0 failed**):
-**52 of 71 closed.** Live in NT8, `shadow`, armed and guarding; NT8 compiles clean (0 errors, net48).
+**57 of 71 closed.** Live in NT8, `shadow`, armed and guarding; NT8 compiles clean (0 errors, net48).
 
 **`P0-63` AND `P?-66` WERE VALIDATED LIVE on 2026-08-13** by a single 1-lot MNQ round trip on
 `Sim101 -> Sim-ORB` — the mirrored stop trailed for the first time on a real broker path, and both
@@ -18,9 +18,15 @@ fills measured (`142.86 ms / 0 ticks` entry, `314.21 ms / -4 ticks` exit). `P?-6
 handover §5.13 has the event-by-event record.
 
 That one trade also opened **four new defects** (`P0-68`, `P1-69`, `P1-70`, `P1-71`), which is the
-return this project keeps getting from a live trade over a test. Highest open defect:
-**`P0-68`** — `nt_change_order` reports `"status": "modified"` when the provider ignored the change,
-the **fourth** `Account.Change()` site and the only one with no verification at all.
+return this project keeps getting from a live trade over a test. ✅ **All four, plus `P0-67`, were FIXED and DEPLOYED the same day as core `v1.1.0` + bridge** —
+handover §5.14. `P0-68`, `P1-69` and `P1-71` are live-validated; `P1-71` was validated *on the exact
+case that motivated it*, and the answer turned out to be a symbol-conversion/sizing interaction
+(1 MNQ translated to NQ at ratio 1.0 rounds below one contract). A sixth defect was found by the
+`P0-67` trail test and fixed in the same change: two `Change()` calls landing on one stop order in a
+single sweep, which per `P0-61` reverts the order.
+
+Highest open defects are now **`P?-64`/`P?-65`** — the copier UI writes to a file nothing reads, and
+its save sites destroy the ratio matrix.
 
 **For "what is left?" read the handover's
 [§5, THE OPEN BACKLOG](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-13),
@@ -52,12 +58,12 @@ but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
-| **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **2** | Open: **`P0-68`** (the fourth `Change()` site, in the bridge — reports success on a no-op) and **`P0-67`** (the third, in `DynamicAtmManager` — caches the refused price). **Fix them together**; one root cause, and `P0-63`'s remedy is written and now live-proven. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-71` | 31 | **5** | Open: **`P1-69`** (metrics computed then discarded — `P?-66`'s reporting half), **`P1-70`** (`BRACKET_MODIFIED` asserts success before settle), **`P1-71`** (four unlogged exits hid a dropped copy), **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
+| **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-71` | 31 | **2** | ✅ `P1-69`, `P1-70`, `P1-71` all closed 2026-08-13 (§5.14); two of the three are live-validated. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**, `OnExecution` is covered but CI is still parked and `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are excluded from the test build. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
-| | | **71** | **19** | **52 closed or superseded** |
+| | | **71** | **14** | **57 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -920,7 +926,7 @@ read the wrong layer. **Advertised by the connection ≠ honoured by the provide
 
 ---
 
-### P0-67. `DynamicAtmManager` has the THIRD `Account.Change()` call, and its cache records the price the broker refused — OPEN
+### P0-67. `DynamicAtmManager` has the THIRD `Account.Change()` call, and its cache records the price the broker refused — ✅ FIXED 2026-08-13 (v1.1.0)
 *(found 2026-08-13 by grepping for `.Change(` across `addons/` instead of trusting `P0-63`'s "Where" clause, which named the two copier leg syncs and `McpBridgeAddOn.ChangeOrder` and missed this one entirely.)*
 
 **Where**: `addons/DynamicAtmManager.cs:622`, inside `ModifyStopPrice`, reached from both
@@ -975,7 +981,7 @@ left out of `P0-63`'s ticket rather than bolted on. At minimum, and in this orde
 
 ---
 
-### P0-68. `nt_change_order` reports `"status": "modified"` when the provider ignored the change — OPEN
+### P0-68. `nt_change_order` reports `"status": "modified"` when the provider ignored the change — ✅ FIXED + LIVE-VALIDATED 2026-08-13
 
 *(found 2026-08-13 during the live validation of `P0-63`, by trying to trail a leader stop through
 MCP and watching it not move. Handover §5.13.)*
@@ -1015,7 +1021,7 @@ success: compare the settled values against the request and say which fields did
 they have four different levels of rigour. The class fix is one verified helper that every site calls
 — see [[fix-the-class-not-the-instance]] reasoning in §7 — not a fourth bespoke check.
 
-### P1-69. The copier's latency and slippage metrics are computed, then discarded — OPEN
+### P1-69. The copier's latency and slippage metrics are computed, then discarded — ✅ FIXED + LIVE-VALIDATED 2026-08-13
 
 *(found 2026-08-13 by the live validation. This is the half of `P?-66` that did NOT close.)*
 
@@ -1046,7 +1052,7 @@ or expose them read-only over the endpoint and leave the file alone.
 cannot be read is indistinguishable from a number that was never computed — and for two sessions it
 was diagnosed as the latter.
 
-### P1-70. `BRACKET_MODIFIED` writes a false success line into the live audit log — OPEN
+### P1-70. `BRACKET_MODIFIED` writes a false success line into the live audit log — ✅ FIXED 2026-08-13 (v1.1.0)
 
 *(found 2026-08-13 by the live validation, in the log of the trade that proved `P0-63` works.)*
 
@@ -1078,7 +1084,7 @@ instrumentation."
 `BRACKET_MODIFY_REQUESTED` then `BRACKET_MODIFIED` on confirmation would make the log a record of
 what happened instead of what was hoped.
 
-### P1-71. A named active relationship produced no order and left no diagnosable trace — OPEN
+### P1-71. A named active relationship produced no order and left no diagnosable trace — ✅ FIXED + LIVE-VALIDATED 2026-08-13
 
 *(found 2026-08-13 by reading the live validation's log for what was **missing** rather than what was
 present.)*
