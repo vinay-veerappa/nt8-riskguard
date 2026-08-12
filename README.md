@@ -45,10 +45,11 @@ python tools/check_direction.py         # this repo must never name a bridge typ
 python tools/check_no_stray_copies.py   # exactly one copy of each addon source
 ```
 
-CI would run all of the above. The workflow is parked at
-[ci/github-workflow-ci.yml](ci/github-workflow-ci.yml) and **is not active yet** --
-activating it needs a token with the `workflow` scope; the file's header has the two
-commands.
+**CI runs all of the above on every push and pull request**, on `windows-latest`, from
+[.github/workflows/ci.yml](.github/workflows/ci.yml) -- active since 2026-08-13. Deploy
+parity is deliberately *not* in CI: it compares against a NinjaTrader install that exists
+only on the trading machine, so on a hosted runner it would pass vacuously, and a green
+check that proves nothing is worse than an absent one.
 
 ### Install the pre-commit hook -- once per clone
 
