@@ -21,7 +21,7 @@ and the live box rather than copying them forward; everything they used to claim
 > | 2 | **[§5 — THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13)** | the authoritative answer to *what is left?* Start at **§5.6**, the order |
 > | 3 | **§7 — Decisions already made** | do not re-litigate; the review panel will try every round |
 > | 4 | **§8 — Known traps** | each one cost a session to find |
-> | 5 | session records, newest first: **§5.16, §5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+> | 5 | session records, newest first: **§5.18, §5.17, §5.16, §5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
 >
 > ⚠️ **This file accretes, and a later section supersedes an earlier one.** Where two disagree, the
 > higher-numbered §5.x wins. **§4a is now HISTORICAL** — its "START HERE" pointed at `P0-62`, which
@@ -39,7 +39,7 @@ and the live box rather than copying them forward; everything they used to claim
 >
 > The split's one behavioural consequence: `TestP2_38`'s three assertions against
 > `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge`, which is why the suite went 929 → 926
-> with nothing broken. It is **1028** now.
+> with nothing broken. It is **1053** now.
 
 ---
 
@@ -51,15 +51,15 @@ Every row was checked, not carried forward. The command that checks it is in the
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **1028 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **75 IDs — 61 closed, 14 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14). **4 more opened and closed by the MCP wrapper pass** (§5.16) | — |
+| **Suite** | **1053 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **78 IDs — 62 closed, 16 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14). **4 more opened and closed by the MCP wrapper pass** (§5.16) | — |
 | **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite (§5.13). Then **`P0-68`, `P1-69` and `P1-71`** on the deployed `v1.1.0` (§5.14) | §5.13, §5.14 |
 | **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` **`v1.1.0`** (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
-| **Deployed** | **`v1.1.0` code is live in NT8** (was `v1.0.2`; §5.14). 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
+| **Deployed** | **`v1.2.0` code is live in NT8** (`P1-76`; §5.16-§5.18). 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
 | **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
-| **Mutation** | **5 batteries, 50 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py`, `mutate_p1_71.py`, `mutate_p0_67.py` |
+| **Mutation** | **6 batteries, 64 killed, 0 survivors** | `mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py`, `mutate_p1_71.py`, `mutate_p0_67.py`, `mutate_p1_76.py` |
 | **CI** | ✅ **Active in both repos** since 2026-08-13, `windows-latest`, every push and PR. Runs all of the above except deploy parity, in 4m39s. **Watched fail on purpose**, not just pass | `gh run list -R vinay-veerappa/nt8-riskguard -L 3` |
 
 > ⚠️ **The git tag and the addon's own constant now BOTH say `1.1.0`, and that is a coincidence, not
@@ -168,7 +168,7 @@ and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verifie
 # the suite -- ALWAYS build first; --no-build after a failed build silently
 # reports the PREVIOUS assembly's result
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1028/0
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1053/0
 
 # deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
 python tools\sync_nt8.py --verify        # expect ALL IN SYNC (7 files)
@@ -2892,16 +2892,16 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 72, re-run 2026-08-13
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 75, re-run 2026-08-13
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **72** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **75** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **75** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16) |
-| **Open** | **14** | §5.1 + `P?-64`, `P?-65`. **`P?-66` and nine more closed 2026-08-13** (§5.13, §5.14, §5.16) |
-| **Closed or superseded** | **61** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16 |
+| **Total IDs** | **78** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17) |
+| **Open** | **16** | §5.1 + `P?-64`, `P?-65`, **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. Ten closed 2026-08-13 |
+| **Closed or superseded** | **62** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -4014,3 +4014,113 @@ exact trap §0 records, met while working on the file that records it. Grep the 
 - ⚠️ **The MCP server change needs the server process restarted** to take effect. A client that
   spawned `nt-mcp-server.js` before this is still running the 5-argument, POST-everything version, and
   will report success on `action: 'quarantine'` exactly as before.
+
+---
+
+## 5.17 Feature audit — 2026-08-13, operator's list of eight
+
+**Asked: do these exist? Answer verified against the source, not from memory.** Two already
+exist and are enforced, two are half-built, three are absent, and one turned out to be a
+**defect rather than a missing feature** — it is configurable, enabled by default, and
+evaluated nowhere.
+
+| # | Asked for | Verdict |
+|---|---|---|
+| 1 | **Latency + fill-slippage per follower** (`P1-22`) | **Measurement DONE, gauge/heatmap NOT.** See below. |
+| 2 | **Consistency Rule Shield** (daily-profit cap) | ⚠️ **DEAD CONFIG — now `P1-77`.** |
+| 3 | **Tilt detection + cool-off + PIN disarm** | **Absent.** Backlog `F-3`. |
+| 4 | **Intra-execution slippage guard** (market→limit, cancel remainder) | **Detection exists, the RESPONSE does not.** Backlog `F-4`. |
+| 5 | **Pure reconciler + in-flight ledger** | **Copier half shipped and live-validated; ledger absent.** Already `P3-31` + `P3-30`'s remaining half. |
+| 6 | **Discord / Telegram push alerts** | **Absent, and there is no outbound HTTP at all.** Backlog `F-6`. |
+| 7 | **Block specific instruments** | ✅ **EXISTS and enforced.** |
+| 8 | **Max contracts per instrument** | ✅ **EXISTS and enforced — at the POSITION level, which is the right one.** |
+
+### 7 and 8 already exist — here is where, so nobody rebuilds them
+
+**Blocking**: `_config.BlockedInstruments` is checked in two places — a can-trade gate
+(`RiskGuardAddOn.cs:133`) and the order-update path (`:1706`), which queues a cancel and logs
+`BLACKLIST_CANCEL`. The firm profile carries its own default list (`ZB`, `ZN`, `6E`, `6B`).
+
+**Per-instrument contract cap — two complementary checks, and the distinction matters:**
+
+| Layer | What it compares | On breach |
+|---|---|---|
+| `_config.InstrumentLimits[root].MaxContracts` (`:1717`) | a **single order's** quantity | cancels that order, `PER_INSTRUMENT_CAP_CANCEL` |
+| `profile.InstrumentProfiles[sym].MaxContracts` (`:3197`, Rule 1 `MAX_SIZE_BREACH`) | the **aggregate position** quantity | locks the account out **and flattens** |
+
+⚠️ **I initially wrote this up as a gap** — "the cap is per-order, so three 5-lots pass a cap of
+10" — and that was wrong. The position-level rule covers exactly that, falling back to
+`profile.DefaultMaxContracts`, which falls back to `_config.Sizing.MaxContractsPerAccount`
+(10) when unset, so it fires without a firm mapping. There is also
+`Sizing.MaxContractsAggregate` (20) across accounts at `:3139`. Recorded because the wrong
+version was one grep away from becoming a filed defect.
+
+**Both are gated by mode.** Intervention cancels run only under `IsActingMode()`
+(`DrainPendingCancels`), and rule evaluation needs `_isArmed`. In `shadow` — today — these
+**log the intent and do not cancel or flatten.** That is correct and deliberate; it also means
+neither has ever fired here.
+
+> **This is the operator's "what applies and for what" complaint, in the risk rules rather
+> than the copier.** One concept — a contract cap for an instrument — is spread across
+> `InstrumentLimits`, `InstrumentProfiles`, `DefaultMaxContracts`,
+> `Sizing.MaxContractsPerAccount` and `Sizing.MaxContractsAggregate`, with different scopes and
+> different consequences. Nothing is wrong with any of them individually. **The UI's job is to
+> say which one bit, and no UI can do that until they are named as one story.** Design input,
+> not a defect.
+
+### 1 — the measurement is real, the display is one line of text
+
+Present and live-validated: `LatencyMs`, `AvgSlippageTicks` (running mean), `MaxSlippageTicks`
+(the quarantine threshold), written per fill by `ObserveFollowerFill`, announced as
+`COPIER_FILL_MEASURED`, with a sanity bound that records a rejected latency as
+`(REJECTED by sanity bound, not recorded)` rather than storing a wrong number. Readable over
+`GET /api/copier/config` since 2026-08-13 (`P1-69`), per relationship, in a `metrics` array.
+
+Not present: any **gauge or heatmap**. The entire UI for it is a single interpolated status
+string at `TradeCopierWindow.cs:799`. Two corrections to the request as written:
+
+* **Milliseconds, not microseconds.** The live measurement was `142.86 ms` entry / `314.21 ms`
+  exit. Microsecond resolution is not available — these are wall-clock deltas between two NT8
+  callbacks, not routing timestamps from the broker.
+* **A zero is not a good reading.** The metrics are **session-scoped**; a recompile resets them.
+  Any gauge must distinguish "no fill observed yet" from "a clean fill", or it will read as a
+  perfect score whenever NT8 has just restarted. That confusion already cost two sessions as
+  `P?-66`.
+
+### 4 — detection exists, the response is post-hoc
+
+`ObserveFollowerFill` compares the follower's fill against the leader's, signed so only adverse
+slippage counts, and on an **entry** beyond `MaxSlippageTicks` sets `IsQuarantined` and logs
+`SLIPPAGE_QUARANTINE`. Exits are never blocked (settled decision — blocking an exit strands the
+follower in a position the leader has left).
+
+So what exists is *after the fill, for the next order*. What was asked for is **during**
+execution: convert a follower market order to a limit, or cancel the unfilled remainder. That
+needs partial-fill handling on the copy order and is genuinely new work — `F-4`.
+
+### 6 — there is no outbound HTTP anywhere in the bridge
+
+`_alerts` is a **local, pull-based store** read through `nt_alert`. No `HttpClient`,
+`WebClient` or `PostAsync` exists in `McpBridgeAddOn.cs`. So a webhook is not "wire up a URL";
+it is the first outbound network call this addon would ever make, from inside NT8's process,
+which brings its own questions (timeouts blocking a callback thread, retries, and a token in
+config). Worth doing, worth designing.
+
+---
+
+## 5.18 Backlog — features, in the operator's words, with what each actually needs
+
+Not defects. Numbered `F-n` deliberately: they are **not** in the `P` defect sequence and must
+not be renumbered into it.
+
+| ID | Feature | What it needs | Notes |
+|---|---|---|---|
+| **F-1** | Latency / slippage **gauge** per follower | UI only — the data is already there and readable | **Folds into the UI redesign**, not separate work. Must show session-scope and distinguish no-fill from clean-fill. |
+| **F-3** | Tilt detection → forced cool-off → optional PIN | A loss-sequence detector (e.g. 3 closed losers inside 5 min), a timed disarm, and a PIN gate on re-arm | Primitives exist to build on: `LockoutUntil`, `MaxTradesPerSession`, the three-phase lockout sweep, and the arm/shadow split. ⚠️ A PIN in a config file is not a security control; it is a speed bump against your own impulse. Say so in the UI rather than implying more. |
+| **F-4** | Intra-execution slippage guard: market→limit, or cancel the remainder | Partial-fill tracking on the copy order, a decision point before the remainder fills, and a rule for what happens to a half-filled follower | ⚠️ **The half-filled follower is the hard part, not the conversion.** Cancelling the remainder leaves the follower smaller than the leader, which is a *sizing* divergence the reconciler must then not "fix" by re-adding. Design against `P3-31` before building. |
+| **F-6** | Discord / Telegram push on fills, slippage, drawdown, disarms | The bridge's first outbound HTTP: fire-and-forget with a hard timeout, off the NT8 callback thread, plus a webhook URL in config | ⚠️ Never block an NT8 callback on a network call. Also: the events worth pushing already exist as `interventions.jsonl` entries, so this is a **sink** on an existing stream, not new instrumentation. |
+| ~~F-2~~ | ~~Consistency Rule Shield~~ | — | **Not a feature. It is `P1-77`** — the config exists and nothing evaluates it. |
+| ~~F-5~~ | ~~Reconciler / ledger~~ | — | **Already tracked**: `P3-31` (ledger) and `P3-30`'s remaining half (timer + RiskGuard-side audit). The copier half is shipped and live-validated. |
+| ~~F-7~~ | ~~Block instruments~~ | — | **Exists** (§5.17). |
+| ~~F-8~~ | ~~Max contracts per instrument~~ | — | **Exists**, position-level (§5.17). |
+

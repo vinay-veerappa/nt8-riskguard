@@ -18,6 +18,14 @@ Deliberately compares against the newest tag REACHABLE FROM HEAD (`git describe
 of a release still pass -- the same narrowing `deploy.py`'s staleness guard needed after
 its first version over-fired on documentation.
 
+⚠️ ORDERING. Bump the constant and create the tag in the SAME push. Between a constant
+bump and its tag this check is RED by design, because the newest reachable tag is still
+the old one -- that is the correct reading, not a false positive. Getting this backwards
+is how `v1.2.0` came to contain the constant `1.1.0`: the bump landed one commit AFTER
+the tag, so the tagged artifact was internally inconsistent and anyone deploying from
+the bridge's submodule pin would have got a box reporting the previous release. Resolved
+by cutting `v1.2.1` rather than moving `v1.2.0` -- a tag the bridge pins must never move.
+
 Exit 0 = they agree. Exit 1 = drift, or no tag could be resolved.
 """
 

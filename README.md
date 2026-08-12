@@ -23,12 +23,13 @@ docs/       hardening plan (the defect index), session handover, design docs
 
 ```bash
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build     # 1028 passed / 0 failed
+dotnet run --project tests/RiskGuardTests.csproj --no-build     # 1053 passed / 0 failed
 python mutation/mutate_cm3.py                                   # 14 mutants, all killed
 python mutation/mutate_cm4.py                                   # 10 mutants, all killed
 python mutation/mutate_p0_63.py                                 #  7 mutants, all killed
 python mutation/mutate_p1_71.py                                 #  9 mutants, all killed
 python mutation/mutate_p0_67.py                                 # 10 mutants, all killed
+python mutation/mutate_p1_76.py                                 # 14 mutants, all killed
 ```
 
 The suite is a plain `Main()` that calls every test method; there is no test framework.
@@ -39,19 +40,23 @@ than no runner.
 `RiskManagerAddOn.cs` is excluded from the test build (superseded by `RiskGuardAddOn.cs`;
 compiling both duplicates types). It still deploys.
 
-Three structural checks. All three have been watched fail, so they can actually fail:
+Four structural checks. All four have been watched fail, so they can actually fail:
 
 ```bash
 python tools/check_direction.py              # this repo must never name a bridge type
 python tools/check_no_stray_copies.py        # exactly one copy of each addon source
 python tools/check_ci_runs_every_battery.py  # no battery that CI does not run
+python tools/check_version_matches_tag.py    # the version the addon REPORTS is the one deployed
 ```
 
 The third exists because a battery was left out of CI twice, each time leaving CI weaker
 than the local gate while looking complete. It also refuses an empty `mutation/`, since a
-check that iterates a collection passes trivially when the collection is empty.
+check that iterates a collection passes trivially when the collection is empty. The fourth
+exists because `GET /api/riskguard/version` reported `1.1.0` while `v1.2.0` was tagged,
+deployed and compiled -- that endpoint is how an operator finds out what is running on a
+live account, so a stale constant is a wrong answer to the question, not a cosmetic slip.
 
-**CI runs all of the above on every push and pull request** — all five batteries, enforced —
+**CI runs all of the above on every push and pull request** — all six batteries, enforced —
 on `windows-latest`, from
 [.github/workflows/ci.yml](.github/workflows/ci.yml) -- active since 2026-08-13. Deploy
 parity is deliberately *not* in CI: it compares against a NinjaTrader install that exists
@@ -109,8 +114,8 @@ repos become mutually recursive and the split is dead.
 ## Status
 
 This code manages real money on live funded accounts, and it is **not finished hardening**.
-**75 defect IDs; 61 closed, 14 open.** Tag `v1.1.0` is the deployed code, live in NT8 in
-`shadow` mode; suite 1028/0, five mutation batteries with 0 survivors.
+**78 defect IDs; 62 closed, 16 open.** Tag `v1.2.0` is the deployed code, live in NT8 in
+`shadow` mode; suite 1053/0, six mutation batteries with 0 survivors.
 
 **`P0-63` was validated live on 2026-08-13** by one 1-lot MNQ round trip on `Sim101 -> Sim-ORB`.
 `Account.Change()` being a silent no-op meant the mirrored stop had **never trailed**; the log
@@ -131,8 +136,17 @@ stating what each field does forces you to check. The one worth reading is **`P1
 prop-firm rules DISARMED them**, latent only because `prop_limits.json` does not exist on this box
 and the first write creates it. See the handover's section 5.16.
 
+`P1-76` followed from the operator asking why it was unclear "what configuration applies and
+for what": it was unclear in the code too. A follower covered by both a direct relationship and
+a group got the direct one purely because of list insertion order, pinned by nothing. Overlaps
+are now refused at every operator write and reported (never silently resolved) on load.
+
+A feature audit the same day (handover section 5.17) found **`P1-77`**: the prop-firm
+**Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere.** It is
+not a missing feature but a lying one, and it covers an account-*failure* condition.
+
 The highest open defects are now **`P?-64`/`P?-65`**: the copier UI writes to a different file
 than anything reads, so every UI change is lost on restart, and its two save sites destroy the
 ratio matrix.
 
-**Read the handover before trusting any of it** -- in particular sections 5.13 and 5.14.
+**Read the handover before trusting any of it** -- in particular sections 5.13 through 5.18.

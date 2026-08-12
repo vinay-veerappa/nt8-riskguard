@@ -43,27 +43,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**75 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**78 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 72 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 75 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 72 + 3 = 75. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+write-up yet. 75 + 3 = 78. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
 but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-75` | 35 | **2** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58` | 10 | **5** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77` | 37 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78` | 11 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
-| | | **75** | **14** | **61 closed or superseded** |
+| | | **78** | **16** | **62 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1481,6 +1481,138 @@ so listing the **groups** still discarded the relationship latency/slippage meas
 **Not live-validated, and it cannot be cheaply**: proving it needs an armed prop config plus a saved
 file, and arming live risk rules to demonstrate a fixed defect is not a trade worth making. Compile
 clean, deployed, pinned by an executed test.
+
+---
+
+### P1-76. Which config applies to a follower was emergent, not defined — ✅ FIXED 2026-08-13
+
+*(found 2026-08-13 from the operator's observation that it was "not clear what configuration
+applies and for what". It was not clear in the code either, which is the actual defect.)*
+
+**What it was**: `GetActiveRelationshipsForLeader` added direct relationships, then expanded
+matching groups into synthesized relationships, then deduplicated by follower with
+`.GroupBy(...).Select(g => g.First())`. So a follower covered by **both** a direct relationship
+and a group got the **direct** one — purely because directs were `AddRange`d into the list
+first and `.First()` takes the earliest.
+
+**Nothing named that rule and no test pinned it.** The existing dedup test asserted
+`activeRels.Count == 1` and the follower's **name** — the safety property — and never which side
+won. Reordering those two blocks is an innocuous-looking refactor that would have flipped every
+group's `QuantityRatio`, `SizingMode`, `AutoSymbolConversion` and `MaxPositionSize` over every
+direct relationship, **silently, with the whole suite green**, on live sizing.
+
+The second consequence is the one the operator hit: **a follower in both places has its group
+settings silently ignored**, so a group can be edited, saved, and have no effect.
+
+**Operator decision, 2026-08-13: REFUSE THE OVERLAP.** A follower belongs to a direct
+relationship OR a group, never both, so that there is exactly one place to look for what applies
+to it.
+
+**The asymmetry in the fix is deliberate and load-bearing:**
+
+| Path | Behaviour |
+|---|---|
+| `ApplyRelationshipRequest`, `ApplyGroupRequest`, `AddFollowerToGroup` | **REFUSE.** Return null/false and log `CONFIG_OVERLAP_REFUSED`. A group request is **all-or-nothing** — creating it minus the clashing follower would silently drop an account the operator named (`P1-23`'s class). |
+| `LoadFromDisk` | **TOLERATES and REPORTS.** Logs `CONFIG_OVERLAP_DETECTED` per overlap and exposes it via `DetectConfigConflicts()`. A load that refused would drop config the operator can see in the file, which is `P?-64`'s and `P2-41`'s shape and **worse** than the overlap. |
+
+**Membership, not effect**: a **disabled** group still reserves its followers, because enabling a
+group is one click and that click must not be what creates the overlap.
+
+**Where an overlap already exists** (only reachable by hand-editing `copier_config.json`) the
+**direct relationship wins**, and that is now stated in code rather than emerging from list
+order. Surfaced over the API as `configConflicts` + `configConflictNote` so the UI can render
+"this group setting is being ignored for this follower" instead of showing it as if it applied.
+
+**One behaviour change worth knowing**: a **disabled** direct relationship now suppresses the
+group entry, so that follower copies **nothing**. Previously the `IsEnabled` filter dropped the
+direct entry and the group's entry survived, so the follower **copied at the group's ratio** —
+a follower the operator had switched off, trading again through group membership.
+
+**The mutation battery found the fix's own test to be decorative.** 3 of 14 mutants survived the
+first run, including the one that restores the pre-`P1-76` emergent tie-break: direct-wins is
+**over-determined**, since dedupe's `.First()` produces it too, so asserting the outcome held
+either way. The case where the two mechanisms diverge is the **disabled** direct relationship
+above — that is the test that was missing, and it is now the one that kills those mutants. A
+second test pins deduplication on the only case it can still fire (one follower in two groups).
+
+⚠️ `P1-76`'s insertion also broke an anchor in `mutate_cm3.py`, which reported `(ANCHOR)` and
+scored it a **SURVIVOR** — that default is why an unrelated edit silently disarming another
+battery's mutant was caught rather than shipped. Anchor narrowed.
+
+**Where**: `TradeCopierEngine.cs` — `DetectConfigConflicts`, `GroupReserving`,
+`DirectRelationshipExists`, the guards in `ApplyRelationshipRequest` / `ApplyGroupRequest` /
+`AddFollowerToGroup`, the explicit tie-break in `GetActiveRelationshipsForLeader`, and the
+report at the end of `LoadFromDisk`. Bridge: `configConflicts` on the copier config GET.
+Tag **`v1.2.0`**. Suite 1053/0; `mutation/mutate_p1_76.py`, 14 mutants, 0 survivors.
+
+**Not live-validated**: `groups` is empty on this box, so no overlap exists to demonstrate
+against — which is also why the rule could be introduced with zero migration risk.
+
+---
+
+### P1-77. The Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere — OPEN
+
+*(found 2026-08-13 by auditing the operator's feature list against the source rather than
+against the config schema — §5.17.)*
+
+**What it is**: `PropFirmProtectionConfig` declares
+
+```csharp
+public bool EnableConsistencyCap { get; set; } = true;
+public double MaxDailyProfitPctOfTarget { get; set; } = 0.35;
+```
+
+Both are parsed from `prop_limits.json` (`PropFirmProtectionSuite.cs:178-179`). **Those four
+lines are the only places either name appears in the entire addon tree.** There is no
+`EvaluateConsistencyCap`; the suite implements `EvaluateProfitTargetLock` and
+`EvaluatePeakEquityGiveback` and nothing else.
+
+**Why it matters more than an unimplemented feature.** It is not absent — it is **present,
+enabled by default, and inert**. An operator reading the config, or an agent reading it over
+the API, is told the consistency rule is switched on with a 35% cap. Prop-firm consistency
+rules are an *account-failure* condition: exceeding the cap on one day can void an evaluation
+no matter how good the rest of the account looks. So the failure mode is believing you are
+covered against the one rule that silently disqualifies you.
+
+**Same class as `P1-23`** (`EnableFollowerAtm`, which implied followers got a bracket and was
+deleted rather than implemented), **`P2-24`** (written-but-never-called safety machinery) and
+**`P1-74`** (an advertised argument that was not a field). Config must not lie.
+
+**Two honest remedies, and the choice is the operator's:**
+
+1. **Implement it.** Needs the evaluation target (`EvaluationTargetProfit`, present), the day's
+   realized PnL (already tracked per account), and a decision on the action — lock out, or
+   refuse new entries only. ⚠️ The action must **not** be *flatten*: hitting a profit cap is not
+   a risk event, and flattening a winner to enforce a consistency rule realises the very P&L the
+   rule is about.
+2. **Delete both fields**, as `EnableFollowerAtm` was deleted. A field nobody reads is not a
+   feature, and leaving it visible is the defect.
+
+**Do not** "fix" this by defaulting `EnableConsistencyCap` to `false`. That keeps the lie and
+makes it quieter.
+
+**Where**: `addons/PropFirmProtectionSuite.cs:46-47` (declared), `:178-179` (parsed), evaluated
+nowhere.
+
+---
+
+### P2-78. `PerInstrumentRiskConfig` carries two fields nothing reads — OPEN
+
+*(found in the same audit, §5.17.)*
+
+`PerInstrumentRiskConfig` (`RiskGuardAddOn.cs:5435`) has three fields. Only `MaxContracts` is
+read (`:1717`). **`IsBlocked` has zero references anywhere in the tree**, and `StopOffsetTicks`
+appears only at its own declaration.
+
+`IsBlocked` is the more misleading of the two: a per-instrument `IsBlocked: true` looks exactly
+like the way to block one instrument, and blocking is really done through the separate
+`_config.BlockedInstruments` list. So the config offers two ways to block an instrument and only
+one of them works.
+
+Same class as `P1-77` above and `P1-23`. Cheapest correct fix is deletion; if `IsBlocked` is
+wanted, it belongs in the `:1706` check next to `BlockedInstruments`.
+
+**Where**: `addons/RiskGuardAddOn.cs:5435-5440`.
 
 ---
 
