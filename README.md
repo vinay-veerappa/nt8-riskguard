@@ -50,6 +50,17 @@ CI would run all of the above. The workflow is parked at
 activating it needs a token with the `workflow` scope; the file's header has the two
 commands.
 
+### Install the pre-commit hook -- once per clone
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` refuses build output, binaries and anything over 50 MB.
+`core.hooksPath` is **local config, not tracked**, so a fresh clone has no hook until
+you run that line -- and nothing will tell you. Deliberate override:
+`ALLOW_BIG_FILES=1 git commit ...`.
+
 ## Deploy
 
 ```bash

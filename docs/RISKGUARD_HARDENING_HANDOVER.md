@@ -46,10 +46,10 @@ Every row was checked, not carried forward. The command that checks it is in the
 |---|---|---|
 | **Suite** | **953 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **67 IDs — 51 closed, 16 open.** Derivation in §5.0, so you can check it instead of trusting it | — |
-| **Branch** | `main` @ `978ed3a`, **pushed, 0 unpushed**, tags `v1.0.0` `v1.0.1` `v1.0.2` | `git status -sb; git tag` |
-| **Deployed** | **`v1.0.2` is live in NT8.** 7 core files identical; 8 counting the bridge's; 2 orphans | `python tools/sync_nt8.py --verify` |
-| **NT8 compile** | 0 errors, net48 | `nt_compile`, and read `errorCount` |
-| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` | `GET /api/riskguard/version` |
+| **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
+| **Deployed** | **`v1.0.2` code is live in NT8.** 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
+| **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
 | **Mutation** | 3 batteries, **31 killed, 0 survivors** | `mutation/mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py` |
 
@@ -529,8 +529,10 @@ tvDownloadOHLC.**
   `b5c58ae0`."~~ **That branch does not exist in this repo** — it was the pre-split branch name in
   tvDownloadOHLC, which is still sitting on it. Here, `main` @ `978ed3a` = `v1.0.2` is deployed and
   pushed, and `b5c58ae0` was orphaned by the filter-repo rewrite (§0.0).
-- ~~"`.githooks/pre-commit` is not automatic."~~ **There is no `.githooks/` here**, and
-  `core.hooksPath` is unset. It was never migrated.
+- ~~"`.githooks/pre-commit` is not automatic."~~ It was never migrated at the split, so for a day
+  there was no `.githooks/` here at all. ✅ **Ported and installed 2026-08-13** in both addon repos —
+  see §5.11. The original complaint was right about the *shape*: `core.hooksPath` is local config, so
+  it is still not automatic in a fresh clone, and both READMEs now say so.
 - ~~The Gemini API key needing rotation, and 0.28 GB of parquet in published history.~~ Both are
   **tvDownloadOHLC's**, keyed to paths (`scripts/trader/chart_agent/test_vision.py`,
   `docs/ROADMAP.md`) that do not exist here. Still real over there; tracked in §5.11 so they are not
@@ -3309,47 +3311,76 @@ unusable on a machine that has just the bridge.
 > stale pin with `--verify` → exit 1, not blocked, and it names `TradeCopierEngine.cs` as the drifted
 > file, which is precisely the `P0-63` revert. See §8.
 
-### The two stale files in the live `AddOns/` folder
+### ✅ The two stale files in the live `AddOns/` folder — REMOVED 2026-08-13
 
-`RiskGuardAddOnTests.cs` and `TestingStubs.cs` sit in the deployed folder and belong to neither tree.
-Both deploy tools report them as orphans. They compile clean and are harmless, but NT8 compiles
-`bin/Custom/` **recursively**, so they are two files away from a duplicate-type error. Not removed
-this session — removing files from a live NT8 install is a deploy action, and nothing needed it.
+`RiskGuardAddOnTests.cs` and `TestingStubs.cs` sat in the deployed folder, reported as orphans by
+both deploy tools. They compiled to nothing (every line is inside `#if TESTING`, which NT8 never
+defines), but NT8 compiles `bin/Custom/` **recursively**, so they were two files away from a
+duplicate-type error that would stop *every* addon loading — the guard included.
+
+**They did not "belong to neither tree", which is what this section said for a day.** Both have a
+canonical home in `tests/`, and the deployed copy of `RiskGuardAddOnTests.cs` was **700 lines behind
+it** (`diff --strip-trailing-cr`: 752 changed lines; raw `diff` says 25,642 because the deployed copy
+is CRLF). So it was a stale fork of the test suite living inside the compiled tree — §5.3a's trap
+exactly, one folder over: *a copy that tracks what was deployed rather than what is canonical.*
+
+Moved, not deleted, to `Documents/NinjaTrader 8/_riskguard_backups/orphan_testfiles_<ts>/` — which is
+a **sibling of `bin/`, deliberately**. Backing them up anywhere under `bin/Custom/` would have left
+them compiled.
+
+Verified after: `nt_compile` → **0 errors**; `sync_nt8.py --verify` → 7 identical, orphans now just
+the bridge's own `McpBridgeAddOn.cs`; `GET /api/riskguard/version` → `loaded/shadow/armed/guarding`;
+and the full config response byte-identical to the snapshot taken before the change. A recompile is
+the moment the guard could silently fail to load, so it is checked, not assumed.
+
+One artifact is deliberately left: `AddOns/config.json.UNUSED_not_read_by_addon`. It is not a `.cs`,
+so it cannot reach the compiler, and its filename is the documentation.
 
 ---
 
 ## 5.11 Repo hygiene — current, and which repo each item belongs to
 
-Re-checked 2026-08-13. The block this replaces (in §4a) had drifted so far that **half of it
-described a different repository**, so ownership is now explicit.
+Re-checked 2026-08-13, and **actioned the same day** — everything below that could be closed without
+an operator or a credential now is. The block this replaces (in §4a) had drifted so far that **half of
+it described a different repository**, so ownership is now explicit.
+
+> **No row here names a HEAD SHA.** The previous version did, and it was stale one commit later — the
+> same failure this whole pass was cleaning up. Each row gives the property that stays true plus the
+> command to re-measure it.
 
 ### This repo (`nt8-riskguard`)
 
 | Item | State |
 |---|---|
-| Branches | `main` @ `978ed3a` (= `v1.0.2`), pushed, **0 unpushed**. `harden/p0-63` is merged and can be deleted. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
-| Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66`). The bridge pins one of these, so **never delete or move a tag.** |
-| CI | ⚠️ **Parked, not running.** The workflow sits at `ci/github-workflow-ci.yml` instead of `.github/workflows/` because pushing it needs `gh auth refresh -s workflow`. `P2-27`'s remaining half. Every gate is therefore local and manual. |
-| Git hooks | **None.** There is no `.githooks/` and `core.hooksPath` is unset; the pre-commit hook was never migrated at the split. |
+| Branches | ✅ **`main` only.** `harden/p0-63` was verified an ancestor of `main` and **deleted 2026-08-13**. Pushed, 0 unpushed. **`harden/riskguard-p0-51` does not exist here** — it was the pre-split branch name, and tvDownloadOHLC is still on it. |
+| Tags | `v1.0.0` (split), `v1.0.1`, `v1.0.2` (`P0-63` + `P?-66` — **the deployed code**), `v1.0.3` (docs only). `main` carries docs commits on top of `v1.0.2`; **a tag moving is what would break the bridge's pin**, so never delete or move one. |
+| Git hooks | ✅ **Installed 2026-08-13.** `.githooks/pre-commit` refuses `dll/pdb/exe/zip/nupkg`, media, and anything over 50 MB. **Proven to fire in both directions** before it was committed: a staged 57 MB blob and a staged `.dll` were each rejected with exit 1, and `ALLOW_BIG_FILES=1` passed. ⚠️ `core.hooksPath` is **local config, not tracked** — a fresh clone silently has no hook until someone runs `git config core.hooksPath .githooks`. Both READMEs now say so. Neither repo tracks a single blocked extension today, so the guard cannot misfire on real work. |
+| CI | ⚠️ **Still parked, and blocked on a credential — not on work.** The workflow sits at `ci/github-workflow-ci.yml`. Measured 2026-08-13: the `gh` token holds `gist, read:org, repo` and **not `workflow`**, so an HTTPS push containing `.github/workflows/` is rejected; there is **no SSH key on this box** either (`ssh -T git@github.com` → `Permission denied (publickey)`), so the usual workaround is unavailable, and `gh ssh-key add` would need `admin:public_key`, also absent. **Deliberately not committed into place**, because a local commit that cannot be pushed would wedge every later push on this branch. One interactive `gh auth refresh -s workflow` unblocks it; `P2-27`'s remaining half. Until then every gate is local and manual. |
+| Deployed tree | ✅ **No orphans.** The two stale test files were moved out of `bin/Custom/AddOns/` on 2026-08-13 and the guard re-verified after the recompile — §5.10. |
 | Loop artifacts | `logs/agent_loop/*` is ignored except `ledger.jsonl` and `learning_feedback.jsonl`. See §8 for why that took two commits. |
 
 ### `nt8-mcp-bridge`
 
 | Item | State |
 |---|---|
-| Submodule | `vendor/nt8-riskguard` pinned at `v1.0.2`, matching this repo's `main`. **Enforced** — `deploy.py` exits 2 on a stale pin (§8, §5.10). |
+| Submodule | `vendor/nt8-riskguard` pinned at **`v1.0.3`**. **Enforced** — `deploy.py` exits 2 on a pin that is behind in `addons/`, and *only* in `addons/`, so a docs commit on the core does not demand a tag bump (§8, §5.10). |
+| Git hooks | ✅ Same hook, same proof, installed 2026-08-13. Its header names the real hazard here: `git add -A` from the root can reach into `vendor/`. |
 | Tests | Harness 9/0, but `P2-27` still records that `McpBridgeAddOn.cs` has no real coverage; `tests/README.md` measures the gap. |
-| CI | Parked the same way, same reason. |
+| CI | Parked the same way, same credential. |
 
 ### tvDownloadOHLC — **not this repo's problem, recorded so it is not lost**
 
 These were listed as this project's hygiene for months and are keyed to paths that do not exist here:
 
 - **The Gemini API key** scrubbed from history (`scripts/trader/chart_agent/test_vision.py`) still
-  needs **rotating**. It never reached GitHub; that is not the same as being safe.
+  needs **rotating**. It never reached GitHub; that is not the same as being safe. **The operator has
+  taken this one** (2026-08-13) — it is not waiting on an engineer.
 - **~0.28 GB of older parquet remains in published history** — the purges only covered the
-  then-unpushed range. Tracked there under `docs/ROADMAP.md`.
-- That repo has **unpushed commits** and two unrelated background processes that commit to it (§8).
+  then-unpushed range. Tracked there under `docs/ROADMAP.md`. ⚠️ **Left alone deliberately.** Removing
+  it means `filter-repo` plus a force-push over *published* history, which invalidates every existing
+  clone and every SHA anyone has cited — a decision, not a chore. It costs disk, not safety.
+- ✅ That repo's unpushed commits were **pushed 2026-08-13**. Two unrelated background processes still
+  commit to it, so re-check rather than assume (§8).
 
 ---
 
