@@ -203,6 +203,22 @@ namespace NinjaTrader.Cbi
         // represent the failure is not coverage.
         public bool SimulateChangeIsSilentNoOp { get; set; }
 
+        // P0-62 / P1-70. The provider honours the PRICE and refuses the QUANTITY -- established by
+        // a live trade on 2026-08-10: one Change() carried `2@29742.5` and the order went
+        // `1@29743.5` -> `1@29742.5`. So a protective leg cannot be GROWN by modification.
+        //
+        // This third case is the one the stub could not express even after SimulateChangeIsSilentNoOp
+        // was added, and its absence was recorded as an open suite gap in mutation/mutate_p0_63.py
+        // ("a SimulateChangeAppliesQuantityOnly stub flag for the partial-honour case"). It matters
+        // beyond P0-62: a partial honour settles AWAY from the original values, so the no-op detector
+        // correctly does not fire -- which makes it the one path where "the change took" and "the
+        // change took what I asked for" come apart, and therefore the only way a confirmation line
+        // can be honestly wrong.
+        public bool SimulateChangeSettlesOneTickAway { get; set; }
+
+        /// <summary>Tick the partial-honour simulation shifts the settled price by.</summary>
+        public double SimulateSettleTickSize { get; set; } = 0.25;
+
         /// <summary>The provider's copy of the mutable order fields, which is the authoritative one.</summary>
         private class ProviderHeld
         {
@@ -423,6 +439,21 @@ namespace NinjaTrader.Cbi
                     // and it is exactly the trap P0-63 set live. Only SettleChange tells them
                     // apart, because only settling asks the provider what it actually holds.
                     if (SimulateChangeIsSilentNoOp) _unhonouredChanges.Add(o);
+                    else if (SimulateChangeSettlesOneTickAway)
+                    {
+                        // The provider MOVES the order but not to the requested price -- a tick-
+                        // boundary rounding, which is ordinary broker behaviour. The point is the
+                        // resulting state: it differs from the original (so the no-op detector
+                        // correctly stays quiet) AND from the request (so "it moved" and "it moved
+                        // to what I asked" come apart). That is the only condition under which a
+                        // confirmation line can be honestly wrong.
+                        CaptureProviderValues(o);
+                        if (_providerHeld[o].StopPrice > 0)
+                            _providerHeld[o].StopPrice -= SimulateSettleTickSize;
+                        if (_providerHeld[o].LimitPrice > 0)
+                            _providerHeld[o].LimitPrice -= SimulateSettleTickSize;
+                        _unhonouredChanges.Add(o);
+                    }
                     else CaptureProviderValues(o);
                 }
                 o.OrderState = OrderState.Working;
@@ -839,6 +870,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCopierSlip_P66_ALatencyRejectedBySanityBoundSaysSo();
             TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo();
             TestCopierSlip_FillIsMatchedWhenOrderIdChanges();
+
+            // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
+            // RED until the fourteen unlogged exits are routed through CopierLog.
+            TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
+            TestCopier_P171_ASuccessfulCopyAnnouncesItself();
+            TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed();
+            TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog();
+            TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome();
+            TestCopier_P171_AClampWarningIsNotCountedAsAnOutcome();
+
+            // P1-70: a modify is a REQUEST until the provider settles.
+            TestBracket_P170_AModifyIsAnnouncedAsARequestAndConfirmedOnlyOnSettle();
+            TestBracket_P170_AnIgnoredChangeIsNeverConfirmed();
+            TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept();
 
             // -- BRACKET REPLICATION TESTS (P0-9) --
             TestBracket_StopMirrorsLeaderDistanceFromFollowerFill();
@@ -1575,6 +1620,435 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ------------------------------------------------------------------
+        // P1-71. On 2026-08-13 a live 1-lot copy named TWO relationships in COPY_BEGIN --
+        // `Sim-ORB, SimCopy2` -- and only Sim-ORB produced anything at all. SimCopy2 produced no
+        // order, no skip, no reason, on both the entry and the exit legs. The account existed, was
+        // not quarantined, had no lockout, and stood at 1 trade of a MaxTradesPerSession of 8, so
+        // every obvious explanation was ruled out and the actual cause was STILL unknown -- because
+        // fourteen paths out of the copy loop either logged to NinjaTrader.Code.Output.Process,
+        // which reaches the Output tab and nothing else, or logged nothing whatsoever.
+        //
+        // That is verbatim the failure RiskGuardAddOn.LogFromComponent was introduced to end:
+        // "every candidate path either logged to a sink nobody can read or returned silently.
+        // Anything worth reading later belongs here." Five paths were missed at the time; there
+        // were actually fourteen.
+        //
+        // The fix is not "add some logging". It is an INVARIANT: every relationship named in
+        // COPY_BEGIN produces exactly one terminal outcome event. That is what makes a silent drop
+        // impossible rather than merely unlikely, and unlike a list of log lines it cannot rot --
+        // a new skip path that forgets to log fails the invariant test below.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Terminal outcome events, by naming convention rather than by a hard-coded list, so a
+        /// path added later is counted automatically instead of quietly escaping the invariant.
+        /// COPY_QTY_CLAMPED and SYMBOL_TRANSLATION_UNRESOLVED are deliberately NOT terminal: the
+        /// copy proceeds through both, and counting them would let a genuine drop hide behind a
+        /// warning.
+        /// </summary>
+        private static int CountCopyOutcomes(List<string> log)
+        {
+            return log.Count(l =>
+                l.StartsWith("COPY_SUBMITTED", StringComparison.Ordinal) ||
+                l.StartsWith("COPY_SKIPPED_", StringComparison.Ordinal) ||
+                l.StartsWith("COPY_BLOCKED_", StringComparison.Ordinal) ||
+                l.StartsWith("COPY_FAILED_", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// The invariant, on the exact shape the live run had: two enabled relationships off one
+        /// leader, one of which cannot act. Baseline logs ONE outcome (the good one) and returns in
+        /// silence for the other, which is the whole defect.
+        /// </summary>
+        private static void TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome()
+        {
+            Console.WriteLine("\n[TEST] COPIER: every relationship named in COPY_BEGIN produces exactly one outcome (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var good = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", good, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            // The second relationship points at an account that is NOT in Account.All -- the
+            // `followerAcc == null` path, which at baseline is `if (followerAcc == null) continue;`
+            // with no log of any kind.
+            TradeCopierEngine.Instance.UpsertRelationship(new CopierRelationship
+            {
+                LeaderAccountName = "SimLeader",
+                FollowerAccountName = "SimVanished",
+                IsEnabled = true,
+                FixedLotMode = true,
+                FixedLotSize = 1,
+                MaxPositionSize = 100
+            });
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P171-A")));
+
+            var begin = log.FirstOrDefault(l => l.StartsWith("COPY_BEGIN", StringComparison.Ordinal));
+            Assert(begin != null, "COPY_BEGIN is logged, so the count below has something to be measured against.");
+            Assert(begin.Contains("2 active relationship(s)"),
+                "Both relationships are named as active -- which is what makes the silence a defect "
+                + "rather than a setting. Got: " + begin);
+
+            Assert(CountCopyOutcomes(log) == 2,
+                "TWO relationships were named, so TWO outcomes must be logged. At baseline only the "
+                + "successful copy says anything and the vanished account returns in silence, which "
+                + "is exactly how SimCopy2 went missing on 2026-08-13. Got "
+                + CountCopyOutcomes(log) + " outcome(s) in: " + string.Join(" / ", log));
+
+            Assert(LoggedEventContaining(log, "COPY_SKIPPED_ACCOUNT_MISSING"),
+                "And the missing account is named as such, so the reason is readable without a "
+                + "debugger. This path logged NOTHING at baseline.");
+            Assert(LoggedEventContaining(log, "SimVanished"),
+                "The log names WHICH account went missing. An outcome count with no account name "
+                + "would tell you a copy was dropped without telling you whose.");
+        }
+
+        /// <summary>
+        /// The success side of the invariant. Without this, a fix that logged a skip for every
+        /// relationship -- including the ones that worked -- would satisfy the count and be wrong.
+        /// </summary>
+        private static void TestCopier_P171_ASuccessfulCopyAnnouncesItself()
+        {
+            Console.WriteLine("\n[TEST] COPIER: a copy that WAS submitted says so, with its quantity (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P171-B")));
+
+            Assert(LoggedEventContaining(log, "COPY_SUBMITTED"),
+                "The submit is announced. Without a positive event the invariant could be satisfied "
+                + "by logging a skip for everything, and 'exactly one outcome' would mean nothing.");
+            Assert(CountCopyOutcomes(log) == 1,
+                "Exactly one outcome for one relationship -- not two. A path that logs both a skip "
+                + "and a submit would double-count and hide a real drop. Got: " + string.Join(" / ", log));
+            Assert(follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "And the order really was submitted, so COPY_SUBMITTED is not decorative.");
+        }
+
+        /// <summary>
+        /// A skip that is CORRECT but was invisible: the follower has nothing to exit. This is the
+        /// most frequent benign skip in production, so if it stays unlogged the operator learns to
+        /// read silence as normal -- and then a real drop looks normal too.
+        /// </summary>
+        private static void TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed()
+        {
+            Console.WriteLine("\n[TEST] COPIER: an exit with no follower position is logged as a skip (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Sell, 1, "P171-C")));
+
+            Assert(CountCopyOutcomes(log) == 1,
+                "The relationship still produces exactly one outcome when the copy is correctly "
+                + "skipped. Got: " + string.Join(" / ", log));
+            Assert(LoggedEventContaining(log, "COPY_SKIPPED_NO_POSITION_TO_EXIT"),
+                "And it says which skip it was, rather than leaving the operator to infer it from "
+                + "an absent order.");
+            Assert(!follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "No order was placed -- the skip is real, so the log is describing something true.");
+        }
+
+        /// <summary>
+        /// The safety-critical skip. A disarmed relationship must not reach a LIVE account, and that
+        /// refusal is the one every audit will ask about -- so it belongs in the audit log, not in a
+        /// UI tab that nothing captures.
+        /// </summary>
+        private static void TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog()
+        {
+            Console.WriteLine("\n[TEST] COPIER: refusing a disarmed LIVE follower is recorded in the audit log (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            rel.ArmedForLive = false;
+            // Provider.Simulator is what makes the ArmedForLive gate a no-op, so this test needs a
+            // genuinely live follower -- the P1-20 lesson: state it through the provider, never
+            // infer it from a "Sim" name prefix.
+            var follower = SetupCopyPath("SimLeader", "LiveFollower", rel, 0, null, MarketPosition.Flat,
+                Provider.Rithmic);
+            rel.FollowerAccountName = "LiveFollower";
+            TradeCopierEngine.Instance.UpsertRelationship(rel);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P171-D")));
+
+            Assert(LoggedEventContaining(log, "COPY_BLOCKED_NOT_ARMED"),
+                "The refusal to touch a live account while disarmed is in the structured log. This "
+                + "is the single most important line in the file during an audit and it went only "
+                + "to the Output tab.");
+            Assert(CountCopyOutcomes(log) == 1,
+                "One relationship, one outcome. Got: " + string.Join(" / ", log));
+            Assert(!follower.Orders.Any(),
+                "And nothing was sent to the live account, which is the behaviour the log claims.");
+        }
+
+        /// <summary>
+        /// The boundary between a TERMINAL outcome and an INFORMATIONAL one, which is what makes the
+        /// invariant self-maintaining -- and which the first run of mutation/mutate_p1_71.py proved
+        /// was unpinned: renaming QUARANTINE_EXIT_ALLOWED into the COPY_SKIPPED_ convention SURVIVED,
+        /// because no test both quarantined a relationship and counted its outcomes.
+        ///
+        /// Why it matters, concretely: a quarantined exit logs a notice AND copies. If the notice is
+        /// counted as an outcome, that one relationship reports two -- so a SECOND relationship
+        /// dropping in total silence still totals the expected number, and P1-71 is back with the
+        /// invariant reporting success.
+        /// </summary>
+        private static void TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome()
+        {
+            Console.WriteLine("\n[TEST] COPIER: the quarantine notice is informational, not a terminal outcome (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(2.0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var entry = LeaderExec(leader, mnq, OrderAction.Buy, 1, "P171-E");
+            entry.Time = SlipT0;
+            entry.Price = 18000.00;
+            TradeCopierEngine.Instance.OnExecution(entry);
+            FillFollowerCopy(follower, mnq, 18001.00, 120, "P171-E-F");   // 4 ticks vs a 2-tick limit
+            Assert(rel.IsQuarantined, "Precondition: the adverse entry fill quarantined the relationship.");
+
+            follower.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18001
+            });
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Sell, 1, "P171-E2")));
+
+            Assert(LoggedEventContaining(log, "QUARANTINE_EXIT_ALLOWED"),
+                "The quarantine notice is still logged -- it explains why an entry would have been "
+                + "refused where this exit was not.");
+            Assert(LoggedEventContaining(log, "COPY_SUBMITTED"),
+                "And the exit really was copied, which is the P1-22 rule: a quarantine must never "
+                + "strand the follower in a position the leader has left.");
+            Assert(CountCopyOutcomes(log) == 1,
+                "ONE relationship, ONE outcome -- the quarantine notice must not inflate the count. "
+                + "If it did, a second relationship could drop in silence and the totals would still "
+                + "look right. Got " + CountCopyOutcomes(log) + " in: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// The same boundary on the other informational event: a copy CLAMPED to a smaller size still
+        /// happens, so COPY_QTY_CLAMPED is a warning about size, not an outcome. Mutation showed
+        /// renaming it into the convention also survived.
+        /// </summary>
+        private static void TestCopier_P171_AClampWarningIsNotCountedAsAnOutcome()
+        {
+            Console.WriteLine("\n[TEST] COPIER: the size-clamp warning is informational, not a terminal outcome (P1-71)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            rel.FixedLotSize = 3;
+            rel.MaxPositionSize = 2;          // room for 2, the copy wants 3
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 3, "P171-F")));
+
+            Assert(LoggedEventContaining(log, "COPY_QTY_CLAMPED"),
+                "The clamp is announced -- the follower is now deliberately out of ratio with the "
+                + "leader, which is exactly the kind of thing that must not be silent.");
+            Assert(LoggedEventContaining(log, "COPY_SUBMITTED"),
+                "And the copy still went out, at the reduced size.");
+            Assert(CountCopyOutcomes(log) == 1,
+                "One relationship, one outcome: the clamp warning must not be counted. Got "
+                + CountCopyOutcomes(log) + " in: " + string.Join(" / ", log));
+
+            var placed = follower.Orders.FirstOrDefault(o => o.Name == "COPIER_FOLLOW");
+            Assert(placed != null && placed.Quantity == 2,
+                "The order really was clamped to 2, so the warning describes something true "
+                + "(got qty " + (placed == null ? "no order" : placed.Quantity.ToString()) + ").");
+        }
+
+        // ------------------------------------------------------------------
+        // P1-70. On 2026-08-13 the live audit log recorded these two lines for the same account, the
+        // same leg, in the same millisecond:
+        //
+        //   BRACKET_MODIFIED             stop moved to 1@29830.75 in place ... no cancel/replace,
+        //                                so no unprotected window.
+        //   BRACKET_STOP_CHANGE_IGNORED  provider ignored Change() for stop (still 1@29820.75,
+        //                                requested 1@29830.75); falling back to cancel-then-create.
+        //
+        // The first line asserts three things it cannot know yet: that the stop moved, that it moved
+        // in place, and that there was therefore no unprotected window. `Change()` is a REQUEST, and
+        // NT8 leaves the caller's desired values on the Order until the provider settles -- so at the
+        // moment that line is written, the order reads as changed whether or not it was.
+        //
+        // This is the same defect already fixed once inside this feature: FILL_MEASURED used to print
+        // a stored value nothing had computed for that fill. An audit log that states an outcome it
+        // has not observed is worse than one that says nothing, because it is believed.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// A trail the provider HONOURS: the request is announced as a request, and the confirmation
+        /// arrives only once the order settles away from its pre-request values.
+        /// </summary>
+        private static void TestBracket_P170_AModifyIsAnnouncedAsARequestAndConfirmedOnlyOnSettle()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: a stop modify is logged as REQUESTED, and CONFIRMED only on settle (P1-70)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18000.00, "P170-A");
+            leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17990.00));
+
+            var log = CaptureCopierLog(() =>
+                leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17996.00)));
+
+            Assert(LoggedEventContaining(log, "BRACKET_MODIFY_REQUESTED"),
+                "The broker call is announced as a REQUEST. Got: " + string.Join(" / ", log));
+            Assert(!LoggedEventContaining(log, "no unprotected window")
+                   || LoggedEventType(log, "BRACKET_MODIFY_CONFIRMED"),
+                "Nothing claims 'no unprotected window' before the provider has settled. That exact "
+                + "sentence was written to the live log and contradicted in the same millisecond.");
+
+            // Settle the order at the requested values, which is what a cooperative provider does.
+            var stop = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+            var settled = CaptureCopierLog(() => follower.SettleChange(stop));
+
+            Assert(LoggedEventContaining(settled, "BRACKET_MODIFY_CONFIRMED"),
+                "Once the provider settles the order away from its pre-request values, the "
+                + "modification is confirmed -- and THAT is the line an audit can rely on. Got: "
+                + string.Join(" / ", settled));
+            Assert(LoggedEventContaining(settled, "17996"),
+                "The confirmation carries the SETTLED price, not the requested one, so a partial "
+                + "honour (P0-62's shape: price applied, quantity refused) is visible rather than "
+                + "reported as a clean success.");
+        }
+
+        /// <summary>
+        /// The case that produced the contradiction live: the provider ignores the change. There must
+        /// be NO confirmation, because nothing was confirmed.
+        /// </summary>
+        private static void TestBracket_P170_AnIgnoredChangeIsNeverConfirmed()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: a Change() the provider ignores produces no confirmation at all (P1-70)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18000.00, "P170-B");
+            leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17990.00));
+
+            // The provider accepts Change() and silently discards it -- P0-63, which is what
+            // `provider: Simulator` does on the real box.
+            follower.SimulateChangeIsSilentNoOp = true;
+
+            var original = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+            var log = CaptureCopierLog(() =>
+            {
+                try
+                {
+                    leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17996.00));
+                    // The round trip completes. Live, THIS is the moment the order comes back at its
+                    // original values, and the only moment the no-op is visible at all.
+                    follower.SettleChange(original);
+                }
+                finally { follower.SimulateChangeIsSilentNoOp = false; }
+            });
+
+            Assert(LoggedEventContaining(log, "BRACKET_STOP_CHANGE_IGNORED"),
+                "The no-op is detected on settle, which is P0-63's fix working. Got: "
+                + string.Join(" / ", log));
+            Assert(!LoggedEventType(log, "BRACKET_MODIFY_CONFIRMED"),
+                "And NOTHING was confirmed, because nothing was honoured. A confirmation here is "
+                + "precisely the false success line this defect is about.");
+        }
+
+        /// <summary>
+        /// The PARTIAL honour: the provider applies the price and refuses the quantity, which a live
+        /// trade on 2026-08-10 established as real (`2@29742.5` requested, `1@29742.5` delivered).
+        ///
+        /// This is the only path where "the change took" and "the change took what I asked for" come
+        /// apart, so it is the only way a confirmation line can be honestly wrong -- and it is why
+        /// the confirmation must print the SETTLED values rather than the requested ones. Mutation
+        /// found this unpinned: reporting `req.RequestedQuantity@req.RequestedPrice` survived,
+        /// because no test made the two differ. The stub could not express it until now; the gap was
+        /// recorded in mutation/mutate_p0_63.py and this closes it.
+        /// </summary>
+        private static void TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: a partly honoured Change() is reported with the SETTLED values (P1-70 / P0-62)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18000.00, "P170-C");
+            leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17990.00));
+
+            var stop = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+            Assert(stop.Quantity == 1, "Precondition: the mirrored stop covers 1 contract.");
+
+            // The leader SCALES IN, so the mirrored stop has to GROW from 1 to 2 -- which is exactly
+            // the modification P0-62 established a provider will refuse while still applying the
+            // price. Without a quantity that actually differs there is no partial honour to observe:
+            // the first version of this test requested the quantity the provider already held, and
+            // correctly reported no refusal.
+            follower.SimulateChangeSettlesOneTickAway = true;
+            List<string> log;
+            try
+            {
+                log = CaptureCopierLog(() =>
+                {
+                    leader.TriggerOrderUpdate(LeaderStop(mnq, OrderAction.Sell, 1, 17996.00));
+                    follower.SettleChange(stop);
+                });
+            }
+            finally { follower.SimulateChangeSettlesOneTickAway = false; }
+
+            Assert(LoggedEventType(log, "BRACKET_MODIFY_CONFIRMED"),
+                "The change DID move the order, so it settles away from its pre-request values and "
+                + "the no-op detector correctly does not fire. Got: " + string.Join(" / ", log));
+
+            // FirstOrDefault, not First: a mutant that renames the event made First throw, which
+            // crashed the runner before it could print a result line -- and the battery scored that
+            // as a SURVIVOR. A test that dies instead of failing is a hole in the harness.
+            var confirmation = log.FirstOrDefault(l => l.StartsWith("BRACKET_MODIFY_CONFIRMED", StringComparison.Ordinal));
+            Assert(confirmation != null, "A confirmation was logged (see above).");
+            // Guarded, not just null-checked: Assert RECORDS a failure and returns, it does not
+            // halt. Dereferencing below would throw and abort every test after this one -- which is
+            // exactly what happened under mutation, and it is worse than the failure it hides.
+            confirmation = confirmation ?? string.Empty;
+            Assert(confirmation.IndexOf("PARTIALLY honoured", StringComparison.Ordinal) >= 0,
+                "And it is flagged as partial: the provider settled somewhere other than where it "
+                + "was asked, which must not read as a clean modification. Got: " + confirmation);
+            Assert(confirmation.IndexOf("17995.75", StringComparison.Ordinal) >= 0,
+                "And it prints the SETTLED price (17995.75), not the requested one (17996.00). "
+                + "Printing the request would be P1-70 again in the line that replaced it -- the "
+                + "verdict alone is not enough, because the numbers are what an operator reads. "
+                + "Got: " + confirmation);
+            Assert(Math.Abs(stop.StopPrice - 17995.75) < 1e-9,
+                "Precondition on the stub: the provider settled a tick away from the request -- "
+                + "17995.75, not the 17996.00 asked for (got " + stop.StopPrice + ").");
+        }
+
+        // ------------------------------------------------------------------
         // P?-66. P1-22's measurement produced NO reading at all on the live path, and every
         // candidate explanation is indistinguishable from every other because ObserveFollowerFill
         // returns SILENTLY five different ways. A zero in the UI can mean the copy was clean, the
@@ -1606,6 +2080,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool LoggedEventContaining(List<string> log, string needle)
         {
             return log.Any(l => l.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        /// <summary>
+        /// Matches the event TYPE only -- the part before the '|'. LoggedEventContaining searches the
+        /// message too, so a message that mentions another event by name makes a negative assertion
+        /// silently unreliable. That happened: the P1-70 REQUESTED line originally said "watch for
+        /// BRACKET_MODIFY_CONFIRMED", which made "no confirmation was logged" fail against a log that
+        /// contained no confirmation. Use this for any assertion that an event is ABSENT.
+        /// </summary>
+        private static bool LoggedEventType(List<string> log, string eventType)
+        {
+            return log.Any(l => l.Split('|')[0].Equals(eventType, StringComparison.OrdinalIgnoreCase));
         }
 
         private static void TestCopierSlip_P66_AMeasuredFillIsAnnouncedNotJustStored()

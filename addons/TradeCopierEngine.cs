@@ -244,7 +244,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
-                    NinjaTrader.Code.Output.Process($"[RECONCILER MISMATCH] Leader: {leaderQty}, Follower: {followerQty}. Exiting follower position.", PrintTo.OutputTab1);
+                    // P1-71: this FLATTENS a live follower position and logged to the Output tab
+                    // only. A broker action with no audit-log entry is the single worst version of
+                    // this defect -- the position disappears and nothing readable says who did it.
+                    CopierLog(followerAccount != null ? followerAccount.Name : null,
+                        "RECONCILER_DIRECTION_MISMATCH",
+                        $"leader is {leaderQty} and follower is {followerQty} on "
+                        + $"{(instrument != null ? instrument.FullName : "?")} -- opposite directions, "
+                        + "so FLATTENING the follower. This is a broker action taken by the copier.");
                     try { followerAccount.Flatten(new[] { instrument }); } catch {}
                 });
             }
@@ -1371,6 +1378,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (isStopLeg) bracket.StopChangeRequest = null;
                         else bracket.TargetChangeRequest = null;
                     }
+
+                    // P1-70: this is the ONLY place a modification can honestly be called done --
+                    // the provider has settled the order and it is not at its pre-request values.
+                    // It was silent, which is why the optimistic line upstream looked necessary.
+                    // Note "took" is not the same as "took exactly": a provider that applies the
+                    // price and refuses the quantity (P0-62's shape) lands here too, so the settled
+                    // values are printed rather than the requested ones.
+                    bool exact = Math.Abs(currentPrice - req.RequestedPrice) <= 1e-9
+                                 && currentQty == req.RequestedQuantity;
+                    CopierLog(acc.Name, isStopLeg ? "BRACKET_MODIFY_CONFIRMED" : "BRACKET_TARGET_MODIFY_CONFIRMED",
+                        $"{o.Instrument.FullName}: provider settled the {(isStopLeg ? "stop" : "target")} "
+                        + $"at {currentQty}@{currentPrice} (requested {req.RequestedQuantity}@{req.RequestedPrice}, "
+                        + $"was {req.OriginalQuantity}@{req.OriginalPrice})"
+                        + (exact
+                            ? " -- modified in place, so no unprotected window."
+                            : " -- ⚠ PARTIALLY honoured: it moved, but not to the requested values.")
+                        + (deferred ? " A deferred instruction is still pending." : ""));
                     return false;
                 }
 
@@ -2183,10 +2207,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 };
                             }
 
-                            CopierLog(followerAcc.Name, "BRACKET_MODIFIED",
-                                $"{instrument.FullName} stop moved to {liveQty}@{stopPrice} in place "
-                                + $"(leader offset {bracket.StopOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}); "
-                                + "no cancel/replace, so no unprotected window.");
+                            // P1-70: this used to be BRACKET_MODIFIED, asserting "stop moved ... in
+                            // place ... no cancel/replace, so no unprotected window" -- three claims
+                            // it cannot make yet. Change() is a REQUEST. NT8 leaves the caller's
+                            // desired values on the Order until the provider settles, so at this
+                            // instant the order *reads* as changed whether or not it was. On
+                            // 2026-08-13 this line was written to the live audit log and contradicted
+                            // by BRACKET_STOP_CHANGE_IGNORED in the same millisecond.
+                            // The confirmation now lives where the evidence is: on settle, in
+                            // DetectAndRecoverIgnoredChange.
+                            CopierLog(followerAcc.Name, "BRACKET_MODIFY_REQUESTED",
+                                $"{instrument.FullName} stop change REQUESTED: {liveQty}@{stopPrice} "
+                                + $"(from {originalQty}@{originalPrice}, leader offset "
+                                + $"{bracket.StopOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}). "
+                                + "Not confirmed yet: the provider has not settled it. The settle "
+                                + "event says whether it was honoured, ignored, or partly applied.");
                             return;
                         }
                         catch (Exception cex)
@@ -2600,9 +2635,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 };
                             }
 
-                            CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFIED",
-                                $"{instrument.FullName} target moved to {liveQty}@{targetPrice} in place "
-                                + $"(leader offset {bracket.TargetOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}).");
+                            // P1-70, same as the stop leg: a request, not an outcome.
+                            CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_REQUESTED",
+                                $"{instrument.FullName} target change REQUESTED: {liveQty}@{targetPrice} "
+                                + $"(leader offset {bracket.TargetOffset:+0.##;-0.##}, follower entry "
+                                + $"{bracket.FollowerEntryPrice}). Not confirmed yet: the provider has "
+                                + "not settled it. The settle event says whether it was honoured.");
                             return;
                         }
                         catch (Exception cex)
@@ -3134,15 +3172,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 rel.QuarantineReason = string.Format(
                     "Entry slipped {0:F1} ticks against the follower vs the leader fill (limit {1:F1}). Exits are still copied.",
                     ticks, rel.MaxSlippageTicks);
-                NinjaTrader.Code.Output.Process(
-                    $"[CopierEngine] SLIPPAGE_QUARANTINE: {rel.LeaderAccountName} -> {rel.FollowerAccountName} entry slipped {ticks:F1} ticks (limit {rel.MaxSlippageTicks:F1}). New entries blocked; exits still copied.",
-                    PrintTo.OutputTab1);
+                // P1-71: this BLOCKS every future entry on the relationship and went to the Output
+                // tab only. A state change that silences the copier belongs in the audit log --
+                // otherwise "the copier stopped copying" has no recorded cause.
+                CopierLog(rel.FollowerAccountName, "SLIPPAGE_QUARANTINE",
+                    $"{rel.LeaderAccountName} -> {rel.FollowerAccountName} entry slipped {ticks:F1} "
+                    + $"ticks (limit {rel.MaxSlippageTicks:F1}). NEW ENTRIES ARE NOW BLOCKED on this "
+                    + "relationship; exits are still copied. Clear IsQuarantined to resume.");
             }
             else
             {
-                NinjaTrader.Code.Output.Process(
-                    $"[CopierEngine] SLIPPAGE_ON_EXIT: {rel.LeaderAccountName} -> {rel.FollowerAccountName} exit slipped {ticks:F1} ticks (limit {rel.MaxSlippageTicks:F1}). Not quarantining -- that would strand the follower.",
-                    PrintTo.OutputTab1);
+                CopierLog(rel.FollowerAccountName, "SLIPPAGE_ON_EXIT",
+                    $"{rel.LeaderAccountName} -> {rel.FollowerAccountName} exit slipped {ticks:F1} "
+                    + $"ticks (limit {rel.MaxSlippageTicks:F1}). Deliberately NOT quarantining: that "
+                    + "would strand the follower in a position the leader has left.");
             }
         }
 
@@ -3399,20 +3442,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (rel.IsQuarantined)
                 {
-                    NinjaTrader.Code.Output.Process(
-                        $"[CopierEngine] QUARANTINE_EXIT_ALLOWED: {rel.LeaderAccountName} -> {rel.FollowerAccountName} is quarantined ({rel.QuarantineReason}), but this is an exit, so it is copied anyway.",
-                        PrintTo.OutputTab1);
+                    // NOT a terminal outcome -- the exit is copied anyway, so this must not match
+                    // the COPY_SUBMITTED/SKIPPED_/BLOCKED_/FAILED_ convention the P1-71 invariant
+                    // counts, or a genuine drop could hide behind it.
+                    CopierLog(rel.FollowerAccountName, "QUARANTINE_EXIT_ALLOWED",
+                        $"{rel.LeaderAccountName} -> {rel.FollowerAccountName} is quarantined "
+                        + $"({rel.QuarantineReason}), but this is an exit, so it is copied anyway.");
                 }
 
                 Account followerAcc = Account.All.FirstOrDefault(a => a.Name.Equals(rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
-                if (followerAcc == null) continue;
+                if (followerAcc == null)
+                {
+                    // P1-71: this was `if (followerAcc == null) continue;` -- no log of any kind. A
+                    // relationship naming an account that no longer exists in NT8 dropped every copy
+                    // in total silence, and the config is the only place the name appears.
+                    CopierLog(rel.FollowerAccountName, "COPY_SKIPPED_ACCOUNT_MISSING",
+                        $"relationship {rel.Id} names follower account '{rel.FollowerAccountName}', "
+                        + "which is not in Account.All -- renamed, removed, or not connected in this "
+                        + "NT8 instance. Nothing was copied. Fix the relationship or the account: "
+                        + "this will drop EVERY copy silently until one of them changes.");
+                    continue;
+                }
 
                 bool isSimFollower = IsSimulationAccount(followerAcc);
 
                 // SAFETY GATE: Disarmed copier MUST NOT place orders on non-Sim (live) accounts
                 if (!rel.ArmedForLive && !isSimFollower)
                 {
-                    NinjaTrader.Code.Output.Process($"[CopierEngine] BLOCKED execution copy to live account {followerAcc.Name} (ArmedForLive=false)", PrintTo.OutputTab1);
+                    CopierLog(followerAcc.Name, "COPY_BLOCKED_NOT_ARMED",
+                        $"follower '{followerAcc.Name}' is LIVE (provider {followerAcc.Provider}) and "
+                        + "the relationship is not ArmedForLive; refusing to place the copy.");
                     continue;
                 }
 
@@ -3428,6 +3487,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                         {
                             targetInstrument = resolvedInst;
                         }
+                        else
+                        {
+                            // P1-71: silent at baseline, and it does NOT skip the copy -- it falls
+                            // through and trades the LEADER's instrument on the follower. That is a
+                            // wrong-instrument copy presented as a normal one, so it is logged loudly
+                            // and deliberately kept out of the terminal-outcome convention.
+                            CopierLog(followerAcc.Name, "SYMBOL_TRANSLATION_UNRESOLVED",
+                                $"AutoSymbolConversion mapped '{exec.Instrument.FullName}' to "
+                                + $"'{translatedSymbolName}', which does not resolve to an instrument. "
+                                + $"FALLING BACK to the leader's own instrument "
+                                + $"'{exec.Instrument.FullName}' -- check CustomSymbolMappings.");
+                        }
                     }
                 }
 
@@ -3437,19 +3508,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (!riskGuard.CanTrade(acctName, exec.Instrument.FullName, "TradeCopier"))
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] BLOCKED execution copy: leader account {acctName} is locked for {exec.Instrument.FullName}", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_BLOCKED_LEADER_LOCKED",
+                            $"LEADER account '{acctName}' is locked for {exec.Instrument.FullName}, so "
+                            + $"the copy to '{followerAcc.Name}' was not placed. Note this is the "
+                            + "leader's lockout, not the follower's.");
                         continue;
                     }
 
                     if (!riskGuard.CanTrade(followerAcc.Name, targetInstrument.FullName, "TradeCopier"))
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] BLOCKED execution copy: follower account {followerAcc.Name} is locked for {targetInstrument.FullName}", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_BLOCKED_FOLLOWER_LOCKED",
+                            $"follower account '{followerAcc.Name}' is locked for "
+                            + $"{targetInstrument.FullName}; copy not placed.");
                         continue;
                     }
 
                     if (!isSimFollower && !riskGuard.IsGuardProtecting(followerAcc.Name))
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] COPY_BLOCKED_NO_GUARD: follower account {followerAcc.Name} is live but not protected by RiskGuard; skipping copy for {targetInstrument.FullName}", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_BLOCKED_NO_GUARD",
+                            $"follower '{followerAcc.Name}' is LIVE but RiskGuard is not protecting it; "
+                            + $"skipping copy for {targetInstrument.FullName}.");
                         continue;
                     }
                 }
@@ -3457,7 +3535,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (!isSimFollower)
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] COPY_BLOCKED_NO_GUARD: RiskGuard is unavailable and follower account {followerAcc.Name} is live; skipping copy for {targetInstrument.FullName}", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_BLOCKED_NO_GUARD",
+                            $"RiskGuard is UNAVAILABLE (no instance) and follower '{followerAcc.Name}' "
+                            + $"is LIVE; skipping copy for {targetInstrument.FullName}.");
                         continue;
                     }
                 }
@@ -3478,22 +3558,39 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (isExit && currentFollowerPos == 0)
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] NO POSITION TO EXIT: Follower has no position in {targetInstrument.FullName} on account {followerAcc.Name}. Copy order skipped.", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_SKIPPED_NO_POSITION_TO_EXIT",
+                            $"follower '{followerAcc.Name}' holds no position in "
+                            + $"{targetInstrument.FullName}, so the leader's exit has nothing to close. "
+                            + "This is usually correct -- but if the follower SHOULD have been in, the "
+                            + "entry copy is what failed, and its own outcome event says why.");
                     }
                     else if (isClamped)
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] CLAMPED TO ZERO: Follower position on {followerAcc.Name} at MaxPositionSize {rel.MaxPositionSize}. Copy order skipped.", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_SKIPPED_CLAMPED_TO_ZERO",
+                            $"follower '{followerAcc.Name}' is already at MaxPositionSize "
+                            + $"{rel.MaxPositionSize} (currently {currentFollowerPos}); no room for the "
+                            + "copy, so nothing was placed.");
                     }
                     else
                     {
-                        NinjaTrader.Code.Output.Process($"[CopierEngine] SUB_MINIMUM_SKIPPED: Scaled copy quantity for {targetInstrument.FullName} is below 1 contract on account {followerAcc.Name}. Copy order skipped.", PrintTo.OutputTab1);
+                        CopierLog(followerAcc.Name, "COPY_SKIPPED_SUB_MINIMUM",
+                            $"scaled quantity for {targetInstrument.FullName} on '{followerAcc.Name}' "
+                            + $"came out below 1 contract from leader qty {exec.Quantity} "
+                            + $"(ratio {rel.QuantityRatio}, sizing {rel.SizingMode}); nothing placed.");
                     }
                     continue;
                 }
 
                 if (isClamped)
                 {
-                    NinjaTrader.Code.Output.Process($"[CopierEngine] POSITION CLAMP WARNING: Follower copy qty for {targetInstrument.FullName} clamped to {targetQty} (MaxPositionSize: {rel.MaxPositionSize}, CurrentPos: {currentFollowerPos}) on account {followerAcc.Name}", PrintTo.OutputTab1);
+                    // NOT terminal: the copy proceeds, at a REDUCED size. Deliberately outside the
+                    // P1-71 outcome convention -- a size change is not an outcome, and counting it
+                    // as one would let a later drop hide behind it.
+                    CopierLog(followerAcc.Name, "COPY_QTY_CLAMPED",
+                        $"copy quantity for {targetInstrument.FullName} on '{followerAcc.Name}' clamped "
+                        + $"to {targetQty} by MaxPositionSize {rel.MaxPositionSize} "
+                        + $"(current position {currentFollowerPos}). The copy IS being placed, smaller "
+                        + "than the leader's -- so the follower is now deliberately out of ratio.");
                 }
 
                 OrderAction followerAction = leadOrderAction;
@@ -3540,11 +3637,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // order that never reached the broker has no fill coming, and its entry
                         // would sit in the pending map until evicted.
                         RecordPendingCopy(followerOrder, rel, exec, targetInstrument, followerAction, isExit);
+
+                        // P1-71: the terminal SUCCESS outcome. Without it, "exactly one outcome per
+                        // relationship" could be satisfied by logging skips only, and the invariant
+                        // would prove nothing.
+                        CopierLog(followerAcc.Name, "COPY_SUBMITTED",
+                            $"{targetInstrument.FullName} {followerAction} {targetQty} submitted to "
+                            + $"'{followerAcc.Name}' mirroring leader '{acctName}' "
+                            + $"{leadOrderAction} {exec.Quantity}@{exec.Price} (isExit={isExit}).");
+                    }
+                    else
+                    {
+                        // P1-71: CreateOrder returning null was completely silent, and it is the one
+                        // failure that looks identical to "the copier never saw the execution".
+                        CopierLog(followerAcc.Name, "COPY_FAILED_CREATE_ORDER_NULL",
+                            $"CreateOrder returned null for {targetInstrument.FullName} "
+                            + $"{followerAction} {targetQty} on '{followerAcc.Name}'; nothing was "
+                            + "submitted. Usually the instrument is not tradeable on that account.");
                     }
                 }
                 catch (Exception ex)
                 {
-                    NinjaTrader.Code.Output.Process($"[CopierEngine] Error placing follower order on {followerAcc.Name}: {ex.Message}", PrintTo.OutputTab1);
+                    CopierLog(followerAcc.Name, "COPY_FAILED_SUBMIT",
+                        $"placing {targetInstrument.FullName} {followerAction} {targetQty} on "
+                        + $"'{followerAcc.Name}' threw {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
