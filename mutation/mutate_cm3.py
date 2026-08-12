@@ -4,9 +4,9 @@ A surviving mutant is a test that only looks like coverage.
 """
 import os, subprocess, sys
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-ENGINE = os.path.join(REPO, 'scripts', 'ninjatrader', 'addons', 'TradeCopierEngine.cs')
+ENGINE = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 
 MUTANTS = [
     ("merge -> rebuild (group)",
@@ -78,11 +78,11 @@ MUTANTS = [
 
 def run():
     b = subprocess.run(['dotnet', 'build', 'RiskGuardTests.csproj', '-v', 'q', '--nologo'],
-                       cwd=os.path.join(REPO, 'ninjatrader-addon'), capture_output=True, text=True)
+                       cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
     if 'Build succeeded' not in b.stdout:
         return 'BUILD FAILED'
     r = subprocess.run(['dotnet', 'run', '--project', 'RiskGuardTests.csproj', '--no-build'],
-                       cwd=os.path.join(REPO, 'ninjatrader-addon'), capture_output=True, text=True)
+                       cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
     for line in r.stdout.splitlines():
         if line.startswith('RESULTS:'):
             return line.strip()
@@ -109,3 +109,11 @@ for name, old, new in MUTANTS:
 open(ENGINE, 'w', encoding='utf-8', newline='').write(original)
 print('\nrestored original;', run())
 print('\nSURVIVORS:', survivors if survivors else 'none')
+
+# Exit non-zero when anything survived. Without this the script printed
+# "SURVIVORS: [...]" and still exited 0, so a CI step that ran it was a green light
+# that proved nothing -- the same lying-harness shape these batteries exist to catch.
+# An ANCHOR skip counts as a survivor: a mutation that could not be applied was not
+# tested, and silently downgrading that to a pass is how coverage rots.
+sys.exit(1 if survivors else 0)
+

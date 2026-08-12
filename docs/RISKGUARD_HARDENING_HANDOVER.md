@@ -1,5 +1,19 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
+> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
+> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
+> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
+> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
+> repathed. **Paths inside historical records -- "what landed", migration steps, closed
+> defects -- are deliberately left as they were written**: that is what the record said at the
+> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
+> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md)
+>
+> **One thing the split did change behaviourally**: `TestP2_38`'s three assertions against
+> `McpBridgeAddOn.cs`'s source text moved to `nt8-mcp-bridge` (that file is not in this repo),
+> so this suite reports **926**, not 929. The three live in that repo's harness.
+
+
 **Last updated**: 2026-08-12 (session 15 — **the copier RATIO CONVERTER IS COMPLETE and DEPLOYED**:
 slices 1, 2, 3a, 3b, suite **929/0**, `nt_compile` 0 errors, and validated on the sim accounts —
 §4w, §4x, §4y, **§4z**. A feature, not a defect: no `P`-number, nothing closed.
@@ -204,7 +218,7 @@ deliberately, and run a shadow session on it first.
 ```powershell
 # the suite, direct -- ALWAYS build first; --no-build after a failed build
 # silently reports the previous assembly's result
-cd ninjatrader-addon; dotnet build -v q --nologo; dotnet run --no-build -v q --nologo
+dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo
 
 # deploy: verify first, then sync, then recompile in NT8 (hot-swaps)
 .\.venv\Scripts\python.exe scripts\utils\sync_nt8_strategies.py --verify --only addons
@@ -2448,7 +2462,7 @@ the next omitted field just as destroyed.
 
 ### Mutation testing found what the tests missed — again
 
-`scripts/ninjatrader/addons/mutation/mutate_cm3.py`, 11 mutants, **all killed**.
+`mutation/mutate_cm3.py`, 11 mutants, **all killed**.
 Three survived the first draft of the CM3 tests and are the reason four more
 tests exist:
 

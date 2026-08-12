@@ -1,5 +1,14 @@
 # RiskGuard + TradeCopier Hardening Plan
 
+> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
+> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
+> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
+> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
+> repathed. **Paths inside historical records -- "what landed", migration steps, closed
+> defects -- are deliberately left as they were written**: that is what the record said at the
+> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
+> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
+
 **Status** (2026-08-10, branch `harden/riskguard-p0-51`, suite **637 passed / 0 failed**): **43 of 56 closed**.
 **`P0-51`/`P1-52` are VALIDATED LIVE** (replay, 2026-08-10 — see handover §4n). That replay opened
 `P0-55` and `P1-54`, both since **closed**.
@@ -59,7 +68,7 @@ could have been: they are both about what *another* program's orders look like t
 >
 > Commits from the P0 phase (`d94d5521` … `f6405c7f`) still say `P1-30`/`P1-31`. Map them here.
 > **When adding a defect, take the next free number — do not extend a band in place.**
-**Scope**: `scripts/ninjatrader/addons/{RiskGuardAddOn,TradeCopierEngine,TradeCopierWindow,PropFirmProtectionSuite,DynamicAtmManager}.cs`
+**Scope**: `addons/{RiskGuardAddOn,TradeCopierEngine,TradeCopierWindow,PropFirmProtectionSuite,DynamicAtmManager}.cs`
 **Comparison baseline**: `github.com/mkalhitti-cloud/universal-or-strategy` (V12 Photon Kernel — SIMA fleet dispatch, REAPER defense, Symmetry Guard)
 **Related**: [RiskGuardAddOn.md](RiskGuardAddOn.md) (current design doc — contains drift, see §6), [NT8_FILE_ORGANIZATION.md](NT8_FILE_ORGANIZATION.md)
 
@@ -1998,11 +2007,11 @@ applies to all real order submission in `RiskGuardAddOn.ExecuteAction`. The 4,23
 2. Keep `OnExecution`/`ExecuteAction` as thin submission shells over those functions.
 3. Extend the stub `Account` (`TestingStubs.cs`) with a recording `Submit`/`Cancel`/`Flatten` so
    the submission shells become testable too.
-4. Add a GitHub Actions job (`dotnet run --project ninjatrader-addon/RiskGuardTests.csproj`)
+4. Add a GitHub Actions job (`dotnet run --project tests/RiskGuardTests.csproj`)
    with a non-zero exit on failure — the harness currently has to be run by hand.
 
 ### P2-28. Three divergent copies of the addon sources + committed build output — ✅ **closed 2026-08-07**
-- `scripts/ninjatrader/addons/` — canonical (referenced by `ninjatrader-addon/RiskGuardTests.csproj`)
+- `scripts/ninjatrader/addons/` — canonical (referenced by `tests/RiskGuardTests.csproj`)
 - ~~`scripts/strategies/nt8/addons_DONOTUSE/`~~ — **deleted**. Nine tracked files, zero code
   references (only this plan mentioned it); recoverable from history if ever needed.
 - `mcp/ninjatrader-mcp/nt8-addon/` — **out of scope for this repo.** That path is a *git

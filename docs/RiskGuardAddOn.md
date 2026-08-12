@@ -1,5 +1,14 @@
 # RiskGuardAddOn Architecture
 
+> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
+> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
+> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
+> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
+> repathed. **Paths inside historical records -- "what landed", migration steps, closed
+> defects -- are deliberately left as they were written**: that is what the record said at the
+> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
+> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
+
 ## 1. Overview
 The `RiskGuardAddOn` is a centralized, robust risk management module for NinjaTrader that actively monitors positions, orders, and PnL across multiple accounts. It enforces strict trading rules (max size, daily loss, consecutive losses, trading windows, stop-loss attachments) and automatically takes defensive actions (flattening positions, cancelling orders) when thresholds are breached.
 
@@ -160,7 +169,7 @@ NinjaTrader's `Order.Oco` (string) identifies the OCO group. `McpBridgeAddOn` al
 - **Version Constant**: `public const string Version = "1.1.0";` defined in `RiskGuardAddOn.cs`.
 - **WPF UI**: Window title bar renders `NinjaTrader Cross-Account Risk Guard Dashboard v1.1.0`.
 - **REST Endpoints**: `GET /api/riskguard/version` returns `{ "success": true, "version": "1.1.0", "name": "RiskGuardAddOn" }`. `GET /api/dev/inspect-state` includes `"version": "1.1.0"`.
-- **Changelog**: Release history maintained in `ninjatrader-addon/VERSION.md`.
+- **Changelog**: Release history maintained in `docs/VERSION.md`.
 
 ## 7. NinjaTrader MCP Integration (in-role)
 
@@ -280,7 +289,7 @@ Two PowerShell scripts drive the running NT8 instance through the MCP bridge (po
 
 **Unit tests** (no NT8 required):
 ```powershell
-dotnet run --project ninjatrader-addon/RiskGuardTests.csproj
+dotnet run --project tests/RiskGuardTests.csproj
 ```
 
 **Stress tests** (require live NT8 with McpBridgeAddOn on port 7890):

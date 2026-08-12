@@ -11,37 +11,37 @@
       "regions": [
         {
           "id": "PositionGuardFsm",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "public class PositionGuardFsm",
           "note": "add CoveredQuantity, GracePending, GraceEmitted"
         },
         {
           "id": "SeedFsms",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void SeedFsmsForExistingPositions(",
           "note": "use the new arming helper; behaviour unchanged"
         },
         {
           "id": "UpdateFsmOnPosition",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void UpdateFsmOnPosition(",
           "note": "dispose outgoing timer on flip; under-coverage detection; define ArmGraceTimer here"
         },
         {
           "id": "UpdateFsmOnOrder",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void UpdateFsmOnOrder(",
           "note": "re-arm on every Unprotected transition; maintain CoveredQuantity"
         },
         {
           "id": "EvaluateGraceExpiry",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal List<GuardAction> EvaluateGraceExpiry(",
           "note": "coverage-aware entry condition, delta-sized action, GraceEmitted latch"
         },
         {
           "id": "FsmWatchdog",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void FsmWatchdog(",
           "note": "lock-safe remediation via timer arming + once-per-episode dedupe"
         }
@@ -56,25 +56,25 @@
       "regions": [
         {
           "id": "PositionGuardFsm",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "public class PositionGuardFsm",
           "note": "add AutoStopAttempts (int) used by the escalation ceiling"
         },
         {
           "id": "ValidateInvariant",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private bool ValidateInvariant(",
           "note": "real risk-reducing arbiter for PlaceStopOrder"
         },
         {
           "id": "ExecuteAction",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void ExecuteAction(",
           "note": "live sizing, reserve-before-submit, rollback, attempt ceiling"
         },
         {
           "id": "StopGuardConfig",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "public class StopGuardConfig",
           "note": "add MaxAutoStopAttempts (default 2)"
         }
@@ -89,19 +89,19 @@
       "regions": [
         {
           "id": "AccountState",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "re:^\\s*public class AccountState\\s*$",
           "note": "add PeakOpenGain + PeakGivebackTriggered; reset on flat"
         },
         {
           "id": "EvaluatePnLRules",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal List<GuardAction> EvaluatePnLRules(",
           "note": "consistent basis, preconditions, latch"
         },
         {
           "id": "EvaluatePeakEquityGiveback",
-          "file": "scripts/ninjatrader/addons/PropFirmProtectionSuite.cs",
+          "file": "addons/PropFirmProtectionSuite.cs",
           "anchor": "public bool EvaluatePeakEquityGiveback(",
           "note": "document + harden the predicate"
         }
@@ -116,19 +116,19 @@
       "regions": [
         {
           "id": "CalculateFollowerQuantity",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public int CalculateFollowerQuantity(CopierRelationship rel, int leaderQty, string rawSymbol, int currentFollowerPosition",
           "note": "no sub-1 floor; exits clamped to follower position"
         },
         {
           "id": "CalculateFollowerQuantityShim",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public int CalculateFollowerQuantity(CopierRelationship rel, int leaderQty, string rawSymbol, bool isExit = false)",
           "note": "keep the existing signature working"
         },
         {
           "id": "OnExecution",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public void OnExecution(Execution exec)",
           "note": "handle zero-quantity outcomes and log reasons"
         }
@@ -143,13 +143,13 @@
       "regions": [
         {
           "id": "IsAccountLocked",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "public bool IsAccountLocked(string accountName)",
           "note": "append the new public IsGuardProtecting query after this method"
         },
         {
           "id": "OnExecution",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public void OnExecution(Execution exec)",
           "note": "risk gate + fail-closed on unguarded live followers"
         }

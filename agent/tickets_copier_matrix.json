@@ -49,13 +49,13 @@
       "regions": [
         {
           "id": "R1",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "int currentFollowerPosition, bool isExit, out bool isClamped)",
           "note": "The sizing implementation, lines 429-534. Anchor on this TAIL: the leading text is shared with the convenience overload at 536 and matches both."
         },
         {
           "id": "R2",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public string TranslateSymbol(string rawSymbol, CopierRelationship rel = null)",
           "note": "Symbol translation, lines 382-427. Contains both the CustomSymbolMappings check and the mini<->micro auto table."
         }

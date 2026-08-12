@@ -1,5 +1,14 @@
 # Local NinjaTrader 8 Trade Copier & RiskGuard Integration — Product Requirement Document (PRD)
 
+> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
+> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
+> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
+> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
+> repathed. **Paths inside historical records -- "what landed", migration steps, closed
+> defects -- are deliberately left as they were written**: that is what the record said at the
+> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
+> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md).
+
 **Status:** Draft v1.0  
 **Target Platform:** NinjaTrader 8 Desktop Add-On (C# / WPF)  
 **Author:** Antigravity AI & Pair Programmer  

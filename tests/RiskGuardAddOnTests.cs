@@ -7121,13 +7121,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         // account called "SimpsonFund" is treated as simulated and can be deployed to, and traded
         // on, without confirmLive=true. Same root cause as P1-20.
         //
-        // Asserted partly against source text because McpBridgeAddOn.cs is excluded from this
-        // test build by construction (WPF dependencies), so its gates cannot be executed here at
-        // all. The behavioural half -- that the shared classifier gets "SimpsonFund" right -- is
-        // executed properly.
+        // This test used to also assert against McpBridgeAddOn.cs's SOURCE TEXT, because that
+        // file was excluded from this test build (WPF dependencies) and its gates could not be
+        // executed here. The repo split (2026-08-12) moved that file to nt8-mcp-bridge, so those
+        // three source assertions moved with it, to tests/BridgeSourceTests.cs in that repo --
+        // where the file is present and the check can actually run. Keeping them here would have
+        // meant the CORE asserting on the BRIDGE, which is the dependency direction the split
+        // exists to forbid (docs/NT8_REPO_SPLIT_PLAN.md section 1).
+        //
+        // What remains here is the behavioural half, and it is the more valuable half: that the
+        // shared classifier both repos call gets "SimpsonFund" right.
         private static void TestP2_38_DeployGateClassifiesByProviderNotName()
         {
-            Console.WriteLine("\n[TEST] P2-38: the bridge's deploy/order gates classify by provider, never by name prefix");
+            Console.WriteLine("\n[TEST] P2-38: the shared sim/live classifier keys on provider, never on name prefix");
 
             var simpson = new Account { Name = "SimpsonFund", Provider = Provider.NinjaTrader };
             Assert(!TradeCopierEngine.IsSimulationAccount(simpson),
@@ -7143,25 +7149,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "A simulated account that does not start with 'Sim' still classifies as simulated -- "
                 + "the name was never the signal in either direction.");
 
-            var bridgePath = Path.Combine(Path.GetDirectoryName(AddonSourcePath()), "McpBridgeAddOn.cs");
-            Assert(File.Exists(bridgePath), string.Format("The bridge source is readable at {0}", bridgePath));
-
-            var code = string.Join("\n", File.ReadAllText(bridgePath)
-                .Split('\n')
-                .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }));
-
-            var nameGate = new System.Text.RegularExpressions.Regex(
-                @"isSim\s*=\s*[^;]*Name\s*\.\s*StartsWith", System.Text.RegularExpressions.RegexOptions.Singleline);
-            Assert(!nameGate.IsMatch(code),
-                "No sim/live gate in the bridge classifies by account name any more.");
-
-            int shared = System.Text.RegularExpressions.Regex.Matches(
-                code, @"IsSimulationAccount\(").Count;
-            Assert(shared >= 4,
-                string.Format(
-                    "All four gates use the shared classifier (found {0}). Two definitions of "
-                    + "'simulated' drift, and the one that drifts is the one nobody is testing.",
-                    shared));
         }
 
         private static void TestStress_S5_PartialFillStorm()
@@ -7830,10 +7817,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// bin/, and the csproj links the sources in from another directory, so any runtime path
         /// walk would be guessing.
         /// </summary>
+        // The tests used to sit in the same flat directory as the addon sources, so this
+        // was just Combine(dir-of-this-file, "RiskGuardAddOn.cs"). After the repo split
+        // (2026-08-12) the suite lives in tests/ and the sources in addons/, so it has to
+        // climb out. CallerFilePath is still the anchor: it is the only way to find the
+        // source tree that does not depend on the working directory the runner was
+        // launched from.
         private static string AddonSourcePath(
             [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
         {
-            return Path.Combine(Path.GetDirectoryName(thisFile), "RiskGuardAddOn.cs");
+            return Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons", "RiskGuardAddOn.cs"));
         }
 
         // P1-13, fail-open half. This one is asserted against the SOURCE TEXT, which needs

@@ -5,13 +5,13 @@
     <DefineConstants>TESTING</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Exclude stray strategy source folders auto-globbed from the project directory. -->
-    <Compile Remove="Strategies\**\*.cs" />
-    <!-- Include all addon .cs files EXCEPT McpBridgeAddOn.cs (WPF dependencies break test build).
-         This matches the old behavior when files were in this directory and auto-globbed. -->
-    <Compile Include="..\scripts\ninjatrader\addons\*.cs" Link="%(Filename)%(Extension)" />
-    <Compile Remove="..\scripts\ninjatrader\addons\McpBridgeAddOn.cs" />
-    <Compile Remove="..\scripts\ninjatrader\addons\RiskManagerAddOn.cs" />
+    <!-- Include all addon .cs files EXCEPT RiskManagerAddOn.cs (superseded by
+         RiskGuardAddOn.cs; compiling both duplicates types).
+         There is no exclusion for McpBridgeAddOn.cs because that file is not in
+         this repo at all. It lives in nt8-mcp-bridge, which vendors this repo
+         and owns its own harness (see docs/NT8_REPO_SPLIT_PLAN.md section 5). -->
+    <Compile Include="..\addons\*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Remove="..\addons\RiskManagerAddOn.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 </Project>

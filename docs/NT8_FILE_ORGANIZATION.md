@@ -1,5 +1,19 @@
 # NinjaTrader 8 File Organization
 
+> **Path note (repo split, 2026-08-12).** This document was written while the addons lived in
+> `tvDownloadOHLC`, at `scripts/ninjatrader/addons/` with the test project at
+> `ninjatrader-addon/`. They now live in this repo as `addons/` and `tests/`, and the deploy
+> tool is `tools/sync_nt8.py`. Operative commands and source-of-truth statements have been
+> repathed. **Paths inside historical records -- "what landed", migration steps, closed
+> defects -- are deliberately left as they were written**: that is what the record said at the
+> time, and the hardening plan keys defects to `file:line` across that history. Rewriting them
+> would falsify the trail. See [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md)
+>
+> **Scope note.** This doc also covers `strategies/`, `indicators/` and `shared/`, which did
+> **not** move here -- they remain in `tvDownloadOHLC`, together with the strategy/indicator
+> half of the sync tool. In this repo only the AddOns half applies.
+
+
 > **Date**: 2026-07-30, updated 2026-08-07
 > **Status**: **Adopted (Option A).** The restructure to `scripts/ninjatrader/` has happened —
 > that is where the code lives now. Everything below the "Current State" heading describes the

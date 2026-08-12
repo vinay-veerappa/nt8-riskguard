@@ -41,7 +41,7 @@
       "regions": [
         {
           "id": "R1",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "public void LoadFromDisk(string filePath)",
           "note": "The whole method, lines 688-799. It contains all three construction sites -- structured relationships, groups, and the flat legacy dictionary -- which is why this is one region and not three: they must end up agreeing, and nested or adjacent spans covering one method is what O47 now rejects."
         }

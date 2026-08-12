@@ -2,8 +2,8 @@
 nt8_riskguard.py — the NT8 RiskGuard profile as a consumer of agent-loop.
 
 Usage:
-    agent-loop --profile nt8-riskguard --profile-module scripts.agent_loop_config.nt8_riskguard \
-        --tickets tickets.json --ticket T1
+    agent-loop --profile nt8-riskguard --profile-module agent.nt8_riskguard \
+        --tickets agent/tickets_p0.json --ticket T1
 """
 from __future__ import annotations
 
@@ -21,26 +21,30 @@ NT8_RISKGUARD = Profile(
     # This is an NT8 constraint, not a universal one -- hence a profile flag.
     ascii_only=True,
     # Build and test
-    build_cmd="dotnet build ninjatrader-addon/RiskGuardTests.csproj --nologo -v q",
-    test_cmd="dotnet run --project ninjatrader-addon/RiskGuardTests.csproj --nologo -v q",
+    build_cmd="dotnet build tests/RiskGuardTests.csproj --nologo -v q",
+    test_cmd="dotnet run --project tests/RiskGuardTests.csproj --nologo -v q",
     # Lock-scope gate (C# has a lock primitive)
     lock_name="_stateLock",
     risk_calls=(".Flatten", ".Cancel", ".Submit", ".CreateOrder"),
     # File scope (Developer mode)
-    file_scope_whitelist=("scripts/ninjatrader/addons/", "ninjatrader-addon/"),
+    file_scope_whitelist=("addons/",),
     # Protected paths
     protected=(
         "*Tests.cs",
         "*.csproj",
-        "scripts/agent_loop/*",
-        "scripts/agent_loop_config/*",
+        "agent/*",
     ),
-    test_sources=("scripts/ninjatrader/addons/*Tests.cs",),
+    test_sources=("tests/*Tests.cs",),
     # Context and token budgets
     context_token_budget=3000,
     round_input_token_budget=40000,
-    # Graph project (codebase-memory-mcp)
-    graph_project="C-Users-vinay-tvDownloadOHLC",
+    # Graph project (codebase-memory-mcp).
+    # Deliberately empty after the repo split: the old value pointed at
+    # tvDownloadOHLC's graph, which indexed these files under
+    # scripts/ninjatrader/addons/ and no longer contains them at all. A stale
+    # graph answers with paths that do not exist, which is worse than no graph.
+    # Re-enable by indexing THIS repo and putting its project name here.
+    graph_project="",
     # Prompts (carried over from the original profiles.py)
     implementer_rules="""\
 You are a senior C# engineer hardening a NinjaTrader 8 AddOn that manages

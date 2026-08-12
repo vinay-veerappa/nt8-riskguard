@@ -1,0 +1,15 @@
+# Build output. tvDownloadOHLC once tracked ninjatrader-addon/obj/ and a
+# RiskGuardTests.exe; that is what P2-28 was about. Do not repeat it.
+bin/
+obj/
+*.exe
+*.pdb
+*.user
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Mutation batteries restore the file they edit, but a crashed run can leave this.
+*.mutation_backup

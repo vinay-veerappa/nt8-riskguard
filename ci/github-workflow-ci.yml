@@ -1,0 +1,60 @@
+# NOT ACTIVE YET. This file belongs at .github/workflows/ci.yml, but the OAuth
+# token that created this repo lacks the `workflow` scope, so GitHub refuses any
+# push that writes under .github/workflows/. To activate:
+#
+#     gh auth refresh -s workflow          # interactive, one time
+#     git mv ci/github-workflow-ci.yml .github/workflows/ci.yml
+#     git commit -m "ci: activate the workflow" && git push
+#
+# Until then the checks are still runnable by hand -- see README.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    # windows-latest, not ubuntu: NinjaTrader is Windows-only and the suite does
+    # real filesystem work against Windows-shaped paths. Running it somewhere the
+    # product can never run would only prove something about the runner.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Plan section 6, check 1: the core must never depend on the bridge.
+      - name: Direction check
+        run: python tools/check_direction.py
+
+      # Plan section 6, check 2: exactly one copy of each addon source.
+      - name: No stray addon copies
+        run: python tools/check_no_stray_copies.py
+
+      - name: Build
+        run: dotnet build tests/RiskGuardTests.csproj -v q --nologo
+
+      - name: Test
+        run: dotnet run --project tests/RiskGuardTests.csproj --no-build
+
+      # A surviving mutant means a test only looks like coverage. Both batteries
+      # must report "SURVIVORS: none"; they exit non-zero otherwise.
+      - name: Mutation battery CM3
+        run: python mutation/mutate_cm3.py
+
+      - name: Mutation battery CM4
+        run: python mutation/mutate_cm4.py
+
+# Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
+# here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
+# the trading machine. A hosted runner has no NT8 install, so the check would either be
+# skipped or pass vacuously -- and a green check that proves nothing is worse than an
+# absent one. Run it locally before and after every deploy.

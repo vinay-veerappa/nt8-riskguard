@@ -15,19 +15,19 @@
       "regions": [
         {
           "id": "FollowerBracket",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "private class FollowerBracket",
           "note": "add the in-flight reservation and the re-sync-owed flag here"
         },
         {
           "id": "SyncFollowerStop",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "private void SyncFollowerStop(",
           "note": "the defect: WorkingStop is nulled under the lock before the broker call and only reassigned after Submit"
         },
         {
           "id": "OnFollowerOrderUpdate",
-          "file": "scripts/ninjatrader/addons/TradeCopierEngine.cs",
+          "file": "addons/TradeCopierEngine.cs",
           "anchor": "private void OnFollowerOrderUpdate(",
           "note": "also nulls WorkingStop, then re-drives the sync; must interact correctly with the reservation"
         }

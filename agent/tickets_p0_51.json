@@ -19,37 +19,37 @@
       "regions": [
         {
           "id": "PendingCancelsField",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private readonly List<PendingCancelEntry> _pendingCancels =",
           "note": "the deferred cancel queue; now carries PendingCancelIntent (CLOSED 2026-08-09)"
         },
         {
           "id": "ExecuteSafetySweep",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal void ExecuteSafetySweep()",
           "note": "the lockout watchdog: collects the batches, then executes them against the broker with no mode check"
         },
         {
           "id": "DrainPendingCancels",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void DrainPendingCancels()",
           "note": "the ONLY drain, with FOUR call sites; the mode decision belongs here, not at the call sites"
         },
         {
           "id": "ExecuteOrderUpdate",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal void ExecuteOrderUpdate(object sender, OrderEventArgs e)",
           "note": "three INTERVENTION enqueue sites: lockout entry-cancel, blacklist, per-instrument cap"
         },
         {
           "id": "UpdateFsmOnPosition",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "private void UpdateFsmOnPosition(Account account, string instrument, MarketPosition newPos, int qty)",
           "note": "the one CLEANUP enqueue site: cancelling RiskGuard's own orphaned auto-stop"
         },
         {
           "id": "ProcessAction",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal string ProcessAction(GuardAction action, bool forceLive = false)",
           "note": "holds the correct inline mode gate; extract it here and call the helper, changing nothing else"
         }
@@ -67,7 +67,7 @@
       "regions": [
         {
           "id": "ExecuteOrderUpdate",
-          "file": "scripts/ninjatrader/addons/RiskGuardAddOn.cs",
+          "file": "addons/RiskGuardAddOn.cs",
           "anchor": "internal void ExecuteOrderUpdate(object sender, OrderEventArgs e)",
           "note": "contains the order-rate governor and the flood lockout body"
         }
