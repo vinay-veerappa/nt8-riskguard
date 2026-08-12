@@ -21,7 +21,11 @@ and the live box rather than copying them forward; everything they used to claim
 > | 2 | **[§5 — THE OPEN BACKLOG](#5-the-open-backlog--authoritative-as-of-2026-08-13)** | the authoritative answer to *what is left?* Start at **§5.6**, the order |
 > | 3 | **§7 — Decisions already made** | do not re-litigate; the review panel will try every round |
 > | 4 | **§8 — Known traps** | each one cost a session to find |
-> | 5 | session records, newest first: **§5.18, §5.17, §5.16, §5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+> | 5 | session records, newest first: **§5.19, §5.18, §5.17, §5.16, §5.15, §5.14, §5.13, §5.12, §5.10, §5.9, §5.8, §5.7, §4z, §4y, §4x, §4w, §4v … §4e** | the reasoning behind a backlog entry, when you need it |
+>
+> ⚠️ **§5.5's "rewrite the UI in NT8 WPF" was REVERSED on 2026-08-13.** The UI is now a local
+> browser page served by the bridge — [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §7, recorded in
+> §5.19. That pass also found a **third risk system in neither repo** (`RiskGatekeeper.cs`).
 >
 > ⚠️ **This file accretes, and a later section supersedes an earlier one.** Where two disagree, the
 > higher-numbered §5.x wins. **§4a is now HISTORICAL** — its "START HERE" pointed at `P0-62`, which
@@ -2956,7 +2960,7 @@ when one is scheduled.
 
 | Item | What |
 |---|---|
-| **UI redesign** | The operator's own assessment: *"not very usable or professional enough"*. On top of `P?-64`/`P?-65`, `PerTickerMatrix` is not in either sizing-mode combo (`:367`, `:459`) and `PerTickerRatios`/`CustomSymbolMappings`/`MaxSlippageTicks` have **no editor at all** — they appear only in a read-only status string. **The ratio converter is reachable ONLY through the bridge today.** |
+| **UI redesign** | The operator's own assessment: *"not very usable or professional enough"*. On top of `P?-64`/`P?-65`, `PerTickerMatrix` is not in either sizing-mode combo (`:367`, `:459`) and `PerTickerRatios`/`CustomSymbolMappings`/`MaxSlippageTicks` have **no editor at all** — they appear only in a read-only status string. **The ratio converter is reachable ONLY through the bridge today.** ✅ **DESIGNED 2026-08-13 — [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md)** (§5.19). Two goals only: configure both systems, and prove they are doing what was configured. Organizing idea is **conformance** (configured vs actual vs verdict) and a **CONFIGURED / EVALUATED / ENFORCING** three-state that four shipped defects share. Host reversed to a local browser page — §5.5. |
 | **MCP wrapper gap** | `nt_copier_config` accepts only `leaderAccount`/`followerAccount`/`quantityRatio`/`autoConversion`. It cannot express `sizingMode`, `perTickerRatios`, `customSymbolMappings`, `maxSlippageTicks`, or any group action. Session 15 had to drive raw HTTP to `localhost:7890`, which `.agent/USER.md` asks agents not to do. **The preference is unfollowable until the wrapper is extended.** |
 | ~~**`/api/copier/config` has NO read**~~ | ✅ **DONE 2026-08-13** as part of `P1-69` (§5.14). The route was **`Post(method, …)` only**, so the live copier config could not be inspected without issuing a write — which defeats the GET-mutate-POST-GET-diff discipline this project relies on (§7), and is why `P?-66`'s live metrics could not simply be read off the box. It is now `return method == "GET" ? CopierConfig(null) : Post(…)`. ⚠️ The fix was **not** the one-liner it looks like: the `get` action was also calling `LoadFromDisk`, which threw away the in-memory measurements it was being asked to report. |
 | ~~**Repo split**~~ | ✅ **EXECUTED 2026-08-12** — §5.7. Two repos, both public: [nt8-riskguard](https://github.com/vinay-veerappa/nt8-riskguard) and [nt8-mcp-bridge](https://github.com/vinay-veerappa/nt8-mcp-bridge), the latter consuming the former as a submodule pinned to a tag. Record: [NT8_REPO_SPLIT_PLAN.md](NT8_REPO_SPLIT_PLAN.md). |
@@ -3012,7 +3016,7 @@ That is the same failure as a stale submodule pin overwriting a newer live core,
 
 | Question | Decision | Status |
 |---|---|---|
-| Where the redesigned UI lives | **Rewrite `TradeCopierWindow.cs` properly, in NT8.** Not the web app. The window stays offline-capable and no new surface is added. | Not started |
+| ~~Where the redesigned UI lives~~ | ~~**Rewrite `TradeCopierWindow.cs` properly, in NT8.** Not the web app.~~ | ⚠️ **REVERSED 2026-08-13 by the operator** — see [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §7. The UI becomes **a local static HTML+JS page served by the bridge over localhost**, launched from the existing NT8 menu item. Two facts found after the original decision forced it: **NT8's `bin/Custom` contains no `.xaml` at all** (it compiles `.cs` only, which is why the current window is 1118 lines to draw four tabs), and **a compile error in any addon `.cs` stops every addon loading, RiskGuard included** — an unacceptable property for the least critical component. WebView2 was considered and rejected: it fixes authoring cost but keeps the blast radius **and** adds three DLLs to NT8's Referenced Assemblies, a machine-local setting `sync_nt8.py --verify` cannot see. It stays offline-capable and no cloud surface is added. |
 | `P0-63` remedy | **Remedy 3 only** — after every `Change()`, read the order back and fall back to cancel-then-create when it did not take. **No funded-account order.** The `Provider31` question stays open on purpose; remedy 3 is correct either way. | ✅ **Shipped and deployed 2026-08-13** exactly as decided. One refinement forced by the evidence: the read-back must happen **on settle**, not synchronously — NT8 leaves the caller's desired values on the `Order` until the provider settles, so an immediate read always says "it took" (§5.9). |
 | What the next session opens with | **`P0-63` + the `P?-66` log line.** Safety first: the trail has never worked and no slippage number currently means anything. | ✅ **Both done** — session 17, then live-validated in session 19 (§5.13). Superseded by §5.6, which now opens with `P?-64`/`P?-65`, the copier UI — `P0-67` came and went in session 20. |
 
@@ -3047,7 +3051,10 @@ deployed; everything else shifts up unchanged.
    19 and from 3 actions to 11; reads go over `GET`; an unknown action is refused instead of silently
    reading. It opened four defects on the way (`P1-72`…`P1-75`), which is the return this project
    keeps getting from *widening* a surface: you have to state what each field does, and then check.
-4. **UI redesign**, on top of a UI that no longer loses or destroys config.
+4. **UI redesign**, on top of a UI that no longer loses or destroys config. **Designed 2026-08-13 —
+   [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md)**, which also reverses §5.5's WPF decision. ⚠️ Its
+   **item 1 is item 2 above**: the snapshot-DTO + apply-request layer that closes `P?-64`/`P?-65` is
+   the same work, is host-agnostic, and must land before anything renders.
 5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
@@ -4123,4 +4130,130 @@ not be renumbered into it.
 | ~~F-5~~ | ~~Reconciler / ledger~~ | — | **Already tracked**: `P3-31` (ledger) and `P3-30`'s remaining half (timer + RiskGuard-side audit). The copier half is shipped and live-validated. |
 | ~~F-7~~ | ~~Block instruments~~ | — | **Exists** (§5.17). |
 | ~~F-8~~ | ~~Max contracts per instrument~~ | — | **Exists**, position-level (§5.17). |
+| **F-9**…**F-15** | UI-adjacent features from the design pass | see [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §9 | firm mapping, flatten-group, session lock, reconciler events, fill-timeout, adopt the gatekeeper, `CanTrade` reason channel. Each holds a marked slot in the layout |
+| **F-16** | **MCP tool schema conformance** | extract the tool schema/dispatch table out of `nt-mcp-server.js`, then ONE sweep over all 52 tools | **52 tools, 1 tested.** Not 51 test files — the four session-21 defects were all **schema** defects, so one conformance sweep covers the class. ⚠️ Importing `nt-mcp-server.js` starts its stdin loop and hangs the test; that is why extraction comes first. See the §5.19 addendum |
 
+
+---
+
+## 5.19 Session 22 — 2026-08-13: the UI design pass, and what RiskGatekeeper turned out to be
+
+**No code changed.** Output is [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md), plus three findings
+that were not in this document at all. Read the design doc for the design; this section records what
+the pass *found*, which is the part that outlives it.
+
+### 🆕 There is a THIRD risk system, and it is in neither repo
+
+`Strategies/Vinay/RiskGatekeeper.cs` — **500 lines**, live in NT8, under no source control, no tests,
+invisible to `sync_nt8.py --verify`. It is referenced by exactly two files: `RiskManagerAddOn.cs`
+(which **is** in this repo and **is** deployed) and `Strategies/Vinay/RiskManagerBase.cs` (816 lines,
+also in neither repo), which is the base class of the whole bot fleet — `EMAPullbackBot`,
+`FailedAuctionBot`, `VWAPReclaimBot`, and via `IntradayStrategyBase` → `IBStrategyBase` the three IB
+bots.
+
+**It is not a duplicate of RiskGuard — it is the other half.** RiskGatekeeper is the **pre-trade,
+strategy-side** gate (`CanTrade` at `RiskManagerBase.cs:418`, `WouldBreachDailyMaxLoss` at `:479`,
+`RecordTrade` at `:683`, all gated `!isBacktest`). RiskGuard is the **post-trade, account-side**
+enforcer. Decision: **keep it, do not fold it in** — but adopt it into this repo (`F-14`).
+
+⚠️ **It is a third config surface and nothing reconciles it.** `RiskManagerAddOn`'s `[Display]`
+properties carry `DailyMaxLoss` 400 and `TrailingDrawdown` 2000. **"What is my daily loss limit?" has
+three different answers on this box today** — RiskGuard's, the gatekeeper's, and the copier's
+per-relationship `DailyLossLimit` — and no surface shows more than one of them. A bot can be waved
+through by a gatekeeper holding different numbers than the guard enforcing.
+
+### 🆕 `P2-25`'s news shield is the same defect class as `P1-77`, and the operator's news request is already half-built
+
+`EnableNewsShield` **defaults to `true`** (`PropFirmProtectionSuite.cs:33`). `LocalNewsEventsFilePath`
+is parsed and persisted and **never read**, so `IsInNewsWindow` always returns `false` outside tests
+and the `NEWS_SHIELD_LOCKOUT` branch (`RiskGuardAddOn.cs:1541`) is unreachable. The operator asked
+about adding news timeouts for strategies to reuse; **the shield exists, on the RiskGuard side, and
+is dead.** The work is loading a file, and tvDownloadOHLC already has the economic-calendar pipeline
+to emit it. On the strategy side, `CanTrade` is already the universal pre-trade gate — but it returns
+a bare `bool` with no reason, which is `F-15`.
+
+### The vocabulary this pass produced, and why it is worth more than the layout
+
+**CONFIGURED / EVALUATED / ENFORCING.** Four shipped defects are the same state:
+
+| | State |
+|---|---|
+| `P1-77` (open) | configured, enabled by default, **evaluated nowhere** |
+| `P2-25` (open) | configured, defaults to on, **evaluated nowhere** |
+| firm-mirror rules | configured, **unmapped, can never fire** |
+| `P1-75` (closed) | enforcing → **not** enforcing, silently, because a read disarmed them |
+
+Four defects, one shape: **the config file reads as protection that does not exist.** That is now the
+UI's primary job, and `CONFIGURED and not EVALUATED` renders red. It is also a lens for defect
+triage independent of any UI — when a config field is added, ask which of the three states it is in.
+
+### `F-9`…`F-15` filed
+
+`F-9` account→firm-profile mapping (the keystone — it is what moves the firm-mirror rules from
+CONFIGURED to EVALUATED), `F-10` flatten-group in the UI, `F-11` no-edits-while-live session lock,
+`F-12` reconciler actions as structured events (`ReconcileAction{Verb,Subject,Leg,Reason}` exists and
+is flattened into a single append-only `TextBox` at `TradeCopierWindow.cs:641`), `F-13`
+fill-timeout + rejected-order protection, `F-14` adopt the gatekeeper, `F-15` `CanTrade` reason
+channel. Details and the layout slot each one holds: the design doc §9.
+
+### Method note
+
+The competitive read (Replikanto, Tradecopia, TradeSyncer) was worth one pass and no more. It
+confirmed we already have what they sell as premium — stealth mode, mini↔micro conversion,
+out-of-sync reconciliation — and that **none of them mirror brackets onto followers at all**, which
+is `P0-63`'s whole subject. Its one durable contribution was the **wireframe critique**: a mock drawn
+without the engine in hand asked for `0.9ms` latency (ours is `142.86 ms`, wall-clock between two NT8
+callbacks) and a trailing-drawdown safety bar with **no data source**, because the firm rules are
+unmapped. Both are recorded in the design doc so they are not re-drawn.
+
+### Addendum to §5.19 — the MCP test coverage question, answered by measurement
+
+The operator recalled that tests had been written "for all the APIs/tools for the MCP" and assumed
+they moved during the split. **They were never written.** `git log --all` over
+`mcp/ninjatrader-mcp/tests/` returns exactly one filename, ever — `copier-config-request.test.js`,
+which arrived with the session-21 widening. `nt-mcp-server.js` defines **52 `nt_*` tools and one is
+tested.** Nothing was lost; the JS repo was never part of the split.
+
+**What produced the false belief was `tvDownloadOHLC/tests/test_mcp_stack_all.py`** — 191 lines,
+7 tests, named as if it covered the stack. **Six of the seven exercised zero product code.**
+`test_atm_bracket_metadata` built a dict and asserted the dict contained what it had just put in it.
+`test_state_persistence_stores` set a key on an empty dict and asserted reading it back worked.
+`test_audit_trail_formatting` round-tripped `json.dumps` through a temp file. `test_indicator_calculations`
+**defined `calculate_sma`/`calculate_ema` inside the test file** and tested those. The seventh,
+`test_version_alignment`, greps a version string and had been raising `FileNotFoundError` since
+`671d8a18` (already recorded in NT8_REPO_SPLIT_PLAN.md:64).
+
+**Deleted 2026-08-13.** A green suite that tests dictionaries is worse than a missing suite, because
+it stops you looking — which is exactly what it did, for two weeks. Its one real assertion (version
+alignment across `nt-mcp-server.js` and `package.json`) also asserted on a **submodule's files from
+the parent repo**, the same inverted dependency `P2-38` already had to fix once; it belongs in
+`ninjatrader-mcp`'s own harness and is folded into `F-16`.
+
+#### 🆕 `F-16` — MCP tool schema conformance, and why it is ONE test rather than 51
+
+The naive reading is "write 51 more test files." It is not, and the reason is in the four defects
+session 21 found: **`P1-72`, `P1-73`, `P1-74` and `P1-75` were SCHEMA defects, not logic defects** —
+an advertised `quarantine` action nothing implemented, schema `default:`s that overwrote stored
+config through a merging receiver, an `autoConversion` argument that was not a field, and a read
+branch that disarmed the rules. Meanwhile `nt-mcp-server.js`'s dispatch (`switch (name)` at `:787`)
+is mostly **thin pass-throughs** with no logic to test.
+
+So the high-value test is a **conformance sweep over all 52 tools at once**: every advertised action
+is handled by the dispatch; no schema declares a `default:` that a merging receiver turns into a
+write; every advertised argument maps to a field that exists. That is one test covering the exact
+shape of all four known defects, plus targeted builder tests only where real mapping logic exists.
+
+⚠️ **The blocker is structural and already documented in `copier-config-request.test.js`'s header:
+importing `nt-mcp-server.js` starts its stdin readline loop and the test hangs.** That is why the
+builder was extracted to `lib/copier-config-request.js` in the first place. So `F-16` begins by
+extracting the **tool schema/dispatch table** into its own module. Parsing the source text instead
+would be a source-text assertion, which the bridge's own `tests/README.md` correctly calls out as
+proving less than an execution.
+
+#### `P2-27`'s remaining half — deliberately deferred, with the price recorded
+
+Making `McpBridgeAddOn.cs` executable in tests costs, measured: **330 compile errors — 312× CS0246,
+16× CS0234, 2× CS0103, 23 distinct missing stub types** (`nt8-mcp-bridge/tests/README.md`). Deferred
+behind `F-16` for two reasons: `F-16` is far cheaper and targets a defect class with four known
+instances, and the 2026-08-13 UI decision keeps the bridge a **thin pipe** — routing and static
+bytes, with every decision in core — so this surface is not growing while it waits.
