@@ -915,6 +915,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange();
             TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace();
             TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored();
+            TestBracket_P0_63_AQuantityOnlyNoOpIsAlsoCaught();
             TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmissionBudget();
 
             // CM1: copier ratio converter, slice 1 -- RED until the fix lands
@@ -11496,17 +11497,100 @@ namespace NinjaTrader.NinjaScript.AddOns
             leader.TriggerOrderUpdate(leaderStop);
             follower.SettleChange(original);
 
+            // A SECOND step, and it is the half that matters. Mutation testing on 2026-08-13 showed
+            // that forcing the no-op detection to fire ALWAYS left this test green with only one
+            // step, because a spurious detection re-drives through the reconciler, which finds the
+            // leg already at the right price and does nothing. What it also does is mark the
+            // ACCOUNT as ignoring Change() -- permanently, for the session -- so from the next step
+            // onward every trail goes cancel-then-create and the follower is naked for a broker
+            // round trip on each one. One step cannot see that; two can.
+            leaderStop.StopPrice = 17997.00;
+            leader.TriggerOrderUpdate(leaderStop);
+            follower.SettleChange(original);
+
             Assert(follower.Orders.Count(o => o.Name == "COPIER_STOP") == 1,
                 string.Format(
-                    "No second stop order was ever created (got {0} in total). Falling back to "
-                    + "cancel-then-create here would leave the follower naked on every trail step.",
+                    "No second stop order was ever created across TWO honoured trail steps (got {0} "
+                    + "in total). A spurious no-op detection marks the account and silently downgrades "
+                    + "every later trail step to cancel-then-create, which is the naked window on the "
+                    + "risk leg that section 4o closed.",
                     follower.Orders.Count(o => o.Name == "COPIER_STOP")));
-            Assert(Math.Abs(follower.ProviderStopPrice(original) - 17997.00) < 1e-9,
+            Assert(Math.Abs(follower.ProviderStopPrice(original) - 17999.00) < 1e-9,
                 string.Format(
-                    "The broker holds the new price against the ORIGINAL order: expected 17997.00, "
-                    + "got {0}.", follower.ProviderStopPrice(original)));
+                    "The broker holds the second step's price against the ORIGINAL order: expected "
+                    + "17999.00, got {0}.", follower.ProviderStopPrice(original)));
             Assert(RiskGuardAddOn.OccupiesSlot(original.OrderState),
                 "And it is still the live leg -- it was never cancelled.");
+        }
+
+        /// <summary>
+        /// A QUANTITY-ONLY no-op, where the price never moves. This is the shape P0-63's probe
+        /// found FIRST -- "asked qty 1 -> 2, result qty 1" -- and the shape of the live P0-61
+        /// failure, where a follower scaling to 2 lots was left holding 2 lots behind a 1-lot stop
+        /// and RiskGuard logged FSM_UNDERCOVERED: covered 1 &lt; pos 2. Armed rather than in shadow,
+        /// that flattens the account.
+        ///
+        /// It needs its own test because a detection that only compares PRICE cannot see it, and
+        /// mutation testing on 2026-08-13 showed exactly that: dropping the quantity half of the
+        /// check left every other P0-63 test green. Under-cover is the more dangerous direction of
+        /// the two -- a stale price is the wrong exit, a stale size is an unprotected lot.
+        /// </summary>
+        private static void TestBracket_P0_63_AQuantityOnlyNoOpIsAlsoCaught()
+        {
+            Console.WriteLine("\n[TEST] BRACKET: an ignored Change() that only altered QUANTITY is caught too (P0-63)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            DriveFollowerEntry(leader, follower, mnq, 1, 18000.00, 18002.00, "BR-P063Q");
+
+            var leaderStop = LeaderStop(mnq, OrderAction.Sell, 1, 17990.00);
+            leader.TriggerOrderUpdate(leaderStop);
+
+            var original = follower.Orders.Single(o => o.Name == "COPIER_STOP");
+            Assert(original.Quantity == 1
+                   && Math.Abs(follower.ProviderStopPrice(original) - 17992.00) < 1e-9,
+                string.Format("Precondition: the mirrored stop is 1 lot at 17992.00 (got {0} at {1}).",
+                    original.Quantity, follower.ProviderStopPrice(original)));
+
+            follower.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // Both sides scale to 2 lots at the SAME average price, so the mirrored offset --
+                // and therefore the follower's stop PRICE -- does not move. Only the size must.
+                SetPosition(leader, mnq, MarketPosition.Long, 2, 18000.00);
+                SetPosition(follower, mnq, MarketPosition.Long, 2, 18002.00);
+                follower.TriggerPositionUpdate(follower.Positions.Single(p =>
+                    p.Instrument.FullName == mnq.FullName));
+
+                leaderStop.Quantity = 2;
+                leader.TriggerOrderUpdate(leaderStop);
+
+                follower.SettleChange(original);
+            }
+            finally { follower.SimulateChangeIsSilentNoOp = false; }
+
+            var live = follower.Orders
+                .Where(o => o.Name == "COPIER_STOP" && RiskGuardAddOn.OccupiesSlot(o.OrderState))
+                .ToList();
+            Assert(live.Count == 1,
+                string.Format("Exactly one live stop after the fallback (got {0}).", live.Count));
+
+            int heldQty = live[0].Quantity;
+            Assert(heldQty == 2,
+                string.Format(
+                    "The broker is holding a stop for the WHOLE 2-lot position: expected 2, got {0}. "
+                    + "At baseline it holds 1 -- one lot of the follower's position is unprotected, "
+                    + "which is the FSM_UNDERCOVERED state that flattens the account when armed.",
+                    heldQty));
+            Assert(Math.Abs(follower.ProviderStopPrice(live[0]) - 17992.00) < 1e-9,
+                string.Format(
+                    "And it is still at the correct price, 17992.00, got {0} -- resizing must not "
+                    + "move the stop.", follower.ProviderStopPrice(live[0])));
         }
 
         /// <summary>

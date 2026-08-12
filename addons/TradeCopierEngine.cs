@@ -133,6 +133,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Queue<string> _executionIdQueue = new Queue<string>();
         private const int MaxExecutionCacheSize = 5000;
         private readonly object _lock = new object();
+        // P0-63. Accounts whose provider has been observed ignoring Account.Change(). Once marked,
+        // the copier goes straight to cancel-then-create on that account without issuing another
+        // doomed Change(). Session-scoped; cleared in ResetBracketsForTest so tests do not leak,
+        // and in SyncFollowerStopOnce when the last active bracket for the account is stood down
+        // so a provider reconfiguration mid-session is not permanently penalised.
+        private readonly HashSet<string> _accountsIgnoringChange = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public void AddRelationship(CopierRelationship rel) => UpsertRelationship(rel);
 
@@ -1326,16 +1332,108 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (followerAcc == null || order == null || order.Instrument == null) return;
 
-            // P0-61's completion hook, and it must come BEFORE the OccupiesSlot return below.
+            // P0-63. Detect a provider that accepts Change() but silently ignores it. Verified on
+            // the settle event (AcceptsModification), gated to the exact order the request was made
+            // against, and re-driven through the in-flight-reserving wrappers -- never the Once
+            // methods, which would let two syncs run concurrently on one bracket (P1-56).
+            bool VerifyAndRecoverIgnoredChange(Account acc, Order o)
+            {
+                string key = BracketKey(acc.Name, o.Instrument.FullName);
+                FollowerBracket bracket;
+                bool isStopLeg;
+                bool isTargetLeg;
+                LegChangeRequest req;
+                bool deferred;
+                lock (_lock)
+                {
+                    if (!_followerBrackets.TryGetValue(key, out bracket)) return false;
+                    isStopLeg = ReferenceEquals(bracket.WorkingStop, o);
+                    isTargetLeg = ReferenceEquals(bracket.WorkingTarget, o);
+                    if (!isStopLeg && !isTargetLeg) return false;
+                    req = isStopLeg ? bracket.StopChangeRequest : bracket.TargetChangeRequest;
+                    deferred = isStopLeg ? bracket.StopChangeDeferred : bracket.TargetChangeDeferred;
+                }
+
+                if (req == null || req.Order == null || !ReferenceEquals(req.Order, o)) return false;
+
+                double currentPrice = isStopLeg ? o.StopPrice : o.LimitPrice;
+                int currentQty = o.Quantity;
+
+                bool priceStillOriginal = Math.Abs(currentPrice - req.OriginalPrice) <= 1e-9;
+                bool qtyStillOriginal = currentQty == req.OriginalQuantity;
+
+                if (!priceStillOriginal || !qtyStillOriginal)
+                {
+                    // The order is not sitting at the values it held before the request.
+                    // Treat as honoured (or at least not a positive no-op) and clear the record.
+                    lock (_lock)
+                    {
+                        if (isStopLeg) bracket.StopChangeRequest = null;
+                        else bracket.TargetChangeRequest = null;
+                    }
+                    return false;
+                }
+
+                // Positive evidence that Change() was accepted and ignored. Do NOT clear the
+                // P0-61 deferred flags here -- the re-drive below will apply the latest desired
+                // state, and clearing them before broker work starts would discard an owed
+                // instruction if the wrapper has to back off. Do NOT clear StopChangeRequest /
+                // TargetChangeRequest here either: the re-drive's cancel-then-create path will
+                // clear it when the old order is actually replaced, and leaving it in place lets
+                // a backed-off re-drive still verify the same order on its next settle event.
+                // No budget refresh here either. It was added during review and mutation testing
+                // showed nothing pins it, which matches the reasoning: the account is marked on the
+                // FIRST detection, so at most one doomed Change() is ever spent per instruction,
+                // and OnLeaderOrderUpdate zeroes the budget whenever the leader's offset changes.
+                // Where the budget DOES bind -- repeated syncs at an unchanged offset -- it is
+                // doing its job, and resetting it there is how an order flood starts.
+                lock (_lock)
+                {
+                    _accountsIgnoringChange.Add(acc.Name);
+                }
+
+                CopierLog(acc.Name, isStopLeg ? "BRACKET_STOP_CHANGE_IGNORED" : "BRACKET_TARGET_CHANGE_IGNORED",
+                    $"{o.Instrument.FullName}: provider ignored Change() for {(isStopLeg ? "stop" : "target")} "
+                    + $"(still {currentQty}@{currentPrice}, requested {req.RequestedQuantity}@{req.RequestedPrice})"
+                    + (deferred ? " with a deferred instruction pending" : "")
+                    + "; falling back to cancel-then-create.");
+
+                try
+                {
+                    if (isStopLeg) SyncFollowerStop(acc, o.Instrument, bracket);
+                    else SyncFollowerTarget(acc, o.Instrument, bracket);
+                }
+                catch (Exception redriveEx)
+                {
+                    // P0-63. The re-drive itself failed (e.g., an unexpected exception escaped the
+                    // wrapper). Do NOT consume the event as if it were handled, and do NOT clear
+                    // the request record: the next OrderUpdate for the same still-working order
+                    // must be allowed to re-detect the no-op and retry. Returning false also lets
+                    // P0-61's ReDriveDeferredLeg run for this event, so a deferred instruction is
+                    // not dropped just because the cancel-then-create path hit a transient fault.
+                    CopierLog(acc.Name, isStopLeg ? "BRACKET_STOP_REDRIVE_FAILED" : "BRACKET_TARGET_REDRIVE_FAILED",
+                        $"{o.Instrument.FullName}: {redriveEx.Message}. Leaving change record in place so the next settle event retries.");
+                    return false;
+                }
+
+                return true;
+            }
+
+            // P0-61 / P0-63 settle hook. It must come BEFORE the OccupiesSlot return below.
             //
-            // A leg that has just settled out of ChangeSubmitted/ChangePending still occupies a
-            // slot, so the early return would drop this event -- and the instruction we deferred
+            // P0-61: A leg that has just settled out of ChangeSubmitted/ChangePending still occupies
+            // a slot, so the early return would drop this event -- and the instruction we deferred
             // while the change was in flight would be lost, leaving the leg at its old price and
-            // size for the life of the position. That is the defect P0-61 fixes, one layer down:
-            // declining to act is only safe if something later acts.
-            if (RiskGuardAddOn.AcceptsModification(order.OrderState)
-                && ReDriveDeferredLeg(followerAcc, order))
-                return;
+            // size for the life of the position. ReDriveDeferredLeg re-applies it.
+            //
+            // P0-63: Verify that a Change() which returned without throwing actually took. If the
+            // leg is still at its pre-change values, mark the account and re-drive through the
+            // in-flight-reserving wrappers.
+            if (RiskGuardAddOn.AcceptsModification(order.OrderState))
+            {
+                if (VerifyAndRecoverIgnoredChange(followerAcc, order)) return;
+                if (ReDriveDeferredLeg(followerAcc, order)) return;
+            }
 
             if (RiskGuardAddOn.OccupiesSlot(order.OrderState)) return;   // still there; nothing lost
             if (order.OrderState == OrderState.Filled) return;                 // it did its job
@@ -1405,6 +1503,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // after its group may have been retired needs a fresh one.
         // ------------------------------------------------------------------
 
+        // P0-63. A snapshot of the last Change() issued against a bracket leg, so the settle event
+        // can detect a provider that accepts Change() but silently ignores it.
+        private class LegChangeRequest
+        {
+            public Order Order;
+            public double OriginalPrice;
+            public double RequestedPrice;
+            public int OriginalQuantity;
+            public int RequestedQuantity;
+        }
+
         private class FollowerBracket
         {
             public string RelationshipId;
@@ -1468,6 +1577,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             // settles (ReDriveDeferredLeg). NOT the same as *ResyncOwed -- see that method.
             public bool StopChangeDeferred;
             public bool TargetChangeDeferred;
+
+            // P0-63. The last Change() request issued against each leg, together with the pre-change
+            // values and the order it was issued against. Verified when the leg settles.
+            public LegChangeRequest StopChangeRequest;
+            public LegChangeRequest TargetChangeRequest;
         }
 
         // How many EXTRA passes the reservation holder will re-drive the sync for, after a
@@ -1873,7 +1987,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             // bracket is stood down as well: it must not go on believing it protects something.
             if (!desired.HasPosition)
             {
-                lock (_lock) { bracket.FollowerQuantity = 0; bracket.FollowerSide = MarketPosition.Flat; }
+                string stoodDownAccount = null;
+                lock (_lock)
+                {
+                    stoodDownAccount = bracket.FollowerAccountName;
+                    bracket.FollowerQuantity = 0;
+                    bracket.FollowerSide = MarketPosition.Flat;
+
+                    // P0-63. If this was the last active bracket for the account, clear the
+                    // provider-ignore mark. The account may be reconfigured to a different
+                    // provider before its next use; permanently bypassing Change() on a real
+                    // provider would reopen the naked window on every trail step.
+                    bool anyOtherActive = false;
+                    foreach (var kvp in _followerBrackets)
+                    {
+                        FollowerBracket other = kvp.Value;
+                        if (other == bracket) continue;
+                        if (other.FollowerQuantity != 0
+                            && string.Equals(other.FollowerAccountName, stoodDownAccount, StringComparison.OrdinalIgnoreCase))
+                        {
+                            anyOtherActive = true;
+                            break;
+                        }
+                    }
+                    if (!anyOtherActive) _accountsIgnoringChange.Remove(stoodDownAccount);
+                }
                 foreach (var a in actions)
                 {
                     if (a.Verb != ReconcileVerb.Cancel) continue;
@@ -1971,6 +2109,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // clamped when it was computed, but the position can move between the decision
                 // and here, and a stop larger than the position FLIPS it on trigger.
                 int liveQty = Math.Min(qty, livePos.Quantity);
+                bool providerIgnoresChange = false;
 
                 // A leader trailing its stop is the ordinary case, and cancel-then-create left the
                 // follower unprotected on EVERY trail step, between the cancel and the new order's
@@ -1986,34 +2125,121 @@ namespace NinjaTrader.NinjaScript.AddOns
                 //
                 if (toModify != null)
                 {
-                    try
-                    {
-                        toModify.StopPrice = stopPrice;
-                        toModify.Quantity = liveQty;
-                        followerAcc.Change(new[] { toModify });
+                    lock (_lock) { providerIgnoresChange = _accountsIgnoringChange.Contains(followerAcc.Name); }
 
-                        lock (_lock) { bracket.WorkingStop = toModify; }
-
-                        CopierLog(followerAcc.Name, "BRACKET_MODIFIED",
-                            $"{instrument.FullName} stop moved to {liveQty}@{stopPrice} in place "
-                            + $"(leader offset {bracket.StopOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}); "
-                            + "no cancel/replace, so no unprotected window.");
-                        return;
-                    }
-                    catch (Exception cex)
+                    if (providerIgnoresChange)
                     {
-                        CopierLog(followerAcc.Name, "BRACKET_MODIFY_FAILED",
-                            $"{instrument.FullName}: {cex.Message}. Falling back to cancel-then-create.");
+                        CopierLog(followerAcc.Name, "BRACKET_MODIFY_BYPASSED",
+                            $"{instrument.FullName}: provider ignored a previous Change() on {followerAcc.Name}; "
+                            + "falling back to cancel-then-create.");
+                        // P0-63. Clear the stale request record NOW, before any broker call. If a
+                        // prior Change() was issued against this order and its settle event has not
+                        // yet arrived, leaving the record set would make the subsequent Canceled
+                        // event look like a fresh no-op and re-drive, producing a duplicate stop.
+                        lock (_lock) { bracket.StopChangeRequest = null; }
                         // The leg the broker refused to change becomes the leg to replace. Both
                         // halves must be set: cancelling without creating is a naked follower,
                         // and it is the failure this fallback exists to avoid.
                         toCancel = toModify;
                         wantsCreate = true;
                     }
+                    else
+                    {
+                        try
+                        {
+                            // P0-63. Capture the broker's true pre-change values. If the Order
+                            // object still carries a previous requested value because an earlier
+                            // Change() was ignored and the settle event has not yet updated the
+                            // object, fall back to the original recorded for that request.
+                            double currentPrice = toModify.StopPrice;
+                            int currentQty = toModify.Quantity;
+                            double originalPrice = currentPrice;
+                            int originalQty = currentQty;
+
+                            LegChangeRequest existing;
+                            lock (_lock) { existing = bracket.StopChangeRequest; }
+                            if (existing != null && ReferenceEquals(existing.Order, toModify)
+                                && Math.Abs(currentPrice - existing.RequestedPrice) <= 1e-9
+                                && currentQty == existing.RequestedQuantity)
+                            {
+                                originalPrice = existing.OriginalPrice;
+                                originalQty = existing.OriginalQuantity;
+                            }
+
+                            toModify.StopPrice = stopPrice;
+                            toModify.Quantity = liveQty;
+                            followerAcc.Change(new[] { toModify });
+
+                            lock (_lock)
+                            {
+                                bracket.WorkingStop = toModify;
+                                bracket.StopChangeRequest = new LegChangeRequest
+                                {
+                                    Order = toModify,
+                                    OriginalPrice = originalPrice,
+                                    RequestedPrice = stopPrice,
+                                    OriginalQuantity = originalQty,
+                                    RequestedQuantity = liveQty
+                                };
+                            }
+
+                            CopierLog(followerAcc.Name, "BRACKET_MODIFIED",
+                                $"{instrument.FullName} stop moved to {liveQty}@{stopPrice} in place "
+                                + $"(leader offset {bracket.StopOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}); "
+                                + "no cancel/replace, so no unprotected window.");
+                            return;
+                        }
+                        catch (Exception cex)
+                        {
+                            CopierLog(followerAcc.Name, "BRACKET_MODIFY_FAILED",
+                                $"{instrument.FullName}: {cex.Message}. Falling back to cancel-then-create.");
+                            // The leg the broker refused to change becomes the leg to replace. Both
+                            // halves must be set: cancelling without creating is a naked follower,
+                            // and it is the failure this fallback exists to avoid.
+                            toCancel = toModify;
+                            wantsCreate = true;
+                        }
+                    }
                 }
 
-                if (toCancel != null) followerAcc.Cancel(new[] { toCancel });
+                // Cancel the leg we are replacing. If the cancel itself fails, do NOT proceed
+                // to CreateOrder/Submit -- a working old leg plus a new leg is the duplicate-
+                // stop defect that flips the follower (P1-56).
+                bool cancelFailed = false;
+                if (toCancel != null)
+                {
+                    try
+                    {
+                        followerAcc.Cancel(new[] { toCancel });
+                    }
+                    catch (Exception cex)
+                    {
+                        cancelFailed = true;
+                        lock (_lock)
+                        {
+                            if (bracket.StopChangeRequest != null
+                                && ReferenceEquals(bracket.StopChangeRequest.Order, toCancel))
+                            {
+                                bracket.StopChangeRequest = null;
+                            }
+                        }
+                        CopierLog(followerAcc.Name, "BRACKET_CANCEL_FAILED",
+                            $"{instrument.FullName}: {cex.Message}. The old stop is still working; "
+                            + "not creating a replacement to avoid two protective stops.");
+                    }
+                }
+                if (cancelFailed) return;
 
+                // NOTE: no P0-63 budget refresh here, deliberately. One was added across review
+                // rounds 2-4 to answer a finding that a long trail on an ignoring provider would
+                // exhaust MaxBracketStopAttempts. That finding is false: OnLeaderOrderUpdate
+                // already zeroes StopAttempts whenever the leader's mirrored offset changes, which
+                // is every trail step, and TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmission
+                // Budget pins it over six steps. Mutation testing then confirmed the refresh was
+                // decorative -- deleting it changed no test outcome. Unpinned defensive state on the
+                // risk leg is not free: it is one more way for the bound that stops an order flood
+                // to be reset by accident.
+                //
                 // A cancel with no create is the reservation case: a submit for this leg is
                 // already in flight, so the replacement is that one, not a second one.
                 if (!wantsCreate) return;
@@ -2040,6 +2266,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         staleTarget = bracket.WorkingTarget;
                         bracket.WorkingTarget = null;
                         bracket.OcoId = Guid.NewGuid().ToString();
+                        bracket.StopChangeRequest = null;
                     }
                     else
                     {
@@ -2069,8 +2296,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 if (stop == null)
                 {
+                    // P0-63. The old leg was cancelled but no replacement could be created. Ask
+                    // the in-flight wrapper to re-drive so the follower is not left naked.
+                    lock (_lock) { bracket.StopResyncOwed = true; }
                     NinjaTrader.Code.Output.Process(
-                        $"[CopierEngine] BRACKET_SUBMIT_FAILED on {followerAcc.Name} {instrument.FullName}: CreateOrder returned null. The follower is UNPROTECTED.",
+                        $"[CopierEngine] BRACKET_SUBMIT_FAILED on {followerAcc.Name} {instrument.FullName}: CreateOrder returned null. The follower is UNPROTECTED; will retry.",
                         PrintTo.OutputTab1);
                     return;
                 }
@@ -2090,8 +2320,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
+                // P0-63. If the cancel itself threw, the old order is still working and the
+                // request record still points at it. Leave the record set and the next OrderUpdate
+                // will re-detect the no-op and re-drive forever. Clear it when the order we were
+                // trying to cancel is the one the record belongs to.
                 int attempts;
-                lock (_lock) { attempts = bracket.StopAttempts; }
+                lock (_lock)
+                {
+                    attempts = bracket.StopAttempts;
+                    if (toCancel != null && bracket.StopChangeRequest != null
+                        && ReferenceEquals(bracket.StopChangeRequest.Order, toCancel))
+                    {
+                        bracket.StopChangeRequest = null;
+                    }
+                }
                 bool exhausted = attempts >= MaxBracketStopAttempts;
                 NinjaTrader.Code.Output.Process(
                     $"[CopierEngine] BRACKET_SUBMIT_FAILED on {followerAcc.Name} {instrument.FullName} "
@@ -2299,36 +2541,111 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // Broker calls outside `_lock` (P1-10/P1-35), as the stop sync does.
                 int liveQty = Math.Min(qty, livePos.Quantity);
+                bool providerIgnoresChange = false;
 
                 // Modify in place where possible: it preserves OCO group membership -- confirmed
                 // live on 2026-08-10, a trailed leg kept both its orderId and its oco -- so the
                 // pair survives without any id being re-minted.
                 if (toModify != null)
                 {
-                    try
-                    {
-                        toModify.LimitPrice = targetPrice;
-                        toModify.Quantity = liveQty;
-                        followerAcc.Change(new[] { toModify });
+                    lock (_lock) { providerIgnoresChange = _accountsIgnoringChange.Contains(followerAcc.Name); }
 
-                        lock (_lock) { bracket.WorkingTarget = toModify; }
-
-                        CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFIED",
-                            $"{instrument.FullName} target moved to {liveQty}@{targetPrice} in place "
-                            + $"(leader offset {bracket.TargetOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}).");
-                        return;
-                    }
-                    catch (Exception cex)
+                    if (providerIgnoresChange)
                     {
-                        CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_FAILED",
-                            $"{instrument.FullName}: {cex.Message}. Falling back to cancel-then-create.");
+                        CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_BYPASSED",
+                            $"{instrument.FullName}: provider ignored a previous Change() on {followerAcc.Name}; "
+                            + "falling back to cancel-then-create.");
+                        // P0-63. Clear the stale request record before any broker call so a later
+                        // Canceled event cannot be mistaken for a fresh no-op and re-driven.
+                        lock (_lock) { bracket.TargetChangeRequest = null; }
                         toCancel = toModify;
                         wantsCreate = true;
                     }
+                    else
+                    {
+                        try
+                        {
+                            // P0-63. Capture the broker's true pre-change values, falling back to
+                            // the original recorded for an earlier ignored Change() if the Order
+                            // object still carries that requested value.
+                            double currentPrice = toModify.LimitPrice;
+                            int currentQty = toModify.Quantity;
+                            double originalPrice = currentPrice;
+                            int originalQty = currentQty;
+
+                            LegChangeRequest existing;
+                            lock (_lock) { existing = bracket.TargetChangeRequest; }
+                            if (existing != null && ReferenceEquals(existing.Order, toModify)
+                                && Math.Abs(currentPrice - existing.RequestedPrice) <= 1e-9
+                                && currentQty == existing.RequestedQuantity)
+                            {
+                                originalPrice = existing.OriginalPrice;
+                                originalQty = existing.OriginalQuantity;
+                            }
+
+                            toModify.LimitPrice = targetPrice;
+                            toModify.Quantity = liveQty;
+                            followerAcc.Change(new[] { toModify });
+
+                            lock (_lock)
+                            {
+                                bracket.WorkingTarget = toModify;
+                                bracket.TargetChangeRequest = new LegChangeRequest
+                                {
+                                    Order = toModify,
+                                    OriginalPrice = originalPrice,
+                                    RequestedPrice = targetPrice,
+                                    OriginalQuantity = originalQty,
+                                    RequestedQuantity = liveQty
+                                };
+                            }
+
+                            CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFIED",
+                                $"{instrument.FullName} target moved to {liveQty}@{targetPrice} in place "
+                                + $"(leader offset {bracket.TargetOffset:+0.##;-0.##}, follower entry {bracket.FollowerEntryPrice}).");
+                            return;
+                        }
+                        catch (Exception cex)
+                        {
+                            CopierLog(followerAcc.Name, "BRACKET_TARGET_MODIFY_FAILED",
+                                $"{instrument.FullName}: {cex.Message}. Falling back to cancel-then-create.");
+                            toCancel = toModify;
+                            wantsCreate = true;
+                        }
+                    }
                 }
 
-                if (toCancel != null) followerAcc.Cancel(new[] { toCancel });
+                // If the cancel itself fails, do NOT create a replacement -- two working targets
+                // behind one position closes the position when the first fills and leaves the
+                // second as an orphan LIMIT that opens a new position (P0-50).
+                bool cancelFailed = false;
+                if (toCancel != null)
+                {
+                    try
+                    {
+                        followerAcc.Cancel(new[] { toCancel });
+                    }
+                    catch (Exception cex)
+                    {
+                        cancelFailed = true;
+                        lock (_lock)
+                        {
+                            if (bracket.TargetChangeRequest != null
+                                && ReferenceEquals(bracket.TargetChangeRequest.Order, toCancel))
+                            {
+                                bracket.TargetChangeRequest = null;
+                            }
+                        }
+                        CopierLog(followerAcc.Name, "BRACKET_TARGET_CANCEL_FAILED",
+                            $"{instrument.FullName}: {cex.Message}. The old target is still working; "
+                            + "not creating a replacement to avoid two targets.");
+                    }
+                }
+                if (cancelFailed) return;
 
+                // No P0-63 budget refresh here either, and for the same measured reason as the stop
+                // leg above.
+                //
                 // A cancel with no create means a target submit is already in flight.
                 if (!wantsCreate) return;
 
@@ -2343,6 +2660,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // rebuild. If the cancel above did retire the group, the stop's own
                     // OrderUpdate re-submits it and the pair reforms a beat later; cancelling a
                     // working protective stop to tidy up an OCO group is not a trade worth making.
+                    if (toCancel != null)
+                    {
+                        bracket.TargetChangeRequest = null;
+                    }
                     string live = LiveLegOcoId(bracket, toCancel);
                     bracket.OcoId = !string.IsNullOrEmpty(live) ? live : Guid.NewGuid().ToString();
                     oco = bracket.OcoId;
@@ -2369,8 +2690,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
+                // P0-63. If the cancel itself threw, the old order is still working and the
+                // request record still points at it. Clear it when the order we were trying to
+                // cancel is the one the record belongs to, so the next OrderUpdate does not
+                // re-detect a stale no-op and spin.
                 int attempts;
-                lock (_lock) { attempts = bracket.TargetAttempts; }
+                lock (_lock)
+                {
+                    attempts = bracket.TargetAttempts;
+                    if (toCancel != null && bracket.TargetChangeRequest != null
+                        && ReferenceEquals(bracket.TargetChangeRequest.Order, toCancel))
+                    {
+                        bracket.TargetChangeRequest = null;
+                    }
+                }
                 CopierLog(followerAcc.Name, "BRACKET_TARGET_FAILED",
                     $"{instrument.FullName} (attempt {attempts}/{MaxBracketTargetAttempts}): {ex.Message}. "
                     + "The stop is unaffected and the follower still exits on the copied leader target fill"
@@ -2490,7 +2823,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         internal void ResetBracketsForTest()
         {
-            lock (_lock) { _followerBrackets.Clear(); }
+            lock (_lock)
+            {
+                _followerBrackets.Clear();
+                _accountsIgnoringChange.Clear();
+            }
         }
 
         internal double GetMirroredStopPriceForTest(string followerAccount, string instrumentFullName)
