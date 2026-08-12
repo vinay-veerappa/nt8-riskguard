@@ -996,6 +996,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi1_MetricsCarryTheirSampleCount();
             TestUi1_TheSnapshotIsAReadAndOnlyARead();
             TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror();
+            TestUi1b_AShortLeaderIsMirroredRatherThanReadAsFlat();
             TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
@@ -1705,6 +1706,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(row != null && row.ExpectedIsClamped,
                 "snapshot carries the clamped flag when the sizing function reports one");
 
+            // The flag alone proved nothing: a mutation battery removed the clamped-to-zero
+            // reconciliation and every one of the 21 tests still passed. At its cap the
+            // sizing function correctly returns 0 more contracts, and a snapshot that reads
+            // that as "expected 0, actual 2" reports a PERMANENT false DIVERGED for a
+            // relationship doing exactly what it was configured to do.
+            Assert(row != null && row.Verdict == CopierConformance.Match,
+                string.Format("snapshot reports MATCH, not DIVERGED, for a follower sitting at its position cap (verdict={0} expected={1} actual={2})",
+                    row == null ? "n/a" : row.Verdict.ToString(),
+                    row == null ? -1 : row.ExpectedQuantity,
+                    row == null ? -1 : row.ActualQuantity));
+
             // A follower with NO Position row is FLAT, which is a fact, not an error.
             // NT8 simply does not carry a position object for a flat account.
             inst = Ui1Clean();
@@ -1896,6 +1908,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                     esRow == null ? "n/a" : esRow.Verdict.ToString(),
                     esRow == null ? -1 : esRow.ActualQuantity,
                     nqRow == null ? "none" : "PRESENT"));
+        }
+
+        private static void TestUi1b_AShortLeaderIsMirroredRatherThanReadAsFlat()
+        {
+            Console.WriteLine("\n[TEST] UI1b: a SHORT leader (mutation survivor -- Math.Abs)");
+
+            // CalculateFollowerQuantity opens with `if (leaderQty <= 0) return 0;`, so it
+            // takes an ABSOLUTE quantity and the caller carries the side separately. Drop
+            // the Math.Abs and a short leader passes -2, trips that guard, and the snapshot
+            // silently reports that the follower should be FLAT -- so a correctly mirrored
+            // short position reads as a divergence, on every short trade.
+            //
+            // The ticket named this trap explicitly and all 21 tests still passed with the
+            // Math.Abs removed, because not one of them used a short LEADER. A follower on
+            // the wrong side is a different case and does not exercise it.
+            var inst = Ui1Clean();
+            Ui1Account("Ui1bShLeader", inst, MarketPosition.Short, 2);
+            Ui1Account("Ui1bShFoll", inst, MarketPosition.Short, 2);
+            Ui1Rel("Ui1bShLeader", "Ui1bShFoll", 1.0);
+
+            var row = Ui1Row("Ui1bShFoll");
+            Assert(row != null && row.Verdict == CopierConformance.Match
+                   && row.ExpectedSide == MarketPosition.Short && row.ExpectedQuantity == 2,
+                string.Format("snapshot mirrors a SHORT leader instead of reporting the follower should be flat (verdict={0} expectedSide={1} expectedQty={2})",
+                    row == null ? "n/a" : row.Verdict.ToString(),
+                    row == null ? "n/a" : row.ExpectedSide.ToString(),
+                    row == null ? -1 : row.ExpectedQuantity));
         }
 
         private static void TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt()
