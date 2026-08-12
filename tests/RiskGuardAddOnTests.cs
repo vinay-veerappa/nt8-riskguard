@@ -885,6 +885,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P170_AnIgnoredChangeIsNeverConfirmed();
             TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept();
 
+            // P0-67: the third Account.Change() site. MonitorTickCore had ZERO coverage.
+            TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened();
+            TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker();
+            TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced();
+            TestAtm_P067_ARefusedTRAILIsBoundedToo();
+            TestAtm_P067_AMissingStopOrderIsNotReportedAsAMove();
+
             // -- BRACKET REPLICATION TESTS (P0-9) --
             TestBracket_StopMirrorsLeaderDistanceFromFollowerFill();
             TestBracket_StopBeforeFollowerFillIsAppliedOnFill();
@@ -2046,6 +2053,275 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(Math.Abs(stop.StopPrice - 17995.75) < 1e-9,
                 "Precondition on the stub: the provider settled a tick away from the request -- "
                 + "17995.75, not the 17996.00 asked for (got " + stop.StopPrice + ").");
+        }
+
+        // ------------------------------------------------------------------
+        // P0-67. The THIRD Account.Change() call site, in DynamicAtmManager.ModifyStopPrice, reached
+        // from both AtmStrategyType branches of the bracket monitor. Same API, same provider, same
+        // silent no-op as P0-63 -- but a worse consequence, because every call site was shaped:
+        //
+        //     ModifyStopPrice(account, bracket.StopOrderId, newStop);
+        //     bracket.CurrentStopPrice = newStop;      // unconditional
+        //
+        // ModifyStopPrice returned void and swallowed its own exceptions, so no caller could tell
+        // "moved" from "no such order" from "threw". The cache therefore recorded a price the broker
+        // had REFUSED, and the trailing comparison (`newStop > bracket.CurrentStopPrice`) was then
+        // made against fiction: the cache said the stop was already better, so no further move was
+        // ever attempted. The trail LATCHED at a stale value and the position kept its original stop.
+        //
+        // Not one test drove MonitorTickCore before these, which is why a 987-test suite never saw it.
+        // ------------------------------------------------------------------
+
+        private static ActiveBracket AtmBracketFor(Account acct, Instrument inst, Order stop,
+            double entry, double initialStop)
+        {
+            return new ActiveBracket
+            {
+                BracketId = "BR-P067",
+                Symbol = inst.MasterInstrument.Name,
+                AccountName = acct.Name,
+                IsLong = true,
+                EntryPrice = entry,
+                Quantity = 1,
+                Config = new AtmStrategyConfig
+                {
+                    Type = AtmStrategyType.DrawdownShield,
+                    BreakevenTriggerTicks = 12,
+                    BreakevenOffsetTicks = 2,
+                    PartialProfitPct = 0.50
+                },
+                OcoId = "OCO-P067",
+                EntryOrderId = "ENTRY-P067",
+                StopOrderId = stop.OrderId,
+                TargetOrderId = "TGT-P067",
+                CurrentStopPrice = initialStop,
+                CurrentTargetPrice = entry + 50.0,
+                CreatedAt = DateTime.UtcNow
+            };
+        }
+
+        /// <summary>
+        /// Builds an account holding a long position and a WORKING stop, priced 12+ ticks in profit so
+        /// the breakeven rule fires on the first sweep.
+        /// </summary>
+        private static Account AtmSetup(out Instrument inst, out Order stop, out DynamicAtmManager atm,
+            double entry = 20000.00, double initialStop = 19990.00, double last = 20003.00)
+        {
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+            RiskGuardAddOn.SetInstanceForTest(null);
+
+            inst = new Instrument("MNQ 03-26");
+            inst.MasterInstrument = new MasterInstrument { Name = "MNQ", TickSize = 0.25 };
+            inst.MarketData = new MarketData { Last = new Last { Price = last } };
+
+            var acct = new Account { Name = "SimAtm", Provider = Provider.Simulator };
+            Account.All.Add(acct);
+            acct.Positions.Add(new Position
+            {
+                Instrument = inst, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = entry
+            });
+
+            stop = acct.CreateOrder(inst, OrderAction.Sell, OrderType.StopMarket, TimeInForce.Day,
+                1, 0, initialStop, "OCO-P067", "ATM_STOP", null);
+            acct.Submit(new[] { stop });
+            stop.OrderState = OrderState.Working;
+
+            atm = new DynamicAtmManager();
+            return acct;
+        }
+
+        /// <summary>
+        /// THE defect. The provider accepts Change() and discards it, so the stop never moves -- and
+        /// the cache must not claim otherwise, because the next sweep's comparison depends on it.
+        /// </summary>
+        private static void TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened()
+        {
+            Console.WriteLine("\n[TEST] ATM: a stop move the provider refuses is NOT written into the cache (P0-67)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            acct.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                atm.MonitorTickForTest();       // breakeven fires; the move is REQUESTED
+                Assert(bracket.BreakevenTriggered,
+                    "Sweep 1 requests the breakeven move and marks it, so it is not re-asked every tick.");
+
+                acct.SettleChange(stop);        // the provider puts the old price back
+                Assert(Math.Abs(stop.StopPrice - 19990.00) < 1e-9,
+                    "Precondition: on settling, the broker really does put the ORIGINAL stop back -- "
+                    + "this is P0-63's live behaviour and the whole reason the cache cannot be "
+                    + "trusted (got " + stop.StopPrice + ").");
+
+                atm.MonitorTickForTest();       // sweep 2 reconciles against the broker
+            }
+            finally { acct.SimulateChangeIsSilentNoOp = false; }
+
+            Assert(Math.Abs(bracket.CurrentStopPrice - 19990.00) < 1e-9,
+                "THE FIX: the cache holds what the BROKER holds (19990.00), not the 20000.50 that was "
+                + "requested and refused. At baseline the caller wrote the requested price "
+                + "unconditionally, so the cache said 20000.50 -- and every later trailing comparison "
+                + "was made against a stop that did not exist. Got " + bracket.CurrentStopPrice + ".");
+
+            Assert(bracket.StopModifyAttempts == 1,
+                "The refusal is counted, so the retry can be bounded (got "
+                + bracket.StopModifyAttempts + ").");
+            // Re-arming is observable as a fresh request, not as a false flag: the reconcile clears
+            // BreakevenTriggered and the SAME sweep then re-evaluates and asks again, so by the time
+            // the sweep returns the flag is set once more. What proves the retry happened is that a
+            // move is outstanding again -- and that the order carries the requested price.
+            Assert(!double.IsNaN(bracket.RequestedStopPrice),
+                "The refusal RE-ARMS the move: a fresh request is outstanding after the reconcile. "
+                + "Without it the trail is still latched -- just latched on an honest cache instead "
+                + "of a false one.");
+            Assert(Math.Abs(bracket.RequestedStopPrice - 20000.50) < 1e-9,
+                "And the retry asks for the same breakeven price it was refused (got "
+                + bracket.RequestedStopPrice + ").");
+        }
+
+        /// <summary>
+        /// The honoured case. Without it, a fix that simply never updated the cache would pass the
+        /// test above and break trailing altogether.
+        /// </summary>
+        private static void TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker()
+        {
+            Console.WriteLine("\n[TEST] ATM: a stop move the provider honours is adopted from the broker (P0-67)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            atm.MonitorTickForTest();           // requests breakeven at 20000.50
+            Assert(Math.Abs(stop.StopPrice - 20000.50) < 1e-9,
+                "The broker honoured it, so the order itself is at 20000.50 (got " + stop.StopPrice + ").");
+
+            atm.MonitorTickForTest();           // reconcile adopts it
+
+            Assert(Math.Abs(bracket.CurrentStopPrice - 20000.50) < 1e-9,
+                "The cache follows the broker up to 20000.50, so trailing still works (got "
+                + bracket.CurrentStopPrice + ").");
+            Assert(bracket.StopModifyAttempts == 0,
+                "An honoured move resets the refusal counter -- otherwise three refusals spread over "
+                + "a long trade would abandon a bracket that is working fine.");
+            Assert(bracket.BreakevenTriggered,
+                "And breakeven stays marked, so it is not requested again.");
+        }
+
+        /// <summary>
+        /// The bound. A provider that always refuses must not be asked forever: that is an order
+        /// flood, and the copier learned the same lesson at MaxBracketStopAttempts.
+        /// </summary>
+        private static void TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced()
+        {
+            Console.WriteLine("\n[TEST] ATM: repeated refusals stop asking rather than flooding (P0-67)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            int changeCalls = 0;
+            Account.BrokerCallObserver = m => { if (m == "Change") changeCalls++; };
+            acct.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                // Each pair is: request, then the provider putting the old price back.
+                for (int i = 0; i < 6; i++)
+                {
+                    atm.MonitorTickForTest();
+                    acct.SettleChange(stop);
+                }
+            }
+            finally
+            {
+                acct.SimulateChangeIsSilentNoOp = false;
+                Account.BrokerCallObserver = null;
+            }
+
+            Assert(changeCalls <= DynamicAtmManager.MaxStopModifyAttempts,
+                "At most " + DynamicAtmManager.MaxStopModifyAttempts + " Change() calls are spent on a "
+                + "provider that keeps refusing -- six sweeps must not mean six orders (got "
+                + changeCalls + ").");
+            Assert(Math.Abs(bracket.CurrentStopPrice - 19990.00) < 1e-9,
+                "And the cache still reports the truth: the stop never moved.");
+        }
+
+        /// <summary>
+        /// The TRAILING path (ScaledRunner), which is not gated by the breakeven re-arm and therefore
+        /// depends entirely on the attempt cap to stay bounded. Mutation showed disabling the cap
+        /// SURVIVED, because the only bounded test went through breakeven -- so the flood risk on the
+        /// path that actually trails was unpinned.
+        /// </summary>
+        private static void TestAtm_P067_ARefusedTRAILIsBoundedToo()
+        {
+            Console.WriteLine("\n[TEST] ATM: a refused TRAILING move is bounded, not re-asked every sweep (P0-67)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            // +30 points in profit: breakeven triggers, and the trail wants 20030 - (0.25*40*2) = 20010.
+            var acct = AtmSetup(out inst, out stop, out atm, 20000.00, 19990.00, 20030.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            bracket.Config.Type = AtmStrategyType.ScaledRunner;
+            bracket.Config.StopTicks = 40;
+            bracket.Config.TrailMultiplier = 2.0;
+            atm.AddBracketForTest(bracket);
+
+            int changeCalls = 0;
+            Account.BrokerCallObserver = m => { if (m == "Change") changeCalls++; };
+            acct.SimulateChangeIsSilentNoOp = true;
+            try
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    atm.MonitorTickForTest();
+                    acct.SettleChange(stop);
+                }
+            }
+            finally
+            {
+                acct.SimulateChangeIsSilentNoOp = false;
+                Account.BrokerCallObserver = null;
+            }
+
+            Assert(changeCalls <= DynamicAtmManager.MaxStopModifyAttempts,
+                "Eight sweeps against a provider that always refuses must not mean eight orders. The "
+                + "trailing branch is NOT gated by the breakeven re-arm, so the attempt cap is the "
+                + "only thing bounding it (got " + changeCalls + " Change() calls, cap "
+                + DynamicAtmManager.MaxStopModifyAttempts + ").");
+            Assert(Math.Abs(bracket.CurrentStopPrice - 19990.00) < 1e-9,
+                "And the cache still reports the truth: the stop never moved (got "
+                + bracket.CurrentStopPrice + ").");
+        }
+
+        /// <summary>
+        /// No WORKING stop order to modify -- the position may be unprotected, and the old code could
+        /// not tell this apart from a successful move because ModifyStopPrice returned void. Mutation
+        /// showed that reporting success here SURVIVED, so the distinction was untested.
+        /// </summary>
+        private static void TestAtm_P067_AMissingStopOrderIsNotReportedAsAMove()
+        {
+            Console.WriteLine("\n[TEST] ATM: a missing stop order is not reported as a completed move (P0-67)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // The stop is gone -- filled, pulled, or replaced by something else.
+            stop.OrderState = OrderState.Filled;
+
+            atm.MonitorTickForTest();
+
+            Assert(double.IsNaN(bracket.RequestedStopPrice),
+                "No move is recorded as outstanding, because none was issued. Recording one would "
+                + "make the next sweep report a phantom refusal.");
+            Assert(!bracket.BreakevenTriggered,
+                "And breakeven is NOT marked done: marking it would permanently suppress the move on "
+                + "a bracket whose stop is missing, which is the worst of the two failures.");
         }
 
         // ------------------------------------------------------------------
