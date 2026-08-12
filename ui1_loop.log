@@ -2,9 +2,9 @@
 === UI1: Copier read model: a conformance snapshot, with measured-vs-unmeasured metrics
   [protected] 1 region file(s) clear of verifier
   [memory] 35 settled decisions (9 from prior runs)
-  [worktree] agentloop-UI1-18888 @ 3249de48
-  [baseline] 1053 passed, 0 failed at 3249de48; 0 expected failure(s)
-  REFUSED: expect_green test(s) not failing at baseline: ['snapshot reports IDLE when the leader and the follower are both flat', 'snapshot reports MATCH when the follower holds the configured multiple of the leader', 'snapshot reports DIVERGED when the follower quantity is short of the configured multiple', 'snapshot reports DIVERGED when the follower holds the right quantity on the wrong side', 'snapshot reports ORPHAN when the leader is flat and the follower is not', 'snapshot ranks ORPHAN above DIVERGED when both could describe the same row', 'snapshot reports SHADOW when the relationship is enabled but not armed for live', 'snapshot reports QUARANTINED in preference to any position comparison', 'snapshot reports latencySamples 0 and slippageSamples 0 before any fill is observed', 'snapshot reports latencySamples 1 after one latency is actually recorded', 'snapshot does not count a latency rejected by the sanity bound as a sample', 'snapshot counts a slippage sample independently of the latency sample count', 'snapshot expands a group into one entry per follower account', 'snapshot reports a follower once when a direct relationship shadows a group membership', "snapshot derives expected quantity from the engine's own sizing path rather than a second copy", 'snapshot carries the clamped flag when the sizing function reports one', 'snapshot treats a missing follower position as flat rather than as an error', 'snapshot leaves the engine unmutated and never reloads config from disk']
+  [worktree] agentloop-UI1-19220 @ 670cefe4
+  [baseline] 1053 passed, 18 failed at 670cefe4; 18 expected failure(s)
+  REFUSED: expect_green test(s) not failing at baseline: ['snapshot reports latencySamples 1 after one latency is actually recorded']
 
 ==== SUMMARY ====
 UI1   TICKET_REJECTED        applied=False

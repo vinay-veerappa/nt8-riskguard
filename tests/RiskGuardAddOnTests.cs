@@ -1776,7 +1776,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             FillFollowerCopy(follower, mnq, 18000.00, 143, "UI1-M-F");
             row = Ui1Row("SimFollower");
             Assert(row != null && row.Latency != null && row.Latency.Samples == 1,
-                "snapshot reports latencySamples 1 after one measured fill");
+                "snapshot reports latencySamples 1 after one latency is actually recorded");
 
             // The sanity-bound case, which is the whole reason the counter cannot simply
             // be "did a fill arrive". A leader clock five hours ahead produces an absurd
