@@ -73,10 +73,16 @@ MUTANTS = [
      '            if (string.IsNullOrWhiteSpace(leader) || string.IsNullOrWhiteSpace(follower))',
      '            if (leader == null || follower == null)'),
 
+    # ⚠️ THIS MUTANT SURVIVED ITS FIRST RUN, and the survival was the finding.
+    # It used to narrow the PRE-merge blank-leader check to the create path -- exactly
+    # the incomplete fix the review panel flagged -- and the suite stayed green, because
+    # a SECOND check after the merge silently covered for it. Two statements of one rule
+    # means neither is load-bearing and neither can be tested. The rule now lives in one
+    # place, so this points at that place and the mutant kills.
     ("the blank-leader refusal applies to CREATE only, not to edits. This is what the first\n"
      "     landing shipped, and its tests were green",
-     '                if (leaderKeyPresent && string.IsNullOrWhiteSpace(leader))',
-     '                if (isNew && leaderKeyPresent && string.IsNullOrWhiteSpace(leader))'),
+     '            if (string.IsNullOrWhiteSpace(grp.LeaderAccountName))',
+     '            if (isNew && string.IsNullOrWhiteSpace(grp.LeaderAccountName))'),
 
     # ---- refused, but silently ----
     ("the group-name refusal returns null WITHOUT a reason. Still refused, so every\n"

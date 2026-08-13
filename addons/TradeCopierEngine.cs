@@ -1919,7 +1919,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
 
             string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName");
-            bool leaderKeyPresent = req["leaderAccount"] != null || req["LeaderAccountName"] != null;
 
             CopierGroup grp = null;
             bool isNew;
@@ -1931,25 +1930,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                     g.GroupName.Equals(groupName, StringComparison.OrdinalIgnoreCase));
                 isNew = existing == null;
 
-                // P1-85: a leader explicitly present but blank/whitespace is refused on both
-                // create and edit paths. Omitting the leader on an edit is legitimate and keeps
-                // the stored value. These checks run under the lock before any clone or merge.
-                if (leaderKeyPresent && string.IsNullOrWhiteSpace(leader))
+                // A new group must name a non-empty leader before it is constructed.
+                // Omitting the leader on an edit is legitimate and keeps the stored
+                // value; that case is covered by the single post-merge check on the clone.
+                if (isNew && string.IsNullOrWhiteSpace(leader))
                 {
                     refusalReason = string.Format(
-                        "refused to apply group '{0}': the leader account was blank. A group must have a non-empty "
-                        + "leader account; on an edit, omit the leader field to keep the stored leader.",
-                        groupName);
-                    refusalAccount = groupName;
-                    refusalEvent = "BLANK_GROUP_LEADER_REFUSED";
-                }
-                else if (isNew && string.IsNullOrWhiteSpace(leader))
-                {
-                    refusalReason = string.Format(
-                        "refused to create group '{0}': the leader account was missing. A new group must name the "
+                        "refused to create group '{0}': the leader account was blank or missing. A new group must name the "
                         + "leader account that its followers will copy.",
                         groupName);
                     refusalAccount = groupName;
+                    // Deliberately NOT the same event type as the post-merge check below.
+                    // They are different situations -- "a new group arrived with no usable
+                    // leader" against "a merge was about to store a blank one" -- and the
+                    // log is grepped by event name, so collapsing them would make one of
+                    // the two unfindable after the fact.
                     refusalEvent = "MISSING_GROUP_LEADER_REFUSED";
                 }
                 else
@@ -1988,11 +1983,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             ApplyArmingGate(grp.ArmedForLive, armingWasRequested, confirmLive, v => grp.ArmedForLive = v);
 
-            // Defensive re-check after the merge: PopulateObject may have received a blank
-            // leader through a property name or path the raw extraction above did not cover.
-            // `grp` is still the clone, so returning here leaves the stored group untouched.
-            bool leaderKeyInNormalized = normalized["leaderAccount"] != null || normalized["LeaderAccountName"] != null;
-            if (leaderKeyInNormalized && string.IsNullOrWhiteSpace(grp.LeaderAccountName))
+            // THE invariant: no group with a blank leader is ever STORED, by any route.
+            // Unconditional on purpose -- the earlier version asked whether this request
+            // mentioned the leader, which is a question about the request rather than
+            // about the group, and it left a second copy of the rule to drift from.
+            //
+            // The create-path check above is a different question and stays: whether a
+            // new group can be CONSTRUCTED at all. This one is the only thing standing
+            // between a merge and storage, and it runs on the clone -- after the merge and
+            // after arming, before UpsertGroup -- so a refusal leaves the stored group
+            // untouched.
+            if (string.IsNullOrWhiteSpace(grp.LeaderAccountName))
             {
                 refusalReason = string.Format(
                     "refused to apply group '{0}': the leader account was blank. A group must have a non-empty "
