@@ -1,9 +1,30 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 34 — §5.34**). Core **`v1.13.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1265/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **104 IDs, 9 open**; the `P0` band and the untriaged band
-are both empty, and every naked-risk item is closed.
+**Last updated**: 2026-08-13 (**session 35 — §5.33**). Core **`v1.14.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1300/0**, **22** core mutation batteries + the bridge's 1,
+**243 anchors / 0 broken**. **104 IDs, 5 open**; the `P0` band and the untriaged band are both empty,
+and every naked-risk item is closed.
+
+⚠️ **Session 35's finding is the one to carry forward, because it invalidates a habit rather than a
+line of code**: `P3-30`'s guard audit shipped in session 34 with **1264 green tests**, and it
+**did not exist in the production build** — `StartAuditTimer` sat inside `#if TESTING`, so
+`AuditIntervalSeconds: 10` was live in the config describing an audit that was not in the net48
+assembly. Nothing called it even in the test build, and when it did run it keyed on
+`Instrument.ToString()` where every FSM keys on `.FullName`, so it matched **nothing** — which meant
+a **correctly protected account** would report `NAKED_POSITION`, `ORPHAN_STOP` *and*
+`FSM_DIVERGENCE` every ten seconds. Its three acceptance tests were **positive-only** and every one
+stayed green through all of it. **For a detector, the negative test is the one that proves the
+detector works** — a detector that fires on everything passes every positive test ever written for
+it. All three are fixed in `v1.14.0` (`mutation/mutate_p330.py`, §5.33).
+
+✅ **`P3-34` mostly landed** (§5.33): the copier has its **own** `live`/`shadow`/`disabled` mode —
+deliberately not a reading of the guard's — and `RunCopierPreflight` finally has a caller that
+**refuses** the move to `live`. ⚠️ **`CopierMode` is not in the `/api/copier/config` payload**, so
+the mode cannot be observed or set over the bridge. **That is the next item.**
+
+🆕 **`tools/check_no_dead_safety_machinery.py`** makes `P2-24`'s class mechanical, because it
+recurred **three times in the session that closed it**. Safety machinery that is written and never
+called passes every other gate here. It fails in **both** directions, so its allowlist cannot rot.
 
 ✅ **Session 34 closed twelve defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
 timer), **P3-30** (guard-side audit), **P1-57** (reference-tracking order filter), **P1-13**
@@ -130,17 +151,17 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1265 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **104 IDs — 95 closed, 9 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | **`P2-29`** (file complexity — split into partial classes), **`P3-33`** (global lock → actor model), **`P3-34`** (copier arm/shadow/preflight). These are architectural upgrades, not defect fixes. The remaining 3 `P?-` are UI write/sync issues. | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Suite** | **core 1300 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
+| **Do next** | **The copier mode's READ SURFACE** — `P3-34`'s core landed in `v1.14.0` but `CopierMode` is not in the `/api/copier/config` payload, so the mode cannot be observed or set over the bridge. Then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **22 tags**, `v1.0.0`…**`v1.14.0`** | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.14.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.14.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.14.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **21 batteries** — **20 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. Run for this pass: `mutate_p292` (11/0, after three survivors were killed) and `mutate_f9` (11/0). **227 anchors / 0 broken — measured.** ⚠️ The other 18 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured in session 34**, after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **Mutation** | **23 batteries** — **22 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. New in `v1.14.0`: `mutate_p330` (7 mutants, 1 documented survivor — the lock-scope one, which no test in this suite can detect because the stubs never block) and `mutate_p334` (9 / 0). **243 anchors / 0 broken**. Run for this pass: `mutate_p292` (11/0, after three survivors were killed) and `mutate_f9` (11/0). **227 anchors / 0 broken — measured.** ⚠️ The other 18 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.14.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| **Bridge pin** | ✅ **`v1.13.0`, matches core `main`.** ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Bridge pin** | ✅ **`v1.14.0`, matches core `main`.** ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
@@ -3204,11 +3225,29 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: architectural upgrades (P2-29, P3-33, P3-34) and the 3 P?- UI items
+> ### Do next: the copier mode's READ SURFACE, then the architectural items
+>
+> **Updated session 35.** `P3-34`'s core landed in `v1.14.0` — the copier has its own
+> `live`/`shadow`/`disabled` mode and preflight gates the move to `live`. ⚠️ **But
+> `CopierMode` is not in the `/api/copier/config` payload**, so the operator cannot
+> observe or set it over the bridge, only by editing the config file. **A mode you
+> cannot read is a mode you cannot trust** — that is item 1, and it is a bridge change
+> (`P2-27`: untested) that belongs with the UI write half below.
+>
+> Item 2 is **`P2-27` coverage for `ReconcileFollowerPosition`**, then wiring it: it is
+> the last entry in `check_no_dead_safety_machinery.py`'s `KNOWN_DEAD`, it sits inside
+> `#if !TESTING`, and it **flattens a live follower position**. §5.32's claim that the
+> P3-31 timer calls it is **false**; the timer calls `SyncFollowerStopOnce`/
+> `SyncFollowerTargetOnce`.
+>
+> Then **`P2-29`** (file complexity) and **`P3-33`** (global lock → actor model), which
+> are architectural upgrades rather than defect fixes, and the 3 `P?-` UI write items.
 >
 > Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13, P2-25,
 > P2-24, P3-32 (superseded), P2-26 (drift table updated), P2-27 (partially
-> closed). P1-77 honestly reported, implementation deferred.
+> closed). P1-77 honestly reported, implementation deferred. ⚠️ **P3-30's audit was
+> re-opened and re-closed in session 35** — see §5.33; it had shipped compiled out of
+> production.
 >
 > **`P2-29`** — split `RiskGuardAddOn.cs` (6740 lines) into partial classes.
 > **`P3-33`** — replace the global lock on the hot path with an actor model.
@@ -5966,3 +6005,140 @@ was removed. `EnableFollowerAtm` was removed (P0-9). The remaining items from P2
 are either wired or deleted.
 
 ---
+
+## 5.33 Session 35 — 2026-08-13: `v1.14.0`. A shipped feature that did not exist, and the copier gets a mode
+
+Two tracks. The first was meant to be a review of session 34's work and turned into three defects
+in one feature. The second was `P3-34`.
+
+### The state this session found, versus the state §0 claimed
+
+Worth recording because **every correction but one was in the reassuring direction**:
+
+* **CI was GREEN, not red.** `gh run list` showed two runs "in_progress" at 1h29m and 1h40m, which
+  reads as hung. It is not: **CI now runs all 20 mutation batteries on every push**, and 1h39m of
+  that 1h40m is batteries. The suite step itself takes 20 seconds. Read the step timings before
+  concluding anything from a long run.
+* **The firm mapping was already done and live** — 94 accounts, 9 profiles, and the operator's
+  `FTDFYG50481277664` correctly on `Tradeify-50K-Growth-Funded`.
+* **The bridge pin was stale for the THIRD time**, and `deploy.py` refused for the third time.
+
+### `P3-30`'s guard audit: three defects, and the suite could see none of them
+
+The audit shipped in session 34 with 1264 green tests. All three of these were live on the box.
+
+1. **It did not exist in the production build.** `StartAuditTimer`/`StopAuditTimer` were inside the
+   `#if TESTING` block, under a banner reading `DEV/TESTING API`. So `AuditIntervalSeconds: 10` was
+   in the live config on this box describing a ten-second audit whose code was **not in the net48
+   assembly**. This is `P1-47`'s trap, and it was caught the only way it can be: `nt_compile` went
+   red on `CS0103` once the wiring was added. **A green net8.0 suite cannot see this class at all.**
+2. **Nothing called `StartAuditTimer`**, even in the test build.
+3. **When it ran, it matched nothing.** Both broker reads keyed on `Instrument.ToString()`; every
+   FSM in this addon keys on `Instrument.FullName` (19 call sites). The failure is INVERTED from
+   what you would guess: not a missed finding, but a **correctly protected account reporting
+   `NAKED_POSITION`, `ORPHAN_STOP` and `FSM_DIVERGENCE`, per instrument, every ten seconds** — the
+   audit log drowning itself at exactly the moment it matters.
+
+**Why the three shipped tests could not fail.** They are all POSITIVE-only — each asserts its event
+*was* emitted. A total matching failure emits **every** event, so all three stay green under defect
+3. The test that finds it is the complement: *a correctly protected account must produce SILENCE*.
+That one failed on all three assertions at once, which is what a total matching failure looks like
+from the outside.
+
+> **The reusable rule: for a DETECTOR, the positive test is the cheap half, and the negative test is
+> the one that proves the detector works at all.** A detector that fires on everything passes every
+> positive test ever written for it.
+
+Two more found in the same read: flat `Position` objects were audited as naked (the FSM-seeding
+sweep has always filtered `MarketPosition.Flat || Quantity <= 0`; the audit did not), and
+`ORPHAN_STOP` fired on `!hasPosition || !hasFsm`, so a stop correctly covering a live-but-untracked
+position was reported as an orphan — a name meaning the opposite of the situation, duplicating the
+`NAKED_POSITION` already emitted for it.
+
+`mutation/mutate_p330.py`: 7 mutants, **6 killed, 1 documented survivor** — holding `_stateLock`
+across the broker reads (`P1-10`/`P1-12`) survives because the test stubs never block, so **no test
+in this suite can detect a deadlock**. Recorded in the battery rather than left to be rediscovered.
+
+### 🆕 `tools/check_no_dead_safety_machinery.py` — `P2-24`'s class, made mechanical
+
+`P2-24` was closed in session 34 by deleting `CalculateSafeFollowerDelta` for being uncalled. **The
+same session produced three more instances of it**: `StartAuditTimer`, `RunCopierPreflight` and
+`ReconcileFollowerPosition`. Three recurrences is what turns a defect into a gate.
+
+The class is invisible to every other gate here: it compiles, its own tests call it directly so the
+suite is green, a source scan finds the fields it reads, and the config surface advertising it looks
+configured. Only *"does anything actually CALL this"* separates them.
+
+The gate fails in **both** directions — an unrecorded dead entry point, **and** a `KNOWN_DEAD` entry
+that has since been wired — so the allowlist cannot rot into a permanent excuse. It earned that
+second direction the same session, reporting `RunCopierPreflight` as `WIRED-BUT-LISTED` the moment
+`P3-34` gave it a caller. Verified by breaking the wiring on purpose (exit 1).
+
+⚠️ **`ReconcileFollowerPosition` is still `KNOWN_DEAD`, and §5.32 records it as called by the P3-31
+timer. That is FALSE** — the timer calls `SyncFollowerStopOnce`/`SyncFollowerTargetOnce`. It sits
+inside `#if !TESTING` with zero coverage and it **flattens a live follower position**. Wiring an
+uncovered flatten into a 5-second timer needs `P2-27` coverage first.
+
+### `P3-34` — and what §0 says about it is half wrong
+
+§0: *"The copier acts regardless of guard mode."* **Measured, half of that is false, and it is the
+half you would act on.** A **live** follower was already gated three ways — `ArmedForLive`,
+`CanTrade`, and `IsGuardProtecting`, which requires the guard's mode to be `live`, so **a shadow
+guard already blocked live copies**. A **sim** follower was gated by none of them.
+
+So the copier gets its **own** mode, not a reading of the guard's — because reading the guard's
+would remove the thing the operator actually does: drive sim copies while the guard sits in shadow,
+which is how §5.13's live validation was run.
+
+| Mode | Behaviour |
+|---|---|
+| `live` | today's behaviour exactly, **and the default** |
+| `shadow` | logs the fully-formed intended order, submits nothing |
+| `disabled` | copier off, under its own event name |
+| anything else | **does not trade** (`P1-87`: the permissive branch here places real orders) |
+
+The gate sits **after** instrument, action and quantity are settled, not at the top of the loop: a
+shadow line that cannot name the order it suppressed observes nothing. `COPY_BLOCKED_COPIER_*` keeps
+`P1-71`'s one-outcome-per-relationship invariant by naming convention rather than by editing the
+counter.
+
+`RunCopierPreflight` now has a caller. `TrySetCopierMode` runs it when entering `live` and
+**refuses** the transition on failure rather than reporting it and applying the change anyway
+(`P1-88` inverted). **Leaving `live` is never gated** — a gate on the safe direction is one an
+operator routes around, and routing around this one means staying live.
+
+**The default is `live` deliberately.** §5.25: a new default only applies to fields *absent* from the
+stored config, so every config on disk today lands on it. A safety feature that silently stops a
+working copier on the next restart is one that gets turned off. **Moving the default to `shadow` is
+a protection increase and the operator's call.**
+
+`CopierConfigPayload` turned out to be **referenced by nothing in either repo** — `CopierMode` was
+briefly added there and moved, because a field on an unused type is `P2-25`'s state exactly: it
+reads as configuration and can never be read. The class is now marked.
+
+`mutation/mutate_p334.py`: 9 mutants, **0 survivors**. Mutant 3 is the one to know — it keeps the
+gate and deletes the `continue`, so the copy is logged as suppressed and then **submitted**; the
+shape of the fix is entirely present for anyone skimming the diff. The first run left two survivors,
+both persistence, and both are now covered by a disk round-trip test that drives the **write** half
+as well as the read.
+
+### ⚠️ What `P3-34` does NOT do, measured on the box rather than assumed
+
+**`CopierMode` is not in the `/api/copier/config` payload.** The endpoint returns relationship-shaped
+data, so the mode **cannot be observed or set over the bridge** — only by editing the config file.
+**A mode you cannot read is a mode you cannot trust**, and this is `P1-69`'s class in a new place.
+That surface is a bridge change (`P2-27`: untested) and belongs with the UI write half, §5.6 item 4.
+**This is the next item.**
+
+### Not live-validated, and it cannot be from a flat box
+
+The audit is deployed, compiled and wired, and **the box is flat** — on a flat box a working audit
+and an absent one both produce silence. The same is true of the copier's shadow mode. Proving either
+fires needs a position, which is a scheduled live-validation item, not something a green suite
+settles.
+
+### Next
+
+1. **The copier mode's read/write surface** — `/api/copier/config` and the `nt_copier_config` wrapper.
+2. **`P2-27`** coverage for `ReconcileFollowerPosition`, then wire it (it is the last `KNOWN_DEAD`).
+3. **`P2-29`** / **`P3-33`**, the architectural items, and the 3 `P?-` UI write items.

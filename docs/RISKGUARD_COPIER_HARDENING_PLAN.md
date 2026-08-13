@@ -129,6 +129,16 @@ re-derivation routine that is currently called from only one place.
 
 ## 1. P0 — Naked-risk and wrong-size defects (fix before any live use)
 
+> ✅ **THE WHOLE `P0-1`…`P0-8` BLOCK IS CLOSED.** It was fixed as tickets `T1`–`T5` in phase 1,
+> and the record of each is in the **handover**, not here — these eight entries were written
+> before this file carried a status marker in the heading, which is why a `grep` for un-struck
+> headings still returns them. **Do not read their absence of a ✅ as "open".**
+>
+> They are deliberately left as they were written: the plan keys defects to `file:line` across
+> the whole history, and rewriting them would falsify the trail. The count in
+> [RISKGUARD_HARDENING_HANDOVER.md](RISKGUARD_HARDENING_HANDOVER.md) §5.0 is the derived one;
+> this note exists so the derivation is not read as eight open naked-risk defects.
+
 ### P0-1. FSM returning to `Unprotected` never re-arms the grace timer → permanent naked position
 **Where**: `RiskGuardAddOn.cs:1667-1677` (`UpdateFsmOnOrder`, terminal-stop branch), `1763-1776` (`FsmWatchdog`)
 **What happens**: When the recognised protective stop goes terminal (cancelled by the user,
@@ -625,7 +635,7 @@ carelessly: a reservation leaked on a throwing path is permanent and worse than 
 
 ---
 
-### P1-57. We would mirror another copier's mirror — the "not ours" test is a name substring — OPEN 2026-08-10
+### P1-57. We would mirror another copier's mirror — the "not ours" test is a name substring — ✅ CLOSED 2026-08-13 (session 34: reference-tracking order filter)
 **Where**: `TradeCopierEngine.OnLeaderOrderUpdate` — `if (!string.IsNullOrEmpty(order.Name) && order.Name.Contains("COPIER")) return;`
 (and the same substring test in `ReevaluateLeaderStops`'s candidate filter)
 
@@ -1646,7 +1656,7 @@ wanted, it belongs in the `:1706` check next to `BlockedInstruments`.
 
 ---
 
-### P1-79. A quarantine can be released but its REASON cannot be cleared — OPEN
+### P1-79. A quarantine can be released but its REASON cannot be cleared — ✅ CLOSED 2026-08-13 (§5.21, UI2)
 
 *(found 2026-08-13 while writing the `UI2` ticket, not by a test and not by a live run. It is
 in the `P1` band rather than `P2` because the surviving text is displayed to the operator as a
@@ -2259,7 +2269,7 @@ that were being used to validate `P1-90`.
 **Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/lib/tools.js` (the schemas were at
 `nt-mcp-server.js:89`, `:124`, `:588`, `:672` before the extraction).
 
-### P2-92. `shadow` mode is not observation-only: a shadow breach stops the account trading — OPEN
+### P2-92. `shadow` mode is not observation-only: a shadow breach stops the account trading — ✅ CLOSED 2026-08-13 (§5.30: a lockout records the AUTHORITY it was imposed under)
 
 *(filed 2026-08-13 while scoping `F-9`, by asking what enabling two more lockout-capable rules on a
 live box would actually do)*
@@ -2306,7 +2316,7 @@ options are (a) record the would-be lockout on a separate shadow field that `Can
 (b) let `CanTrade` consult the mode the way `ProcessAction` does. (b) is one line and (a) is more
 truthful; (a) also gives the shadow session the count it is supposed to be collecting.
 
-### P2-95. `FirmStartingBalance` is a session-start heuristic, and the error GROWS with the account — OPEN
+### P2-95. `FirmStartingBalance` is a session-start heuristic, and the error GROWS with the account — ✅ CLOSED 2026-08-13 (session 34: FirmProfile.AccountSize is the floor)
 
 *(filed 2026-08-13, straight out of [FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md): the research gave
 the config the real starting balance, and revealed that the guard measures its own)*
@@ -2354,7 +2364,7 @@ R3). ⚠️ Note the migration: the field is already persisted with heuristic va
 (fresh / persisted-heuristic / persisted-correct / unmapped). Also surface it in the inventory: a
 trailing floor whose anchor nobody can see is the same class of problem as a limit nobody reads.
 
-### P2-94. A TIMED manual lockout does not stop new orders — `CanTrade` never reads `LockoutUntil` — OPEN
+### P2-94. A TIMED manual lockout does not stop new orders — `CanTrade` never reads `LockoutUntil` — ✅ CLOSED 2026-08-13 (session 34)
 
 *(filed 2026-08-13 while fixing `P2-92`, from a review-panel finding that pointed at the adjacent
 code)*
@@ -2390,7 +2400,7 @@ check `:3021`'s lapse logic first — the comment there records that the flag de
 its own deadline, so the two conditions are not interchangeable and the interaction needs a test per
 combination, not one.
 
-### P2-93. `pure` and `override_with_friction` pass the enforcement gate and then enforce nothing — OPEN
+### P2-93. `pure` and `override_with_friction` pass the enforcement gate and then enforce nothing — ✅ CLOSED 2026-08-13 (session 34: both now fail preflight)
 
 *(filed 2026-08-13 while scoping `P2-92`, by reading what `IsActingMode` actually returns)*
 
@@ -3276,7 +3286,7 @@ for an entry and non-zero for an exit; `QuantityRatio` is unchanged.
 
 ## 4. P2 — Dead safety code, unreachable features, and stated-vs-actual gaps
 
-### P2-24. Written-but-never-called safety machinery
+### P2-24. Written-but-never-called safety machinery — ✅ CLOSED 2026-08-13, and the class is now a GATE (`tools/check_no_dead_safety_machinery.py`) because it recurred three times in the session that closed it
 | Symbol | Location | Status |
 |---|---|---|
 | `CalculateSafeFollowerDelta` | TradeCopierEngine.cs:165 | never called — the fix for P0-5 already exists |
@@ -3293,7 +3303,7 @@ quarantine on submit exception / risk breach, then `DailyLossLimit` enforcement 
 Config that is displayed but not enforced is worse than absent config — it invites a live
 account to be armed on the belief that a limit is active.
 
-### P2-25. The news shield can never fire in production
+### P2-25. The news shield can never fire in production — ✅ CLOSED 2026-08-13 (session 34: `LoadNewsEventsFromDisk`)
 **Where**: `PropFirmProtectionSuite.cs:56` (`_newsEvents`), populated **only** by
 `AddTestNewsEvent` (`:60`). `LocalNewsEventsFilePath` (`:36`) is parsed and persisted but never
 read. `IsInNewsWindow` (`:84`) therefore always returns `false` outside tests, so the
@@ -3318,7 +3328,7 @@ Also unimplemented: `EnableConsistencyCap` / `MaxDailyProfitPctOfTarget` / `Enab
 so the correct move is to emit a JSON feed from it into the path the suite reads, not to build a
 second source. Note that this makes the fix **cross-repo**, which it was not when written.
 
-### P2-26. Design-doc drift ([RiskGuardAddOn.md](RiskGuardAddOn.md))
+### P2-26. Design-doc drift ([RiskGuardAddOn.md](RiskGuardAddOn.md)) — ✅ CLOSED 2026-08-13 (session 34: drift table updated)
 | Doc claim | Code reality |
 |---|---|
 | §5, §6.5, §6.8: "1-second sweep" / "1-second `DispatcherTimer`" | `new Timer(OnSafetySweep, null, 5000, 5000)` — 5 s, `System.Threading.Timer` (`:303`) |
@@ -3488,7 +3498,7 @@ is what makes it testable at all.
 
 ## 5. P3 — Architecture upgrades worth porting from V12
 
-### P3-30. An independent reconciler (the REAPER port) — highest-value single addition
+### P3-30. An independent reconciler (the REAPER port) — ✅ CLOSED 2026-08-13. ⚠️ The guard-side audit shipped COMPILED OUT of production (`#if TESTING`), unwired, and keyed on `Instrument.ToString()` where every FSM keys on `.FullName`; all three fixed in v1.14.0 with `mutation/mutate_p330.py`
 
 > 🔶 **PARTIALLY SHIPPED 2026-08-10 — the copier's bracket half is done and deployed. Still open:
 > the background timer, and the RiskGuard-side audit.** See handover §4u.
@@ -3551,7 +3561,7 @@ Reuse what exists: `SeedFsmsForExistingPositions` is already a correct re-deriva
 from here. Borrow REAPER's `_repairInFlight` / `_nakedPositionFirstSeen` grace pattern so a
 normal bracket-confirmation window is not mistaken for a naked position.
 
-### P3-31. Expected-position ledger with reserve/rollback
+### P3-31. Expected-position ledger with reserve/rollback — ✅ CLOSED 2026-08-13 (session 34: `InFlightLedger` + the 5s reconciler timer)
 
 > 🔶 **The reconciler's SEAM for this exists and is tested; the ledger itself does not.**
 > `Reconcile` takes `stopSubmitInFlight` / `targetSubmitInFlight` and suppresses `Create` — and
@@ -3579,7 +3589,7 @@ block another. A full port is large; the pragmatic subset is: keep `_stateLock` 
 mutation only, never hold it across I/O or broker calls (P1-10/12), and move the action queue to
 a `ConcurrentQueue<GuardAction>` drained by a single executor.
 
-### P3-34. Arm/shadow discipline extended to the copier
+### P3-34. Arm/shadow discipline extended to the copier — ⚠️ MOSTLY CLOSED in v1.14.0: the copier has its own live/shadow/disabled mode and `RunCopierPreflight` gates the move to live. **The read surface is missing** — `CopierMode` is not in the `/api/copier/config` payload, so the mode cannot be observed or set over the bridge
 RiskGuard's `RunPreflight` + `MinShadowSessions` gate is the best-designed safety feature in
 either addon. The copier only has a per-relationship `ArmedForLive` bool with a name-based sim
 check (P1-20). Give the copier the same treatment: a global arm switch, a shadow mode that logs
