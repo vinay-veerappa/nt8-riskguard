@@ -1362,7 +1362,7 @@ the flag) and `P1-44` (never cancel a protective order to enforce a rate limit) 
 
 ---
 
-### P1-72. `nt_copier_config` advertised a `quarantine` action that nothing implemented — ✅ FIXED 2026-08-13
+### P1-72. `nt_copier_config` advertised a `quarantine` action that nothing implemented — ✅ FIXED 2026-08-13, ⚠️ **REGRESSED and RE-FIXED the same day (§5.34)**. The enum still listed `quarantine` AND `unquarantine`; both are answered `UNKNOWN_COPIER_ACTION` — measured against the live box. It fails closed and loudly (P1-88), so it is a contract defect, not a dangerous one — but the enum is the only description of this surface a model ever sees. **The worse half**: `isQuarantined` (sent with `action: set`, which is what the browser page posts) was **not in the schema at all**, so the wrapper advertised two ways that do not work and omitted the one that does. A test now pins the enum against the addon's own `knownActions` whitelist, so the two cannot drift silently again
 
 *(found 2026-08-13 while widening the MCP wrapper's argument surface — §5.6 item 3 — by comparing the
 tool's declared `action` enum against the branches that exist.)*
@@ -3589,7 +3589,7 @@ block another. A full port is large; the pragmatic subset is: keep `_stateLock` 
 mutation only, never hold it across I/O or broker calls (P1-10/12), and move the action queue to
 a `ConcurrentQueue<GuardAction>` drained by a single executor.
 
-### P3-34. Arm/shadow discipline extended to the copier — ⚠️ MOSTLY CLOSED in v1.14.0: the copier has its own live/shadow/disabled mode and `RunCopierPreflight` gates the move to live. **The read surface is missing** — `CopierMode` is not in the `/api/copier/config` payload, so the mode cannot be observed or set over the bridge
+### P3-34. Arm/shadow discipline extended to the copier — ✅ CLOSED 2026-08-13. The copier has its own `live`/`shadow`/`disabled` mode (core `v1.15.0`), `RunCopierPreflight` gates the move to `live`, and the read surface landed with it: `copierMode` + `set_mode` on `/api/copier/config`, and `set_mode`/`copierMode` on `nt_copier_config`. Live-validated end to end. 11 mutants / 0 survivors
 RiskGuard's `RunPreflight` + `MinShadowSessions` gate is the best-designed safety feature in
 either addon. The copier only has a per-relationship `ArmedForLive` bool with a name-based sim
 check (P1-20). Give the copier the same treatment: a global arm switch, a shadow mode that logs
