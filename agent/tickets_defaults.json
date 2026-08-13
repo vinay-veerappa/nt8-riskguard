@@ -1,0 +1,35 @@
+{
+  "_comment": "Config defaults, from docs/CONFIG_DEFAULTS.md. Rule R2 -- a default must never read as protection that does not exist. The red tests are TestP182_AFlagThatCannotFireMustNotDefaultOn and TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag in tests/RiskGuardAddOnTests.cs; both are already written and the first is RED. Do not edit the tests -- they are protected.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "The two switches that default ON while doing nothing must default OFF",
+      "defect": "`P1-82`. Two flags in `PropFirmProtectionConfig` default to `true` while the rules behind them cannot fire, so `prop_limits.json` reads as protection that does not exist.\n\n(1) `EnableNewsShield` (`addons/PropFirmProtectionSuite.cs:33`) defaults `true`. `RiskGuardAddOn.cs:1571` genuinely tests it and genuinely calls `IsInNewsWindow`, which iterates `_newsEvents` -- a list nothing outside a test ever appends to, because `LocalNewsEventsFilePath` is parsed and opened by no loader. The rule inventory reports it `INERT`: it executes, its evidence set is empty, its verdict is a foregone conclusion. That is `P2-25`.\n\n(2) `EnableConsistencyCap` (`:46`) defaults `true` and NO CODE READS IT. Declaration plus JSON parser, and nowhere else. The inventory reports it `CONFIGURED-not-EVALUATED`. That is `P1-77`.\n\nThese are the ONLY two flags in the system that default ON while doing nothing, which is what makes this the highest-value change in `CONFIG_DEFAULTS.md`.\n\nEACH DEFAULT IS STATED TWICE. `PropFirmProtectionSuite.ParseConfig` (`:185` and `:194`) repeats the same literal as the FINAL fallback for a config file that does not name the field -- which is every config file that predates the field, i.e. every one on this box. Changing only the property initializer leaves every existing install on the old default and fixes nothing in production.",
+      "spec": "Change four literals, in `addons/PropFirmProtectionSuite.cs` and nowhere else.\n\nA. `public bool EnableNewsShield { get; set; } = true;` becomes `= false;`.\nB. `public bool EnableConsistencyCap { get; set; } = true;` becomes `= false;`.\nC. In `ParseConfig`, the `EnableNewsShield` line's FINAL fallback (the trailing `: true`, after the `newsShield` alias) becomes `false`.\nD. In `ParseConfig`, the `EnableConsistencyCap` line's FINAL fallback (the trailing `: true`) becomes `false`.\n\nEach flag keeps a short comment on its declaration saying WHY it ships off: name the defect ID, and say that the flag is not the fix -- the rule is still broken, this only stops the config asserting a protection that is not there. Turning it back on is a one-line change for whoever implements the rule.\n\nWHAT NOT TO DO:\n* Do NOT add an evaluator, a loader, or any implementation of either rule. `P1-77` and `P2-25` stay open and the inventory must keep reporting them red. A do-nothing evaluator would turn an honest red row into a lie -- that is the defect, not the fix.\n* Do NOT change `NewsBufferMinutesBefore` / `NewsBufferMinutesAfter` / `MaxDailyProfitPctOfTarget` / `LocalNewsEventsFilePath`. They are the thresholds for rules that do not run; they are not switches and they cannot read as protection.\n* Do NOT touch `EnableProfitTargetLock` or `EnablePeakEquityProtection`. Both default `true` and both are genuinely evaluated -- they are the control group in the test.\n* Do NOT change `addons/GuardRules.cs`. Its registry entries describe the defects and stay exactly as they are; the news-shield rule's state will move from `INERT` to `Disabled` on its own, because the evaluator already returns `Off(...)` when the flag is false.",
+      "context": "THE TEST THAT GATES THIS IS A CLASS TEST, NOT A CONSTANT TEST. `TestP182_AFlagThatCannotFireMustNotDefaultOn` builds the rule inventory under the conditions most favourable to a rule firing (live, armed, one account, nothing excluded), collects every row reporting `ConfiguredNotEvaluated` or `Inert`, resolves each row's `ConfigPath` against a default config by reflection, and fails on any that resolves to a `bool` that is `true`. It currently names both flags. It will keep working for the next dead flag somebody adds, so do not try to satisfy it by special-casing a name.\n\nThe second test, `TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag`, is GREEN right now and must stay green: it asserts the property initializer and the parser fallback agree for all five prop-firm switches. It is green today because both copies say `true`. If you change only one copy it goes red. That is the whole reason it exists -- it is the trap this ticket is most likely to fall into, and it is deliberately not in `expect_green`, because a string that is not failing now can never go red-then-green.\n\nASCII only. C# 8.0 / .NET Framework 4.8 and a net8.0 test build.",
+      "expect_green": [
+        "cannot fire yet default their switch ON"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "public bool EnableNewsShield { get; set; } = true;",
+          "note": "THE NEWS SHIELD PROPERTY. Flip to false and say why on the declaration. P2-25."
+        },
+        {
+          "id": "R2",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "public bool EnableConsistencyCap { get; set; } = true;",
+          "note": "THE CONSISTENCY CAP PROPERTY. Flip to false and say why on the declaration. P1-77."
+        },
+        {
+          "id": "R3",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "public PropFirmProtectionConfig ParseConfig(JObject jObj)",
+          "note": "THE PARSER, WHICH HOLDS THE SECOND COPY OF EVERY DEFAULT. Exactly TWO literals change in this whole method: the FINAL fallback on the `EnableNewsShield` line (the trailing `: true`, after the `newsShield` alias) and the FINAL fallback on the `EnableConsistencyCap` line. Every alias read stays, and no other field's fallback is touched -- `EnableProfitTargetLock` and `EnablePeakEquityProtection` in particular keep their `true`, because both rules genuinely run."
+        }
+      ]
+    }
+  ]
+}

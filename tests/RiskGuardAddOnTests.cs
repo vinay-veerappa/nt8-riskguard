@@ -435,6 +435,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi3_TheWorstStateSortsFirst();
             TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
             TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
+            TestP182_AFlagThatCannotFireMustNotDefaultOn();
+            TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag();
             TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
             TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing();
             TestUi4_TheCanActCopyAgreesWithTheGuardItself();
@@ -2309,6 +2311,125 @@ namespace NinjaTrader.NinjaScript.AddOns
             cfg.FirmMirror.DailyLoss.Enabled = true;
             cfg.FirmMirror.AccountFirmMap["Ui4Acc"] = "Apex";
             return cfg;
+        }
+
+        /// <summary>
+        /// Resolves a dotted registry path -- "PropFirm.EnableConsistencyCap",
+        /// "StopGuard.OnMissing" -- against the two config objects, so a test can ask what a
+        /// rule's own switch is BORN set to.
+        ///
+        /// Returns null when the path does not name a chain of properties. That is not a
+        /// failure: several registry paths deliberately name a dictionary's contents rather
+        /// than a field.
+        /// </summary>
+        private static object P182ResolveConfigPath(
+            string configPath, RiskConfig cfg, PropFirmProtectionConfig prop)
+        {
+            if (string.IsNullOrEmpty(configPath)) return null;
+
+            object current;
+            string[] parts;
+            if (configPath.StartsWith("PropFirm.", StringComparison.Ordinal))
+            {
+                current = prop;
+                parts = configPath.Substring("PropFirm.".Length).Split('.');
+            }
+            else
+            {
+                current = cfg;
+                parts = configPath.Split('.');
+            }
+
+            foreach (var part in parts)
+            {
+                if (current == null) return null;
+                var pi = current.GetType().GetProperty(part);
+                if (pi == null) return null;
+                current = pi.GetValue(current, null);
+            }
+            return current;
+        }
+
+        private static void TestP182_AFlagThatCannotFireMustNotDefaultOn()
+        {
+            Console.WriteLine("\n[TEST] P1-82: no rule that cannot fire may have its switch default ON");
+
+            // R2 from docs/CONFIG_DEFAULTS.md, expressed as a GATE rather than as two constants.
+            //
+            // The defect is not "EnableNewsShield is true". The defect is the CLASS: a flag that
+            // READS as protection while the rule behind it cannot fire. A test that pinned the
+            // two known values would go green and then wave the third one through, which is
+            // exactly how P1-77 and P2-25 both got here in the first place.
+            //
+            // So build the inventory under the conditions MOST favourable to a rule firing --
+            // live, armed, a real account, nothing excluded -- and ask which rules STILL report
+            // CONFIGURED-not-EVALUATED or INERT. Those cannot act under any conditions at all.
+            // If such a rule's own switch is a bool born `true`, the config file asserts a
+            // protection that does not exist, and this fails.
+            //
+            // Flipping the default does NOT fix the rule -- P1-77 and P2-25 stay open -- it stops
+            // the config lying about it. The rule then reports Disabled, which is honest.
+            //
+            // Only bools are checked, and that limit is deliberate: a switch is the only kind of
+            // field that can read as "this protection is on". An empty list or a zero threshold
+            // behind a dead rule reads as absent, which is what it is.
+            var cfg = new RiskConfig();
+            var prop = new PropFirmProtectionConfig();
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                cfg, prop, "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("P182Acc") }, 0);
+
+            var rows = new List<GuardRuleRow>();
+            if (snap.UnevaluatedRules != null) rows.AddRange(snap.UnevaluatedRules);
+            foreach (var acct in snap.Accounts)
+                if (acct.Rules != null) rows.AddRange(acct.Rules);
+
+            var liars = new List<string>();
+            foreach (var row in rows)
+            {
+                if (row.State != GuardRuleState.ConfiguredNotEvaluated
+                    && row.State != GuardRuleState.Inert)
+                    continue;
+                var value = P182ResolveConfigPath(row.ConfigPath, cfg, prop);
+                if (value is bool && (bool)value)
+                    liars.Add(row.ConfigPath + " (" + row.State + ")");
+            }
+
+            var named = liars.Distinct().ToList();
+
+            // The positive half. Without it an empty registry -- or a BuildSnapshot that returned
+            // no rows at all -- would pass this trivially, which is the failure mode the UI3
+            // completeness test was written against.
+            Assert(rows.Count > 20 && named.Count == 0, string.Format(
+                "of {0} rule readings, {1} cannot fire yet default their switch ON{2}",
+                rows.Count, named.Count,
+                named.Count == 0 ? "" : ": " + string.Join(", ", named)));
+        }
+
+        private static void TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag()
+        {
+            Console.WriteLine("\n[TEST] P1-82: the parser's fallback is the same default as the property");
+
+            // THE SECOND COPY. `PropFirmProtectionConfig` states each of these defaults TWICE:
+            // once as a property initializer, and once as the final fallback in the hand-written
+            // JSON parser, which is what runs for a config file that predates the field. Change
+            // one and the other keeps the old default for every existing install -- and every
+            // install on this box predates every one of these flags.
+            //
+            // Asserting the two AGREE, rather than asserting a literal, is what makes this
+            // survive the next default change: it fails when they drift apart, whatever they
+            // drift to.
+            var declared = new PropFirmProtectionConfig();
+            var parsed = new PropFirmProtectionSuite().ParseConfig(new JObject());
+
+            Assert(parsed != null
+                   && parsed.EnableNewsShield == declared.EnableNewsShield
+                   && parsed.EnableConsistencyCap == declared.EnableConsistencyCap
+                   && parsed.EnableAutoDayFiller == declared.EnableAutoDayFiller
+                   && parsed.EnableProfitTargetLock == declared.EnableProfitTargetLock
+                   && parsed.EnablePeakEquityProtection == declared.EnablePeakEquityProtection,
+                "a config file that names none of the prop-firm switches gets the same defaults "
+                + "the properties declare");
         }
 
         private static void TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited()
