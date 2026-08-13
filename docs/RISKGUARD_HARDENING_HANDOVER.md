@@ -1,15 +1,16 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 34 — §5.31**). Core **`v1.13.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1259/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **101 IDs, 15 open**; the `P0` band and the untriaged band
+**Last updated**: 2026-08-13 (**session 34 — §5.32**). Core **`v1.13.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1262/0**, **20** core mutation batteries + the bridge's 1
+/ 0 survivors, **227 anchors / 0 broken**. **102 IDs, 14 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
 
-✅ **Session 34 closed four defects**: **P2-95** (FirmStartingBalance uses plan AccountSize, not
+✅ **Session 34 closed five defects**: **P2-95** (FirmStartingBalance uses plan AccountSize, not
 session-scoped heuristic), **P2-93** (pure/override_with_friction fail preflight — they pass the
 MinShadowSessions gate but IsActingMode() names only "live"), **P2-94** (CanTrade reads LockoutUntil
-for timed manual lockouts, not just IsLockedOut), and **P3-31** (in-flight order ledger + background
-reconciler timer). **94 accounts are now mapped** across **9 firm profiles**, including
+for timed manual lockouts, not just IsLockedOut), **P3-31** (in-flight order ledger + background
+reconciler timer), and **P3-30** (RiskGuard-side audit: naked position, orphan stop, FSM/broker
+divergence). **94 accounts are now mapped** across **9 firm profiles**, including
 `FTDFYG50481277664` as `Tradeify-50K-Growth-Funded`. All with operator-verifyable defaults.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
@@ -130,9 +131,9 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1259 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **101 IDs — 86 closed, 15 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 34: **98** banded + **3** `P?-`. `P2-93`, `P2-94`, `P2-95` and `P3-31` are CLOSED. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Do next** | **`P3-30`** — the RiskGuard-side audit (naked position, orphan stop, FSM/broker divergence). The timer from P3-31 now exists and can drive it. Then `P1-57`, `P1-13`, and the rest of the `P2` band. ⚠️ There is no "highest open" row any more, deliberately: `P1-90` carried a `P1` and was `P0` on consequence, so **band letter is not priority** — use §5.6 | §5.6 |
+| **Suite** | **core 1262 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
+| **Defects** | **102 IDs — 88 closed, 14 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 34: **99** banded + **3** `P?-`. `P2-93`, `P2-94`, `P2-95`, `P3-31`, `P3-30` are CLOSED. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Do next** | **`P1-57`** (third-party copier fan-out), **`P1-13`** (guard evaluation on the WPF dispatcher), then the rest of the `P2` band. ⚠️ **band letter is not priority** — use §5.6 | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3204,19 +3205,13 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P3-30` (RiskGuard-side audit), then `P1-57` and `P1-13`
+> ### Do next: `P1-57` and `P1-13`, then the rest of the `P2` band
 >
 > The three P2 defects from session 33 are CLOSED (§5.31): P2-95, P2-93, P2-94.
-> P3-31 (in-flight ledger + timer) is CLOSED (§5.31). The timer now exists and can
-> drive the RiskGuard-side audit.
+> P3-31 (in-flight ledger + timer) is CLOSED (§5.31). P3-30 (RiskGuard-side
+> audit) is CLOSED (§5.32): naked position, orphan stop, FSM/broker divergence.
 >
-> **`P3-30`** — the **RiskGuard-side audit** and the **background timer** for the
-> guard side. The copier half shipped (§4u); the timer from P3-31 now exists for
-> the copier side. What remains is the guard's own audit: naked position, orphan
-> stop, FSM/broker divergence. The guard's `CoveredQuantity` already answers the
-> multi-stop coverage sum — share it, do not rebuild it (§4a).
->
-> Then **`P1-57`** (third-party copier fan-out — the "not ours" test is a name
+> **`P1-57`** (third-party copier fan-out — the "not ours" test is a name
 > substring), **`P1-13`** (guard evaluation on the WPF dispatcher — threading
 > half only), and the rest of the `P2` band.
 
@@ -5921,5 +5916,35 @@ operator will verify and correct each account's plan when it is actually used.
 ⚠️ The agent loop's `expect_green` naming: the loop matches against `[FAIL]` line text, not
 test method names. Three intermediate commits failed CI because the `InFlightLedger` stub made
 the acceptance tests fail; the final commit (`eb15210`) has the real implementation and passes.
+
+---
+
+## 5.32 Session 34 continued — P3-30: RiskGuard-side audit
+
+The copier half of P3-30 shipped with the reconciler (§4u) and its timer (§5.31/P3-31). The guard
+half did not exist. `FsmWatchdog` runs on events only, so a divergence arriving with no subsequent
+event is permanent.
+
+### What was built
+
+`RunGuardAudit` runs on a `System.Threading.Timer` (default 10s, configurable via
+`AuditIntervalSeconds`, 0 = disabled) and performs three checks per account+instrument:
+
+1. **NAKED_POSITION** — broker has a position but no FSM is tracking it, or the FSM says
+   `Unprotected` / `CoveredQuantity < PositionQuantity`. The existing `FsmWatchdog` already arms a
+   grace timer for this on events; the audit is the clock-driven complement that catches the case
+   where no event arrives.
+2. **ORPHAN_STOP** — a working stop order exists but the position is flat. P0-50's class: an orphan
+   stop on a flat account is a new position in the opposite direction the moment it triggers.
+3. **FSM_DIVERGENCE** — the FSM says `Protected` but no working stop exists at the broker for that
+   instrument. The FSM's optimistic fast path lost the truth.
+
+The audit is an **observer**: it emits `LogEvent` only, never actions. Actions come from the
+existing `FsmWatchdog`/`EvaluateRules` path. The audit does NOT hold `_stateLock` across broker
+reads (P1-10/12). Shares `CoveredQuantity` from the existing FSM (per §4a: share it, do not
+rebuild it). `RunAuditNow()` was wired to call `RunGuardAudit()` (the loop left the stub in place).
+`AuditIntervalSeconds` added to `GuardRuleRegistry.NonRules` for the UI3 gate.
+
+Suite **1262/0**, 227 anchors / 0 broken, NT8 compile 0 errors.
 
 ---
