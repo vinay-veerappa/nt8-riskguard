@@ -216,6 +216,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         Quarantined = 5  // not copying at all, so agreement is meaningless
     }
 
+    // P3-34: copier preflight result. Same shape as the guard's PreflightResult.
+    public class CopierPreflightResult
+    {
+        public bool Passed = true;
+        public string FailureCode = "";
+        public string FailureMessage = "";
+        public List<string> Failures = new List<string>();
+        public void Fail(string code, string msg) { Passed = false; FailureCode = code; FailureMessage = msg; Failures.Add(msg); }
+    }
+
     /// <summary>
     /// A measurement AND the number of samples behind it. The pair is the point: these
     /// metrics are SESSION-SCOPED and a recompile resets them, so a bare 0 cannot
@@ -489,6 +499,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             decimal rounded = Math.Round(rawQuantity, 0, MidpointRounding.AwayFromZero);
             if (rounded > int.MaxValue) return int.MaxValue;
             return (int)rounded;
+        }
+
+        // P3-34 stub: exists so acceptance tests compile. The real implementation
+        // is the agent loop's job. Returns a passing result (no failures detected).
+        public CopierPreflightResult RunCopierPreflight()
+        {
+            return new CopierPreflightResult();
         }
 
 #if !TESTING

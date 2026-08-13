@@ -1,0 +1,31 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P3-34: copier preflight -- verify followers before live arming",
+      "defect": "The copier only has a per-relationship ArmedForLive bool with a name-based sim check (P1-20). The guard has RunPreflight + MinShadowSessions which is the best-designed safety feature in either addon. P3-34 wants the copier to have a preflight that verifies every follower is connected, subscribed, not locked, and has a resolvable instrument, before any relationship can be armed for live.",
+      "spec": "Add a RunCopierPreflight method to TradeCopierEngine that checks:\n1. Every enabled relationship's follower account exists in Account.All.\n2. Every enabled relationship's follower account is connected (provider != Disconnected).\n3. Every enabled relationship's follower is not locked out (via RiskGuardAddOn.Instance.CanTrade).\n4. If ArmedForLive is requested, verify the follower is NOT a simulated account (the existing P1-20 name-based sim check, but centralized in preflight).\n\nThe preflight returns a result object with Passed, FailureCode, FailureMessage -- same shape as the guard's PreflightResult.\n\nThis is the MINIMAL version -- a preflight check, not a full shadow mode. The full shadow mode (logging intended orders without submitting) is a larger feature and can follow.\n\nCONSTRAINTS:\n- The preflight must not hold _lock across Account.All enumeration.\n- The preflight must be callable from the bridge (so the operator can check before arming).\n- The preflight must report ALL failures, not just the first (so the operator sees every problem at once).\n- If RiskGuardAddOn.Instance is null (guard not loaded), skip the CanTrade check rather than fail.\n- The preflight does NOT block arming -- it reports. The caller decides whether to arm. This matches the guard's pattern (RunPreflight reports, ToggleArmed gates on it).",
+      "context": "TradeCopierEngine has _relationships (List<CopierRelationship>) and _groups (List<CopierGroup>). CopierRelationship has LeaderAccountName, FollowerAccountName, IsEnabled, ArmedForLive. The guard's PreflightResult is at RiskGuardAddOn.cs ~3604. Account.All is the NT8 account list. RiskGuardAddOn.Instance.CanTrade checks lockouts.",
+      "expect_green": [
+        "the copier preflight detects a missing follower account",
+        "the preflight reports at least one failure"
+      ],
+      "regions": [
+        {
+          "id": "PreflightMethod",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public void ReconcileFollowerPosition(Account leaderAccount, Account followerAccount, Instrument instrument",
+          "note": "add RunCopierPreflight method near the top of TradeCopierEngine, after the singleton/fields. Returns a result with Passed/FailureCode/FailureMessage/Failures list."
+        },
+        {
+          "id": "PreflightResult",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public enum CopierConformance",
+          "kind": "line",
+          "note": "add the CopierPreflightResult class near the enums, before TradeCopierEngine class"
+        }
+      ],
+      "max_rounds": 4
+    }
+  ]
+}

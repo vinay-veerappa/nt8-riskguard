@@ -160,6 +160,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
             TestP113_ConcurrentGuardEventsDoNotCorruptState();
             TestP225_NewsShieldLoadsEventsFromDisk();
+            TestP334_CopierPreflightDetectsMissingFollower();
+            TestP334_CopierPreflightPassesWhenAllFollowersConnected();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18962,6 +18964,57 @@ namespace NinjaTrader.NinjaScript.AddOns
             });
             var fsm = addon.TestGetFsm("P113Stress", "MNQ 03-26");
             Assert(fsm != null, "the FSM was created for the concurrent position events");
+        }
+
+        // ================================================================================
+        // P3-34: copier preflight -- verify followers before live arming.
+        // ================================================================================
+
+        private static void TestP334_CopierPreflightDetectsMissingFollower()
+        {
+            Console.WriteLine("\n[TEST] P3-34: the copier preflight detects a missing follower");
+
+            TradeCopierEngine.Instance.ResetBracketsForTest();
+            Account.All.Clear();
+            Account.All.Add(new Account { Name = "P334Leader" });
+
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "P334Leader",
+                FollowerAccountName = "P334Missing",
+                IsEnabled = true,
+                ArmedForLive = false
+            };
+            TradeCopierEngine.Instance.UpsertRelationship(rel);
+
+            var result = TradeCopierEngine.Instance.RunCopierPreflight();
+            Assert(!result.Passed,
+                "P3-34: the copier preflight detects a missing follower account");
+            Assert(result.Failures.Count > 0,
+                "P3-34: the preflight reports at least one failure");
+        }
+
+        private static void TestP334_CopierPreflightPassesWhenAllFollowersConnected()
+        {
+            Console.WriteLine("\n[TEST] P3-34: the copier preflight passes when all followers are connected");
+
+            TradeCopierEngine.Instance.ResetBracketsForTest();
+            Account.All.Clear();
+            Account.All.Add(new Account { Name = "P334LeaderB" });
+            Account.All.Add(new Account { Name = "P334FollowerB" });
+
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "P334LeaderB",
+                FollowerAccountName = "P334FollowerB",
+                IsEnabled = true,
+                ArmedForLive = false
+            };
+            TradeCopierEngine.Instance.UpsertRelationship(rel);
+
+            var result = TradeCopierEngine.Instance.RunCopierPreflight();
+            Assert(result.Passed,
+                "P3-34: the copier preflight passes when all followers exist and are connected");
         }
 
         // ================================================================================
