@@ -462,6 +462,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi7_ARefusedGroupWriteNamesEveryClashingFollower();
             TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently();
             TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload();
+            TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed();
+            TestP185_AGroupRequestThatNamesNoGroupIsRefusedRatherThanGuessed();
+            TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot();
+            TestP185_TheCopierEngineNamesNoAccountOfItsOwn();
+            TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -3441,6 +3446,160 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(!string.IsNullOrWhiteSpace(relReason) && !string.IsNullOrWhiteSpace(grpReason),
                 "and both say so. This path is reached by a malformed POST body, where the caller "
                 + "is a surface that will otherwise report the engine's silence as its own bug");
+        }
+
+        /// <summary>The copier engine's source with `//` comments stripped, for P1-85's literal scan.</summary>
+        private static string P185EngineCode(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            var path = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons", "TradeCopierEngine.cs"));
+            if (!File.Exists(path)) return null;
+            return string.Join("\n", File.ReadAllText(path)
+                .Split('\n')
+                .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }));
+        }
+
+        private static void TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a relationship request naming no accounts is refused, not routed to a guess");
+
+            // THE DEFECT: `ApplyRelationshipRequest` resolves the leader to "Sim101" and the
+            // follower to "SimCopy2" when the request names neither. So a malformed or truncated
+            // write does not fail -- it succeeds, against two accounts nobody asked for. On this
+            // box those two names are real, connected accounts, which is what turns a validation
+            // gap into "the copier is now mirroring into an account you did not choose."
+            //
+            // A write that cannot say what it applies to has no safe interpretation. Refuse it.
+            var engine = new TradeCopierEngine();
+
+            string reason;
+            var rel = engine.ApplyRelationshipRequest(
+                JObject.Parse(@"{""quantityRatio"":2.0,""maxPositionSize"":7}"), false, out reason);
+
+            Assert(rel == null, "the relationship request is refused");
+            Assert(!string.IsNullOrWhiteSpace(reason) && reason.IndexOf("account", StringComparison.OrdinalIgnoreCase) >= 0,
+                "and the reason says an account name is what was missing");
+
+            // The half that matters more than the return value: nothing was WRITTEN. A refusal
+            // that still creates the guessed relationship is the same defect wearing a null.
+            Assert(engine.GetRelationships().Count == 0,
+                "and no relationship was created against a guessed pair of accounts");
+        }
+
+        private static void TestP185_AGroupRequestThatNamesNoGroupIsRefusedRatherThanGuessed()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a group request naming no group is refused, not applied to 'DefaultGroup'");
+
+            // Same class, third guess. `ApplyGroupRequest` falls back to the group name
+            // "DefaultGroup", so an unnamed write creates -- or silently EDITS -- a group by
+            // that name. The edit case is the dangerous one: two unnamed writes from two
+            // different surfaces collide on one object neither of them meant to touch.
+            var engine = new TradeCopierEngine();
+
+            string reason;
+            var grp = engine.ApplyGroupRequest(
+                JObject.Parse(@"{""quantityRatio"":2.0}"), false, out reason);
+
+            Assert(grp == null, "the group request is refused");
+            Assert(!string.IsNullOrWhiteSpace(reason) && reason.IndexOf("group", StringComparison.OrdinalIgnoreCase) >= 0,
+                "and the reason says the group name is what was missing");
+            Assert(engine.GetGroups().Count == 0, "and no group was created under a guessed name");
+        }
+
+        private static void TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a NEW group must name its leader; an edit to an existing one must not have to");
+
+            // The fourth guess, and the one that has to be fixed WITHOUT breaking merge
+            // semantics -- which is the whole reason this is a separate test rather than a
+            // fourth assertion above.
+            //
+            // Creating a group with no leader currently invents "Sim101". Refuse that.
+            // But an EDIT names only what it changes, by design (P1-72...P1-75 are what
+            // happens when a request is read as a whole object), so an edit that does not
+            // mention the leader must keep the stored one rather than being refused for
+            // omitting it. Create and edit are different questions about the same field.
+            var engine = new TradeCopierEngine();
+
+            string createReason;
+            var created = engine.ApplyGroupRequest(
+                JObject.Parse(@"{""groupName"":""P185G"",""quantityRatio"":2.0}"), false, out createReason);
+
+            Assert(created == null && !string.IsNullOrWhiteSpace(createReason),
+                "a new group with no leader is refused with a reason");
+            Assert(engine.GetGroups().Count == 0, "and no group was created under a guessed leader");
+
+            // Now store one properly, and edit it without naming the leader.
+            string okReason;
+            var real = engine.ApplyGroupRequest(
+                JObject.Parse(@"{""groupName"":""P185G"",""leaderAccount"":""P185Lead"",""quantityRatio"":1.0}"),
+                false, out okReason);
+            Assert(real != null && okReason == null, "a group that names its leader is accepted");
+
+            string editReason;
+            var edited = engine.ApplyGroupRequest(
+                JObject.Parse(@"{""groupName"":""P185G"",""quantityRatio"":3.0}"), false, out editReason);
+
+            Assert(edited != null && editReason == null,
+                "and an EDIT that omits the leader is still accepted -- a request names only what it changes");
+            Assert(edited.LeaderAccountName == "P185Lead" && edited.QuantityRatio == 3.0,
+                "the stored leader survives the edit that did not mention it");
+        }
+
+        private static void TestP185_TheCopierEngineNamesNoAccountOfItsOwn()
+        {
+            Console.WriteLine("\n[TEST] P1-85: the copier engine contains no default account or group name at all");
+
+            // THE CLASS GATE. Four separate guesses were found by reading the file; a test that
+            // pinned those four call sites would go green and let the fifth one in, and this
+            // engine has already grown a guessed identity four times.
+            //
+            // So: no literal account or group name may appear in the engine's code at all. The
+            // engine does not get to know what any account is called -- every name it handles
+            // arrives from a request, a config file, or NT8. Comments are stripped first, because
+            // the comments are where the defect gets EXPLAINED, and a check that forbids naming
+            // the bug it prevents is a check that gets the explanation deleted instead.
+            var code = P185EngineCode();
+            bool readable = code != null && code.Length > 5000;
+
+            var found = new List<string>();
+            foreach (var name in new[] { "Sim101", "SimCopy2", "DefaultGroup" })
+                if (code != null && code.Contains("\"" + name + "\"")) found.Add(name);
+
+            Assert(readable && found.Count == 0, string.Format(
+                "TradeCopierEngine.cs states {0} default identity literal(s){1}",
+                found.Count, found.Count == 0 ? "" : ": " + string.Join(", ", found)));
+        }
+
+        private static void TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a stored relationship with no derivable follower is skipped, not invented");
+
+            // The same guess on the LOAD path, where it is worse: it runs at startup, against a
+            // file, with no operator watching. `TryParseRelationship` derives the two names from
+            // the config key when the object omits them -- which is correct -- and then falls
+            // back to "SimCopy2" when the key cannot supply one. That silently manufactures a
+            // relationship the file never described.
+            //
+            // Skipping is the honest outcome and the method already has that path: it returns
+            // false and logs for a malformed entry. This is malformed in exactly the same way.
+            CopierRelationship rel;
+            bool parsed = TradeCopierEngine.TryParseRelationship(
+                JObject.Parse(@"{""quantityRatio"":1.0}"), "NoUnderscoreKey", false, out rel);
+
+            Assert(!parsed && rel == null,
+                "a non-flat entry whose key cannot supply a follower is skipped rather than pointed at a guessed account");
+
+            // The control: a key that CAN supply both names still parses, because deriving a
+            // name that is present in the file is not guessing.
+            CopierRelationship ok;
+            bool okParsed = TradeCopierEngine.TryParseRelationship(
+                JObject.Parse(@"{""quantityRatio"":1.0}"), "P185Lead_P185Follow", false, out ok);
+
+            Assert(okParsed && ok != null && ok.LeaderAccountName == "P185Lead"
+                   && ok.FollowerAccountName == "P185Follow",
+                "and a key that names both accounts still parses into both of them");
         }
 
         private static void TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload()

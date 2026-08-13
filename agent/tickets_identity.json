@@ -1,0 +1,62 @@
+{
+  "_comment": "P1-85 -- the copier invents an identity when a request omits one. From docs/CONFIG_DEFAULTS.md section 3.1. The red tests are the five TestP185_* methods in tests/RiskGuardAddOnTests.cs; they are already written and RED. Do not edit them -- tests are protected.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "A copier write that does not say what it applies to must be refused, not applied to a guessed account",
+      "defect": "`P1-85`. `TradeCopierEngine` invents an identity in FOUR places when a request or a stored entry omits one. All four are the same defect: a write that cannot say what it applies to is executed against something the operator did not choose.\n\n(1) `ApplyRelationshipRequest` (`:1975`) resolves the leader to `\"Sim101\"` when the request names none.\n(2) The same method (`:1976`) resolves the follower to `\"SimCopy2\"`.\n(3) `ApplyGroupRequest` (`:1892`) resolves the group name to `\"DefaultGroup\"`. Because the group is looked up BY that name, an unnamed write does not merely create a stray group -- it silently EDITS whatever is already stored under `DefaultGroup`. Two unnamed writes from two different surfaces collide on one object neither of them meant to touch.\n(4) `ApplyGroupRequest` (`:1901`) gives a NEWLY created group the leader `\"Sim101\"`.\n\nAnd twice more on the LOAD path, where it is worse because it runs at startup against a file with no operator watching:\n\n(5) `TryParseRelationship` (`:1632`) derives the two account names from the config key -- which is correct -- and then falls back to `\"SimCopy2\"` when the key cannot supply one, manufacturing a relationship the file never described.\n(6) `TryParseGroup` (`:1662`) gives a keyed group the leader `\"Sim101\"`.\n\n⚠️ WHY THIS IS NOT A COSMETIC VALIDATION GAP: `Sim101` and `SimCopy2` are REAL, CONNECTED accounts on this box. A truncated or malformed write does not fail loudly -- it succeeds, and the copier begins mirroring into an account nobody selected. The property initializers (`:159`, `:160`, `:278`) state the same two names, so an object built without them looks configured rather than empty.",
+      "spec": "Remove every invented identity from `addons/TradeCopierEngine.cs`. Nothing else is in scope.\n\nA. `ApplyRelationshipRequest(JObject, bool, out string)`. Read the leader and follower with no fallback. If either is null, empty or whitespace, set `refusalReason` and return null BEFORE anything is looked up, cloned or written. The reason must contain the word \"account\" and must say WHICH of the two was missing (or both). Follow the existing refusal shape in this method exactly: build the string once, and -- as the P1-76 branch does -- log it through `CopierLog` so the refusal is on the audit record, not only in the caller's hands.\n\nB. `ApplyGroupRequest(JObject, bool, out string)`. Same for the group name: no `\"DefaultGroup\"` fallback, refuse when it is missing, and the reason must contain the word \"group\".\n\nC. `ApplyGroupRequest`, the CREATE branch. A group being created for the first time must name its leader; refuse when it does not. ⚠️ AN EDIT MUST STILL BE ACCEPTED WITHOUT ONE. A request names only the fields it changes -- that is the merge contract this engine has been repaired four times to honour (`P1-72`...`P1-75`) -- so the leader is required only on the branch that constructs a new `CopierGroup`, never on the branch that clones an existing one. There is a test for each direction and they will both be run.\n\nD. `TryParseRelationship`. Keep deriving the names from the key: a name present in the file is not a guess. Delete only the `\"SimCopy2\"` fallbacks. When a name cannot be derived, return false with `rel = null`, and report it the same way the existing `catch` reports a malformed entry -- the operator must be told the entry was skipped. A silent drop is `P?-64`'s shape and is not acceptable here.\n\nE. `TryParseGroup`. Same: no `\"Sim101\"` leader fallback; skip and report instead.\n\nF. The property initializers on `CopierRelationship` (`LeaderAccountName`, `FollowerAccountName`) and `CopierGroup` (`LeaderAccountName`) become `= \"\"`. Empty reads as unset; `\"Sim101\"` reads as configured. Use `\"\"` and not null -- several lookups call `.Equals` on these directly and a null would turn a refusal into a NullReferenceException, which is the failure UI7 was written to remove.\n\nAfterwards no literal `\"Sim101\"`, `\"SimCopy2\"` or `\"DefaultGroup\"` may remain anywhere in `TradeCopierEngine.cs`. There is a source scan asserting exactly that.",
+      "context": "THE GATE IS A CLASS GATE. `TestP185_TheCopierEngineNamesNoAccountOfItsOwn` scans the engine's source, comments stripped, for those three literals. Four separate guesses were found by reading the file, and a test pinning those four call sites would go green and let the fifth one in -- this engine has already grown a guessed identity four times. Do not satisfy it by moving a literal into a constant or a comment; the point is that the engine does not get to know what any account is called. Every name it handles arrives from a request, a config file, or NT8.\n\nCALLERS ARE ALREADY SAFE. All three `CopierRequests` builders (`Relationship`, `Group`, `RelationshipEdit`) take the account names as parameters and always emit them, and the bridge's write branches pass them through. So no surface depends on the fallbacks; they only ever fired for a malformed request.\n\nWHAT NOT TO DO:\n* Do NOT add validation to `UpsertRelationship`/`UpsertGroup`. Those are the object-level API that `LoadFromDisk` and forty-odd fixtures use legitimately.\n* Do NOT change `NormalizeRequest`, `ClearCollectionsNamedIn` or `JsonConvert.PopulateObject` ordering. The merge semantics are load-bearing and separately tested.\n* Do NOT touch `addons/TradeCopierWindow.cs` (its `if (names.Count == 0) names.Add(\"Sim101\")` is a UI picker default, a different thing) or `addons/RiskGuardAddOn.cs` (its `Sim101` check is display filtering).\n\nASCII only. C# 8.0 / .NET Framework 4.8 and a net8.0 test build. The lock-scope rule applies: `CopierLog` reaches another component, so do not call it while holding `_lock`.",
+      "expect_green": [
+        "the relationship request is refused",
+        "and the reason says an account name is what was missing",
+        "and no relationship was created against a guessed pair of accounts",
+        "the group request is refused",
+        "and the reason says the group name is what was missing",
+        "and no group was created under a guessed name",
+        "a new group with no leader is refused with a reason",
+        "and no group was created under a guessed leader",
+        "default identity literal",
+        "a non-flat entry whose key cannot supply a follower is skipped rather than pointed at a guessed account"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public CopierRelationship ApplyRelationshipRequest(JObject req, bool confirmLive, out string refusalReason)",
+          "note": "GUESSES 1 AND 2. The leader/follower reads at the top of the method. Refuse before the GroupReserving lookup -- a request with no accounts cannot meaningfully be checked against a group either."
+        },
+        {
+          "id": "R2",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public CopierGroup ApplyGroupRequest(JObject req, bool confirmLive, out string refusalReason)",
+          "note": "GUESSES 3 AND 4. The groupName read, and the `new CopierGroup { ... LeaderAccountName = \"Sim101\" }` in the CREATE branch. The clone branch beside it must keep accepting a request that does not mention the leader -- that is the merge contract, and there is a test for it."
+        },
+        {
+          "id": "R3",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal static bool TryParseRelationship(JObject source, string key, bool isFlatLegacy, out CopierRelationship rel)",
+          "note": "GUESS 5, on the load path. Keep the key-derived names; delete only the \"SimCopy2\" fallbacks, and skip-with-a-report when a name cannot be derived."
+        },
+        {
+          "id": "R4",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal static bool TryParseGroup(JObject source, string key, out CopierGroup grp)",
+          "note": "GUESS 6. Same treatment for the group leader."
+        },
+        {
+          "id": "R5",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public class CopierRelationship",
+          "note": "THE DTO DEFAULTS. LeaderAccountName and FollowerAccountName become \"\" -- empty reads as unset. Change nothing else in this class."
+        },
+        {
+          "id": "R6",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public class CopierGroup",
+          "note": "THE GROUP DTO DEFAULT. LeaderAccountName becomes \"\". Change nothing else in this class."
+        }
+      ]
+    }
+  ]
+}
