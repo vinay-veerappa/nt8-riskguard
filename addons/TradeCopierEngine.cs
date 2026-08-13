@@ -1854,9 +1854,41 @@ namespace NinjaTrader.NinjaScript.AddOns
             return RemoveUnknownEnums(normalized, targetType);
         }
 
+        /// <summary>
+        /// UI7. FOR CALLERS THAT ALREADY KNOW THE REQUEST CANNOT BE REFUSED -- which in
+        /// practice means test fixtures, and nothing else. An OPERATOR SURFACE must call the
+        /// three-argument overload, because a surface is precisely the caller with a person
+        /// waiting to be told what to change.
+        ///
+        /// This is not a style preference. The bridge's two write branches discarded the
+        /// refusal and then dereferenced the null they were handed (`rel.IsEnabled`), so a
+        /// refused write reached the operator as a NullReferenceException -- after SaveToDisk
+        /// had already run. The NT8 window checked the null but could still only say "the
+        /// engine refused", because the reason existed nowhere but the copier log.
+        /// `TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload` holds that line.
+        /// </summary>
         public CopierGroup ApplyGroupRequest(JObject req, bool confirmLive)
         {
-            if (req == null) return null;
+            string ignored;
+            return ApplyGroupRequest(req, confirmLive, out ignored);
+        }
+
+        /// <summary>
+        /// Returns null on refusal, exactly as before, and sets <paramref name="refusalReason"/>
+        /// to the reason -- which is null on success, so the two agree and either can be tested.
+        ///
+        /// The reason string is built ONCE and handed to both the log and the caller. Writing it
+        /// twice would be the shorter diff and the reliable bug: two explanations of one refusal
+        /// drift apart, and the operator reads whichever of them nobody maintained.
+        /// </summary>
+        public CopierGroup ApplyGroupRequest(JObject req, bool confirmLive, out string refusalReason)
+        {
+            refusalReason = null;
+            if (req == null)
+            {
+                refusalReason = "the request was empty, so there was nothing to apply.";
+                return null;
+            }
             string groupName = ReqStr(req, "groupName") ?? ReqStr(req, "GroupName") ?? "DefaultGroup";
 
             CopierGroup grp;
@@ -1909,12 +1941,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     .ToList();
                 if (clashes.Count > 0)
                 {
-                    CopierLog(grp.LeaderAccountName, "CONFIG_OVERLAP_REFUSED", string.Format(
+                    refusalReason = string.Format(
                         "refused group '{0}' under leader '{1}': {2} of its followers already have a direct "
                         + "relationship ({3}). The ENTIRE request was refused -- creating the group without them "
                         + "would silently drop accounts you named. Remove those relationships, or leave those "
                         + "accounts out of the group.",
-                        grp.GroupName, grp.LeaderAccountName, clashes.Count, string.Join(", ", clashes)));
+                        grp.GroupName, grp.LeaderAccountName, clashes.Count, string.Join(", ", clashes));
+                    CopierLog(grp.LeaderAccountName, "CONFIG_OVERLAP_REFUSED", refusalReason);
                     return null;
                 }
             }
@@ -1923,9 +1956,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return grp;
         }
 
+        /// <summary>UI7. See <see cref="ApplyGroupRequest(JObject, bool)"/> -- fixtures only, never a surface.</summary>
         public CopierRelationship ApplyRelationshipRequest(JObject req, bool confirmLive)
         {
-            if (req == null) return null;
+            string ignored;
+            return ApplyRelationshipRequest(req, confirmLive, out ignored);
+        }
+
+        /// <summary>UI7. Null on refusal, with <paramref name="refusalReason"/> set to the one string that was also logged.</summary>
+        public CopierRelationship ApplyRelationshipRequest(JObject req, bool confirmLive, out string refusalReason)
+        {
+            refusalReason = null;
+            if (req == null)
+            {
+                refusalReason = "the request was empty, so there was nothing to apply.";
+                return null;
+            }
             string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName") ?? "Sim101";
             string follower = ReqStr(req, "followerAccount") ?? ReqStr(req, "FollowerAccountName") ?? "SimCopy2";
 
@@ -1937,12 +1983,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             var reserving = GroupReserving(leader, follower);
             if (reserving != null)
             {
-                CopierLog(follower, "CONFIG_OVERLAP_REFUSED", string.Format(
+                refusalReason = string.Format(
                     "refused to create a direct relationship for '{0}' under leader '{1}': it is already a member "
                     + "of group '{2}'. A follower belongs to a direct relationship OR a group, never both, so that "
                     + "there is exactly one place to look for what applies to it. Remove it from the group first, "
                     + "or change the group instead.",
-                    follower, leader, reserving.GroupName));
+                    follower, leader, reserving.GroupName);
+                CopierLog(follower, "CONFIG_OVERLAP_REFUSED", refusalReason);
                 return null;
             }
 

@@ -158,6 +158,16 @@ jobs:
       - name: Mutation battery UI6
         run: python mutation/mutate_ui6.py
 
+      # UI7 -- a refusal that says why. Every mutant here still REFUSES the write, so the
+      # P1-76 tests stay green through all of them; what breaks is the operator's ability to
+      # find out what to change. Two of the ten mutate TradeCopierWindow.cs instead of the
+      # engine, putting a surface back on the reason-losing overload -- that file is entirely
+      # `#if !TESTING`, so a source scan is the only gate there is and it has to be proven to
+      # fire. One survived the first run: the accepted-write test covered the relationship
+      # half and not the group half, which is the same one-sided shape as P1-69 and P1-75.
+      - name: Mutation battery UI7
+        run: python mutation/mutate_ui7.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

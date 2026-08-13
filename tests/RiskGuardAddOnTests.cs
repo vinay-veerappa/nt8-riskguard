@@ -1040,6 +1040,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi6_TheSeverityRankIsNotTheEnumsOwnOrder();
             TestUi6_TheVerdictAndSidesTravelAsNamesAndTheRankTravelsWithThem();
             TestUi6_ANullSnapshotSaysSoAndAnEmptyOneIsStillAnAnswer();
+            TestUi7_ARefusedWriteSaysWhyAndNamesTheGroupResponsible();
+            TestUi7_TheReasonTheCallerGetsIsTheOneThatWasLogged();
+            TestUi7_AnAcceptedWriteReturnsNoReasonAtAll();
+            TestUi7_ARefusedGroupWriteNamesEveryClashingFollower();
+            TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently();
+            TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -3744,6 +3750,176 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && !noRows["rows"].Any(),
                 "a missing copier reports a stated error while a copier with no relationships "
                 + "reports an empty rows array, so the page can tell them apart");
+        }
+
+        // ── UI7: a refusal has to say why ────────────────────────────────────────────────
+        //
+        // ApplyRelationshipRequest and ApplyGroupRequest signal a refusal by returning null.
+        // That is fine as a contract and terrible as an answer: the REASON is written to the
+        // copier log and nowhere else, so every surface has to render "refused" and then send
+        // the operator to a log file to find out what it refused and why.
+        //
+        // The browser page has no log window at all, which is what forced this. But the same
+        // gap was already there in the NT8 window ("The engine refused to toggle this
+        // relationship." -- and no more), and it is the reason the bridge's two write branches
+        // dereference the result without checking it: `rel.IsEnabled` on a null. A refusal
+        // reaches the operator as a NullReferenceException, AFTER SaveToDisk has run.
+        //
+        // So the reason travels with the refusal, and one string feeds both the log and the
+        // caller -- a test pins that they are the same text, because two copies of an
+        // explanation drift and the one the operator reads is the one that goes stale.
+        private static TradeCopierEngine Ui7EngineWithGroup(string group, string leader, string follower)
+        {
+            var engine = new TradeCopierEngine();
+            engine.UpsertGroup(P176Group(group, leader, follower));
+            return engine;
+        }
+
+        private static void TestUi7_ARefusedWriteSaysWhyAndNamesTheGroupResponsible()
+        {
+            Console.WriteLine("\n[TEST] UI7: a refused relationship write returns the REASON, naming the group");
+
+            var engine = Ui7EngineWithGroup("Ui7Group", "Ui7Leader", "Ui7Follower");
+
+            string reason;
+            var rel = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Ui7Leader"",""followerAccount"":""Ui7Follower"",""isEnabled"":false}"),
+                false, out reason);
+
+            Assert(rel == null, "the request is still refused -- the contract has not changed");
+            Assert(!string.IsNullOrWhiteSpace(reason),
+                "and the refusal carries a reason, so a surface with no log window can render one");
+            Assert(reason != null && reason.IndexOf("Ui7Group", StringComparison.OrdinalIgnoreCase) >= 0,
+                "the reason NAMES the group holding the follower. 'Refused' without the culprit is "
+                + "not actionable: the operator cannot find what to change");
+        }
+
+        private static void TestUi7_TheReasonTheCallerGetsIsTheOneThatWasLogged()
+        {
+            Console.WriteLine("\n[TEST] UI7: the reason returned to the caller is the SAME text that was logged");
+
+            var engine = Ui7EngineWithGroup("Ui7SyncG", "Ui7SyncL", "Ui7SyncF");
+
+            string reason = null;
+            var log = CaptureCopierLog(() =>
+            {
+                engine.ApplyRelationshipRequest(JObject.Parse(
+                    @"{""leaderAccount"":""Ui7SyncL"",""followerAccount"":""Ui7SyncF""}"), false, out reason);
+            });
+
+            var logged = log.FirstOrDefault(l => l.Split('|')[0] == "CONFIG_OVERLAP_REFUSED");
+
+            Assert(logged != null, "the refusal is still logged");
+            Assert(reason != null && logged != null && logged.EndsWith(reason, StringComparison.Ordinal),
+                "the logged message and the returned reason are ONE string, not two copies. Two "
+                + "explanations of the same refusal drift, and the operator reads the stale one");
+        }
+
+        private static void TestUi7_AnAcceptedWriteReturnsNoReasonAtAll()
+        {
+            Console.WriteLine("\n[TEST] UI7: an accepted write returns a null reason, so a reason means refused");
+
+            var engine = new TradeCopierEngine();
+
+            string reason;
+            var rel = engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Ui7OkL"",""followerAccount"":""Ui7OkF"",""quantityRatio"":2.5}"),
+                false, out reason);
+
+            Assert(rel != null, "the write was accepted");
+            Assert(reason == null,
+                "and it reports NO reason. This is what makes `reason != null` a usable test for "
+                + "refusal on its own -- a caller that checks the reason and a caller that checks "
+                + "the object must reach the same verdict");
+
+            // The group half, because the first version of this test asserted only the
+            // relationship half and a mutant setting a reason on every accepted GROUP write
+            // survived. Every defect in this area is a fix applied to one of two symmetric
+            // halves (P1-69, P1-75, and the two write branches in the bridge).
+            string grpReason;
+            var grp = engine.ApplyGroupRequest(JObject.Parse(
+                @"{""groupName"":""Ui7OkG"",""leaderAccount"":""Ui7OkGL"",""followerAccounts"":[""Ui7OkGF""]}"),
+                false, out grpReason);
+
+            Assert(grp != null && grpReason == null,
+                "and the same holds for a group write, which is the half a one-sided fix leaves behind");
+        }
+
+        private static void TestUi7_ARefusedGroupWriteNamesEveryClashingFollower()
+        {
+            Console.WriteLine("\n[TEST] UI7: a refused GROUP write names every clashing follower, not just the first");
+
+            var engine = new TradeCopierEngine();
+            engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Ui7GL"",""followerAccount"":""Ui7ClashA""}"), false);
+            engine.ApplyRelationshipRequest(JObject.Parse(
+                @"{""leaderAccount"":""Ui7GL"",""followerAccount"":""Ui7ClashB""}"), false);
+
+            string reason;
+            var grp = engine.ApplyGroupRequest(JObject.Parse(
+                @"{""groupName"":""Ui7NewG"",""leaderAccount"":""Ui7GL"",""followerAccounts"":[""Ui7ClashA"",""Ui7ClashB""]}"),
+                false, out reason);
+
+            Assert(grp == null, "the whole request is refused, as before -- all-or-nothing");
+            Assert(reason != null
+                   && reason.IndexOf("Ui7ClashA", StringComparison.OrdinalIgnoreCase) >= 0
+                   && reason.IndexOf("Ui7ClashB", StringComparison.OrdinalIgnoreCase) >= 0,
+                "and BOTH clashing followers are named. Naming one would send the operator round "
+                + "the loop again for the second, which is how an all-or-nothing refusal becomes "
+                + "indistinguishable from a flaky one");
+        }
+
+        private static void TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently()
+        {
+            Console.WriteLine("\n[TEST] UI7: an empty request is refused with a stated reason, not a bare null");
+
+            var engine = new TradeCopierEngine();
+
+            string relReason, grpReason;
+            var rel = engine.ApplyRelationshipRequest(null, false, out relReason);
+            var grp = engine.ApplyGroupRequest(null, false, out grpReason);
+
+            Assert(rel == null && grp == null, "both refuse a null request");
+            Assert(!string.IsNullOrWhiteSpace(relReason) && !string.IsNullOrWhiteSpace(grpReason),
+                "and both say so. This path is reached by a malformed POST body, where the caller "
+                + "is a surface that will otherwise report the engine's silence as its own bug");
+        }
+
+        private static void TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload()
+        {
+            Console.WriteLine("\n[TEST] UI7: no operator surface calls the reason-losing overload");
+
+            var code = Ui2WindowCode();
+            bool readable = code != null && code.Length > 5000;
+
+            // The two-argument overload still exists, and deliberately: forty-odd test fixtures
+            // apply a request they know cannot be refused, and threading an ignored `out` through
+            // all of them would be noise. What must not happen is a SURFACE reaching for it,
+            // because a surface is exactly the caller that has an operator waiting for the reason.
+            //
+            // Scanned from source rather than asserted through a call, because TradeCopierWindow's
+            // body is entirely `#if !TESTING` -- the test build compiles it away, so there is no
+            // executable path here to assert against. Same technique, and same limitation, as
+            // TestUi2_TheWindowConstructsNoDomainObject.
+            var calls = new List<string>();
+            if (code != null)
+            {
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                    code, @"Apply(?:Relationship|Group)Request\s*\(([^;]*?)\)\s*;",
+                    System.Text.RegularExpressions.RegexOptions.Singleline))
+                {
+                    calls.Add(m.Value);
+                }
+            }
+
+            bool everyCallTakesTheReason = calls.Count > 0 && calls.All(c => c.Contains("out "));
+
+            Assert(readable && everyCallTakesTheReason,
+                string.Format(
+                    "every Apply*Request call in the copier window takes the reason out-parameter "
+                    + "({0} call sites found, {1} without it). A surface that discards the reason "
+                    + "can only tell the operator THAT it was refused",
+                    calls.Count, calls.Count(c => !c.Contains("out "))));
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

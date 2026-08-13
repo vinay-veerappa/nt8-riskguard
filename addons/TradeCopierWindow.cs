@@ -893,10 +893,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 resetBtn.Click += (s, e) =>
                 {
                     var req = CopierRequests.RelationshipEdit(rel.LeaderAccountName, rel.FollowerAccountName, null, true);
-                    var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive);
+                    string refusal;
+                    var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive, out refusal);
                     if (result == null)
                     {
-                        MessageBox.Show("The engine refused to release this quarantine.", "Release Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        MessageBox.Show("The engine refused to release this quarantine.\n\n" + refusal, "Release Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
                         return;
                     }
                     TradeCopierEngine.Instance.SaveToDisk();
@@ -918,10 +919,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bool nextEnabled = !rel.IsEnabled;
                 var req = CopierRequests.RelationshipEdit(rel.LeaderAccountName, rel.FollowerAccountName, nextEnabled, null);
-                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive);
+                string refusal;
+                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, rel.ArmedForLive, out refusal);
                 if (result == null)
                 {
-                    MessageBox.Show("The engine refused to toggle this relationship.", "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("The engine refused to toggle this relationship.\n\n" + refusal, "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
                 TradeCopierEngine.Instance.SaveToDisk();
@@ -1007,10 +1009,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bool nextEnabled = !grp.IsEnabled;
                 var req = CopierRequests.GroupEdit(grp.GroupName, nextEnabled);
-                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive);
+                string refusal;
+                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive, out refusal);
                 if (result == null)
                 {
-                    MessageBox.Show("The engine refused to toggle this group.", "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("The engine refused to toggle this group.\n\n" + refusal, "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
                 TradeCopierEngine.Instance.SaveToDisk();
@@ -1071,10 +1074,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var req = CopierRequests.Relationship(
                     leader, follower, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
 
-                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, armed);
+                string refusal;
+                var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, armed, out refusal);
                 if (result == null)
                 {
-                    MessageBox.Show("The engine refused this relationship (possible group overlap).", "Relationship Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    // Was "(possible group overlap)" -- a guess, in the one place the engine
+                    // knows the answer. It now says which group, and which followers.
+                    MessageBox.Show("The engine refused this relationship.\n\n" + refusal, "Relationship Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
@@ -1124,10 +1130,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var req = CopierRequests.Group(
                     grpName, leader, selectedFollowers, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
 
-                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, armed);
+                string refusal;
+                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, armed, out refusal);
                 if (result == null)
                 {
-                    MessageBox.Show("The engine refused this group (possible follower overlap).", "Group Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("The engine refused this group.\n\n" + refusal, "Group Refused", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
