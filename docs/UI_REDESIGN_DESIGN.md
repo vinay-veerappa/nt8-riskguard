@@ -63,6 +63,13 @@ would have shown each of them on sight:**
 **Design rule: `CONFIGURED and not EVALUATED` renders red, everywhere, always.** It is the most
 dangerous state this system can be in, because the config file reads as protection.
 
+⚠️ **A FOURTH state was found on 2026-08-13 and it is worse, because every static check passes:
+`INERT` — the rule executes and its evidence set is empty.** The news shield (`P2-25`) is
+configured `true` by default, genuinely tested at `RiskGuardAddOn.cs:1541`, and genuinely calls a
+real `IsInNewsWindow` — which iterates a list **nothing outside a test ever appends to**, because
+`LocalNewsEventsFilePath` is parsed and then read by no loader. It always returns `false`. See
+§6a: this is why the rule inventory belongs in the runtime snapshot and not in a linter.
+
 ---
 
 ## 3. The three signals
@@ -185,6 +192,78 @@ answerable: one concept — a contract cap — is spread across `InstrumentLimit
 
 **System**
 feed connected, guard mode + armed + guarding, copier armed, bridge version, config file mtime.
+
+---
+
+## 6a. The rule inventory — and the fourth state the survey found
+
+**Added 2026-08-13, after surveying every config field against the code that reads it.** §6 asks
+the guard side of the snapshot to carry, per account, every rule with
+`{ name, source, scope, state, currentValue, limit }`. Building that survey first changed the
+design, so the reasoning is recorded here rather than discovered again.
+
+### A grep for "is this field read?" is NOT an evaluation check
+
+Every leaf field of `RiskConfig` and its nested types was counted against every use in `addons/`.
+It found exactly the two fields `P2-78` already records (`PerInstrumentRiskConfig.IsBlocked` and
+`.StopOffsetTicks`, zero references each) and **nothing else** — which looks reassuring and is not,
+because **the two worst rules in the system both score as READ**:
+
+| Rule | Grep says | Truth |
+|---|---|---|
+| `EnableConsistencyCap` / `MaxDailyProfitPctOfTarget` (`P1-77`) | read | **declaration + the JSON parser, and nothing else.** No evaluator exists. Defaults to `true` |
+| `EnableNewsShield` (`P2-25`) | read | read at `RiskGuardAddOn.cs:1541`, inside a real enforcement path, calling a real method. **And it can never fire** |
+
+The news shield is the one that matters, because it defeats the obvious audit:
+
+* `EnableNewsShield` defaults to `true`.
+* `RiskGuardAddOn.cs:1541` genuinely tests it and genuinely calls `IsInNewsWindow`.
+* `IsInNewsWindow` genuinely iterates `_newsEvents` and genuinely returns `true` for a high-impact
+  event inside the buffer.
+* **`_newsEvents` is only ever appended to by `AddTestNewsEvent`.** `LocalNewsEventsFilePath` is
+  declared and parsed out of the config file — and read by nothing. No loader exists.
+
+So in production the list is **always empty**, `IsInNewsWindow` **always returns `false`**, and the
+`NEWS_SHIELD_LOCKOUT` branch is unreachable. Every static check passes. The rule is fully wired and
+structurally incapable of acting.
+
+### The fourth state: INERT
+
+`CONFIGURED / EVALUATED / ENFORCING` cannot express that. The news shield is CONFIGURED, its code
+is EVALUATED, and were the guard armed it would be ENFORCING — three greens on a rule that has
+never once been able to fire.
+
+> **INERT — the rule executes and its evidence set is empty, so its verdict is a foregone
+> conclusion.**
+
+**INERT is the state a static audit cannot see and a runtime snapshot can.** That is the whole
+argument for putting the inventory in the snapshot rather than in a linter:
+
+**every rule reports the size of the evidence it evaluated against.** News shield: `0 events
+loaded`. A rule whose evidence count is zero renders red beside `CONFIGURED and not EVALUATED`,
+because to an operator they mean the same thing — *this is not protecting you* — and only the
+cause differs.
+
+### What this makes the deliverable
+
+A **registry**, not a hand-written list. Each rule is declared once with its config path, source,
+scope, and **a delegate that evaluates it**:
+
+* a rule with **no evaluator delegate** is `CONFIGURED, not EVALUATED` **by construction** — it
+  cannot be mis-reported, because there is nothing to mis-report;
+* a rule whose evaluator returns an empty evidence set is `INERT`;
+* a rule in `shadow`, or on a disarmed account, is `EVALUATED, not ENFORCING`;
+* and **a test asserts that every leaf field of `RiskConfig` and `PropFirmProtectionConfig` appears
+  in the registry**, which closes the hole that produced `P1-77`, `P2-25` and `P2-78`: a field added
+  to a config class and wired to nothing.
+
+That last test is the point of the whole exercise. The three defects above are one defect — *a
+config field can be born with no evaluator and nothing notices* — and the registry converts it from
+something found by audit into something that cannot compile.
+
+⚠️ **Do NOT report a rule's state from a hand-maintained table.** That is what every doc in this
+repo that carried a defect count did, and all three drifted (§5.0). The state must be derived from
+the registry at read time.
 
 ---
 

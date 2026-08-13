@@ -1557,6 +1557,13 @@ against — which is also why the rule could be introduced with zero migration r
 *(found 2026-08-13 by auditing the operator's feature list against the source rather than
 against the config schema — §5.17.)*
 
+✅ **RE-CONFIRMED MECHANICALLY, same day.** A survey counting every use of every config leaf across
+`addons/` found `EnableConsistencyCap` and `MaxDailyProfitPctOfTarget` at exactly two sites each:
+**the declaration and the JSON parser** (`PropFirmProtectionSuite.cs:46-47` and `:178-179`). There
+is no evaluator, so unlike `P2-25` this rule is not INERT — it is the plainer
+`CONFIGURED and not EVALUATED`, and [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §6a makes that
+state **structural**: a rule registered without an evaluator delegate cannot report anything else.
+
 **What it is**: `PropFirmProtectionConfig` declares
 
 ```csharp
@@ -2581,10 +2588,22 @@ Config that is displayed but not enforced is worse than absent config — it inv
 account to be armed on the belief that a limit is active.
 
 ### P2-25. The news shield can never fire in production
-**Where**: `PropFirmProtectionSuite.cs:51` (`_newsEvents`), populated **only** by
-`AddTestNewsEvent` (`:55`). `LocalNewsEventsFilePath` (`:36`) is parsed and persisted but never
-read. `IsInNewsWindow` therefore always returns `false` outside tests, so the
-`NEWS_SHIELD_LOCKOUT` branch (`RiskGuardAddOn.cs:1124`) is unreachable.
+**Where**: `PropFirmProtectionSuite.cs:56` (`_newsEvents`), populated **only** by
+`AddTestNewsEvent` (`:60`). `LocalNewsEventsFilePath` (`:36`) is parsed and persisted but never
+read. `IsInNewsWindow` (`:84`) therefore always returns `false` outside tests, so the
+`NEWS_SHIELD_LOCKOUT` branch (`RiskGuardAddOn.cs:1547`, reached from the test at `:1541`) is
+unreachable. *(Line numbers re-measured 2026-08-13; the previous entry said `:51`, `:55` and
+`:1124`.)*
+
+⚠️ **RE-CONFIRMED INDEPENDENTLY 2026-08-13, and it is the reason the UI design gained a fourth
+state.** A survey of every config leaf against every read in `addons/` scored this rule as READ:
+`EnableNewsShield` defaults to `true`, `:1541` genuinely tests it, and it genuinely calls a real
+method that genuinely iterates a real list. **Every static check passes on a rule that has never
+been able to fire.** `CONFIGURED / EVALUATED / ENFORCING` cannot express that, so
+[UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §6a adds **INERT** — *the rule executes and its
+evidence set is empty* — and requires every rule in the guard snapshot to report the SIZE of the
+evidence it evaluated against. This one would read `0 events loaded`. It is the state a linter
+cannot see and a runtime snapshot can.
 Also unimplemented: `EnableConsistencyCap` / `MaxDailyProfitPctOfTarget` / `EnableAutoDayFiller`
 (parsed, never evaluated).
 **Fix**: load events from `LocalNewsEventsFilePath` on config load and refresh periodically.
