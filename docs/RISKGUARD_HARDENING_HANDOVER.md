@@ -1,6 +1,6 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 35 — §5.33**). Core **`v1.14.0`** is tagged, deployed and
+**Last updated**: 2026-08-13 (**session 35 — §5.33**). Core **`v1.15.0`** is tagged, deployed and
 **NT8-compiled clean (0 errors)** — suite **1300/0**, **22** core mutation batteries + the bridge's 1,
 **243 anchors / 0 broken**. **104 IDs, 5 open**; the `P0` band and the untriaged band are both empty,
 and every naked-risk item is closed.
@@ -17,7 +17,7 @@ stayed green through all of it. **For a detector, the negative test is the one t
 detector works** — a detector that fires on everything passes every positive test ever written for
 it. All three are fixed in `v1.14.0` (`mutation/mutate_p330.py`, §5.33).
 
-✅ **`P3-34` mostly landed** (§5.33): the copier has its **own** `live`/`shadow`/`disabled` mode —
+✅ **`P3-34` mostly landed** in `v1.15.0` (§5.33): the copier has its **own** `live`/`shadow`/`disabled` mode —
 deliberately not a reading of the guard's — and `RunCopierPreflight` finally has a caller that
 **refuses** the move to `live`. ⚠️ **`CopierMode` is not in the `/api/copier/config` payload**, so
 the mode cannot be observed or set over the bridge. **That is the next item.**
@@ -153,15 +153,15 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1300 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | **The copier mode's READ SURFACE** — `P3-34`'s core landed in `v1.14.0` but `CopierMode` is not in the `/api/copier/config` payload, so the mode cannot be observed or set over the bridge. Then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **22 tags**, `v1.0.0`…**`v1.14.0`** | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.14.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.14.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.14.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Do next** | **The copier mode's READ SURFACE** — `P3-34`'s core landed in `v1.15.0` but `CopierMode` is not in the `/api/copier/config` payload, so the mode cannot be observed or set over the bridge. Then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **23 tags**, `v1.0.0`…**`v1.15.0`** | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.15.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.15.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.15.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **23 batteries** — **22 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. New in `v1.14.0`: `mutate_p330` (7 mutants, 1 documented survivor — the lock-scope one, which no test in this suite can detect because the stubs never block) and `mutate_p334` (9 / 0). **243 anchors / 0 broken**. Run for this pass: `mutate_p292` (11/0, after three survivors were killed) and `mutate_f9` (11/0). **227 anchors / 0 broken — measured.** ⚠️ The other 18 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.14.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **Mutation** | **23 batteries** — **22 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. New in session 35: `mutate_p330` (7 mutants, 1 **documented survivor** — holding `_stateLock` across the audit's broker reads, which no test here can detect because the stubs never block) and `mutate_p334` (9 / 0). **243 anchors / 0 broken — measured this pass.** ⚠️ The other 20 batteries were **not** re-run locally (~243 mutants × a suite run each) — **CI now runs every one of them on every push**, which is why a push takes ~1h40m and is not a hang. **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.15.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| **Bridge pin** | ✅ **`v1.14.0`, matches core `main`.** ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Bridge pin** | ✅ **`v1.15.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
@@ -3227,7 +3227,7 @@ the *order* they forced is the reusable part.
 
 > ### Do next: the copier mode's READ SURFACE, then the architectural items
 >
-> **Updated session 35.** `P3-34`'s core landed in `v1.14.0` — the copier has its own
+> **Updated session 35.** `P3-34`'s core landed in `v1.15.0` — the copier has its own
 > `live`/`shadow`/`disabled` mode and preflight gates the move to `live`. ⚠️ **But
 > `CopierMode` is not in the `/api/copier/config` payload**, so the operator cannot
 > observe or set it over the bridge, only by editing the config file. **A mode you
@@ -6006,7 +6006,7 @@ are either wired or deleted.
 
 ---
 
-## 5.33 Session 35 — 2026-08-13: `v1.14.0`. A shipped feature that did not exist, and the copier gets a mode
+## 5.33 Session 35 — 2026-08-13: `v1.14.0` + `v1.15.0`. A shipped feature that did not exist, and the copier gets a mode
 
 Two tracks. The first was meant to be a review of session 34's work and turned into three defects
 in one feature. The second was `P3-34`.
