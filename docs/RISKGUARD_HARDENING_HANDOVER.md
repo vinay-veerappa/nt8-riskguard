@@ -1,17 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 34 — §5.32**). Core **`v1.13.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1262/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **102 IDs, 14 open**; the `P0` band and the untriaged band
+**Last updated**: 2026-08-13 (**session 34 — §5.33**). Core **`v1.13.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1266/0**, **20** core mutation batteries + the bridge's 1
+/ 0 survivors, **227 anchors / 0 broken**. **103 IDs, 13 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
 
-✅ **Session 34 closed five defects**: **P2-95** (FirmStartingBalance uses plan AccountSize, not
-session-scoped heuristic), **P2-93** (pure/override_with_friction fail preflight — they pass the
-MinShadowSessions gate but IsActingMode() names only "live"), **P2-94** (CanTrade reads LockoutUntil
-for timed manual lockouts, not just IsLockedOut), **P3-31** (in-flight order ledger + background
-reconciler timer), and **P3-30** (RiskGuard-side audit: naked position, orphan stop, FSM/broker
-divergence). **94 accounts are now mapped** across **9 firm profiles**, including
-`FTDFYG50481277664` as `Tradeify-50K-Growth-Funded`. All with operator-verifyable defaults.
+✅ **Session 34 closed seven defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
+timer), **P3-30** (guard-side audit), **P1-57** (reference-tracking order filter), and **P1-13**
+(threading inversion -- guard evaluates on caller thread, not dispatcher). **94 accounts mapped**
+across **9 firm profiles**. All with operator-verifyable defaults.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
 mapped to two size-keyed plans, and their firm rules moved `Disabled` → `EvaluatedNotEnforcing` with
@@ -131,9 +128,9 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1262 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **102 IDs — 88 closed, 14 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 34: **99** banded + **3** `P?-`. `P2-93`, `P2-94`, `P2-95`, `P3-31`, `P3-30` are CLOSED. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Do next** | **`P1-57`** (third-party copier fan-out), **`P1-13`** (guard evaluation on the WPF dispatcher), then the rest of the `P2` band. ⚠️ **band letter is not priority** — use §5.6 | §5.6 |
+| **Suite** | **core 1266 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
+| **Defects** | **103 IDs — 90 closed, 13 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13` all CLOSED. Derivation in §5.0 | the `grep` in §5.0 |
+| **Do next** | **`P2-25`** (news shield can never fire — no loader), **`P2-27`** (riskiest code has zero coverage), then the remaining P2/P3 items. ⚠️ **band letter is not priority** — use §5.6 | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3205,15 +3202,16 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-57` and `P1-13`, then the rest of the `P2` band
+> ### Do next: the remaining `P2` band, then `P3-32`/`P3-33`/`P3-34`
 >
-> The three P2 defects from session 33 are CLOSED (§5.31): P2-95, P2-93, P2-94.
-> P3-31 (in-flight ledger + timer) is CLOSED (§5.31). P3-30 (RiskGuard-side
-> audit) is CLOSED (§5.32): naked position, orphan stop, FSM/broker divergence.
+> Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13.
 >
-> **`P1-57`** (third-party copier fan-out — the "not ours" test is a name
-> substring), **`P1-13`** (guard evaluation on the WPF dispatcher — threading
-> half only), and the rest of the `P2` band.
+> **`P2-25`** — the news shield can never fire in production (no loader populates `_newsEvents`).
+> **`P2-27`** — `McpBridgeAddOn.cs` and `TradeCopierWindow.cs` have zero coverage (outside the test build).
+> **`P2-24`** — written-but-never-called safety machinery.
+> **`P2-26`** — design-doc drift.
+> **`P2-29`** — single-file size/complexity.
+> Then **`P3-32`** (may be superseded by P0-9), **`P3-33`** (global lock on hot path), **`P3-34`** (arm/shadow discipline for copier).
 
 > ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
