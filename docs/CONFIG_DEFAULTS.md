@@ -173,6 +173,33 @@ settled that sim accounts are identified by provider and never by a name prefix.
 **So completing the map needs the operator to state a size per account.** That is not a gap in the
 tooling; it is information that exists only outside the platform.
 
+#### R3c. The firms' actual published numbers — and both deployed plans are wrong
+
+See **[FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md)**, researched 2026-08-13 for Apex, Take Profit
+Trader, Tradeify and Lucid, at the operator's request and pending their correction.
+
+Three things it establishes that change R3a's conclusions:
+
+1. ⚠️ **Both plans `F-9` deployed carry the wrong numbers.** The recovered `TakeProfitTrader` profile
+   (1500) is the **25K** max loss, deployed as a 50K (should be **2000**); the recovered `Apex` profile
+   (2000 DD / 1000 DLL) is Apex's **50K EOD** row *exactly*, deployed as a 100K (should be **3000 /
+   1500**). The recovered `Lucid` profile (2500/2500) matches **no Lucid plan at any size**.
+2. ⚠️ **One of those errors is in the dangerous direction.** A TPT **PRO** account trails
+   **intraday**, not `eod`. An intraday trail follows peak equity *including unrealized*, so its floor
+   rises during a winning session while an EOD model's stays stale and lower — the firm's floor ends up
+   **above** the guard's and the firm fails you first. The amount errors both err tighter, which is
+   safe but fires early (R5).
+3. ⚠️ **Firm + size is not a plan.** Every one of the four firms sells multiple rule sets at the same
+   size — Tradeify's 100K max loss is 2500, 3000, 3500 or 4000 depending on family; a TPT PRO trails
+   intraday where Test and PRO+ trail EOD; Apex sells an EOD variant *with* a DLL and an intraday
+   variant *without* one. So the key must be **firm + plan + size**, which costs no code and changes
+   what has to be known about an account before it can be mapped.
+
+It also names what this guard **cannot** express — consistency rules (`P1-77`, still open, and the rule
+most likely to void a payout), Lucid's `LucidScale` DLL of 60%-of-highest-EOD-profit, and soft-vs-hard
+DLL breaches — because a profile that silently omits a firm rule is `CONFIGURED`-not-`EVALUATED`
+wearing a firm's name.
+
 **What IS machine-checkable, and is `F-9b`:** `FirmProfile.AccountSize` (added 2026-08-13) plus a
 preflight refusal on two silent failures — a mapping naming an account that does not exist, and a
 plan whose stated size contradicts the account's observed equity. The first is `P1-90`'s class one
