@@ -10406,6 +10406,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 { "_accountStates[accName] = state;", 0 },               // rehydration from persisted state
             };
 
+            // ⚠️ THIS GATE HAS TWO HALVES BECAUSE THE FIX REMOVES WHAT ITS FIRST DRAFT COUNTED,
+            // and that mistake made T2 unpassable. The draft counted `IsLockedOut = true` sites
+            // that had a `LockoutWasShadowOnly` write nearby -- which assumed the fix would add a
+            // second assignment beside each of the ten. The spec instead routes them through one
+            // helper, so a routed site contains NO `IsLockedOut = true` at all: after both tickets
+            // the count would have been 1 (the helper) against a demand for 10, and the only way to
+            // go green would have been to un-route the sites. A gate written before the shape of
+            // the fix was decided will demand the shape it happened to imagine.
+            //
+            // So: NO non-exempt site may assign the flag directly (that is the invariant), AND at
+            // least ten sites must call the helper (that is what makes a PARTIAL fix fail, which is
+            // the whole reason this gate exists -- fixing only the path the behavioural test drives
+            // is how P1-36 came to live in a second place).
             int gated = 0;
             var ungated = new List<string>();
             for (int i = 0; i < src.Length; i++)
@@ -10423,6 +10436,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (window.IndexOf("LockoutWasShadowOnly", StringComparison.Ordinal) >= 0) gated++;
                 else ungated.Add("line " + (i + 1) + ": " + src[i].Trim());
             }
+
+            // The helper's own call sites. Its DECLARATION is excluded by requiring a `(` that is
+            // not preceded by `void ` / `private `, so declaring it ten times would not pass.
+            int routed = src.Count(l =>
+                l.IndexOf("MarkRuleLockout(", StringComparison.Ordinal) >= 0
+                && l.IndexOf("private", StringComparison.Ordinal) < 0
+                && !l.TrimStart().StartsWith("//", StringComparison.Ordinal));
+            if (routed < 10)
+                Console.WriteLine(string.Format("        only {0} site(s) call the helper; 10 rule paths lock out", routed));
+            Assert(routed >= 10,
+                "all ten rule-breach paths route their lockout through the one helper that records authority");
 
             var rotted = exempt.Where(kv => kv.Value != 1).Select(kv => kv.Key + " matched " + kv.Value).ToList();
             if (rotted.Count > 0)
@@ -10444,7 +10468,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Console.WriteLine(string.Format(
                     "        {0} site(s) record it, {1} do not: {2}",
                     gated, ungated.Count, string.Join(" | ", ungated)));
-            Assert(gated >= 10 && ungated.Count == 0,
+            Assert(gated >= 1 && ungated.Count == 0,
                 "every rule-breach lockout site records whether the guard could act");
         }
 
