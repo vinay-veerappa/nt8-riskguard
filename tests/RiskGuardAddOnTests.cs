@@ -10540,6 +10540,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                     "a manual EOD lockout holds in {0} mode -- the operator asked for it, and the "
                     + "mode describes what the RULES may do, not what the operator may do", mode));
             }
+
+            // ⚠️ AND IT MUST OVERRIDE A STALE SHADOW OBSERVATION. Raised by the review panel, and
+            // it is a real hole rather than one of the four it invented: an account that breached
+            // in shadow carries the lockout flag with shadow authority. If `LockAccount` then only
+            // sets `IsLockedOut` -- which is already true -- the leftover authority stands and the
+            // operator's instruction is silently ignored. The account was ALREADY in the state that
+            // makes the bug reachable, which is what makes it easy to miss: the manual lockout
+            // "succeeds" and changes nothing.
+            AccountState stale; Account staleAcct;
+            var shadowFirst = P292Guard("shadow", true, out stale, out staleAcct);
+            stale.RealizedPnL = -1100.0;
+            shadowFirst.EvaluatePnLRules(staleAcct, stale);
+            Assert(shadowFirst.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "precondition: the shadow breach left the account tradable");
+
+            shadowFirst.LockAccount("P292Acc", -1);
+            Assert(!shadowFirst.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "a manual lockout on an account that already breached in SHADOW still bites -- the "
+                + "operator's authority replaces the observation's, it does not inherit it");
         }
 
         /// <summary>

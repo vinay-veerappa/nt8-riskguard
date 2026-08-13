@@ -62,10 +62,10 @@ but not as an open item.)
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
 | **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-90` | 49 | **5** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92`, `P2-93` | 15 | **8** | ⚠️ **`P2-93` NEW 2026-08-13**: `pure` and `override_with_friction` are recognised modes that pass preflight's *enforcement* gate (`MinShadowSessions`) and then act on nothing, because `IsActingMode()` names only `live` -- an operator had to WAIT OUT five shadow sessions to reach a mode that enforces nothing. ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92`, `P2-93`, `P2-94` | 16 | **9** | ⚠️ **`P2-93` NEW 2026-08-13**: `pure` and `override_with_friction` are recognised modes that pass preflight's *enforcement* gate (`MinShadowSessions`) and then act on nothing, because `IsActingMode()` names only `live` -- an operator had to WAIT OUT five shadow sessions to reach a mode that enforces nothing. ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **95** | **18** | **76 closed or superseded** |
+| | | **96** | **19** | **76 closed or superseded** |
 
 > ⚠️ **These counts and the handover's §0 counts are derived independently and have drifted before.**
 > `docs/RISKGUARD_HARDENING_HANDOVER.md` §0 is the authoritative one (CLAUDE.md says so); re-derive
@@ -2305,6 +2305,42 @@ exactly this reason.
 options are (a) record the would-be lockout on a separate shadow field that `CanTrade` ignores, or
 (b) let `CanTrade` consult the mode the way `ProcessAction` does. (b) is one line and (a) is more
 truthful; (a) also gives the shadow session the count it is supposed to be collecting.
+
+### P2-94. A TIMED manual lockout does not stop new orders — `CanTrade` never reads `LockoutUntil` — OPEN
+
+*(filed 2026-08-13 while fixing `P2-92`, from a review-panel finding that pointed at the adjacent
+code)*
+
+**Where**: `RiskGuardAddOn.cs:112` (`CanTrade`) against `:3648` (`LockAccount`) and `:1777` (the
+sweep).
+
+`LockAccount(accountName, minutes)` has two branches:
+
+```csharp
+if (minutes == -1) { state.IsLockedOut = true; state.LockoutUntil = DateTime.MinValue; }   // EOD
+else if (minutes > 0) { state.LockoutUntil = DateTime.UtcNow.AddMinutes(minutes); }        // timed
+```
+
+The timed branch **never sets `IsLockedOut`** — and an existing test asserts exactly that
+(*"IsLockedOut is false for timed lockout"*, `:10229`). `CanTrade` reads **only** `IsLockedOut`. So a
+timed manual lockout does not refuse a single order.
+
+It is not entirely inert: the sweep tests `IsLockedOut || DateTime.UtcNow < LockoutUntil` — an OR, at
+`:1777` — so it will flatten and cancel. The net behaviour is therefore the **worst available**
+combination: the operator asks for a 60-minute lockout, the guard accepts new orders, and the sweep
+flattens each resulting position. A clean refusal is strictly better than a fill followed by a
+flatten, and the operator has no way to tell from the config or the UI which of the two they asked
+for.
+
+Same family as `P2-92`: **one lockout, two consumers, and they disagree about what it means.**
+`P2-92` records the *authority* under which a lockout was imposed; this one is about the two
+*representations* of a lockout — a flag and a deadline — where each consumer reads a different subset.
+
+**Fix**: make `CanTrade` honour the deadline the way the sweep already does, i.e. test
+`IsLockedOut || DateTime.UtcNow < LockoutUntil`. ⚠️ Do it with `P2-92`'s authority flag in mind, and
+check `:3021`'s lapse logic first — the comment there records that the flag deliberately *outlives*
+its own deadline, so the two conditions are not interchangeable and the interaction needs a test per
+combination, not one.
 
 ### P2-93. `pure` and `override_with_friction` pass the enforcement gate and then enforce nothing — OPEN
 
