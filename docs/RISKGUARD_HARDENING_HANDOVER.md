@@ -1,40 +1,59 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 26 — §5.23**, five tags). Core **`v1.8.0`** is tagged,
-deployed and **NT8-compiled clean (0 errors)**. **There is now a browser page**: start NT8 and open
-**`http://localhost:7890/ui`** — it asks for the bridge token once and keeps it in `localStorage`.
+**Last updated**: 2026-08-13 (**session 29 — §5.25**). Core **`v1.12.1`** is tagged, deployed and
+**NT8-compiled clean (0 errors)**, with deploy parity verified. Suite **1188/0**, **18** mutation
+batteries / 0 survivors, **205 anchors / 0 broken**. **92 IDs, 16 open**; the `P0` band and the
+untriaged band are both empty.
 
-It shows, per account, every guard rule with its state **derived at read time** — and beside it the
-copier's relationships with **expected vs actual position**. `v1.4.0` gave the inventory a producer,
-`v1.5.0` a wire format, `v1.6.0` the fleet summary, `v1.7.0` account equity, `v1.8.0` the copier half.
-Two defects opened and closed on the way: **`P2-82`** (the rule registry was publicly mutable —
-`P1-77` inverted, and the direction that fails *un*safe) and **`P2-83`** (a snapshot with no accounts
-rendered as healthy).
+**There is a browser page**: start NT8 and open **`http://localhost:7890/ui`** — it asks for the
+bridge token once and keeps it in `localStorage`. It shows, per account, every guard rule with its
+state **derived at read time**, and beside it the copier's relationships with **expected vs actual
+position**. It can now *change* two things (relationship enable/disable, quarantine release);
+everything else is still read-only.
 
-**The one to carry from `UI3`, still: a static "is this field read?" check MISSES `P2-25`
-completely.** The news shield is fully wired — flag defaults `true`, `RiskGuardAddOn.cs:1541` tests
-it, it calls a real `IsInNewsWindow` over a real list — and that list is **always empty**, because
-`LocalNewsEventsFilePath` has no loader. Every mechanical check passes on a rule that has never been
-able to fire. That is the fourth state, **`INERT`**, and it is why the inventory is a runtime read
-and not a linter. **The page now shows it to you.**
+⚠️ **THE HIGHEST OPEN DEFECT IS `P1-90`, AND ITS BAND LETTER UNDERSTATES IT.** Three order paths in
+`nt8-mcp-bridge/addons/McpBridgeAddOn.cs` (`:2386`, `:2453`, `:4422`) resolve the account as *the
+named account → `"Sim101"` → ANY non-Backtest account → ANY account at all*. So `nt_place_order`
+with a name that does not resolve — a typo, wrong case, a disconnected account — **is not refused;
+the order is placed somewhere else**, on a box reporting **96 accounts**. `P1-85` was the same guess
+on a *config* path; this one opens the wrong position. The fix is refusal. See §5.25.
 
-**And the one to carry from this session: ASK THE DEPLOYED BOX BEFORE DESIGNING A VIEW OF IT.**
-The inventory passed 1123 tests and returned **96 accounts / 2400 rows / 648 KB per poll** in
-production, of which **88 accounts have zero equity**. Neither fact was reachable by reasoning; both
-took minutes to find by fetching the real payload. See §5.23.
+**Every default in [CONFIG_DEFAULTS.md](CONFIG_DEFAULTS.md) is now applied** (`P1-82`…`P1-87`,
+§5.25), along with `P1-88`/`P1-89` in the bridge. One theme runs through all eight: **config that
+reads as protection that does not exist.**
 
-Suite **1134/0**, **twelve** mutation batteries, 0 survivors. **83 IDs, 15 open**; the `P0` band and
-the untriaged band are both empty. ⚠️ **Next: goal 1 of the two this UI exists for —
-*configure both systems* — is completely untouched. Nothing on the page is editable.**
+**Three things to carry forward, each of which cost something to learn:**
 
-*(Earlier: session 21, the MCP wrapper — four defects `P1-72`…`P1-75`, all closed, §5.16, of which
-**`P1-75`: reading the prop-firm rules DISARMED them**. Session 20 — the whole `P0` band closed;
-`P0-63` and `P?-66` validated by one live 1-lot MNQ round trip, §5.13, which opened four defects
-that were fixed and deployed the same day, §5.14.)*
+1. **A static "is this field read?" check MISSES `P2-25` completely** — the reason the guard's rule
+   inventory is a runtime read and not a linter. The news shield is fully wired and its event list
+   is **always empty**, because `LocalNewsEventsFilePath` has no loader. Every mechanical check
+   passes on a rule that has never been able to fire. That is the fourth state, **`INERT`**, and the
+   page shows it to you. ⚠️ **`P1-86` is its corollary**: `Disabled` must mean *"this would work if
+   you turned it on"*, so switching off a rule that could never fire must not quiet it.
+2. **ASK THE DEPLOYED BOX.** The inventory passed 1123 tests and returned **96 accounts / 2400 rows
+   / 648 KB per poll** in production, 88 of those accounts with zero equity (§5.23). And in §5.25:
+   **changing a default does not change a deployed box** — the new values only apply to fields
+   *absent* from the stored config, so the running guard kept `StopAttachSeconds = 3` through a
+   clean deploy and a green suite until it was written explicitly.
+3. **Four of the six defects opened in session 29 came from EVIDENCE, not from reading code** — two
+   from mutation batteries, one from checking what a fix did to the inventory, one from the review
+   panel. `P1-87` is the one to know: a mutant flipping `StopGuard.OnMissing` survived **1180 green
+   tests**, and a test in that suite **asserted the defect as correct behaviour**.
+   `mutation/check_anchors.py` exists because a battery whose find-string stops matching scores its
+   mutant a **survivor** — but only when someone runs it; **11 anchors** were silently proving
+   nothing.
+
+*(Earlier: session 26 — the UI became something you can look at, `v1.4.0`→`v1.8.0`, §5.23. Session
+21, the MCP wrapper — four defects `P1-72`…`P1-75`, all closed, §5.16, of which **`P1-75`: reading
+the prop-firm rules DISARMED them**. Session 20 — the whole `P0` band closed; `P0-63` and `P?-66`
+validated by one live 1-lot MNQ round trip, §5.13, which opened four defects that were fixed and
+deployed the same day, §5.14.)*
 
 Session 18 was a documentation pass that re-derived this header, §0, §4a, §5, §7 and §8 from the repo
 and the live box rather than copying them forward; everything they used to claim that was false is in
-**§5.10**, because the *pattern* of how this file went stale is worth more than the corrections.)
+**§5.10**, because the *pattern* of how this file went stale is worth more than the corrections.
+⚠️ **It went stale again**: sessions 27 and 28 were never written up at the time and this header sat
+four tags behind until session 29 reconstructed them as §5.24.
 
 > ### Read in this order
 >
@@ -2919,16 +2938,20 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 78, re-run 2026-08-13
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 89, re-run 2026-08-13 (session 29)
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **78** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **89** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **83** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23) |
-| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
-| **Closed or superseded** | **66** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
+| **Total IDs** | **92** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23) |
+| **Open** | **16** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
+| **Closed or superseded** | **76** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
+
+⚠️ **Session 29 added nine IDs** (`P1-82`…`P1-90`) and closed eight of them. `P1-90` is the only
+one still open, and it is in `nt8-mcp-bridge` rather than here — see §5.25. **Its `P1` letter
+understates it**: an order naming an account that does not resolve is placed on an arbitrary one.
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -2945,6 +2968,7 @@ were triaged.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
+| **`P1-90`** ⚠️ | **An order naming an account that does not resolve is PLACED ON AN ARBITRARY ONE** — the chain is *named account → `"Sim101"` → ANY non-Backtest account → ANY account at all* | P1 | **NEW 2026-08-13 (§5.25), and the HIGHEST OPEN DEFECT. The band letter understates it** — `P1-85` was the same guess on a *config* path; this one opens the wrong position, so it belongs with `P0` on consequence. In **`nt8-mcp-bridge`**, `McpBridgeAddOn.cs:2386`, `:2453`, `:4422`; three more `"Sim101"` fallbacks at `:1848`, `:4166`, `:5621`. **The fix is refusal.** Not attempted in the session that found it: it changes order routing and that repo has no executable tests (`P2-27`) |
 | ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13; was the highest open defect for one day.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
 | ~~**`P0-67`**~~ ✅ | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
 | ~~**`P1-69`**~~ ✅ | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
@@ -2953,9 +2977,9 @@ were triaged.
 | `P1-57` | We would mirror another copier's mirror; the "not ours" test is a name substring | P1 | Live on this box: a third-party copier fans `Sim101 → Sim-ORB → {SimCopyTest1, SimCopy2}` copying names verbatim |
 | `P1-13` | Guard evaluation on the WPF dispatcher — **threading half only** | P1 | The fail-open half is closed |
 | `P2-24` | Written-but-never-called safety machinery | P2 | |
-| `P2-25` | The news shield can never fire in production | P2 | |
+| `P2-25` | The news shield can never fire in production | P2 | Still open. `P1-82` defaulted its flag OFF so the config stops asserting it, and `P1-86` makes it report `INERT` **either way** — neither is a fix for the rule (§5.25) |
 | `P2-26` | Design-doc drift in `RiskGuardAddOn.md` | P2 | |
-| `P2-27` | The riskiest code has zero coverage | P2 | **Half done.** `OnExecution` is covered now; `McpBridgeAddOn.cs` and `TradeCopierWindow.cs` are still excluded from `RiskGuardTests.csproj` |
+| `P2-27` | The riskiest code has zero coverage | P2 | **Step 1 done (§5.24)**: the NT8 stubs are extracted to `tests/TestingStubs.cs` so another repo can consume them. `McpBridgeAddOn.cs` and `TradeCopierWindow.cs` are still outside the test build — which is why `P1-88`/`P1-89`/`P1-90` could only be found on the live box, and why the agent-loop **cannot gate the bridge at all** |
 | `P2-29` | Single-file size / complexity | P2 | |
 | `P3-30` | Independent reconciler | P3 | **Copier half shipped + live-validated.** The **RiskGuard-side audit** and the **background timer** remain |
 | `P3-31` | Expected-position ledger with reserve/rollback | P3 | The seam in `Reconcile` exists; the ledger does not. **Required BEFORE the timer** |
@@ -3054,8 +3078,19 @@ and `P?-65` together and makes the redesign testable.
 
 ## 5.6 Order of work
 
-**Updated 2026-08-13.** Items 1 and 2 of the previous ordering (`P0-63`, `P?-66`) are done and
-deployed; everything else shifts up unchanged.
+**Updated 2026-08-13 (session 29).** ⚠️ **`P1-90` goes first and it is not close.** Everything below
+it is the previous ordering with the finished items struck through.
+
+0. ⚠️ **`P1-90` — an order naming an unresolvable account is placed on an arbitrary one.**
+   `nt8-mcp-bridge`, three call sites, and the fix is the one `P1-85` already established: **refuse**.
+   An order that cannot say which account it is for has no safe interpretation. Do the three
+   account-resolution fallbacks (`:1848`, `:4166`, `:5621`) in the same pass, and decide
+   deliberately what each of those should do when the name does not resolve.
+   ⚠️ **Do `P2-27`'s remaining steps first or accept that this lands untested** — that repo compiles
+   only `BridgeSourceTests.cs`, so a source scan is the only gate available today, and this is order
+   routing. That is the trade to make consciously, not by default.
+
+Then the previous ordering:
 
 0. ~~**Live-validate what is already deployed**~~ ✅ **DONE 2026-08-13 — §5.13.** `P0-63` trails on a
    real broker path; `P?-66` is answered and closed. It cost one 1-lot MNQ round trip and produced
@@ -3064,25 +3099,34 @@ deployed; everything else shifts up unchanged.
    `P1-71`. All five are deployed as core `v1.1.0` + bridge, and `P0-68`/`P1-69`/`P1-71` were
    live-validated. A sixth defect (two `Change()` calls on one stop order in a single sweep) was found
    by the `P0-67` trail test and fixed in the same change.
-2. **`P?-64` + `P?-65` together** ← **the next code work.** The copier UI writes to a different file
-   than anything reads, and its two save sites destroy the ratio matrix. Same fix, same shape as slice
-   3b: point the window at `ApplyRelationshipRequest`/`ApplyGroupRequest` and the single
-   `CopierConfigFile`. Doing 64 without 65 leaves a UI that persists correctly and destroys the
-   payload on the way. ⚠️ `TradeCopierWindow.cs` is excluded from `RiskGuardTests.csproj`, so the
-   mapping must go on the ENGINE or it cannot be pinned by an executed test.
+2. ~~**`P?-64` + `P?-65` together**~~ ✅ **DONE — `UI2`, §5.21**, deployed in `v1.3.0`. The mapping
+   went on the ENGINE, as required, because `TradeCopierWindow.cs` is excluded from the test build.
 3. ~~**MCP wrapper.**~~ ✅ **DONE 2026-08-13 — §5.16.** `nt_copier_config` went from 5 arguments to
    19 and from 3 actions to 11; reads go over `GET`; an unknown action is refused instead of silently
    reading. It opened four defects on the way (`P1-72`…`P1-75`), which is the return this project
    keeps getting from *widening* a surface: you have to state what each field does, and then check.
-4. **UI redesign**, on top of a UI that no longer loses or destroys config. **Designed 2026-08-13 —
-   [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md)**, which also reverses §5.5's WPF decision. ⚠️ Its
-   **item 1 is item 2 above**: the snapshot-DTO + apply-request layer that closes `P?-64`/`P?-65` is
-   the same work, is host-agnostic, and must land before anything renders.
+4. **UI redesign** — **the READ half is done** (`UI1`…`UI7`, §5.21–§5.24): the rule inventory, the
+   copier conformance view, the browser page, and refusals that say why.
+   ⚠️ **The WRITE half is barely started.** The page can toggle a relationship and release a
+   quarantine — the two actions that already had engine-side refusal gates — and nothing else on it
+   can be changed. **Goal 1 of the two this UI exists for, *configure both systems*, is still
+   mostly untouched.**
 5. Then `P3-31` ledger → timer → RiskGuard-side audit (`P3-30`'s remaining half), in that order.
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
 `P1-57`, `P1-13`, and the `P2` band are real but none is naked-risk; schedule them after the above.
+
+**Three items session 29 named rather than left to be rediscovered:**
+
+* **`F-9` — the firm mapping** (`FirmMirror.AccountFirmMap`). Every dollar-denominated default is
+  still a guess for one unstated account size; this is the mechanism that replaces guessing, and it
+  is the largest remaining item in [CONFIG_DEFAULTS.md](CONFIG_DEFAULTS.md).
+* **A copier field registry.** `P1-83`'s gate is a source scan and says so — it cannot catch
+  `P2-25`'s class on the copier side (a field genuinely read, by a branch that can never fire). The
+  guard side needed a runtime registry for exactly that.
+* **The attribution gap** (§5.24). `interventions.jsonl` answers *what changed* and cannot answer
+  *who*. Needs a decision on what identity means here before it can be specified.
 
 > **Two suite gaps remain worth closing alongside whatever comes next.** Both are places where the
 > suite currently *cannot fail*, and neither is naked-risk.
@@ -4685,3 +4729,234 @@ that cite defect IDs instead of plain language, and the NT8 Control Center menu 
 page is reachable without typing a URL.
 
 `F-9` (firm mapping) still follows, and is what makes the risk half of the inspector tell the truth.
+
+## 5.24 Sessions 27–28 — 2026-08-13: the page learned to write, and a refusal learned to say why
+
+⚠️ **These two sessions were never written up at the time.** This section is reconstructed from the
+commits, the tags and the live box, so treat the *narrative* as thinner than §5.23's — the facts
+below were re-checked, the emphasis may not be what the sessions felt like.
+
+**`v1.9.0` → `v1.11.0`**, all deployed, `nt_compile` 0 errors.
+
+| Tag | What |
+|---|---|
+| `v1.9.0` | A **Control Center menu item** that launches the browser page, and operator-readable notes |
+| `v1.10.0` | **`UI7`** — a refused write carries its reason |
+| `v1.11.0` | **`P2-27` step 1** (the NT8 stubs extracted from the test file), and `docs/CONFIG_DEFAULTS.md` |
+
+### `UI7` — the defect was that a refusal arrived as a NullReferenceException
+
+Both `ApplyRelationshipRequest` and `ApplyGroupRequest` refuse by returning `null`. Every surface
+then said some version of *"the engine refused"* and stopped, because the reason existed only in
+the copier log — and the browser page has no log window at all. Worse, the bridge's two write
+branches **dereferenced the result without checking it** (`rel.IsEnabled` on a null), so a refusal
+reached the operator as an exception, **after `SaveToDisk` had already run**.
+
+Both methods gained an `out string refusalReason` overload. The reason is **built once and handed
+to both the log and the caller** — a test pins that they are the same string, because two copies of
+one explanation drift and the one the operator reads is the one nobody maintained. The 2-argument
+overload survives for the ~40 fixtures that apply a request they know cannot be refused, and a
+source scan forbids an **operator surface** reaching for it.
+
+### The page became editable — the first half of the reason this UI exists
+
+`nt8-mcp-bridge/ui/index.html` gained relationship enable/disable and quarantine release: a
+confirmation naming what will change, a rendered refusal when the engine says no, and cancel that
+changes nothing. Verified in a real browser, all four paths.
+
+⚠️ **Goal 1 — *configure both systems* — is still only started.** What is editable is the two
+actions that already had engine-side refusal gates. Nothing else on the page can be changed.
+
+### `P2-27` step 1, and why the loop still cannot gate the bridge
+
+The NT8 stubs (591 lines) moved out of `RiskGuardAddOnTests.cs` into `tests/TestingStubs.cs`,
+byte-identical, so another repo can consume them. Suite unchanged at 1147/0.
+
+**Measured and recorded rather than excused**: `nt8-mcp-bridge` sets `EnableDefaultCompileItems=false`
+and compiles only `BridgeSourceTests.cs`, so the agent-loop's build gate **cannot see a patch to
+`McpBridgeAddOn.cs`**. A profile whose build gate is blind to the file being edited is a trap, so
+one was deliberately **not** written. Steps 2–4 remain: three missing stubs (`ChartBars`,
+`DrawingTools`, `LogLevel`), namespace shims, the `CS1061` member tail, then putting
+`McpBridgeAddOn.cs` + the vendored core into `BridgeTests.csproj`.
+
+### Two things found by asking what READS a field
+
+Both went into `docs/CONFIG_DEFAULTS.md` and were fixed in the next session (§5.25):
+
+* **Three dead copier fields** — `StealthMode`, the copier's own `DailyLossLimit`, and the whole
+  `CopierExecutionMode` enum. All persisted, all settable, branched on nowhere.
+* ⚠️ **The attribution gap, still open.** `interventions.jsonl` records every copier write with its
+  exact payload and timestamp, and **carries no client identity**. One shared bearer token, no
+  source logged, so a change made by the browser page, an MCP tool, `curl`, or another machine is
+  **indistinguishable after the fact**. Two writes at `04:47:43` and `04:47:52` on 2026-08-13 could
+  not be attributed to anything done in that session. Not filed as a defect ID: it needs a decision
+  about what identity means here (a per-client token? a source header the page sets?) before it can
+  be specified.
+
+---
+
+## 5.25 Session 29 — 2026-08-13: the config defaults, applied — and what applying them found
+
+**`v1.12.0` → `v1.12.1`**, deployed, `nt_compile` 0 errors, deploy parity verified.
+Suite **1188/0**, **18** mutation batteries / 0 survivors, **205 anchors / 0 broken**.
+
+Every delta in `docs/CONFIG_DEFAULTS.md` is applied. Eight defects closed — `P1-82`…`P1-89` — and
+one opened that is the most serious item now outstanding.
+
+### What changed, in one line each
+
+| ID | What | Why it mattered |
+|---|---|---|
+| `P1-82` | `EnableNewsShield` + `EnableConsistencyCap` default `false` | The only two flags that defaulted ON while doing nothing |
+| `P1-86` | A rule with no evidence reports `INERT` whether its switch is on or off | `P1-82` had converted `P2-25` into a *preference* |
+| `P1-83` | Four dead config fields deleted, plus the gate that finds the fifth | `StealthMode` had **four surfaces** asserting it |
+| `P1-84` | `StopAttachSeconds` 3→15, `MaxPositionSize` 100→10 (both DTOs), `MinShadowSessions` 0→5 | Defaults that make the guard easier to switch off than to live with |
+| `P1-85` | The copier stopped inventing an account when a request omits one | `"Sim101"`/`"SimCopy2"` are **real, connected accounts on this box** |
+| `P1-87` | An unrecognised `StopGuard.OnMissing` no longer means silence | A typo emitted **no action** for a position with no stop |
+| `P1-88` | An unrecognised copier action is refused instead of answered as a write | Two live writes returned `success:true, persisted:true` and changed nothing |
+| `P1-89` | A copier read resolves by leader **and** follower | A request naming `SimCopy2` came back carrying `Sim-ORB`'s object |
+
+### ⚠️ The five things a future session must not rediscover
+
+**1. A default is stated TWICE, and the second copy is the one that runs.**
+`P1-82` looked like two literals and was four: each `PropFirmProtectionConfig` default appears as a
+property initializer **and** as the final fallback in `ParseConfig`, and the parser copy is what
+runs for any config file that predates the field — which is every config file on this box. Fixing
+only the property would have been **green in the suite and unchanged in production**. The class
+gate cannot catch it, because the gate builds its config with `new`; only a test asserting the two
+copies **agree** can, and mutants 3–4 of `mutate_p182.py` exist to prove it.
+
+**2. Switching off a broken rule can hide that it is broken — and this plan predicted it.**
+The `P1-77` entry warned in writing: *do not "fix" a dead flag by defaulting it false, that keeps
+the lie and makes it quieter.* Half of that is dead and half was exactly right.
+
+* It does **not** hold for the consistency cap: `CONFIGURED-not-EVALUATED` is derived from
+  `Evaluator == null`, so that row stays red whatever the flag says.
+* It held precisely for the news shield, whose evaluator opened with `!EnableNewsShield ? Off(...)`.
+  With the flag off the inventory reported it **`Disabled`** — documented as *"not a defect"*.
+
+> **The rule to carry forward: `Disabled` means "this would work if you turned it on".** A rule with
+> nothing to evaluate does not qualify however its switch is set. **Before defaulting any enabling
+> flag to `false`, check the rule behind it still reports its defect with the switch off.**
+
+⚠️ **`DeriveState` is deliberately NOT the place to fix that.** Moving the evidence check above the
+`DisabledByConfig` check there is the shorter diff and a real defect: the two `FirmMirror` rules,
+the window gate and the two working prop rules all short-circuit to `Off(...)` *without* gathering
+evidence, so all five would start reporting `INERT` and the inventory would call
+deliberately-disabled rules defects.
+
+**3. Dead config fields are load-bearing in the tests.**
+Ten merge-preservation probes used `StealthMode` / `Mode` / the copier's `DailyLossLimit` —
+*"a field the request never mentions survives the merge"* — chosen **precisely because nothing read
+them**. Deleting them broke ten assertions. They now probe live fields (`IsQuarantined` +
+`QuarantineReason`, `AutoSymbolConversion`), which is a better test anyway: the quarantine flag is
+a field the Add form genuinely cannot show.
+
+**4. `P1-83`'s gate is scoped to the ENGINE, and that is the design, not a shortcut.**
+It walks both copier DTOs by reflection and counts real uses in `TradeCopierEngine.cs`, discounting
+a field's own declaration, `X = something.X` clone/serializer lines, and the field-name string list.
+Widen it to the window and **`StealthMode` scores as READ** — because the window printed
+`Stealth: ON` for it. That is the defect told louder, not an absolution from it.
+And it is honest about its limit: it is source text, so it **cannot** catch `P2-25`'s class (a field
+genuinely read by a branch that can never be reached). The guard side needed a runtime registry for
+that; **the copier side still has none**, which is recorded as open.
+
+**5. Four of the six new defects came from EVIDENCE, not from reading code.**
+Two from mutation batteries, one from checking what a fix did to the inventory, one from the review
+panel. Only `P1-83` came from reading — and only because the question being asked was *"what reads
+this field?"* rather than *"what does this field do?"*.
+
+### `P1-87` — the one to know, and how it was found
+
+`mutate_p184.py`'s mutant 3 changed `StopGuard.OnMissing` from `"Flatten"` to `"AutoStop"` and
+**all 1180 tests stayed green**. Nothing pinned the guard's most consequential default. Asking why
+led to the dispatch in `EvaluateGraceExpiry`: two exact string comparisons and **no `else`**. A
+lower-case `"flatten"`, a typo, an empty string, or the `"WarnOnly"` the declaration itself
+advertised matched nothing — so the guard emitted **no action at all** for a position with no stop,
+past its grace period. `RunPreflight` refuses an unrecognised guard *mode* and had never looked at
+this, so the failure was silent at startup and silent at the moment it mattered.
+
+⚠️ **The suite was DEFENDING the defect, not merely silent about it.**
+`TestStopGuardWarnOnlyProducesNoAction` asserted *"No action generated when OnMissing is WarnOnly"* —
+the defect, written down as the expected behaviour. Deleted. This is
+[[test-doubles-are-not-evidence]] in a new place: a green suite can encode the bug.
+
+### ⚠️ `P1-90` — OPEN, and its band letter understates it
+
+Found by grepping `nt8-mcp-bridge` for the guess `P1-85` had just removed from the engine. Three
+order paths (`McpBridgeAddOn.cs:2386`, `:2453`, `:4422`) resolve the account as:
+
+```
+the named account
+  ?? the account called "Sim101"
+  ?? ANY account not called "Backtest"
+  ?? ANY account at all
+```
+
+So `nt_place_order` with a name that does not resolve — a typo, wrong case, a disconnected
+account — **is not refused. The order is placed somewhere else.** The live box reports **96
+accounts**.
+
+`P1-85` was the same guess on a *config* path and was rated `P1` because a config guess writes the
+wrong config. **This one opens the wrong position**, so it belongs with the `P0` band on
+consequence. Three further `"Sim101"` fallbacks sit on account-resolution paths (`:1848`, `:4166`,
+`:5621`) and should be reviewed with it.
+
+**The fix is refusal**, as it was for `P1-85`: an order that cannot say which account it is for has
+no safe interpretation. Deliberately **not** attempted in the session that found it — it changes
+order routing and that repo has no executable tests (`P2-27`).
+
+### `mutation/check_anchors.py` — new, and it earned its place three times
+
+A battery locates each mutant by an exact source substring. When an unrelated commit edits that
+source the find-string stops matching: the battery prints `[SKIP]` and scores the mutant a
+**SURVIVOR** — **but only when the battery is run, and a battery only runs when the suite is green.**
+So a stale anchor is invisible for as long as nobody happens to run that file. `mutate_ui2`'s anchor
+was broken by the `UI7` commit and stayed broken through a whole session for exactly that reason.
+
+The new check reads each battery's `MUTANTS` list by AST — importing one *executes* it — and counts
+substrings. All ~205 anchors in about a second, and **it works while the suite is RED**, which is
+precisely when a battery can tell you nothing. It runs first in CI.
+
+In this session alone it found **11 stale anchors across five batteries**: two broken by `P1-85`,
+eight by `P1-83`'s deletion, one by a comment edit. Every one would have scored a survivor.
+**Two of the three breakages were mine.**
+
+### Three things the agent-loop taught, which are about the tool and not the code
+
+Every ticket this session went through the loop except one.
+
+1. ⚠️ **The loop cannot perform a deletion.** Removing a symbol that a **protected** test file
+   references fails its compile gate — the patch is correct and the build breaks anyway, on a file
+   the loop may not touch. `P1-83` had to be done by hand.
+2. ⚠️ **A region that covers only the `if` half of an `if/else-if` chain makes every patch leave a
+   dangling `else`.** Four rounds of `P1-87` failed to compile on a region boundary rather than on
+   anything the implementer wrote. Widen to the enclosing method.
+3. ⚠️ **A ticket saying a value is "tied to" another field will get you a computed property when
+   you meant a comment.** `P1-84`'s implementer turned `StopAttachSeconds` into a getter that reads
+   `OnMissing`; the reviewers were right to refuse it (a config reload could move a deadline while
+   a grace timer was already running, and it reads `OnMissing` off one thread while another writes
+   it). The ticket invited it.
+
+Also worth knowing: two runs ended `NOT_CONVERGING` and said *"arbitrate the findings by hand"* —
+and in both cases the last green round was the right patch and the surviving findings were real but
+small. The verdict is not a reason to discard the work.
+
+### Verified on the live box, after the deploy
+
+* Rule inventory: news shield reports **`INERT`** (not `Disabled`) with the flag defaulted off —
+  `P1-86` working in production. Consistency cap still `CONFIGURED-not-EVALUATED`; `P1-77` open.
+* `stealthMode` and `mode` no longer appear in the copier snapshot payload — `P1-83` confirmed.
+* Stored config brought to the new defaults: `StopAttachSeconds 15`, `MinShadowSessions 5`, both
+  relationships `MaxPositionSize 10`, guard in `shadow`, both relationships **disarmed**.
+* `P1-88` live-validated: the exact request that used to return `success:true, persisted:true` now
+  returns `success:false, UNKNOWN_COPIER_ACTION, persisted:false` and lists the valid actions.
+
+⚠️ **CHANGING A DEFAULT DOES NOT CHANGE A DEPLOYED BOX.** The new defaults only apply to fields
+*absent* from the stored config, and `StopAttachSeconds` and `MinShadowSessions` were both present
+with their old values. The deploy was clean, the tests were green, and the running guard still had
+`StopAttachSeconds = 3` until it was written explicitly. **After changing a default, go and look at
+what the box actually holds.**
+
+---
+
