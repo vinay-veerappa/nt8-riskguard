@@ -445,10 +445,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardRuleDefinition {
                 Name = "Consistency / daily-profit cap", ConfigPath = "PropFirm.EnableConsistencyCap",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "NO CODE READS THIS. It is switched ON by default and has "
-                    + "never capped anything -- the setting exists in the file and in the parser, "
-                    + "and nowhere else. It is meant to cover a condition that FAILS a funded "
-                    + "evaluation account. (P1-77)"
+                UnevaluatedReason = "NO CODE READS THIS. It has never capped anything -- the "
+                    + "setting exists in the file and in the parser, and nowhere else. It is "
+                    + "meant to cover a condition that FAILS a funded evaluation account. It "
+                    + "now defaults OFF (P1-82) so the config file stops asserting a cap that "
+                    + "does not exist, but that changes nothing about the rule: turning it on "
+                    + "still does nothing. (P1-77)"
             },
             new GuardRuleDefinition {
                 Name = "Consistency cap threshold", ConfigPath = "PropFirm.MaxDailyProfitPctOfTarget",

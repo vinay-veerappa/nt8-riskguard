@@ -61,11 +61,11 @@ but not as an open item.)
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-87` | 46 | **4** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-90` | 49 | **5** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83` | 13 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **89** | **15** | **74 closed or superseded** |
+| | | **92** | **16** | **76 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -2045,6 +2045,83 @@ dangling `else`.
 and the settings window's `_onMissingCombo`.
 **Gate**: `mutation/mutate_p187.py` — 6 mutants; mutant 2 keeps the `else` and makes it do nothing,
 so the shape of the fix survives and the behaviour does not.
+
+---
+
+### P1-88. An unrecognised copier action was answered as a successful write — CLOSED 2026-08-13
+
+*(found on the live box while applying `P1-84`'s new `MaxPositionSize` default. Two writes came
+back `success:true, persisted:true, loaded:true` and the value did not move.)*
+
+`McpBridgeAddOn.CopierConfig` tests each recognised action in turn and ends in an `else` that is
+the **read** path — and that path returns `success = true`, `loaded = true` and
+`persisted = File.Exists(CopierConfigFile)`. So **any** unrecognised action was answered as a
+persisted write. The request had used `"set_relationship"`; the action is `"set"`.
+
+`P1-80`'s shape on the copier, and worse: the caller sent a payload it believes was applied.
+
+**Fixed** with a whitelist checked once before any branch, refusing by name and listing the valid
+actions. A whitelist rather than accepting the extra name, because the failure is not that one
+name was wrong — it is that **any** wrong name was answered as a write. Three surfaces reach this
+one handler (the MCP wrapper, the browser page, `curl`) and only one of them has a schema.
+
+**Live-validated**: the same request now returns `success:false`, `UNKNOWN_COPIER_ACTION`,
+`persisted:false`.
+
+**Where**: `nt8-mcp-bridge`, `addons/McpBridgeAddOn.cs`, `CopierConfig`.
+
+---
+
+### P1-89. A copier read resolved a relationship by leader alone — CLOSED 2026-08-13
+
+*(found in the same request, because the response carried the wrong relationship.)*
+
+The read branch used `FirstOrDefault(r => r.LeaderAccountName.Equals(leader))`, ignoring the
+follower even when the caller named one. With two followers under `Sim101`, a request naming
+`SimCopy2` came back carrying `Sim-ORB`'s object — and looked like a successful read.
+
+Both accounts identify a relationship everywhere else in this system: the config key, the refusal
+paths, the conformance rows. **Fixed** to match on both, while a request that names *no* follower
+still gets the leader's first — that is the historical behaviour and is right for "show me this
+leader". What was wrong was ignoring a follower the caller *did* name.
+
+**Where**: `nt8-mcp-bridge`, `addons/McpBridgeAddOn.cs`, the copier read branch.
+**Gate**: `tests/BridgeSourceTests.cs` — a source scan, because this repo has no executable tests
+(`P2-27`).
+
+---
+
+### P1-90. An unresolvable account name routes an order to an arbitrary account — OPEN
+
+*(found while closing `P1-88`, by grepping the bridge for the guess `P1-85` had just removed from
+the engine. **This is the most serious item currently open in either repo.**)*
+
+Three order paths in `McpBridgeAddOn.cs` (`:2386`, `:2453`, `:4422`) resolve the account as:
+
+```
+the named account
+  ?? the account called "Sim101"
+  ?? ANY account not called "Backtest"
+  ?? ANY account at all
+```
+
+So `nt_place_order` with an account name that does not resolve — a typo, wrong case, a
+disconnected account — **is not refused. The order is placed somewhere else.** The live box
+reports 96 accounts.
+
+⚠️ **Severity is above `P1` despite the number.** `P1-85` was the same guess on the copier's
+config path and was rated `P1` because a config guess writes the wrong config. This one opens the
+wrong position. It belongs with the `P0` band on consequence; it is filed here because it was
+found here and has not been triaged.
+
+Three further `"Sim101"` fallbacks sit on account-resolution paths (`:1848`, `:4166`, `:5621`) and
+should be reviewed with it.
+
+**The fix is refusal**, as it was for `P1-85`: an order that cannot say which account it is for
+has no safe interpretation. Deliberately **not** attempted at the end of the session that found
+it — it changes order routing, and this repo has no executable tests to catch a mistake (`P2-27`).
+
+**Where**: `nt8-mcp-bridge`, `addons/McpBridgeAddOn.cs`.
 
 ---
 
