@@ -3341,7 +3341,17 @@ sweep interval constant matches the documented value).
 wrong about all five. Closing P2-26 means a rewrite against the code as it now stands, not a patch
 of the table above.
 
-### P2-27. The riskiest code has zero test coverage
+### P2-27. The riskiest code has zero test coverage — PARTIALLY CLOSED 2026-08-13
+**✅ The copy path (`OnExecution`) is now in the test build** — the harness repair (session 18) brought it in
+deliberately, and it has three copy-path tests that reproduce P0-5, P0-6 and P0-8 as executable failures.
+**✅ CI runs the suite** — GitHub Actions runs `dotnet run --project tests/RiskGuardTests.csproj` with
+non-zero exit on failure (all 20 mutation batteries are invoked by CI, verified by
+`check_ci_runs_every_battery.py`).
+**✅ The bridge has its own test suite** — `nt8-mcp-bridge/tests/BridgeTests.csproj` has 50 tests,
+a parse gate (`check_bridge_parses.py`), and `BridgeAccountResolver.cs` is executed by tests (P1-90).
+**Still open**: `TradeCopierWindow.cs` is excluded from the test build (WPF dependencies). The UI's
+write half (relationship toggle, quarantine release) is tested via engine-level tests, not window-level.
+`McpBridgeAddOn.cs`'s HTTP endpoint handling is not behaviourally tested (only parse-checked).
 `TradeCopierEngine.OnExecution` (`:613-745`) and `ReconcileFollowerPosition` (`:193-228`) are
 inside `#if !TESTING`, so the entire copy path is excluded from `RiskGuardTests.csproj`. The same
 applies to all real order submission in `RiskGuardAddOn.ExecuteAction`. The 4,237-line
