@@ -132,6 +132,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan();
             TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
             TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan();
+            TestF9_TheDeployedFirmMappingPassesPreflight();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -9973,6 +9974,110 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(mappedState == GuardRuleState.Enforcing && mappedReading.EvidenceCount == 1,
                 string.Format("the mapped account itself still reports Enforcing on 1 piece of evidence (got {0}/{1})",
                     mappedState, mappedReading == null ? "null" : mappedReading.EvidenceCount.ToString()));
+        }
+
+        /// <summary>
+        /// The F-9 config as DEPLOYED must pass preflight, or the guard comes up DISARMED.
+        ///
+        /// This is not a hypothetical. `SaveAndReloadConfig` writes and reloads WITHOUT running
+        /// preflight, so the mapping went live at 14:04 on a box that had armed at 14:03 against
+        /// the previous config -- the live config had never been preflighted at all. The next
+        /// restart runs it, and a `FIRM_MIRROR` failure there means `ARMED_ON_START` does not
+        /// arm: no protection, and nothing about the config file looks wrong.
+        ///
+        /// There is no preflight endpoint on the bridge, so this is where that gets checked. The
+        /// values are the ones actually POSTed to the box on 2026-08-13, transcribed from the
+        /// `interventions.jsonl` audit record of the write, and the assertion is on the WHOLE
+        /// preflight rather than the firm clause, because `PreflightResult.Fail` overwrites and
+        /// any earlier failure would hide this one.
+        /// </summary>
+        private static void TestF9_TheDeployedFirmMappingPassesPreflight()
+        {
+            Console.WriteLine("\n[TEST] F-9: the firm mapping as deployed passes preflight, so the box can still arm");
+
+            var previousAccounts = Account.All;
+            try
+            {
+                Account.All = new List<Account> { new Account { Name = "Sim_All_Day_ORB" } };
+
+                var cfg = new RiskConfig();
+                cfg.Mode = "shadow";
+                cfg.FirmMirror.Enabled = true;
+                // Top-level sub-rules stay OFF deliberately: an UNMAPPED account must get no firm
+                // rule at all rather than the guessed 2500/1500, which is CONFIG_DEFAULTS R3 --
+                // "the honest default is not a different number, it is no number".
+                cfg.FirmMirror.TrailingDD.Enabled = false;
+                cfg.FirmMirror.DailyLoss.Enabled = false;
+                cfg.FirmMirror.FirmProfiles["TakeProfitTrader-50K"] = new FirmProfile
+                {
+                    Name = "TakeProfitTrader-50K",
+                    TrailingDD = new FirmTrailingDDConfig
+                    {
+                        Enabled = true, Type = "eod", IncludesUnrealized = false,
+                        Amount = 1500.0, Buffer = 200.0, LockAtProfit = 0.0
+                    },
+                    // TPT has no daily loss limit. Enabled=false WITH Amount=0 is the shape that
+                    // matters here: preflight's "enabled but Amount <= 0" check must not fire on
+                    // a sub-rule that is switched off, or a truthful profile cannot be armed.
+                    DailyLoss = new FirmDailyLossConfig
+                    {
+                        Enabled = false, Basis = "realized", Amount = 0.0, Buffer = 0.0
+                    }
+                };
+                cfg.FirmMirror.FirmProfiles["Apex-100K"] = new FirmProfile
+                {
+                    Name = "Apex-100K",
+                    TrailingDD = new FirmTrailingDDConfig
+                    {
+                        Enabled = true, Type = "eod", IncludesUnrealized = false,
+                        Amount = 2000.0, Buffer = 200.0, LockAtProfit = 0.0
+                    },
+                    DailyLoss = new FirmDailyLossConfig
+                    {
+                        Enabled = true, Basis = "include_unrealized_peak",
+                        Amount = 1000.0, Buffer = 100.0
+                    }
+                };
+                cfg.FirmMirror.AccountFirmMap["Sim_All_Day_ORB"] = "TakeProfitTrader-50K";
+                cfg.FirmMirror.AccountFirmMap["Sim-ORB"] = "Apex-100K";
+                cfg.FirmMirror.AccountFirmMap["Sim101"] = "Apex-100K";
+                cfg.FirmMirror.AccountFirmMap["SimCopy2"] = "Apex-100K";
+                cfg.FirmMirror.AccountFirmMap["SimCopyTest1"] = "Apex-100K";
+
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigForTest(cfg);
+                var result = addon.RunPreflight();
+
+                Assert(result.Passed, string.Format(
+                    "the deployed F-9 mapping passes preflight, so ARMED_ON_START still arms (got {0}: {1})",
+                    result.FailureCode, result.FailureMessage));
+
+                // The paired negative, so the assertion above cannot pass on a preflight that
+                // approves anything. A plan key nothing defines is the typo this mapping is most
+                // exposed to -- the account names alone are five chances to make one.
+                var typo = new RiskConfig();
+                typo.Mode = "shadow";
+                typo.FirmMirror.Enabled = true;
+                typo.FirmMirror.FirmProfiles["Apex-100K"] = new FirmProfile
+                {
+                    Name = "Apex-100K",
+                    TrailingDD = new FirmTrailingDDConfig { Enabled = true, Amount = 2000.0, Buffer = 200.0 }
+                };
+                typo.FirmMirror.AccountFirmMap["Sim-ORB"] = "Apex-100k-typo";
+                var typoAddon = new RiskGuardAddOn();
+                typoAddon.SetConfigForTest(typo);
+                var typoResult = typoAddon.RunPreflight();
+
+                Assert(!typoResult.Passed
+                       && typoResult.FailureMessage != null
+                       && typoResult.FailureMessage.IndexOf("Apex-100k-typo", StringComparison.Ordinal) >= 0,
+                    "a plan key nothing defines fails preflight AND the message names the key, so the "
+                    + "operator knows which of the five mappings is wrong");
+            }
+            finally
+            {
+                Account.All = previousAccounts;
+            }
         }
 
         /// <summary>
