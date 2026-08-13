@@ -1,0 +1,48 @@
+{
+  "FirmMirror": {
+    "Enabled": true,
+    "FirmProfiles": {
+      "TakeProfitTrader-50K": {
+        "Name": "TakeProfitTrader-50K",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 1500.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": false,
+          "Basis": "realized",
+          "Amount": 0.0,
+          "Buffer": 0.0
+        }
+      },
+      "Apex-100K": {
+        "Name": "Apex-100K",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 2000.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": true,
+          "Basis": "include_unrealized_peak",
+          "Amount": 1000.0,
+          "Buffer": 100.0
+        }
+      }
+    },
+    "AccountFirmMap": {
+      "Sim_All_Day_ORB": "TakeProfitTrader-50K",
+      "Sim-ORB": "Apex-100K",
+      "Sim101": "Apex-100K",
+      "SimCopy2": "Apex-100K",
+      "SimCopyTest1": "Apex-100K"
+    }
+  }
+}

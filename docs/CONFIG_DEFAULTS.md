@@ -106,6 +106,48 @@ now; it could not when these values were chosen.
 
 This is `F-9`, and it is the single change that makes the risk half of the UI tell the truth.
 
+#### R3a. The four researched profiles were destroyed, and this is the only surviving copy
+
+Written 2026-08-13 while acting on R3. The sentence above says the mechanism "already exists and is
+switched off". That was **half true**: `FirmMirror.Enabled` is `false` and `AccountFirmMap` is empty,
+as stated — but `FirmProfiles` is empty **too**, and it did not use to be. The plan records four
+fully researched profiles present in the live config on 2026-08-07 (§ *"P1-42"*). They are gone.
+
+**`P2-41` took them.** A single `nt_riskguard_config` call with no arguments POSTed an empty body,
+which deserialised `{}` into a complete `RiskConfig` and wrote it — and among the things it reset to
+default was `FirmProfiles`, to `{}`. The defect is closed (`RiskConfigMerge`), but it ran on this box
+before it was, and this document then recorded the wreckage as the baseline without noticing that a
+collection had gone missing from it. **A default and an erasure look identical in a config file.**
+
+The four profiles below were recovered from
+`Documents/NinjaTrader 8/RiskGuard/config.json.bak_prearm_20260807_061407`. They are written here
+because a doc is in git and a `.bak` file is one cleanup away from gone.
+
+| Firm | TrailingDD | DailyLoss |
+|---|---|---|
+| `TakeProfitTrader` | `eod`, 1500 / buffer 200, excl. unrealized | **OFF** — TPT has no daily loss limit |
+| `Tradeify` | `eod`, 2000 / buffer 200, lock-at-profit 100 | `include_unrealized_peak`, 1250 / buffer 100 |
+| `Lucid` | `eod`, 2500 / buffer 200 | `include_unrealized_peak`, 2500 / buffer 200 |
+| `Apex` | `eod`, 2000 / buffer 200 | `include_unrealized_peak`, 1000 / buffer 100 |
+
+⚠️ **Two of the four have a sub-rule switched off or set differently from the top-level block.** That
+is not an edge case, it is the norm — and it is what made the reporter's disagreement with the
+enforcer (§F-9 below) a defect in *both* directions rather than one.
+
+⚠️ **None of the four states an account size, which is R3's own complaint.** Apex's published
+trailing threshold is $2,500 on a 50k and $3,000 on a 100k; this profile says $2,000, which matches
+neither. Tighter than the firm's own number is the safe direction — the guard speaks before the firm
+does, which is what `Buffer` is for — but *nobody can tell from the config which direction it is*.
+So the keys change: `FirmProfiles` is now keyed by **plan**, not by firm — `Apex-100K`,
+`TakeProfitTrader-50K`. The key is an opaque string, so this needs no code change, and one "Apex"
+entry carrying one dollar amount **cannot** serve a 50k and a 100k account, which is the fleet this
+box actually has.
+
+**Still not machine-checked, and filed rather than left to be rediscovered:** nothing verifies that
+the amounts on a plan named `-100K` were derived for a 100k account. That wants an `AccountSize` on
+`FirmProfile` and a preflight check against observed equity. Until it exists, the size lives in a
+string.
+
 ### R4. Two names for one concept carry one number.
 
 The copier's `MaxPositionSize` defaults to **100**. The guard's `Sizing.MaxContractsPerAccount`

@@ -62,10 +62,15 @@ but not as an open item.)
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
 | **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-90` | 49 | **5** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83` | 13 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92` | 14 | **7** | ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **92** | **16** | **76 closed or superseded** |
+| | | **93** | **17** | **76 closed or superseded** |
+
+> ⚠️ **These counts and the handover's §0 counts are derived independently and have drifted before.**
+> `docs/RISKGUARD_HARDENING_HANDOVER.md` §0 is the authoritative one (CLAUDE.md says so); re-derive
+> rather than trusting either header. `F-n` feature IDs are deliberately not in this table and must
+> not be renumbered into the `P` sequence.
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -2253,6 +2258,53 @@ that were being used to validate `P1-90`.
 
 **Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/lib/tools.js` (the schemas were at
 `nt-mcp-server.js:89`, `:124`, `:588`, `:672` before the extraction).
+
+### P2-92. `shadow` mode is not observation-only: a shadow breach stops the account trading — OPEN
+
+*(filed 2026-08-13 while scoping `F-9`, by asking what enabling two more lockout-capable rules on a
+live box would actually do)*
+
+**Where**: `RiskGuardAddOn.cs:112` (`CanTrade`) against `:4622` / `:4647`
+(`EvaluateFirmMirror`), and the same shape at `:1482`, `:1522`, `:1581`, `:1599` for the PnL rules.
+
+**The mechanism.** `ProcessAction` gates *execution* on mode — `IsActingMode` is false in `shadow`, so
+the flatten is logged as `SHADOW_ACTION` and never sent. That is the whole promise of shadow mode.
+But the rules set `stateModel.IsLockedOut = true` **before** the action is dispatched, outside any
+mode check, and `_stateDirty` persists it. And `CanTrade` reads that flag **first**:
+
+```csharp
+if (_accountStates.TryGetValue(accountName, out var state) && state.IsLockedOut)
+{
+    bool bypassAllowed = !_isArmed && _config.LockoutBypassWhileDisarmedAccounts...
+    if (!bypassAllowed) return false;
+}
+if (!_isArmed) return true;          // <- the mode/arming escape hatch is BELOW the lockout
+```
+
+So in `shadow`: nothing is flattened, and the account **stops being allowed to trade**. The copier
+consults `CanTrade(followerName, ...)` (plan §1, `:3440`/`:3446`) and every strategy consults it
+through `RiskManagerBase`. A shadow-mode breach therefore halts a bot silently — the three refusal
+paths log to `Output.Process` only, which is `P1-71`'s finding, so *nothing readable says why*.
+
+**Why the existing comment does not cover it.** The comment at `:116` explains lockout persistence
+across **disarming** (`FR-30`, judge-loop `P1-4`) — a panic toggle-off must not defeat a daily-loss
+lockout. That decision is right and is not in question. `shadow` is a different axis, and it was
+never considered: `LockoutBypassWhileDisarmedAccounts` cannot help, because the guard is *armed*.
+
+**Why it is P2 and not P1.** It fails in the safe direction — it stops trading rather than permitting
+it — and it is recoverable through the existing unlock path. But "shadow" naming a mode that can halt
+your bots is a false description of the one mode the whole `MinShadowSessions` gate exists to make
+safe, and it will be discovered as "the copier mysteriously stopped".
+
+⚠️ **This is load-bearing for `F-9`.** `F-9` maps accounts to firm plans, which arms two more
+lockout-capable rules. On the five Sim accounts mapped, an `Apex-100K` breach needs a $1,800 drop from
+peak — an ordinary week for an ORB strategy. Mapping was deliberately kept to Sim accounts for
+exactly this reason.
+
+**Fix, not yet applied**: decide whether a non-acting mode may set `IsLockedOut` at all. The honest
+options are (a) record the would-be lockout on a separate shadow field that `CanTrade` ignores, or
+(b) let `CanTrade` consult the mode the way `ProcessAction` does. (b) is one line and (a) is more
+truthful; (a) also gives the shadow session the count it is supposed to be collecting.
 
 ---
 

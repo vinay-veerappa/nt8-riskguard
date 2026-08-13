@@ -1,0 +1,94 @@
+{
+  "_recovered_from": "Documents/NinjaTrader 8/RiskGuard/config.json.bak_prearm_20260807_061407",
+  "_why": "P2-41 erased FirmMirror.FirmProfiles on this box; see docs/CONFIG_DEFAULTS.md R3a. Kept verbatim so the research is in git, not in a .bak file.",
+  "FirmMirror": {
+    "Enabled": true,
+    "DailyResetHourUtc": 22,
+    "DailyResetMinuteUtc": 0,
+    "AccountFirmMap": {},
+    "FirmProfiles": {
+      "TakeProfitTrader": {
+        "Name": "TakeProfitTrader",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 1500.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": false,
+          "Basis": "realized",
+          "Amount": 0.0,
+          "Buffer": 0.0
+        }
+      },
+      "Tradeify": {
+        "Name": "Tradeify",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 2000.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 100.0
+        },
+        "DailyLoss": {
+          "Enabled": true,
+          "Basis": "include_unrealized_peak",
+          "Amount": 1250.0,
+          "Buffer": 100.0
+        }
+      },
+      "Lucid": {
+        "Name": "Lucid",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 2500.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": true,
+          "Basis": "include_unrealized_peak",
+          "Amount": 2500.0,
+          "Buffer": 200.0
+        }
+      },
+      "Apex": {
+        "Name": "Apex",
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 2000.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": true,
+          "Basis": "include_unrealized_peak",
+          "Amount": 1000.0,
+          "Buffer": 100.0
+        }
+      }
+    },
+    "TrailingDD": {
+      "Enabled": false,
+      "Type": "intraday",
+      "IncludesUnrealized": true,
+      "Amount": 2500.0,
+      "Buffer": 300.0,
+      "LockAtProfit": 0.0
+    },
+    "DailyLoss": {
+      "Enabled": false,
+      "Basis": "realized",
+      "Amount": 1500.0,
+      "Buffer": 200.0
+    }
+  }
+}
