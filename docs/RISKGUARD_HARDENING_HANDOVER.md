@@ -1,14 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 34 — §5.33**). Core **`v1.13.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1266/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **103 IDs, 13 open**; the `P0` band and the untriaged band
+**Last updated**: 2026-08-13 (**session 34 — §5.34**). Core **`v1.13.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1265/0**, **20** core mutation batteries + the bridge's 1
+/ 0 survivors, **227 anchors / 0 broken**. **104 IDs, 12 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
 
-✅ **Session 34 closed seven defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
-timer), **P3-30** (guard-side audit), **P1-57** (reference-tracking order filter), and **P1-13**
-(threading inversion -- guard evaluates on caller thread, not dispatcher). **94 accounts mapped**
-across **9 firm profiles**. All with operator-verifyable defaults.
+✅ **Session 34 closed ten defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
+timer), **P3-30** (guard-side audit), **P1-57** (reference-tracking order filter), **P1-13**
+(threading inversion), **P2-25** (news shield loader), **P2-24** (dead code removed), and the firm
+mapping (**94 accounts** across **9 profiles**). All with operator-verifyable defaults.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
 mapped to two size-keyed plans, and their firm rules moved `Disabled` → `EvaluatedNotEnforcing` with
@@ -128,9 +128,9 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1266 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **103 IDs — 90 closed, 13 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13` all CLOSED. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | **`P2-25`** (news shield can never fire — no loader), **`P2-27`** (riskiest code has zero coverage), then the remaining P2/P3 items. ⚠️ **band letter is not priority** — use §5.6 | §5.6 |
+| **Suite** | **core 1265 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **104 IDs — 92 closed, 12 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24` all CLOSED. Derivation in §5.0 | the `grep` in §5.0 |
+| **Do next** | **`P2-27`** (riskiest code has zero coverage — `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` outside test build), **`P2-26`** (doc drift), **`P2-29`** (file complexity), then **`P3-32`** (may be superseded by P0-9), **`P3-33`**, **`P3-34`**, **`P1-77`** | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3204,14 +3204,12 @@ the *order* they forced is the reusable part.
 
 > ### Do next: the remaining `P2` band, then `P3-32`/`P3-33`/`P3-34`
 >
-> Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13.
+> Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13, P2-25, P2-24.
 >
-> **`P2-25`** — the news shield can never fire in production (no loader populates `_newsEvents`).
 > **`P2-27`** — `McpBridgeAddOn.cs` and `TradeCopierWindow.cs` have zero coverage (outside the test build).
-> **`P2-24`** — written-but-never-called safety machinery.
 > **`P2-26`** — design-doc drift.
 > **`P2-29`** — single-file size/complexity.
-> Then **`P3-32`** (may be superseded by P0-9), **`P3-33`** (global lock on hot path), **`P3-34`** (arm/shadow discipline for copier).
+> Then **`P3-32`** (may be superseded by P0-9), **`P3-33`** (global lock on hot path), **`P3-34`** (arm/shadow discipline for copier), **`P1-77`** (consistency cap dead config).
 
 > ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
@@ -5944,5 +5942,21 @@ rebuild it). `RunAuditNow()` was wired to call `RunGuardAudit()` (the loop left 
 `AuditIntervalSeconds` added to `GuardRuleRegistry.NonRules` for the UI3 gate.
 
 Suite **1262/0**, 227 anchors / 0 broken, NT8 compile 0 errors.
+
+### P2-25: news shield loads events from disk
+
+`LoadNewsEventsFromDisk` reads a JSON file of `EconomicNewsEvent` objects and populates
+`_newsEvents`, which was only populated by `AddTestNewsEvent` before. Called from
+`UpdateConfig` when `LocalNewsEventsFilePath` is non-empty. The news shield can now fire
+in production once a JSON feed is placed at the configured path. The tvDownloadOHLC
+economic-calendar pipeline can emit the feed.
+
+### P2-24: dead code removed
+
+`CalculateSafeFollowerDelta` was written but never called — the P0-5 fix is already in the
+copy path. Removed the method and its tests. `ReconcileFollowerPosition` is now called by
+the P3-31 timer. `LatencyMs`/`AvgSlippageTicks` are now computed and read (P1-69). `StealthMode`
+was removed. `EnableFollowerAtm` was removed (P0-9). The remaining items from P2-24's list
+are either wired or deleted.
 
 ---

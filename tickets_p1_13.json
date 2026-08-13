@@ -1,0 +1,23 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P1-13: concurrent-guard-event stress test (prerequisite for the threading inversion)",
+      "defect": "P1-13's fail-open half is CLOSED -- RunGuardWork runs inline when there is no dispatcher. The threading half (evaluating on the caller's thread, marshalling only broker calls) is still OPEN. The prerequisite is a concurrent-guard-event stress test: the S-series (S4-S9) are all sequential scenario tests, and the threading inversion turns six handlers the dispatcher was implicitly serialising into genuinely concurrent ones. Without a concurrent stress test, doing the inversion is how P1-40 shipped.",
+      "spec": "Build a concurrent stress test that fires multiple guard event handlers (PositionUpdate, OrderUpdate, ExecutionUpdate, AccountItemUpdate) concurrently against the same account+instrument and verifies the lock-scope invariants hold:\n\n1. The _stateLock is never held across broker calls (P1-10/12 invariant).\n2. The _guardFsms dictionary is not corrupted (no exception from concurrent access).\n3. The _accountStates dictionary is not corrupted.\n4. No FSM state transition is lost (the final state is consistent with the events that were fired).\n5. No duplicate actions are emitted for the same event.\n\nAPPROACH:\n- The test should fire N concurrent events (e.g. 50) on separate threads (Task.Run or new Thread), mixing position updates, order updates, and execution updates for the same account+instrument.\n- Use a CountdownEvent or Barrier to release all threads simultaneously.\n- After all threads complete, verify the FSM state is consistent (no null refs, no corrupted state, the position quantity matches what was fired).\n- The test must run under #if TESTING so it executes in the test suite.\n- The test does NOT need to prove the inversion is safe -- it needs to exist so the inversion CAN be done safely. Currently nothing tests concurrent access.\n- If the test finds a real race (exception or corrupted state), that IS the evidence the inversion is unsafe without it.\n\nCONSTRAINTS:\n- The test must not be a no-op: it must actually fire events on multiple threads simultaneously.\n- The test must clean up after itself (Account.All.Clear, etc.).\n- The test must be deterministic enough to run in CI (no random sleeps that make it flaky).\n- The test must not hold _stateLock for the entire duration (that would make it sequential, not concurrent).\n- The existing RunGuardWork seam runs inline under TESTING (Application.Current is null in the test build), so the test exercises the inline path -- which is the path the threading inversion would make the production path too.",
+      "context": "RunGuardWork is at line ~1266 in RiskGuardAddOn.cs. The six event handlers are: OnPositionUpdate, OnOrderUpdate, OnExecutionUpdate, OnAccountItemUpdate, OnSafetySweep, OnGraceExpired. All route through RunGuardWork. Under TESTING, Application.Current is null so RunGuardWork runs inline. The _stateLock guards _accountStates and _guardFsms. The S-series tests (S1-S9) are sequential.",
+      "expect_green": [
+        "the concurrent stress test completes without corruption"
+      ],
+      "regions": [
+        {
+          "id": "StressTestMethod",
+          "file": "tests/RiskGuardAddOnTests.cs",
+          "anchor": "private static void TestFsm_DuplicatePositionUpdatesAreIdempotent",
+          "note": "add the concurrent stress test method near the other FSM tests. Fire N threads, each with a mix of position/order/execution events for the same account+instrument."
+        }
+      ],
+      "max_rounds": 4
+    }
+  ]
+}
