@@ -2,8 +2,8 @@
 
 **Last updated**: 2026-08-13 (**session 32 — §5.28**). Core **`v1.12.2`** is tagged, deployed and
 **NT8-compiled clean (0 errors)** — re-measured this session, deploy parity verified by content hash
-(`sync_nt8.py --verify` → 8 files). Suite **1200/0**, **19** core mutation batteries + the bridge's 1
-/ 0 survivors, **216 anchors / 0 broken**. **94 IDs, 15 open**; the `P0` band and the untriaged band
+(`sync_nt8.py --verify` → 8 files). Suite **1232/0**, **20** core mutation batteries + the bridge's 1
+/ 0 survivors, **227 anchors / 0 broken**. **97 IDs, 18 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
@@ -17,6 +17,8 @@ bridge token once and keeps it in `localStorage`. It shows, per account, every g
 state **derived at read time**, and beside it the copier's relationships with **expected vs actual
 position**. It can now *change* two things (relationship enable/disable, quarantine release);
 everything else is still read-only.
+
+✅ **`P2-92` IS CLOSED** (§5.30) — `shadow` mode is observation-only now, and the firm mapping is live on SIX accounts including the funded 50K TPT PRO, with numbers taken from the firms' published tables (`FIRM_PLANS_RESEARCH.md`) rather than from a config backup. ⚠️ **Everything `F-9` first deployed was WRONG**: the recovered profiles carried no account size, so TPT's 25K max loss went out as a 50K and Apex's 50K row as a 100K — and a TPT PRO trails **intraday**, not `eod`, which is the direction where the firm fails you before the guard speaks. **Weigh `P2-95` first now**: `FirmStartingBalance` is a session-start heuristic, so the trail-lock floor is wrong by the account's LIFETIME PROFIT, and `LockAtProfit` carried a real value for the first time on 2026-08-13.
 
 ⚠️ **DO THE NEXT ITEM BY §5.6, NOT BY BAND LETTER.** `P1-90` was `P0` on consequence and is closed and
 live-validated; `P1-91` is closed. The one to weigh first now is **`P2-92`, filed this session, and its
@@ -123,7 +125,7 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1188 passed, 0 failed** (all **401** declared methods invoked); **bridge 50 passed, 0 failed** (was 23 — `P1-90` brought executable tests to that repo) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **94 IDs — 79 closed, 15 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 32: **91** banded + **3** `P?-`. `P2-92` is the new one, filed this session. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Defects** | **97 IDs — 80 closed, 18 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 33: **94** banded + **3** `P?-`. `P2-92` is CLOSED; `P2-93`, `P2-94` and `P2-95` are new and open. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
 | **Highest open** | **`P1-57`** — we would mirror another copier's mirror; the "not ours" test is a name substring. Not naked-risk, which is the point: ✅ **the `P0` band and every naked-risk item are closed.** ⚠️ Judge the next item by §5.6, not by band letter — `P1-90` was `P0` on consequence | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **19 tags**, `v1.0.0`…**`v1.12.2`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.12.2` core + `P1-90` bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and now `BridgeAccountResolver.cs` too | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
@@ -260,7 +262,7 @@ and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verifie
 # the suite -- ALWAYS build first; --no-build after a failed build silently
 # reports the PREVIOUS assembly's result
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1200/0
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1232/0
 
 # deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
 python tools\sync_nt8.py --verify        # expect ALL IN SYNC (8 files)
@@ -279,9 +281,9 @@ python tools\check_ci_runs_every_battery.py   # no battery CI does not run
 # [SKIP] and scores a SURVIVOR -- but only when run, and a battery only runs when
 # the suite is green. This check reads every MUTANTS list by AST, takes ~1s, and
 # WORKS WHILE THE SUITE IS RED. It found 11 stale anchors in session 29 alone.
-python mutation\check_anchors.py         # expect 216 anchors / 0 broken
+python mutation\check_anchors.py         # expect 227 anchors / 0 broken
 
-# the 19 mutation batteries. All exit NON-ZERO on a survivor and all refuse to run
+# the 20 mutation batteries. All exit NON-ZERO on a survivor and all refuse to run
 # from a red baseline -- see §8, they were decorative until 2026-08-13. The newer
 # ones also score a CRASH (no result line) as a kill, which the oldest three do
 # not, because a mutant that crashes the runner read as a SURVIVOR (§5.14).
@@ -5647,6 +5649,133 @@ and its size.
   interesting mutants are the ones that pass every existing test (invert the authority sense; gate
   `LockAccount` too; let a shadow lockout persist as enforced) and this programme's own record says a
   fix without a battery is a fix nobody has measured.
+
+⚠️ Re-read §0 rather than this section for state.
+
+---
+
+## 5.30 Session 33 continued — the firm research, and what it corrected
+
+The operator named their four firms and asked for the current plans, then corrected the readings. That
+turned the firm mapping from a guess into configuration, and in doing so found that **everything
+`F-9` had deployed was wrong**.
+
+### The corrections, and the one that mattered
+
+The four profiles recovered from the 2026-08-07 backup (§R3a) carried **no account size**, and the
+sizes inferred for two of them were wrong:
+
+| Recovered profile | What its numbers actually are | Was deployed as | Now |
+|---|---|---|---|
+| `TakeProfitTrader` 1500 `eod` | TPT's **25K** max loss | `TakeProfitTrader-50K` | **`TPT-50K-PRO`** — 2000, **`intraday`**, `LockAtProfit` 2000 |
+| `Apex` 2000 / DLL 1000 | Apex's **50K EOD** row *exactly* | `Apex-100K` | **`Apex-100K-EOD`** — 3000, DLL 1500 realised |
+| `Tradeify` 2000 / 1250 | Tradeify **50K** (correctly sized, wrongly labelled) | — | not mapped |
+| `Lucid` 2500 / 2500 | ⚠️ **no Lucid plan at any size** | — | discarded |
+
+⚠️ **The type error was the dangerous one, and it is not a "tighter is safer" case.** A TPT **PRO**
+account trails **intraday until the buffer is hit** (the operator's words), not `eod`. An intraday
+trail follows peak equity *including unrealized*, so its floor rises during a winning session while an
+EOD model's stays stale and **lower** — the firm's floor ends up **above** the guard's and the firm
+fails you first. Both amount errors erred *tighter* than the firm, which is safe but fires early (R5).
+
+**Operator corrections applied**: the funded account is a 50K PRO; `PAAPEX*` are the funded accounts;
+`TDYG` is Tradeify Growth and the `F` marks funded; `LFE` is Lucid evaluation; all firms are on a
+**realised** DLL basis except some Apex accounts.
+
+### Firm + size is not a plan
+
+Every one of the four firms sells **multiple rule sets at the same account size**. Tradeify's 100K max
+loss is 2500, 3000, 3500 or 4000 depending on family; Apex sells an EOD product *with* a daily loss
+limit and an intraday one *without*, at every size; TPT's Test and PRO+ trail EOD while PRO trails
+intraday. So `FirmProfiles` keys now carry the **variant** — `TPT-50K-PRO`, `Apex-100K-EOD`. No code
+change; the key is an opaque string. What it changes is what must be *known* per account, which is the
+part only the operator can supply. Full tables in **[FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md)**.
+
+### `LockAtProfit` existed and was being used wrong
+
+Apex, Lucid and TPT PRO all stop trailing once the threshold reaches the plan's starting balance (Apex
+and Lucid: + $100). That is precisely `TrailingDD.LockAtProfit`'s semantics here — the floor locks when
+`FirmTrailingPeak >= FirmStartingBalance + LockAtProfit`. Every recovered profile had **`0`**, meaning
+the guard would keep trailing after the firm stopped and flatten on a drawdown the firm no longer
+counts. `TPT-50K-PRO` sets it to `2000` (the amount), which is the first time this field has carried a
+real value.
+
+⚠️ **Setting it immediately exposed `P2-95`.** The lock reads `FirmStartingBalance`, which
+`ComputeFirmMirror` captures as `balance - realized - unrealized` — the balance at *session* start, not
+the plan's. On an account up $5,000 over its life that reads **55,000** instead of 50,000, so the
+locked floor is $5,000 too high and the guard flattens $5,000 early. **The error grows with the
+account's profit**, which is R5's failure mode getting worse the better you do. `AccountSize` is the
+fix and is why it was added; the migration is the awkward part, because the field is already persisted
+with heuristic values.
+
+### How the config was applied, and why not over the API
+
+`POST /api/riskguard/config` **merges**, so it cannot REMOVE a key — and the two wrongly-numbered
+profiles had to go, not be shadowed by correctly-named neighbours. There is no reload route either. So
+`config.json` was edited directly, whole-block, and `nt_compile` did the reload — which was needed
+anyway to deploy `P2-92` and `F-9b`. Backed up first as
+`config.json.bak_pre_f9_corrected_20260813_091902`, and verified afterwards that every top-level key
+other than `FirmMirror` was untouched (`Mode` shadow, `MinShadowSessions` 5, 2 windows,
+`StopAttachSeconds` 15).
+
+### Live validation — the funded account is protected for the first time
+
+| Account | Firm trailing drawdown | Firm daily loss |
+|---|---|---|
+| `TAKEPROFITPRO524207503` (live 50K PRO, 50,357) | `EvaluatedNotEnforcing`, limit **2000**, plan `TPT-50K-PRO` | `Disabled` — *"plan 'TPT-50K-PRO' has NO daily loss limit, which is that firm's actual rule -- not an oversight"* |
+| `Sim_All_Day_ORB` (49,833) | same plan, limit **2000** | `Disabled` |
+| `Sim-ORB` (100,170) | `Apex-100K-EOD`, limit **3000** | `EvaluatedNotEnforcing`, **-1500** |
+| `APEX10121500000151` (unmapped, 0 equity) | `Disabled` | `Disabled` |
+
+`nt_compile` 0 errors, mode `shadow`, **`isArmed: true`**, no lockouts. The arming matters most: it
+proves `F-9b`'s two new preflight refusals do not block the real config, and a config that cannot pass
+preflight comes up **disarmed** with nothing about the file looking wrong.
+
+⚠️ Mapping the funded account was **gated on `P2-92`**, not on the numbers. Before it, a shadow breach
+set an enforced-looking lockout and stopped the account trading while flattening nothing.
+
+### `P2-92` closed, and what its battery cost to get right
+
+11 mutants, **0 survivors**, suite **1209 → 1232**, 227 anchors clean. Three survived the first run —
+and the battery's own docstring had *predicted* all three, which is worth noticing: **predicting a
+survivor is not killing it.**
+
+* Two were the persisted authority (write, and read-back). Both fail **closed**, so nothing looked
+  wrong — and both mean a restart **promotes** a shadow observation into a real lockout, so the account
+  stops trading for a breach that never enforced. A recompile is a restart here. Killed by a save/load
+  round trip asserted in **both** directions, since "always restore as shadow-only" would pass the
+  first half while releasing a real lockout.
+* The third deleted the `SHADOW_LOCKOUT` log line and left 1,224 tests green. That is a bigger finding
+  than the mutant: **nothing in this suite could observe that an audit event happened at all**, so
+  every claim about this addon's log was pinned by source scan or not at all — `P1-70`'s and `P1-71`'s
+  included. `LogEventObserver` now exists under `#if TESTING`, beside the lock-scope and disk-write
+  probes and for the same reason. It fires **before** the `try`, so a test sees the event even when the
+  disk write throws — the case a source scan cannot distinguish from a working one. Its signature is
+  `(account, eventType)` deliberately: asserting on message text breaks on every rewording.
+
+### Three defects filed from reading adjacent code
+
+* **`P2-93`** — `pure` and `override_with_friction` pass preflight's *enforcement* gate (five shadow
+  sessions) and then act on nothing, because `IsActingMode()` names only `live`.
+* **`P2-94`** — a **timed** manual lockout does not stop new orders: `CanTrade` reads only
+  `IsLockedOut`, and `LockAccount(name, 60)` sets only `LockoutUntil`. The sweep then flattens the
+  fills. A clean refusal beats a fill followed by a flatten.
+* **`P2-95`** — `FirmStartingBalance`, above.
+
+### Still open on the mapping, and it is information, not code
+
+Nothing is mapped for the ~89 zero-equity accounts, and this is not a tooling gap: only **6 of 96**
+accounts report any equity, no field in the platform payload carries a plan size, and firm + size does
+not determine the numbers anyway. Outstanding questions, each blocking a group of accounts: **which
+Apex accounts are the exception to the realised DLL basis**; whether `APEX*` evaluations are the EOD or
+the intraday product (they differ in whether a DLL exists at all); what `FTDFYG`'s leading `F` denotes
+as distinct from `TDFYG`; and which Lucid plan the `LFE*` accounts are on.
+
+⚠️ And the boundary of what the machine can check, because it is the error the research just found:
+`F-9b` validates **account ↔ plan** size. It **cannot** validate **plan ↔ firm table** — the deployed
+`Apex-100K` would have passed the size check easily while its amount was Apex's 50K number. Both are
+plausible fractions of a 100k account. Only the firm's published table can say, and that is
+`FIRM_PLANS_RESEARCH.md` plus a human pass.
 
 ⚠️ Re-read §0 rather than this section for state.
 

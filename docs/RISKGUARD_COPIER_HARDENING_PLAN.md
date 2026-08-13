@@ -62,10 +62,10 @@ but not as an open item.)
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
 | **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-90` | 49 | **5** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92`, `P2-93`, `P2-94` | 16 | **9** | ⚠️ **`P2-93` NEW 2026-08-13**: `pure` and `override_with_friction` are recognised modes that pass preflight's *enforcement* gate (`MinShadowSessions`) and then act on nothing, because `IsActingMode()` names only `live` -- an operator had to WAIT OUT five shadow sessions to reach a mode that enforces nothing. ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92`…`P2-95` | 17 | **10** | ✅ **`P2-92` CLOSED 2026-08-13** — shadow mode is observation-only now; 11 mutants / 0 survivors. ⚠️ **`P2-95` NEW**: `FirmStartingBalance` is a session-start heuristic, so the trail-lock floor is wrong by the account's lifetime profit — and `LockAtProfit` was set for the first time the same day. ⚠️ **`P2-94` NEW**: a TIMED manual lockout does not stop new orders. ⚠️ **`P2-93` NEW 2026-08-13**: `pure` and `override_with_friction` are recognised modes that pass preflight's *enforcement* gate (`MinShadowSessions`) and then act on nothing, because `IsActingMode()` names only `live` -- an operator had to WAIT OUT five shadow sessions to reach a mode that enforces nothing. ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **96** | **19** | **76 closed or superseded** |
+| | | **97** | **18** | **77 closed or superseded** |
 
 > ⚠️ **These counts and the handover's §0 counts are derived independently and have drifted before.**
 > `docs/RISKGUARD_HARDENING_HANDOVER.md` §0 is the authoritative one (CLAUDE.md says so); re-derive
@@ -2305,6 +2305,54 @@ exactly this reason.
 options are (a) record the would-be lockout on a separate shadow field that `CanTrade` ignores, or
 (b) let `CanTrade` consult the mode the way `ProcessAction` does. (b) is one line and (a) is more
 truthful; (a) also gives the shadow session the count it is supposed to be collecting.
+
+### P2-95. `FirmStartingBalance` is a session-start heuristic, and the error GROWS with the account — OPEN
+
+*(filed 2026-08-13, straight out of [FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md): the research gave
+the config the real starting balance, and revealed that the guard measures its own)*
+
+**Where**: `RiskGuardAddOn.cs:4664` in `ComputeFirmMirror`.
+
+```csharp
+if (st.FirmStartingBalance == 0.0)
+{
+    st.FirmStartingBalance = balance - realized - unrealized;
+    result.TraceLogs.Add($"Initial starting balance captured heuristically: {st.FirmStartingBalance}");
+}
+```
+
+`realized` is **session-scoped**, so that expression is *the balance at the start of this session*, not
+the plan's starting balance. The comment says "heuristically" and is honest about it. What was not
+appreciated is how the two diverge:
+
+| Account state | Real plan start | `FirmStartingBalance` becomes | Locked floor is wrong by |
+|---|---|---|---|
+| fresh 50K | 50,000 | 50,000 | 0 |
+| 50K, up $324 this session | 50,000 | 50,032.50 | $32 |
+| 50K, up $5,000 over its life | 50,000 | **55,000** | **$5,000** |
+
+**Two paths read it, and both are load-bearing for the plans just deployed:**
+
+* `TrailingDD.Type == "static"` → `guardFloor = (FirmStartingBalance - Amount) + Buffer`.
+* **The trail lock** → once `FirmTrailingPeak >= FirmStartingBalance + LockAtProfit`, the floor becomes
+  `FirmStartingBalance`. This is the mechanism Apex, Lucid **and TPT PRO** all use, and `LockAtProfit`
+  was set for the first time on 2026-08-13 (`TPT-50K-PRO`, `LockAtProfit = 2000`).
+
+So on a TPT PRO account up $5,000 lifetime, the guard would lock its floor at **55,000** while the
+firm's is **50,000**, and flatten roughly $5,000 early. That is `CONFIG_DEFAULTS` **R5**'s failure
+mode — a limit that fires on a good day is the most likely single reason this system gets switched
+off — and unlike R5's `StopAttachSeconds` it gets *worse* the better the account does.
+
+⚠️ **It is currently invisible.** `FirmStartingBalance` is captured once and persisted, so on this box
+it holds whatever the balance was at the first evaluation after `F-9` landed. Nothing displays it and
+nothing validates it.
+
+**Fix**: seed it from the mapped plan's `FirmProfile.AccountSize` when that is `> 0`, falling back to
+the heuristic when it is not — which is exactly why `AccountSize` was added (`F-9b`, `CONFIG_DEFAULTS`
+R3). ⚠️ Note the migration: the field is already persisted with heuristic values, so the fix needs to
+*correct* existing state rather than only affect fresh accounts, and a test per case
+(fresh / persisted-heuristic / persisted-correct / unmapped). Also surface it in the inventory: a
+trailing floor whose anchor nobody can see is the same class of problem as a limit nobody reads.
 
 ### P2-94. A TIMED manual lockout does not stop new orders — `CanTrade` never reads `LockoutUntil` — OPEN
 
