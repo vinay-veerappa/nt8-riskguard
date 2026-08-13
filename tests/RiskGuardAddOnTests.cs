@@ -250,7 +250,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCopierGroup_GroupStressAndConcurrency();
             RunCopierFixesVerificationTests();
             TestOrderVerificationWatchdogAndReconciliation();
-            TestHedgingReconciliationAndAutoClose();
 
             // -- DYNAMIC ATM BRACKET TESTS --
             TestAtm_FixedTicksLong();
@@ -14887,27 +14886,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(activeStates.Contains(OrderState.Submitted), "Submitted order state included in emergency flatten cancel pass");
 
             Console.WriteLine("[PASS] All Order Verification Watchdog & Reconciliation Tests Passed Successfully!");
-        }
-
-        public static void TestHedgingReconciliationAndAutoClose()
-        {
-            Console.WriteLine("\n--- RUNNING HEDGING, RECONCILIATION & AUTO-CLOSE TESTS ---");
-
-            var engine = TradeCopierEngine.Instance;
-
-            // Test 1: Normal short entry allowed when flat
-            int safeShortDelta = engine.CalculateSafeFollowerDelta(leaderTargetQty: -2, currentFollowerQty: 0, isMarketOrder: true, out bool isBlocked);
-            Assert(safeShortDelta == -2 && !isBlocked, "Normal short entry delta allowed when flat");
-
-            // Test 2: Quantity Capping on Position Reduction
-            int cappedDelta = engine.CalculateSafeFollowerDelta(leaderTargetQty: 0, currentFollowerQty: 5, isMarketOrder: true, out isBlocked);
-            Assert(cappedDelta == -5 && !isBlocked, "Exit delta capped to follower open position size");
-
-            // Test 3: Standalone Limit/Stop entries unblocked
-            int limitDelta = engine.CalculateSafeFollowerDelta(leaderTargetQty: 3, currentFollowerQty: 0, isMarketOrder: false, out isBlocked);
-            Assert(limitDelta == 3 && !isBlocked, "Standalone Limit/Stop entry unblocked when flat");
-
-            Console.WriteLine("[PASS] All Hedging, Reconciliation & Auto-Close Tests Passed Successfully!");
         }
 
         // ─────────────────────────────────────────────────────────────────────

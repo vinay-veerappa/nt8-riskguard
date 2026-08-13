@@ -491,34 +491,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (int)rounded;
         }
 
-        public int CalculateSafeFollowerDelta(int leaderTargetQty, int currentFollowerQty, bool isMarketOrder, out bool isBlocked)
-        {
-            isBlocked = false;
-            int delta = leaderTargetQty - currentFollowerQty;
-            if (delta == 0) return 0;
-
-            if (isMarketOrder && currentFollowerQty == 0)
-            {
-                bool isLeaderShort = leaderTargetQty < 0;
-                bool isLeaderLong = leaderTargetQty > 0;
-                bool isOppositeMarketOrder = (isLeaderShort && delta > 0) || (isLeaderLong && delta < 0);
-
-                if (isOppositeMarketOrder)
-                {
-                    isBlocked = true;
-                    return 0;
-                }
-            }
-
-            if (currentFollowerQty != 0 && ((currentFollowerQty > 0 && delta < 0) || (currentFollowerQty < 0 && delta > 0)))
-            {
-                int maxReduce = Math.Abs(currentFollowerQty);
-                delta = Math.Sign(delta) * Math.Min(Math.Abs(delta), maxReduce);
-            }
-
-            return delta;
-        }
-
 #if !TESTING
         public void ReconcileFollowerPosition(Account leaderAccount, Account followerAccount, Instrument instrument)
         {
