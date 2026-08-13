@@ -91,49 +91,78 @@ four tags behind until session 29 reconstructed them as §5.24.
 
 ## 0. Start here
 
-### Verified state — 2026-08-13, re-measured for this pass
+### Verified state — 2026-08-13, re-measured after session 29
 
-Every row was checked, not carried forward. The command that checks it is in the last column.
+Every row below was **measured for this pass**, not carried forward, and the row says so when it was
+not. The command that checks it is in the last column.
+
+> ⚠️ **This block was 11 tags stale before this pass, and that is the failure it exists to prevent.**
+> Sessions 22–29 each appended a `§5.x` and none came back here, so §0 claimed suite 1053, 78 IDs,
+> `v1.2.0` and 6 batteries while §5.25 recorded 1188, 92, `v1.12.1` and 18. Anyone following the
+> documented reading order — "§0, then §5 from §5.6" — got a correct order of work and a wrong set of
+> facts about what is deployed. **If you append a session record, re-derive this table in the same
+> commit.**
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **1053 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **78 IDs — 62 closed, 16 open. The whole `P0` band is CLOSED.** Derivation in §5.0, so you can check it instead of trusting it. **4 opened and 1 closed by the 2026-08-13 live trade** (§5.13); **all 4 plus `P0-67` fixed the same day** (§5.14). **4 more opened and closed by the MCP wrapper pass** (§5.16) | — |
-| **Live-validated** | **`P0-63` trails and `P?-66` measures** — proven 2026-08-13 on `Sim101 → Sim-ORB`, not just in the suite (§5.13). Then **`P0-68`, `P1-69` and `P1-71`** on the deployed `v1.1.0` (§5.14) | §5.13, §5.14 |
-| **Branch** | **`main` only** — `harden/p0-63` was merged and deleted. Pushed, 0 unpushed. Tags `v1.0.0` `v1.0.1` `v1.0.2` **`v1.1.0`** (code) `v1.0.3` (docs) | `git status -sb; git branch; git tag` |
-| **Deployed** | **`v1.2.0` code is live in NT8** (`P1-76`; §5.16-§5.18). 7 core files identical; 8 counting the bridge's; **0 orphans** | `python tools/sync_nt8.py --verify` |
-| **NT8 compile** | 0 errors, net48. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
-| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — re-verified after the 2026-08-13 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** (not `X-Auth-Token`, which returns `Unauthorized`) |
-| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, 96 accounts, **feed connected** | `nt_health` |
-| **Mutation** | **6 batteries, 64 killed, 0 survivors** | `mutate_cm3.py`, `mutate_cm4.py`, `mutate_p0_63.py`, `mutate_p1_71.py`, `mutate_p0_67.py`, `mutate_p1_76.py` |
-| **CI** | ✅ **Active in both repos** since 2026-08-13, `windows-latest`, every push and PR. Runs all of the above except deploy parity, in 4m39s. **Watched fail on purpose**, not just pass | `gh run list -R vinay-veerappa/nt8-riskguard -L 3` |
+| **Suite** | **1188 passed, 0 failed** — measured. All **401** declared test methods invoked | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **92 IDs — 76 closed, 16 open. The whole `P0` band is CLOSED.** Re-derived for this pass: **89** banded + **3** `P?-`. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Highest open** | ⚠️ **`P1-90`** — an order naming an unresolvable account is **placed on an arbitrary one**. In **`nt8-mcp-bridge`**, not here. `P1` understates it; on consequence it is `P0` (§5.25) | §5.6 item 0 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`. `git describe` = **`v1.12.1-1-gcdee906`** — one docs-only commit past the tag. **18 tags**, `v1.0.0`…`v1.12.1` | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.12.1` core is live in NT8** — measured **ALL IN SYNC, 8 files identical, 0 orphans**. `McpBridgeAddOn.cs` is listed as *unmanaged* here, which is correct: the bridge repo deploys it | `python tools/sync_nt8.py --verify` |
+| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured 12:27 UTC | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
+| **Mutation** | **18 batteries** + `check_anchors.py`. **205 anchors / 0 broken — measured.** ⚠️ The batteries themselves were **not** re-run for this pass (~205 mutants × a suite run each); session 29 reports 0 survivors. **The anchors are the cheap thing that actually goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | 0 errors, net48 — **session 29's figure, not re-run here.** Deliberate: `nt_compile` reloads every addon on a box whose guard is armed. The loaded assembly is evidenced instead by `guarding: true` **plus** content parity above | `nt_compile`, and read `errorCount` |
+| **CI** | ⚠️ **RED in `nt8-riskguard` — 7 consecutive runs**, since 04:16 UTC, spanning sessions 27–29. **One gate, and it is right**: see the block below. `nt8-mcp-bridge` is green | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
+| ⚠️ **Bridge pin** | **STALE and it is a real revert this time.** The bridge vendors `v1.12.0`, **3 commits behind**, and that range touches `addons/GuardRules.cs`. `deploy.py --verify` WARNs; a real deploy **exits 2**. **Bump the pin before deploying the bridge** | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 
-> ⚠️ **The git tag and the addon's own constant now BOTH say `1.1.0`, and that is a coincidence, not
-> a guarantee.** They agreed once before — and for a day they did not: the deployed, correct build
-> reported itself as `1.1.0` while the repo was tagged `v1.0.2` and `docs/VERSION.md` led with
-> `v1.7.0-ui-audit` from an unrelated pre-hardening scheme. The constant
-> (`addons/RiskGuardAddOn.cs:35`) is hand-maintained and drifts; `VERSION.md` now says which one wins
-> at the top. **Trust the git tag and the file hashes; never a version string.** `sync_nt8.py --verify`
-> compares content — a version string compares nothing.
+> ⚠️ **CI IS RED, THE GATE IS CORRECT, AND THREE SESSIONS SHIPPED ON TOP OF IT.**
+> `tools/check_version_matches_tag.py` reports: constant **`1.10.0`** (`addons/RiskGuardAddOn.cs:39`)
+> vs newest reachable tag **`v1.12.1`**. So `GET /api/riskguard/version` on the live box answers
+> **`1.10.0`** for code that is `v1.12.1` — measured today, and that endpoint is how an operator finds
+> out what is guarding a funded account.
+>
+> The gate was added by commit `c92605e`, *"the addon reported 1.1.0 while v1.2.0 was deployed — and
+> now a gate says so"*. **It was built for exactly this, it fired, and two tags then shipped without
+> bumping the constant.** A gate nobody reads is a comment. The fix is one line —
+> `Version = "1.12.1"` — but it then needs `sync_nt8.py` **and** a recompile, so it is an action on a
+> live box rather than a docs edit; it is item 0 of §5.6's pre-work.
+>
+> **The durable rule stands and now has a second body of evidence: trust the git tag and the file
+> hashes, never a version string.** `sync_nt8.py --verify` compares content; a version string compares
+> nothing. `docs/VERSION.md` says which identifier wins, and it was itself 11 tags stale until this
+> pass.
 
 ### What is deployed but NOT validated live
 
 This distinction is the one this document has most often blurred, so it gets its own block.
 
 * **`P0-53`, `P1-54`, `P0-55`, `P1-56`** — unit + compile only.
-* **`P0-67`** — deployed in `v1.1.0`, unit + mutation only. **Nothing has driven `DynamicAtmManager`'s
-  monitor live**; the bridge drives that path and tests none of it (`P2-27`). The sixth defect fixed
-  with it (two `Change()` calls on one stop in a single sweep) is in the same position.
+* **`P0-67`** — deployed since `v1.1.0`, unit + mutation only. **Nothing has driven
+  `DynamicAtmManager`'s monitor live**; the bridge drives that path and tests none of it (`P2-27`).
+  The sixth defect fixed with it (two `Change()` calls on one stop in a single sweep) is in the same
+  position.
 * **`P1-70`** — the settle-path confirmation is pinned by test, but no live trade has produced a
   `BRACKET_MODIFY_CONFIRMED` since the deploy.
 * **`T5`'s fail-closed gate** — needs an acting mode; `IsGuardProtecting` requires `mode == "live"`.
-* **The firm-mirror rules** — loaded but unmapped, so none can fire.
+* **The firm-mirror rules** — loaded but unmapped, so none can fire. This is `F-9`, and §5.6 names it
+  as the largest remaining config item: every dollar default is a guess until an account is mapped.
+* **The UI's WRITE half** — the page can toggle a relationship and release a quarantine, and those two
+  are validated; **nothing else on it can be changed** (§5.6 item 4).
 
-**Validated live**: **`P0-63` and `P?-66` (§5.13, 2026-08-13 — the mirrored stop trails and both
-fills measured)**, **`P0-68`, `P1-69` and `P1-71` (§5.14, on the deployed `v1.1.0`)**, `P0-9`'s
-mirrored **stop** (§4l) and **target** (§4s), `P0-50`'s orphan-stop release (§5.13), `P0-51`,
-`P1-52`, `P2-41`, `P0-48`, T3's giveback rule (§4g), the reconciler + `P0-61`'s fix (§4v), and the
-ratio converter's slices 2 and 3b (§4z).
+**Validated live**: `P1-86` (news shield reports `INERT` in production) and `P1-88` (an unknown copier
+action now refused, where it used to answer `success:true, persisted:true`) — both §5.25, on
+`v1.12.1`; **`P0-63` and `P?-66`** (§5.13 — the mirrored stop trails and both fills measured);
+**`P0-68`, `P1-69`, `P1-71`** (§5.14); `P0-9`'s mirrored **stop** (§4l) and **target** (§4s);
+`P0-50`'s orphan-stop release (§5.13); `P0-51`, `P1-52`, `P2-41`, `P0-48`; T3's giveback rule (§4g);
+the reconciler + `P0-61`'s fix (§4v); and the ratio converter's slices 2 and 3b (§4z).
+
+> ⚠️ **A deployed default is not an applied default, and session 29 proved it on this box.** The new
+> `StopAttachSeconds` and `MinShadowSessions` defaults only apply to fields *absent* from the stored
+> config; both were present with their old values, so the guard ran with `StopAttachSeconds = 3` after
+> a clean deploy and a green suite. **After changing a default, go and read what the box holds**
+> (§5.25).
 
 > **The remaining `provider: Simulator` caveat is now a narrow one, not a blanket one.** `P0-63`'s
 > detection and its cancel-then-create fallback are proven on a live broker path — a *simulated* one,
@@ -214,27 +243,37 @@ and `POST /api/riskguard/config` merging instead of flattening (`P2-41`, verifie
 # the suite -- ALWAYS build first; --no-build after a failed build silently
 # reports the PREVIOUS assembly's result
 dotnet build tests/RiskGuardTests.csproj -v q --nologo
-dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1053/0
+dotnet run --project tests/RiskGuardTests.csproj --no-build -v q --nologo   # expect 1188/0
 
 # deploy: verify, sync, then recompile IN NT8 (files on disk are not loaded code)
-python tools\sync_nt8.py --verify        # expect ALL IN SYNC (7 files)
+python tools\sync_nt8.py --verify        # expect ALL IN SYNC (8 files)
 python tools\sync_nt8.py
 #   then nt_compile, and read errorCount
 
-# the structural checks (free, instant)
-python tools\check_direction.py          # no addon may name a bridge-owned type
-python tools\check_no_stray_copies.py    # no addon .cs outside addons/
+# the structural checks (free, instant). RUN THESE FIRST -- one of them is red
+# right now and has been for 7 CI runs (see the CI row above).
+python tools\check_version_matches_tag.py     # the constant vs the newest tag
+python tools\check_direction.py               # no addon may name a bridge-owned type
+python tools\check_no_stray_copies.py         # no addon .cs outside addons/
 python tools\check_ci_runs_every_battery.py   # no battery CI does not run
 
-# the mutation batteries. All exit NON-ZERO on a survivor, all five refuse to run
-# from a red baseline -- see §8, they were decorative until 2026-08-13 -- and the
-# two newest also score a CRASH (no result line) as a kill, which the older three
-# do not, because a mutant that crashes the runner read as a SURVIVOR (§5.14).
-python mutation\mutate_cm3.py            # 14 killed   (copier matrix)
-python mutation\mutate_cm4.py            # 10 killed   (copier round-trip)
-python mutation\mutate_p0_63.py          #  7 killed   (ignored Change())
-python mutation\mutate_p1_71.py          #  9 killed   (copy-loop outcome logging)
-python mutation\mutate_p0_67.py          # 10 killed   (ATM stop cache + retry cap)
+# ⚠️ CHECK THE ANCHORS BEFORE TRUSTING ANY BATTERY. A battery finds its mutant by
+# an exact source substring; when an unrelated commit edits that source it prints
+# [SKIP] and scores a SURVIVOR -- but only when run, and a battery only runs when
+# the suite is green. This check reads every MUTANTS list by AST, takes ~1s, and
+# WORKS WHILE THE SUITE IS RED. It found 11 stale anchors in session 29 alone.
+python mutation\check_anchors.py         # expect 205 anchors / 0 broken
+
+# the 18 mutation batteries. All exit NON-ZERO on a survivor and all refuse to run
+# from a red baseline -- see §8, they were decorative until 2026-08-13. The newer
+# ones also score a CRASH (no result line) as a kill, which the oldest three do
+# not, because a mutant that crashes the runner read as a SURVIVOR (§5.14).
+#   guard/copier core: mutate_cm3, mutate_cm4, mutate_p0_63, mutate_p0_67,
+#                      mutate_p1_71, mutate_p1_76
+#   config defaults:   mutate_p182, mutate_p183, mutate_p184, mutate_p185,
+#                      mutate_p187
+#   the UI series:     mutate_ui1 .. mutate_ui7
+ls mutation\mutate_*.py                  # 18 files; do not hand-maintain the list
 
 # free: do all ticket regions still resolve? READ THE LINE RANGES -- a degenerate
 # one-line region also prints OK, and only `kind: line` regions should be one line.
@@ -291,6 +330,14 @@ exit quantity that would have **increased a follower position sitting opposite t
   follower fewer than the config implies.
 
 <details><summary>Earlier headers, kept for the record</summary>
+
+**Sessions 20–29, 2026-08-13** — the ten sessions this block failed to track, which is why it was
+11 tags stale. `v1.1.0` → **`v1.12.1`**, suite 1003 → **1188**, 5 batteries → **18**. In order: the
+five live-trade defects fixed (§5.14); the MCP wrapper widened, 5 arguments → 19 and 3 actions → 11,
+opening four defects (§5.16); the feature audit and the UI design pass, which found a **third risk
+system** in neither repo, `RiskGatekeeper.cs` (§5.17–§5.19); `UI1`…`UI7` — the rule inventory, the
+copier conformance view, the browser page, refusals that say why (§5.20–§5.24); and session 29, which
+**applied every config default** and closed `P1-82`…`P1-89` while opening `P1-90` (§5.25).
 
 **Sessions 17–19, 2026-08-13** — `P0-63` (remedy 3) and `P?-66`'s instrumentation shipped, suite
 953/0, three mutation batteries; then the documentation pass (§5.10, §5.12); then **the live
@@ -2963,8 +3010,13 @@ were triaged.
 
 > ✅ **`P0-67`, `P0-68`, `P1-69`, `P1-70` and `P1-71` were all FIXED, DEPLOYED and (where
 > observable) LIVE-VALIDATED on 2026-08-13 — §5.14.** They are struck from the table below rather
-> than deleted, because the digits are never reused. Suite **1003/0**, five mutation batteries,
-> 0 survivors. Core is tag **`v1.1.0`**, bridge pin bumped to match.
+> than deleted, because the digits are never reused.
+>
+> ⚠️ **The state figures that used to sit in this banner have been removed rather than updated.**
+> It said "suite 1003/0, five mutation batteries, core is tag `v1.1.0`, bridge pin bumped to match"
+> — every number wrong by session 29, and the pin claim wrong *today* (it vendors `v1.12.0` against a
+> `v1.12.1` core, and the range touches `addons/GuardRules.cs`). **Current state lives in exactly one
+> place, §0, and is derived there.** A second copy of a number is a second thing to forget.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
@@ -3080,6 +3132,24 @@ and `P?-65` together and makes the redesign testable.
 
 **Updated 2026-08-13 (session 29).** ⚠️ **`P1-90` goes first and it is not close.** Everything below
 it is the previous ordering with the finished items struck through.
+
+> ### ⚠️ Two mechanical chores come before any of it, and the second one BLOCKS `P1-90`
+>
+> Both were found by re-measuring for the §0 pass, not by a review. Neither is a defect in the guard;
+> both are the repo lying about itself.
+>
+> **A. Bump `Version` to `1.12.1`** (`addons/RiskGuardAddOn.cs:39`, currently `1.10.0`). This is
+> **why CI has been red for 7 runs** — `tools/check_version_matches_tag.py` is correct and was written
+> for precisely this. It is one line, but the live box currently answers `1.10.0` to
+> `GET /api/riskguard/version` while running `v1.12.1`, so finishing it means `sync_nt8.py` **and** a
+> recompile. Do it in the same commit as the next tag, which is what the gate asks for.
+>
+> **B. Bump the bridge's submodule pin to `v1.12.1`** (`nt8-mcp-bridge`, vendors `v1.12.0`).
+> ⚠️ **This is not cosmetic and not the usual harmless lag: the 3-commit range touches
+> `addons/GuardRules.cs`, so deploying the bridge today would overwrite the live, correct file with
+> the older one.** `deploy.py` refuses (exit 2) — which means **`P1-90` cannot be deployed until the
+> pin moves**, because the fix lands in the bridge and `deploy.py` ships bridge + vendored core
+> together. Bump the pin first, then fix `P1-90`, then deploy once.
 
 0. ⚠️ **`P1-90` — an order naming an unresolvable account is placed on an arbitrary one.**
    `nt8-mcp-bridge`, three call sites, and the fix is the one `P1-85` already established: **refuse**.
