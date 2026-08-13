@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 // The NinjaTrader type stubs that used to live here (namespaces NinjaTrader.Cbi,
@@ -158,6 +159,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder();
             TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
             TestP113_ConcurrentGuardEventsDoNotCorruptState();
+            TestP225_NewsShieldLoadsEventsFromDisk();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18970,6 +18972,55 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Verify FSM state is consistent after concurrent access
             var fsm = addon.TestGetFsm("P113Stress", "MNQ 03-26");
             Assert(fsm != null, "the FSM was created for the concurrent position events");
+        }
+
+        // ================================================================================
+        // P2-25: the news shield can never fire in production because _newsEvents is
+        // never loaded from disk. Fix: LoadNewsEventsFromDisk reads a JSON file and
+        // populates _newsEvents, called from UpdateConfig when a path is configured.
+        // ================================================================================
+
+        private static void TestP225_NewsShieldLoadsEventsFromDisk()
+        {
+            Console.WriteLine("\n[TEST] P2-25: the news shield loads events from disk");
+
+            var suite = PropFirmProtectionSuite.Instance;
+            var savedConfig = suite.Config;
+            suite.UpdateConfig(new PropFirmProtectionConfig { EnableNewsShield = true });
+
+            // Write a temporary JSON file with a news event
+            string tempPath = Path.GetTempFileName();
+            try
+            {
+                var ev = new EconomicNewsEvent
+                {
+                    EventTimeUtc = DateTime.UtcNow,
+                    Title = "CPI Release",
+                    Currency = "USD",
+                    Impact = "High"
+                };
+                File.WriteAllText(tempPath, JsonConvert.SerializeObject(new[] { ev }));
+
+                int before = suite.NewsEventCount;
+                suite.LoadNewsEventsFromDisk(tempPath);
+                int after = suite.NewsEventCount;
+
+                Assert(after > before,
+                    "P2-25: LoadNewsEventsFromDisk populates the event list -- the news shield can now fire");
+
+                bool inWindow = suite.IsInNewsWindow(DateTime.UtcNow, 2, 2);
+                Assert(inWindow,
+                    "P2-25: IsInNewsWindow returns true for an event at the current time with a 2-minute buffer");
+            }
+            finally
+            {
+                File.Delete(tempPath);
+                // Restore singleton state so other tests are not affected
+                lock (suite)
+                {
+                    suite.UpdateConfig(savedConfig ?? new PropFirmProtectionConfig());
+                }
+            }
         }
     }
 }

@@ -80,6 +80,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // P2-25: load news events from LocalNewsEventsFilePath. This is the loader
+        // that was missing -- without it, _newsEvents is always empty and the news
+        // shield can never fire. Called from UpdateConfig when a config with a
+        // non-empty path is applied, and can be called directly to refresh.
+        public void LoadNewsEventsFromDisk(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+            try
+            {
+                string json = File.ReadAllText(filePath);
+                var events = JsonConvert.DeserializeObject<List<EconomicNewsEvent>>(json);
+                if (events != null)
+                {
+                    lock (_lock)
+                    {
+                        _newsEvents.Clear();
+                        _newsEvents.AddRange(events);
+                    }
+                }
+            }
+            catch { }
+        }
+
         public void UpdateConfig(PropFirmProtectionConfig config, bool confirmLive = false)
         {
             if (config == null) return;
@@ -94,6 +117,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Config = config;
             }
+
+            // P2-25: load news events if a path is configured
+            if (!string.IsNullOrEmpty(config.LocalNewsEventsFilePath))
+                LoadNewsEventsFromDisk(config.LocalNewsEventsFilePath);
         }
 
         public bool IsInNewsWindow(DateTime nowUtc, int bufferMinutesBefore, int bufferMinutesAfter)
