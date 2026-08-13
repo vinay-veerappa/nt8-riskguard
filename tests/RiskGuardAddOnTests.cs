@@ -133,6 +133,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
             TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan();
             TestF9_TheDeployedFirmMappingPassesPreflight();
+            TestF9b_AMappingToAnAccountThatDoesNotExistFailsPreflight();
+            TestF9b_APlanWhoseStatedSizeContradictsTheAccountFailsPreflight();
+            TestF9b_AnUnstatedSizeAndAnAbsentAccountAreDifferentThings();
             TestP292_AShadowBreachMustNotStopTheAccountTrading();
             TestP292_EveryRuleLockoutRecordsWhetherItCouldAct();
             TestP292_SwitchingToShadowIsNotALockoutBypass();
@@ -10083,6 +10086,202 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Account.All = previousAccounts;
             }
+        }
+
+        // ================================================================================
+        // F-9b -- the firm mapping has to be machine-checked, because it is hand-written.
+        //
+        // `F-9` put five accounts in `AccountFirmMap` on the live box. Two things about that map
+        // are unverifiable by reading it, and both fail SILENTLY -- the account simply falls back
+        // to the top-level block, which is deliberately disabled, so the result is no firm
+        // protection and nothing saying so:
+        //
+        //   1. AN ACCOUNT NAME THAT DOES NOT EXIST. Five names is five chances at a typo, and the
+        //      operator's own spelling of `Sim_All_Day_ORB` in the session that mapped it used a
+        //      HYPHEN. `ResolveEffectiveFirmConfig` is OrdinalIgnoreCase but it cannot invent an
+        //      account. This is `P1-90`'s class -- a name that does not resolve -- one layer out:
+        //      there it placed an order on the wrong account, here it removes protection from the
+        //      right one.
+        //
+        //   2. A PLAN WHOSE STATED SIZE CONTRADICTS THE ACCOUNT. `FirmProfiles` is keyed by plan
+        //      (`Apex-100K`) precisely because one dollar amount cannot serve a 50k and a 100k,
+        //      and the box holds both. Nothing checks that the account behind a `-100K` key is a
+        //      100k account. Mapping a 50k account to a 100k plan puts the guard's floor BELOW the
+        //      firm's own threshold, so the firm fails you before the guard speaks -- which is
+        //      CONFIG_DEFAULTS R3's stated failure mode, in the direction that costs money.
+        //
+        // ⚠️ These tests deliberately go through `RunPreflight` and name no new symbol. Two
+        // reasons. Preflight is where the existing firm-mirror validation already lives (`P2-8`
+        // refuses to arm on a mapped firm that is absent from `FirmProfiles`), so it is the honest
+        // home. And a test that named a new helper could be satisfied by exposing that helper
+        // without ever calling it from anything -- which is `P1-77`'s shape, and this file's whole
+        // subject.
+        //
+        // ⚠️ Preflight refusing is the fail-closed direction and it is also a real cost: the guard
+        // does not arm, so there is no protection until the config is corrected. That is the right
+        // trade only because the refusal NAMES the fix. Every assertion below therefore checks the
+        // message content, not just the verdict.
+        // ================================================================================
+
+        /// <summary>
+        /// Builds a config with one plan and one mapping, so each test varies exactly one thing.
+        /// The plan's numbers are the recovered Apex research; only `AccountSize` and the mapped
+        /// name change between tests.
+        /// </summary>
+        private static RiskConfig F9bConfig(string mappedAccount, string planKey, double planSize)
+        {
+            var cfg = new RiskConfig();
+            cfg.Mode = "shadow";
+            cfg.FirmMirror.Enabled = true;
+            cfg.FirmMirror.TrailingDD.Enabled = false;
+            cfg.FirmMirror.DailyLoss.Enabled = false;
+            cfg.FirmMirror.FirmProfiles[planKey] = new FirmProfile
+            {
+                Name = planKey,
+                AccountSize = planSize,
+                TrailingDD = new FirmTrailingDDConfig
+                {
+                    Enabled = true, Type = "eod", IncludesUnrealized = false,
+                    Amount = 2000.0, Buffer = 200.0
+                },
+                DailyLoss = new FirmDailyLossConfig
+                {
+                    Enabled = true, Basis = "include_unrealized_peak", Amount = 1000.0, Buffer = 100.0
+                }
+            };
+            cfg.FirmMirror.AccountFirmMap[mappedAccount] = planKey;
+            return cfg;
+        }
+
+        private static PreflightResultView F9bPreflight(RiskConfig cfg, params Account[] accounts)
+        {
+            var previous = Account.All;
+            try
+            {
+                Account.All = accounts.ToList();
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigForTest(cfg);
+                addon.SetModeForTest(cfg.Mode);
+                var r = addon.RunPreflight();
+                return new PreflightResultView { Passed = r.Passed, Code = r.FailureCode, Message = r.FailureMessage };
+            }
+            finally { Account.All = previous; }
+        }
+
+        private class PreflightResultView
+        {
+            public bool Passed;
+            public string Code;
+            public string Message;
+        }
+
+        private static Account F9bAccount(string name, double cash)
+        {
+            var a = new Account { Name = name };
+            a.Values[AccountItem.CashValue] = cash;
+            a.Values[AccountItem.UnrealizedProfitLoss] = 0.0;
+            a.Values[AccountItem.RealizedProfitLoss] = 0.0;
+            return a;
+        }
+
+        /// <summary>
+        /// A mapping to a name no account has must refuse to arm, and must NAME the name.
+        /// Silently falling back is how `F-9` would deliver no protection while reading as
+        /// configured -- the exact state `F-9` was built to end.
+        /// </summary>
+        private static void TestF9b_AMappingToAnAccountThatDoesNotExistFailsPreflight()
+        {
+            Console.WriteLine("\n[TEST] F-9b: a firm mapping naming an account that does not exist fails preflight");
+
+            // The real typo: the live account is Sim_All_Day_ORB, with underscores.
+            var typo = F9bConfig("Sim_All_Day-ORB", "Apex-100K", 100000.0);
+            var bad = F9bPreflight(typo, F9bAccount("Sim_All_Day_ORB", 49833.70));
+
+            Assert(!bad.Passed, "a mapping to a non-existent account refuses to arm");
+            Assert(bad.Message != null
+                   && bad.Message.IndexOf("Sim_All_Day-ORB", StringComparison.Ordinal) >= 0,
+                "and the refusal names the account that does not resolve, so the operator can see "
+                + "WHICH of the mappings is wrong: " + (bad.Message ?? "<null>"));
+
+            // The paired positive: the same mapping, spelled correctly, arms. Without this, a
+            // preflight that refused everything would pass the assertions above.
+            var ok = F9bConfig("Sim_All_Day_ORB", "Apex-100K", 50000.0);
+            var good = F9bPreflight(ok, F9bAccount("Sim_All_Day_ORB", 49833.70));
+            Assert(good.Passed, string.Format(
+                "the correctly-spelled mapping still arms (got {0}: {1})", good.Code, good.Message));
+        }
+
+        /// <summary>
+        /// A plan states the account size its dollar amounts came from. If the account behind it
+        /// is a different size, the numbers are wrong in one direction or the other, and the
+        /// dangerous direction is a floor BELOW the firm's own threshold.
+        /// </summary>
+        private static void TestF9b_APlanWhoseStatedSizeContradictsTheAccountFailsPreflight()
+        {
+            Console.WriteLine("\n[TEST] F-9b: a plan whose stated account size contradicts the account fails preflight");
+
+            // A 100k account mapped to a plan researched for 50k.
+            var wrong = F9bConfig("Sim-ORB", "TakeProfitTrader-50K", 50000.0);
+            var bad = F9bPreflight(wrong, F9bAccount("Sim-ORB", 100170.0));
+
+            Assert(!bad.Passed, "a 100k account mapped to a 50k plan refuses to arm");
+            Assert(bad.Message != null
+                   && bad.Message.IndexOf("TakeProfitTrader-50K", StringComparison.Ordinal) >= 0
+                   && bad.Message.IndexOf("50000", StringComparison.Ordinal) >= 0
+                   && bad.Message.IndexOf("100170", StringComparison.Ordinal) >= 0,
+                "and the refusal names the plan and BOTH numbers, because 'size mismatch' without "
+                + "them is not actionable: " + (bad.Message ?? "<null>"));
+
+            // Ordinary drawdown is not a mismatch. A 50k account down 2,300 must still arm, or
+            // this check fires on a normal week and gets switched off -- CONFIG_DEFAULTS R5.
+            var drawn = F9bConfig("Sim_All_Day_ORB", "TakeProfitTrader-50K", 50000.0);
+            var stillOk = F9bPreflight(drawn, F9bAccount("Sim_All_Day_ORB", 47700.0));
+            Assert(stillOk.Passed, string.Format(
+                "a 50k account drawn down to 47,700 is still a 50k account and still arms (got {0}: {1})",
+                stillOk.Code, stillOk.Message));
+        }
+
+        /// <summary>
+        /// The two ways this check must NOT over-apply, paired in one test because they are the
+        /// same mistake: treating "I cannot check this" as "this is wrong".
+        ///
+        /// An UNSTATED size (0) is not an error -- the check is opt-in per plan, or an operator
+        /// adding a plan is locked out of arming until they have researched a number they may not
+        /// have. And an account reporting ZERO equity cannot be size-checked at all: 89 of the 96
+        /// accounts on the live box read zero because they are expired or unconnected, and
+        /// refusing to arm over those would mean the guard never arms on that box again.
+        ///
+        /// ⚠️ But the EXISTENCE check still applies to a zero-equity account. It exists, so a
+        /// mapping to it is legitimate; it is only its SIZE that is unknowable.
+        /// </summary>
+        private static void TestF9b_AnUnstatedSizeAndAnAbsentAccountAreDifferentThings()
+        {
+            Console.WriteLine("\n[TEST] F-9b: an unstated plan size and a zero-equity account are not errors; a missing account is");
+
+            // (1) AccountSize = 0 means "not stated". Nothing to check, so nothing fails, even
+            // though the equity is nowhere near any plausible plan size.
+            var unstated = F9bConfig("Sim-ORB", "Apex-Unstated", 0.0);
+            var r1 = F9bPreflight(unstated, F9bAccount("Sim-ORB", 100170.0));
+            Assert(r1.Passed, string.Format(
+                "a plan that states no account size is checked for nothing (got {0}: {1})", r1.Code, r1.Message));
+
+            // (2) A zero-equity account is real but unmeasurable. It must not fail the SIZE check.
+            var expired = F9bConfig("APEX10121500000151", "Apex-100K", 100000.0);
+            var r2 = F9bPreflight(expired,
+                F9bAccount("APEX10121500000151", 0.0), F9bAccount("Sim101", 99482.0));
+            Assert(r2.Passed, string.Format(
+                "an account reporting zero equity is not size-checked -- 89 of 96 on the live box "
+                + "read zero (got {0}: {1})", r2.Code, r2.Message));
+
+            // (3) ...but it is still EXISTENCE-checked. Remove it from the platform and the same
+            // mapping must refuse. This is what stops (2) from being a hole big enough to swallow
+            // the whole check.
+            var r3 = F9bPreflight(expired, F9bAccount("Sim101", 99482.0));
+            Assert(!r3.Passed
+                   && r3.Message != null
+                   && r3.Message.IndexOf("APEX10121500000151", StringComparison.Ordinal) >= 0,
+                "a mapping to an account the platform does not report still refuses, even though "
+                + "its size could never have been checked: " + (r3.Message ?? "<null>"));
         }
 
         // ================================================================================

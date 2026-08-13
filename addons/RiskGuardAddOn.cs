@@ -5569,6 +5569,24 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class FirmProfile
     {
         public string Name { get; set; } = "";
+
+        /// <summary>
+        /// The account size these dollar amounts were derived for, or 0 for "not stated".
+        ///
+        /// CONFIG_DEFAULTS R3: a dollar limit is derived from the account, never guessed. None of
+        /// the four researched profiles stated a size, which is why `Apex` carried 2000 while Apex
+        /// publishes 2500 on a 50k and 3000 on a 100k -- tighter than the firm's own number, which
+        /// is the safe direction, but nothing in the file said which direction it was. Keys are
+        /// now plan names (`Apex-100K`), and this is the machine-readable half of that: preflight
+        /// compares it against the account's observed equity, so a 100k account mapped to a 50k
+        /// plan is refused instead of silently protected at the wrong threshold.
+        ///
+        /// 0 means unstated and is NOT an error -- the check is opt-in per plan, because an
+        /// operator adding a plan should not be blocked from arming until they have researched a
+        /// number they may not have. A plan that states nothing is checked for nothing.
+        /// </summary>
+        public double AccountSize { get; set; } = 0.0;
+
         public FirmTrailingDDConfig TrailingDD { get; set; } = new FirmTrailingDDConfig();
         public FirmDailyLossConfig DailyLoss { get; set; } = new FirmDailyLossConfig();
     }
