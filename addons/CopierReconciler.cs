@@ -151,6 +151,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
     }
 
+    // P3-31 stub: exists so the acceptance tests compile. The real implementation
+    // is the agent loop's job. This stub makes every assertion fail, which is the
+    // baseline-red gate the loop requires (tests must be failing, not uncompilable).
+    internal class InFlightLedger
+    {
+        private readonly int _timeoutSeconds;
+        public InFlightLedger(int timeoutSeconds = 30) { _timeoutSeconds = timeoutSeconds; }
+        public int Count { get { return 0; } }
+        public void Register(string accountName, string instrumentFullName, string legName) { }
+        public void Settle(string accountName, string instrumentFullName, string legName) { }
+        public void Fail(string accountName, string instrumentFullName, string legName) { }
+        public bool IsInFlight(string accountName, string instrumentFullName, string legName) { return false; }
+        public void PurgeExpired() { }
+    }
+
     internal static class CopierBracketReconciler
     {
         /// <summary>
