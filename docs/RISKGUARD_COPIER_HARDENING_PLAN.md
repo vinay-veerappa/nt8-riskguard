@@ -3560,12 +3560,8 @@ V12 registers the master's expected position **before** submitting and rolls the
 if the submit returns null. Adopting this fixes P0-2 structurally and gives the reconciler a
 precise "expected vs actual" to compare, instead of inferring intent from order names.
 
-### P3-32. Follower risk anchored to the follower's own fill
-V12's Symmetry Guard resolves an `AnchorSnapshot` from the master's weighted fill and sizes
-followers with a `SlippageCushionPoints` reserve so follower dollar risk cannot exceed the cap
-even on a worse fill. Our copier has no equivalent. Minimum viable version: after the follower
-fill, compute realised dollar risk from the follower's actual fill and the mirrored stop; if it
-exceeds the relationship cap, reduce the position immediately rather than at the next evaluation.
+### P3-32. Follower risk anchored to the follower's own fill — SUPERSEDED by P0-9, CLOSED 2026-08-13
+**Verified**: `FollowerBracket.FollowerEntryPrice` is the follower's own average fill (`bracket.FollowerEntryPrice = pos.AveragePrice` at `TradeCopierEngine.cs:4558`). The stop and target offsets are SIGNED and applied to the follower's entry, not the leader's (`ComputeDesiredBracket` in `CopierReconciler.cs` uses `followerEntryPrice + stopOffset`). This is precisely "follower risk anchored to the follower's own fill". P0-9 is fully implemented and live-validated (§5.13). P3-32 is superseded and closed.
 
 ### P3-33. Replace the global lock on the hot path
 V12 enforces zero `lock()` via an `Enqueue(ctx => …)` actor model, so no event handler can ever
