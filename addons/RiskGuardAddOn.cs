@@ -258,6 +258,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Per-position guard state machines (see -6 of RiskGuardAddOn.md).
         // Keyed by "accountName|instrumentFullName". All access under _stateLock.
         private readonly Dictionary<string, PositionGuardFsm> _guardFsms = new Dictionary<string, PositionGuardFsm>();
+        private System.Threading.Timer _auditTimer;
+        private int _auditIntervalSeconds = 10;
 
         // Pending-stop buffer: stops whose OrderUpdate arrived before PositionUpdate
         // (possible per NT8 event ordering). Keyed by "accountName|instrumentFullName".
@@ -446,6 +448,43 @@ namespace NinjaTrader.NinjaScript.AddOns
         // DEV/TESTING API
         // -
 #if TESTING
+        private void StartAuditTimer()
+        {
+            StopAuditTimer();
+
+            int seconds = _config != null ? _config.AuditIntervalSeconds : _auditIntervalSeconds;
+            if (seconds <= 0)
+                return;
+
+            _auditTimer = new System.Threading.Timer(
+                state =>
+                {
+                    try
+                    {
+                        RunGuardAudit();
+                    }
+                    catch (Exception ex)
+                    {
+                        LogEvent("RiskGuard", "AUDIT_TIMER_ERROR",
+                            $"Audit timer callback failed: {ex}");
+                    }
+                },
+                null,
+                TimeSpan.FromSeconds(seconds),
+                TimeSpan.FromSeconds(seconds));
+        }
+
+        private void StopAuditTimer()
+        {
+            var timer = _auditTimer;
+            if (timer != null)
+            {
+                timer.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                timer.Dispose();
+                _auditTimer = null;
+            }
+        }
+
         internal void SetConfigForTest(RiskConfig cfg)
         {
             _config = cfg;
@@ -564,7 +603,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (_stateLock) { _guardFsms[FsmKey(accountName, instrument)] = fsm; }
         }
-        internal void RunAuditNow() { }
+        internal void RunAuditNow() { RunGuardAudit(); }
 
         // --- pending-stop buffer seams (P1-14) ---
         internal int TestPendingStopCount(string accountName, string instrument)
@@ -2989,6 +3028,125 @@ namespace NinjaTrader.NinjaScript.AddOns
                         ArmGraceTimer(fsm, account, fsm.Instrument, 250);
                     }
                 }
+            }
+        }
+
+        private struct FsmAuditSnapshot
+        {
+            public string AccountName;
+            public string Instrument;
+            public GuardFsmState State;
+            public long CoveredQuantity;
+            public long PositionQuantity;
+        }
+
+        private void RunGuardAudit()
+        {
+            var fsmSnapshot = new Dictionary<string, FsmAuditSnapshot>();
+            lock (_stateLock)
+            {
+                foreach (var kv in _guardFsms)
+                {
+                    var fsm = kv.Value;
+                    fsmSnapshot[kv.Key] = new FsmAuditSnapshot
+                    {
+                        AccountName = fsm.AccountName,
+                        Instrument = fsm.Instrument,
+                        State = fsm.State,
+                        CoveredQuantity = fsm.CoveredQuantity,
+                        PositionQuantity = fsm.PositionQuantity
+                    };
+                }
+            }
+
+            try
+            {
+                foreach (Account account in Account.All)
+                {
+                    string accountName = account.Name;
+
+                    var positionsByInstrument = new Dictionary<string, Position>();
+                    foreach (Position pos in account.Positions)
+                    {
+                        string instrument = pos.Instrument == null ? string.Empty : pos.Instrument.ToString();
+                        if (string.IsNullOrEmpty(instrument))
+                            continue;
+                        positionsByInstrument[instrument] = pos;
+                    }
+
+                    var workingStopsByInstrument = new Dictionary<string, int>();
+                    foreach (Order order in account.Orders)
+                    {
+                        if (order == null || order.Instrument == null)
+                            continue;
+
+                        bool isWorking = order.OrderState == OrderState.Working || order.OrderState == OrderState.Accepted;
+                        if (!isWorking)
+                            continue;
+
+                        bool isStop = order.OrderType == OrderType.StopMarket || order.OrderType == OrderType.StopLimit;
+                        if (!isStop)
+                            continue;
+
+                        string instrument = order.Instrument.ToString();
+                        if (string.IsNullOrEmpty(instrument))
+                            continue;
+
+                        if (workingStopsByInstrument.ContainsKey(instrument))
+                            workingStopsByInstrument[instrument]++;
+                        else
+                            workingStopsByInstrument[instrument] = 1;
+                    }
+
+                    foreach (var posKv in positionsByInstrument)
+                    {
+                        string instrument = posKv.Key;
+                        Position pos = posKv.Value;
+                        string fsmKey = accountName + "|" + instrument;
+                        bool hasFsm = fsmSnapshot.TryGetValue(fsmKey, out FsmAuditSnapshot fsm);
+                        bool isProtected = hasFsm && fsm.State == GuardFsmState.Protected;
+                        long covered = hasFsm ? fsm.CoveredQuantity : 0;
+                        long positionQty = pos.Quantity;
+                        if (!isProtected || covered < positionQty)
+                        {
+                            long gap = Math.Max(0, positionQty - covered);
+                            string stateName = hasFsm ? fsm.State.ToString() : "MISSING";
+                            LogEvent(accountName, "NAKED_POSITION",
+                                $"{instrument}: position={positionQty}, fsmState={stateName}, covered={covered}, gap={gap}");
+                        }
+                    }
+
+                    foreach (var stopKv in workingStopsByInstrument)
+                    {
+                        string instrument = stopKv.Key;
+                        bool hasPosition = positionsByInstrument.TryGetValue(instrument, out Position pos) && pos.Quantity != 0;
+                        string fsmKey = accountName + "|" + instrument;
+                        bool hasFsm = fsmSnapshot.ContainsKey(fsmKey);
+                        if (!hasPosition || !hasFsm)
+                        {
+                            LogEvent(accountName, "ORPHAN_STOP",
+                                $"{instrument}: workingStopCount={stopKv.Value}, hasPosition={hasPosition}, hasFsm={hasFsm}");
+                        }
+                    }
+
+                    foreach (FsmAuditSnapshot fsm in fsmSnapshot.Values)
+                    {
+                        if (fsm.AccountName != accountName)
+                            continue;
+                        if (fsm.State != GuardFsmState.Protected)
+                            continue;
+                        if (!workingStopsByInstrument.ContainsKey(fsm.Instrument))
+                        {
+                            LogEvent(accountName, "FSM_DIVERGENCE",
+                                $"{fsm.Instrument}: FSM claims Protected but no working stop order");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogEvent("RiskGuard", "AUDIT_TIMER_ERROR",
+                    $"RunGuardAudit failed: {ex}");
             }
         }
 
@@ -5697,6 +5855,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // nothing at all. Five is roughly a week of sessions watched without the guard wanting
         // to intervene wrongly, before it can be pointed at live money.
         public int MinShadowSessions { get; set; } = 5;
+        public int AuditIntervalSeconds { get; set; } = 10;
         public Dictionary<string, PerInstrumentRiskConfig> InstrumentLimits { get; set; } = new Dictionary<string, PerInstrumentRiskConfig>(StringComparer.OrdinalIgnoreCase);
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<string> BlockedInstruments { get; set; } = new List<string>();
