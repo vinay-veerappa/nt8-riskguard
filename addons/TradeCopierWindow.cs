@@ -21,7 +21,16 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         public static TradeCopierAddOn Instance { get; private set; }
         private NTMenuItem _menuItem;
+        private NTMenuItem _riskGuardMenuItem;
         private ControlCenter _controlCenter;
+
+        /// <summary>
+        /// Where the browser UI lives. The bridge's listener defaults to this and the prefix is
+        /// overridable by NT8_MCP_PREFIX, so this is the DEFAULT rather than a guarantee -- if the
+        /// prefix has been changed for a VPN, the menu item points at the wrong place and the
+        /// browser says so plainly, which is better than this addon guessing.
+        /// </summary>
+        private const string RiskGuardUiUrl = "http://localhost:7890/ui";
 
         protected override void OnStateChange()
         {
@@ -70,6 +79,46 @@ namespace NinjaTrader.NinjaScript.AddOns
                     };
 
                     existingMenuItem.Items.Add(_menuItem);
+
+                    // ── the browser UI (design section 7.4) ───────────────────────────────
+                    // ~20 lines and near-zero assembly risk, which is the whole argument for a
+                    // browser page over WPF: every line of UI code compiled into NT8 is a line
+                    // that can stop the risk guard from loading, and this is all of it.
+                    //
+                    // No token in the URL. The page asks for it once and keeps it in
+                    // localStorage; putting it here would land it in browser history and in the
+                    // referrer of every request the page makes.
+                    _riskGuardMenuItem = new NTMenuItem
+                    {
+                        Header = "RiskGuard Inventory (browser)",
+                        Style = Application.Current.TryFindResource("MainMenuItem") as Style
+                    };
+
+                    _riskGuardMenuItem.Click += (s, e) =>
+                    {
+                        try
+                        {
+                            // UseShellExecute so this is the DEFAULT browser rather than a
+                            // hardcoded one; on .NET Framework it defaults true, but say it.
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                            {
+                                FileName = RiskGuardUiUrl,
+                                UseShellExecute = true
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            // The likely cause is the bridge not running -- the page is served by
+                            // nt8-mcp-bridge, not by this addon -- so say that rather than just
+                            // reporting the exception.
+                            NinjaTrader.Code.Output.Process(
+                                "[TradeCopierAddOn] Could not open " + RiskGuardUiUrl + ": " + ex.Message
+                                + ". The page is served by the MCP bridge add-on; if that is not loaded, "
+                                + "there is nothing listening on that port.", PrintTo.OutputTab1);
+                        }
+                    };
+
+                    existingMenuItem.Items.Add(_riskGuardMenuItem);
                 }
                 catch (Exception ex)
                 {
@@ -83,11 +132,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             ControlCenter cc = window as ControlCenter;
             if (cc == null) return;
 
+            NTMenuItem existingMenuItem = cc.FindFirst("ControlCenterMenuItemNew") as NTMenuItem;
+
             if (_menuItem != null)
             {
-                NTMenuItem existingMenuItem = cc.FindFirst("ControlCenterMenuItemNew") as NTMenuItem;
                 existingMenuItem?.Items.Remove(_menuItem);
                 _menuItem = null;
+            }
+
+            // Both items, or the second one accumulates a duplicate every time the Control
+            // Center is closed and reopened.
+            if (_riskGuardMenuItem != null)
+            {
+                existingMenuItem?.Items.Remove(_riskGuardMenuItem);
+                _riskGuardMenuItem = null;
             }
         }
     }

@@ -430,8 +430,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ? Off("news shield disabled")
                     : R(null, null, c.NewsEventCount,
                         c.NewsEventCount == 0
-                            ? "P2-25: no news events are loaded, so this can never fire. "
-                              + "LocalNewsEventsFilePath is parsed and read by no loader."
+                            ? "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "
+                              + "stored in the config and nothing ever opens it. (P2-25)"
                             : null)
             },
 
@@ -439,37 +439,38 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardRuleDefinition {
                 Name = "Consistency / daily-profit cap", ConfigPath = "PropFirm.EnableConsistencyCap",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "P1-77. EnableConsistencyCap defaults to TRUE and appears at "
-                    + "exactly two sites -- its declaration and the JSON parser. No evaluator "
-                    + "exists anywhere, so this has never capped anything. It covers an "
-                    + "account-FAILURE condition on a funded evaluation."
+                UnevaluatedReason = "NO CODE READS THIS. It is switched ON by default and has "
+                    + "never capped anything -- the setting exists in the file and in the parser, "
+                    + "and nowhere else. It is meant to cover a condition that FAILS a funded "
+                    + "evaluation account. (P1-77)"
             },
             new GuardRuleDefinition {
                 Name = "Consistency cap threshold", ConfigPath = "PropFirm.MaxDailyProfitPctOfTarget",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "P1-77. The threshold for a cap that is evaluated nowhere."
+                UnevaluatedReason = "NO CODE READS THIS. It is the threshold for the cap above, "
+                    + "which is itself evaluated nowhere. (P1-77)"
             },
             new GuardRuleDefinition {
                 Name = "News events file", ConfigPath = "PropFirm.LocalNewsEventsFilePath",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "P2-25, and this is the CAUSE of the news shield being INERT: "
-                    + "the path is parsed out of the config and read by NO loader, so the event "
-                    + "list is always empty. Fixing this one field is what makes the shield real."
+                UnevaluatedReason = "NO CODE READS THIS, and it is WHY the news shield below can "
+                    + "never fire: the path is stored but nothing ever opens it, so the event list "
+                    + "is always empty. Loading this one file is what would make the shield real. "
+                    + "(P2-25)"
             },
             new GuardRuleDefinition {
                 Name = "Auto day filler", ConfigPath = "PropFirm.EnableAutoDayFiller",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "Parsed and evaluated nowhere. Unlike the consistency cap "
-                    + "this one defaults to FALSE, so it is a dead option rather than a lie."
+                UnevaluatedReason = "NO CODE READS THIS. Unlike the cap above it is switched OFF "
+                    + "by default, so it is a dead option rather than a false promise."
             },
             new GuardRuleDefinition {
                 Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLive",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
-                UnevaluatedReason = "Found 2026-08-13 while building this registry. It is read by "
-                    + "its own safety gate (PropFirmProtectionSuite.cs:73) and by the parser, and "
-                    + "by NOTHING ELSE -- no prop rule consults it before acting. The prop rules "
-                    + "are gated by the GUARD's mode instead, so this flag protects nothing and "
-                    + "an operator reading it would draw the wrong conclusion either way."
+                UnevaluatedReason = "THIS SWITCH DOES NOTHING. No prop-firm rule checks it before "
+                    + "acting -- they are gated by the GUARD's mode and arming instead. So turning "
+                    + "it on does not enable them, and turning it off does not disable them. "
+                    + "(P1-81)"
             },
         };
 

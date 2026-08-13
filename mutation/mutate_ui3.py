@@ -115,7 +115,7 @@ MUTANTS = [
     ("the consistency cap gets a DO-NOTHING evaluator, which is exactly the instinct the\n"
      "     header of this file warns against: it converts an honest red row into a green\n"
      "     one without enforcing anything",
-     '                UnevaluatedReason = "P1-77. EnableConsistencyCap defaults to TRUE and appears at "',
+     '                UnevaluatedReason = "NO CODE READS THIS. It is switched ON by default and has "',
      '                Evaluator = c => R(null, null, 1),\n'
      '                UnevaluatedReason = "P1-77. EnableConsistencyCap defaults to TRUE and appears at "'),
 
@@ -135,7 +135,8 @@ MUTANTS = [
 
     ("an unevaluated rule loses its stated reason, so a red row cannot tell the operator\n"
      "     WHY it is red -- which is the only thing that makes it actionable",
-     '                UnevaluatedReason = "P1-77. The threshold for a cap that is evaluated nowhere."',
+     '                UnevaluatedReason = "NO CODE READS THIS. It is the threshold for the cap above, "\n'
+     '                    + "which is itself evaluated nowhere. (P1-77)"',
      '                UnevaluatedReason = null'),
 ]
 
