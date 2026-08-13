@@ -67,7 +67,7 @@ MUTANTS = [
      '            {\n'
      '                return JsonConvert.SerializeObject(\n'
      '                    new { error = "the RiskGuard add-on is not loaded, so no rule inventory exists to report" },\n'
-     '                    _settings);\n'
+     '                    UiJsonSettings);\n'
      '            }\n',
      ''),
 

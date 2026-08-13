@@ -705,7 +705,13 @@ namespace NinjaTrader.NinjaScript.AddOns
     /// </summary>
     public static class GuardSnapshotJson
     {
-        private static readonly JsonSerializerSettings _settings = new JsonSerializerSettings
+        /// <summary>
+        /// The ONE settings object for everything this UI is served. `CopierSnapshotJson` uses it
+        /// too, deliberately: two payloads rendered by one page must not disagree about whether an
+        /// enum is a name or a number, or whether a null survives. Two settings objects would be
+        /// two owners of one fact.
+        /// </summary>
+        internal static readonly JsonSerializerSettings UiJsonSettings = new JsonSerializerSettings
         {
             // camelCase because the only consumer is JavaScript, and the page's field names are
             // then the same characters as these ones.
@@ -792,7 +798,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // reason P2-83 exists, and an operator who only ever opens the fleet view must
                 // still see them.
                 unevaluatedRules = snapshot.UnevaluatedRules
-            }, _settings);
+            }, UiJsonSettings);
         }
 
         public static string ToJson(GuardSnapshot snapshot)
@@ -804,10 +810,118 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return JsonConvert.SerializeObject(
                     new { error = "the RiskGuard add-on is not loaded, so no rule inventory exists to report" },
-                    _settings);
+                    UiJsonSettings);
             }
 
-            return JsonConvert.SerializeObject(snapshot, _settings);
+            return JsonConvert.SerializeObject(snapshot, UiJsonSettings);
+        }
+    }
+
+
+    /// <summary>
+    /// How a CopierSnapshot becomes JSON for the browser UI.
+    ///
+    /// Shares GuardSnapshotJson's settings for the same reasons (enum NAMES, nulls PRESERVED,
+    /// empty lists PRESENT) and adds the one thing the copier needs that the guard does not:
+    /// a SEVERITY RANK.
+    ///
+    /// ⚠️ `CopierConformance`'s own integer order is NOT severity order. It reads
+    /// `Idle=0, Match=1, Shadow=2, Diverged=3, Orphan=4, Quarantined=5`, so a surface that sorted
+    /// by the enum value would put a healthy Idle row FIRST and an ORPHAN -- the leader is flat
+    /// and the follower is still holding a live position nobody is managing -- BELOW a quarantined
+    /// one. That is the single most dangerous row this system can produce, sorted into the middle.
+    ///
+    /// So the rank is stated here, once, and travels on the row. The page sorts by a number it is
+    /// given rather than re-deriving an order, which is the same reason the guard's four states
+    /// are derived in one place: an ordering duplicated into JavaScript is an ordering that drifts.
+    /// </summary>
+    public static class CopierSnapshotJson
+    {
+        /// <summary>
+        /// 0 is WORST. Every enum member must appear; a test asserts completeness AND that this
+        /// disagrees with casting the enum, so sorting by the cast is a visible defect rather
+        /// than an equivalent shortcut.
+        /// </summary>
+        public static int SeverityRank(CopierConformance verdict)
+        {
+            switch (verdict)
+            {
+                // The leader is FLAT and the follower is not. Somebody is holding a live position
+                // that nothing is managing and nothing will close. Worst row this system emits.
+                case CopierConformance.Orphan:      return 0;
+
+                // Both non-flat and they disagree on side or size.
+                case CopierConformance.Diverged:    return 1;
+
+                // Not copying at all. A known state rather than a surprise, but it means the
+                // follower is drifting from the leader for as long as it lasts.
+                case CopierConformance.Quarantined: return 2;
+
+                // Configured and will not act. Not a fault -- but it is the state most often
+                // mistaken for working, so it ranks above the two that ARE working.
+                case CopierConformance.Shadow:      return 3;
+
+                case CopierConformance.Match:       return 4;
+                case CopierConformance.Idle:        return 5;
+            }
+
+            // A value added to the enum and not to this switch. Rank it WORST rather than best:
+            // an unrecognised verdict is not evidence of health, and putting it at the top is how
+            // it gets noticed. The completeness test fails first, which is the real defence.
+            return 0;
+        }
+
+        public static string ToJson(CopierSnapshot snapshot)
+        {
+            if (snapshot == null)
+            {
+                return JsonConvert.SerializeObject(
+                    new { error = "the trade copier is not loaded, so no relationships can be reported" },
+                    GuardSnapshotJson.UiJsonSettings);
+            }
+
+            // The rank travels ON each row so the page sorts by a number it was given. An
+            // ordering duplicated into JavaScript is an ordering that drifts from this one.
+            var rows = new List<object>();
+            foreach (var r in snapshot.Rows ?? new List<CopierSnapshotRow>())
+            {
+                rows.Add(new
+                {
+                    relationshipId = r.RelationshipId,
+                    leaderAccountName = r.LeaderAccountName,
+                    followerAccountName = r.FollowerAccountName,
+                    groupName = r.GroupName,
+                    instrumentFullName = r.InstrumentFullName,
+                    sizingMode = r.SizingMode,
+                    effectiveRatio = r.EffectiveRatio,
+                    isEnabled = r.IsEnabled,
+                    armedForLive = r.ArmedForLive,
+                    isQuarantined = r.IsQuarantined,
+                    quarantineReason = r.QuarantineReason,
+                    stealthMode = r.StealthMode,
+                    leaderSide = r.LeaderSide,
+                    leaderQuantity = r.LeaderQuantity,
+                    expectedSide = r.ExpectedSide,
+                    expectedQuantity = r.ExpectedQuantity,
+                    expectedIsClamped = r.ExpectedIsClamped,
+                    actualSide = r.ActualSide,
+                    actualQuantity = r.ActualQuantity,
+                    // `Measured` is a computed getter on CopierMetric and serializes with the
+                    // value. That pair is the whole of P1-22: these metrics are session-scoped, so
+                    // a bare 0 cannot tell "no copy has filled yet" from "a copy filled and was
+                    // perfect", and that confusion was once misdiagnosed as a broken measurement.
+                    latency = r.Latency,
+                    slippage = r.Slippage,
+                    verdict = r.Verdict,
+                    severity = SeverityRank(r.Verdict)
+                });
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                takenUtc = snapshot.TakenUtc,
+                rows = rows
+            }, GuardSnapshotJson.UiJsonSettings);
         }
     }
 

@@ -1036,6 +1036,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi5_TheJsonRoundTripsBackToTheSameStates();
             TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull();
             TestUi5_TheFleetSummaryIsDerivedFromTheSameRowsItSummarises();
+            TestUi6_AZeroThatWasNeverMeasuredIsNotAZeroThatWas();
+            TestUi6_TheSeverityRankIsNotTheEnumsOwnOrder();
+            TestUi6_TheVerdictAndSidesTravelAsNamesAndTheRankTravelsWithThem();
+            TestUi6_ANullSnapshotSaysSoAndAnEmptyOneIsStillAnAnswer();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -3553,6 +3557,193 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(summary["unevaluatedRules"] != null && summary["unevaluatedRules"].Any(),
                 "the fleet summary still carries the rules nothing evaluates, so they cannot be "
                 + "missed by an operator who never opens an account");
+        }
+
+        // ── UI6: the copier half of the page ─────────────────────────────────────────────
+
+        private static CopierSnapshot Ui6Snapshot()
+        {
+            var rows = new List<CopierSnapshotRow>();
+            // One row per conformance value, so the ordering and the labels are exercised on
+            // every state rather than on the two the live box happens to be in today.
+            var verdicts = new[]
+            {
+                CopierConformance.Idle, CopierConformance.Match, CopierConformance.Shadow,
+                CopierConformance.Diverged, CopierConformance.Orphan, CopierConformance.Quarantined
+            };
+            foreach (var v in verdicts)
+            {
+                rows.Add(new CopierSnapshotRow
+                {
+                    RelationshipId = "rel-" + v,
+                    LeaderAccountName = "Sim101",
+                    FollowerAccountName = "Follower-" + v,
+                    InstrumentFullName = v == CopierConformance.Idle ? null : "MNQ 03-26",
+                    SizingMode = CopierSizingMode.QuantityRatio,
+                    EffectiveRatio = 1.0,
+                    IsEnabled = true,
+                    ArmedForLive = v != CopierConformance.Shadow,
+                    IsQuarantined = v == CopierConformance.Quarantined,
+                    QuarantineReason = v == CopierConformance.Quarantined ? "slippage breach" : null,
+                    LeaderSide = MarketPosition.Long,
+                    LeaderQuantity = 2,
+                    ExpectedSide = MarketPosition.Long,
+                    ExpectedQuantity = 2,
+                    ActualSide = v == CopierConformance.Diverged ? MarketPosition.Short : MarketPosition.Long,
+                    ActualQuantity = v == CopierConformance.Diverged ? 1 : 2,
+                    // THE PAIR THAT MATTERS: one metric never measured, one measured AT ZERO.
+                    Latency = new CopierMetric { Value = 0.0, Samples = 0 },
+                    Slippage = new CopierMetric { Value = 0.0, Samples = 4 },
+                    Verdict = v
+                });
+            }
+            return new CopierSnapshot { Rows = rows, TakenUtc = DateTime.UtcNow };
+        }
+
+        private static void TestUi6_AZeroThatWasNeverMeasuredIsNotAZeroThatWas()
+        {
+            Console.WriteLine("\n[TEST] UI6: an unmeasured metric is distinguishable from one measured at zero");
+
+            // P1-22, and the reason CopierMetric carries Samples at all. These metrics are
+            // SESSION-SCOPED and a recompile resets them, so a bare 0 cannot tell "no copy has
+            // filled yet" from "a copy filled and was perfect". That confusion was misdiagnosed as
+            // a broken measurement and cost two sessions.
+            //
+            // The page renders a dash for the first and 0 for the second, which it can only do if
+            // BOTH the value and the sample count survive serialization.
+            var parsed = Newtonsoft.Json.Linq.JObject.Parse(CopierSnapshotJson.ToJson(Ui6Snapshot()));
+            var row = parsed["rows"] == null || !parsed["rows"].Any() ? null : parsed["rows"][0];
+
+            Assert(row != null
+                   && row["latency"] != null && (int)row["latency"]["samples"] == 0
+                   && row["latency"]["measured"] != null && (bool)row["latency"]["measured"] == false
+                   && row["slippage"] != null && (int)row["slippage"]["samples"] == 4
+                   && (bool)row["slippage"]["measured"] == true
+                   && (double)row["slippage"]["value"] == 0.0,
+                "a metric with zero samples crosses as measured=false while one measured AT zero "
+                + "crosses as measured=true, so the page can never show a latency of 0ms for a "
+                + "copy that has never filled");
+        }
+
+        private static void TestUi6_TheSeverityRankIsNotTheEnumsOwnOrder()
+        {
+            Console.WriteLine("\n[TEST] UI6: the severity rank is stated, complete, and disagrees with the enum's integers");
+
+            // ⚠️ THE TRAP. CopierConformance reads Idle=0, Match=1, Shadow=2, Diverged=3,
+            // Orphan=4, Quarantined=5 -- so sorting by the enum value puts a HEALTHY Idle row
+            // first and an ORPHAN, where the leader is flat and the follower still holds a live
+            // position nobody manages, BELOW a quarantined one. Orphan is the worst row this
+            // system can produce.
+            //
+            // Unlike GuardRuleState, whose integer order IS its severity order and is pinned as
+            // such, this enum's numbering is historical. The rank therefore has to be stated, and
+            // stated in ONE place -- so the test asserts the intended order explicitly rather than
+            // recomputing it from the thing it is correcting.
+            var order = new[]
+            {
+                CopierConformance.Orphan,        // an unmanaged live position
+                CopierConformance.Diverged,      // both non-flat and they disagree
+                CopierConformance.Quarantined,   // not copying; known, but needs attention
+                CopierConformance.Shadow,        // configured, will not act
+                CopierConformance.Match,
+                CopierConformance.Idle
+            };
+
+            var ranks = order.Select(v => CopierSnapshotJson.SeverityRank(v)).ToList();
+            bool ascending = true;
+            for (int i = 1; i < ranks.Count; i++) if (ranks[i] <= ranks[i - 1]) ascending = false;
+
+            // Completeness: a conformance value added later must not fall off the ranking and
+            // land wherever the default puts it. Same argument as the rule registry's
+            // every-config-leaf test.
+            var all = Enum.GetValues(typeof(CopierConformance)).Cast<CopierConformance>().ToList();
+            var allRanks = all.Select(v => CopierSnapshotJson.SeverityRank(v)).ToList();
+            bool complete = allRanks.Distinct().Count() == all.Count && allRanks.All(r => r >= 0 && r < all.Count);
+
+            Assert(ascending && complete && order.Length == all.Count,
+                "every conformance value has a unique severity rank, worst first, and ORPHAN "
+                + "outranks Diverged and Quarantined -- which the enum's own integers do not");
+
+            // And it must actually DISAGREE with the enum order, or the whole method is
+            // ceremony and someone will delete it in favour of the cast.
+            Assert(CopierSnapshotJson.SeverityRank(CopierConformance.Orphan)
+                     < CopierSnapshotJson.SeverityRank(CopierConformance.Quarantined)
+                   && (int)CopierConformance.Orphan > (int)CopierConformance.Quarantined - 2,
+                "the severity rank genuinely differs from casting the enum, so sorting by the "
+                + "cast is a visible defect rather than an equivalent shortcut");
+
+            // An UNRECOGNISED verdict -- a value added to the enum and not to the switch -- must
+            // rank WORST, not best. The completeness check above cannot reach this: it iterates
+            // the values that exist, and all of them are handled. Only an out-of-range cast gets
+            // to the fallback, and its mutant survived until this line existed.
+            //
+            // Worst, because an unrecognised verdict is not evidence of health. Ranking it best
+            // puts it at the bottom of the table looking fine, which is how it stays unnoticed.
+            Assert(CopierSnapshotJson.SeverityRank((CopierConformance)99) == 0,
+                "a verdict this code does not recognise ranks WORST, so a conformance value added "
+                + "later and forgotten cannot sit at the bottom of the table looking healthy");
+        }
+
+        private static void TestUi6_TheVerdictAndSidesTravelAsNamesAndTheRankTravelsWithThem()
+        {
+            Console.WriteLine("\n[TEST] UI6: verdicts, sides and sizing modes cross as names, each row carrying its rank");
+
+            string json = CopierSnapshotJson.ToJson(Ui6Snapshot());
+            var parsed = Newtonsoft.Json.Linq.JObject.Parse(json);
+            var rows = parsed["rows"] == null ? new List<Newtonsoft.Json.Linq.JToken>() : parsed["rows"].ToList();
+
+            bool named = json.Contains("\"Orphan\"") && json.Contains("\"Diverged\"")
+                         && json.Contains("\"Quarantined\"") && json.Contains("\"QuantityRatio\"")
+                         && json.Contains("\"Short\"");
+            bool numeric = System.Text.RegularExpressions.Regex.IsMatch(
+                json, "\"(verdict|leaderSide|expectedSide|actualSide|sizingMode)\"\\s*:\\s*-?\\d");
+
+            // The rank travels ON the row, so the page sorts by a number it was given rather than
+            // re-deriving an order in JavaScript -- an ordering duplicated into the page is an
+            // ordering that drifts from this one.
+            bool ranked = rows.Count == 6 && rows.All(r => r["severity"] != null)
+                && rows.All(r => (int)r["severity"] ==
+                     CopierSnapshotJson.SeverityRank(
+                         (CopierConformance)Enum.Parse(typeof(CopierConformance), (string)r["verdict"])));
+
+            Assert(named && !numeric && ranked,
+                "verdicts, sides and sizing modes serialize as names, and every row carries the "
+                + "severity rank its verdict maps to");
+
+            // THE ACTUAL POSITION IS THE WHOLE POINT and nothing asserted it survived the trip.
+            // A mutant reporting `actual = expected` made every row match -- the conformance idea
+            // reporting success unconditionally -- and no test noticed. Same for the quarantine
+            // reason: a quarantined row that cannot say what quarantined it is a dead end.
+            var diverged = rows.FirstOrDefault(r => (string)r["verdict"] == "Diverged");
+            var quarantined = rows.FirstOrDefault(r => (string)r["verdict"] == "Quarantined");
+
+            Assert(diverged != null
+                   && (int)diverged["expectedQuantity"] == 2 && (string)diverged["expectedSide"] == "Long"
+                   && (int)diverged["actualQuantity"] == 1 && (string)diverged["actualSide"] == "Short"
+                   && quarantined != null
+                   && (string)quarantined["quarantineReason"] == "slippage breach",
+                "a diverged row carries BOTH the expected and the actual position rather than "
+                + "echoing one into the other, and a quarantined row says what quarantined it");
+        }
+
+        private static void TestUi6_ANullSnapshotSaysSoAndAnEmptyOneIsStillAnAnswer()
+        {
+            Console.WriteLine("\n[TEST] UI6: no copier and no relationships are DIFFERENT answers");
+
+            // "The copier is not loaded" and "the copier is loaded and mirrors nothing" are
+            // completely different situations and must not render the same. This is P2-83's
+            // argument on the copier side.
+            var noCopier = Newtonsoft.Json.Linq.JObject.Parse(CopierSnapshotJson.ToJson(null));
+            var noRows = Newtonsoft.Json.Linq.JObject.Parse(
+                CopierSnapshotJson.ToJson(new CopierSnapshot { Rows = new List<CopierSnapshotRow>(), TakenUtc = DateTime.UtcNow }));
+
+            Assert(noCopier["error"] != null && !string.IsNullOrWhiteSpace((string)noCopier["error"])
+                   && noRows["error"] == null
+                   && noRows["rows"] != null
+                   && noRows["rows"].Type == Newtonsoft.Json.Linq.JTokenType.Array
+                   && !noRows["rows"].Any(),
+                "a missing copier reports a stated error while a copier with no relationships "
+                + "reports an empty rows array, so the page can tell them apart");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

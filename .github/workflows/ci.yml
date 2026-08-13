@@ -149,6 +149,15 @@ jobs:
       - name: Mutation battery UI5
         run: python mutation/mutate_ui5.py
 
+      # UI6 (the copier half). The mutant this battery exists for casts CopierConformance to an
+      # int for sorting: that enum's numbering is HISTORICAL, not severity, so casting puts a
+      # healthy Idle row first and an ORPHAN -- a live position nothing is managing -- below a
+      # quarantined one. Three survived the first run, all real gaps: an unrecognised verdict was
+      # unreachable by the completeness test, and nothing asserted the ACTUAL position or the
+      # quarantine reason survived serialization.
+      - name: Mutation battery UI6
+        run: python mutation/mutate_ui6.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be
