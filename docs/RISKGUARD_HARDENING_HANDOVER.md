@@ -1,13 +1,27 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (session 21 — **the MCP wrapper**, §5.6 item 3, which turned up **four
-more defects** (`P1-72`…`P1-75`) and closed all of them; §5.16. The one to know about is **`P1-75`:
-reading the prop-firm rules DISARMED them**, latent only because `prop_limits.json` does not exist on
-this box. Suite **1028/0**. Session 20 — **the whole `P0` band closed**. `P0-63` and `P?-66`
-were validated by one live 1-lot MNQ round trip (**§5.13**), that trade opened four defects, and all
-four plus `P0-67` and a sixth found by a test are fixed and deployed as core **`v1.1.0`** (**§5.14**).
-Suite **1003/0**, five mutation batteries, 0 survivors. The next code work is **`P?-64` + `P?-65`**,
-the copier UI — §5.6.
+**Last updated**: 2026-08-13 (**session 25 — §5.22**, four landings). Core **`v1.3.0`** is tagged,
+deployed and **NT8-compiled clean (0 errors)**: `UI1`'s conformance snapshot and `UI2`'s
+single-owner config path, closing **`P?-64`, `P?-65`, `P1-79`** — the untriaged band is now empty.
+Then **`P1-80`** (three config files in `RiskGuard/`, one live; a bridge write returned
+`success` for config **nothing would ever read**, holding `trailingDrawdown 500` against a live
+`1500`), **`UI3`** the guard rule registry, and **`P1-81`**.
+
+**The one to carry from `UI3`: a static "is this field read?" check MISSES `P2-25` completely.**
+The news shield is fully wired — flag defaults `true`, `RiskGuardAddOn.cs:1541` tests it, it calls
+a real `IsInNewsWindow` over a real list — and that list is **always empty**, because
+`LocalNewsEventsFilePath` has no loader. Every mechanical check passes on a rule that has never
+been able to fire. That is the fourth state, **`INERT`**, and it is why the rule inventory is a
+runtime read and not a linter.
+
+Suite **1101/0**, **nine** mutation batteries, 0 survivors. **81 IDs, 15 open**; the `P0` band and
+the untriaged band are both empty. Next code work is **`UI_REDESIGN_DESIGN.md` §10 items 3-4** —
+bridge routes, then the page.
+
+*(Earlier: session 21, the MCP wrapper — four defects `P1-72`…`P1-75`, all closed, §5.16, of which
+**`P1-75`: reading the prop-firm rules DISARMED them**. Session 20 — the whole `P0` band closed;
+`P0-63` and `P?-66` validated by one live 1-lot MNQ round trip, §5.13, which opened four defects
+that were fixed and deployed the same day, §5.14.)*
 
 Session 18 was a documentation pass that re-derived this header, §0, §4a, §5, §7 and §8 from the repo
 and the live box rather than copying them forward; everything they used to claim that was false is in
@@ -2896,15 +2910,15 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 77, re-run 2026-08-13
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 78, re-run 2026-08-13
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **77** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **78** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **80** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21) |
-| **Open** | **14** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ **`P?-64`, `P?-65` and `P1-79` closed in §5.21** — branch `feat/ui-config-single-owner`, unmerged. Thirteen closed 2026-08-13 |
+| **Total IDs** | **81** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21) |
+| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ **`P?-64`, `P?-65` and `P1-79` closed in §5.21** — branch `feat/ui-config-single-owner`, unmerged. Thirteen closed 2026-08-13 |
 | **Closed or superseded** | **66** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
@@ -4439,3 +4453,121 @@ means exactly what it says.**
    It needs a deploy, and deploying unmerged code to the live guarded box is the operator's call.
 3. Then `UI3` — the read/write layer is done, so the next landing is the bridge routes and the
    static page (`UI_REDESIGN_DESIGN.md` §10 items 3-4).
+
+## 5.22 Session 25 — 2026-08-13: shipped `v1.3.0`, then `P1-80`, `P1-81` and the rule registry
+
+Four landings in one session. `main` carries all of them; `v1.3.0` is deployed and NT8-compiled.
+
+### 1. `v1.3.0` — `UI1` + `UI2` merged, tagged, deployed, compiled
+
+**`P?-64`, `P?-65` and `P1-79` closed**, which empties the untriaged band. Bridge pin bumped and
+its `CopierConfigFile` now delegates to `TradeCopierEngine.ConfigFilePath` — the change that was
+blocked on the tag existing.
+
+**`nt_compile` returned 0 errors, and that is the number that mattered.** `TradeCopierWindow.cs`
+is one 1100-line `#if !TESTING` block, so `dotnet build` compiles it to *nothing* and NT8 was the
+only thing that had ever type-checked it. Live config reloaded intact through the hot-swap.
+
+⚠️ **`P?-64` cost no configuration in the end.** The orphaned `CopierConfig.json` held the *same*
+values as the canonical file — the window's writes went nowhere since August while the bridge kept
+the real file current. The mechanism was as described; the outcome was not the loss it implied.
+Recorded because overstating a closed defect's impact is its own kind of drift.
+
+### 2. `P1-80` — three config files, one live, and a write that faked success
+
+Found by asking **"which of these files does anything actually READ?"** — a question worth
+re-asking anywhere config accumulates.
+
+| File | Read by | |
+|---|---|---|
+| `RiskGuard/config.json` | `RiskGuardAddOn.cs:333` | the real one |
+| `RiskGuard/riskguard_config.json` | **nothing** | written by the bridge |
+| `RiskGuard/RiskConfig.json` | **nothing, either repo** | zero references |
+
+The bridge's `RiskGuardConfig` write path, with the guard not loaded, stashed the body in
+`_riskGuardConfig`, wrote it, and returned `success = true, status = "persisted_only"`. **That
+dictionary was declared, loaded at startup, and never read by anything** — so the config was not
+applied then, not at the next startup, and never would be.
+
+**Measured on the box**: it held `trailingDrawdown: 500` against a live `1500`, and
+`RiskConfig.json` said `OnMissing: "AutoStop"` against a live `"Flatten"`. Files stating protection
+that was not in force.
+
+⚠️ **THE TELL GENERALISES: the READ half of that same method already refused, while the WRITE half
+pretended to succeed.** When one direction of a pair refuses and the other does not, the permissive
+one is usually wrong. Fixed by **deletion, not wiring** — wiring the store up would have created a
+second source of truth for the guard's limits, which is the defect one layer up.
+
+### 3. `UI3` — the guard rule inventory, and a fourth state
+
+**All 54 leaves of `RiskConfig` + `PropFirmProtectionConfig` are classified**, and a reflection
+test fails the build if one is neither a rule nor an explicit non-rule with a reason.
+
+**`P1-77`, `P2-25` and `P2-78` are ONE defect** — a config field can be born with no evaluator and
+nothing notices — and the registry converts it from an audit finding into a build failure.
+
+⚠️ **A static "is this field read?" check finds two of the three and MISSES `P2-25` entirely.** The
+news shield's flag defaults `true`, `RiskGuardAddOn.cs:1541` genuinely tests it, it genuinely calls
+a real `IsInNewsWindow`, which genuinely iterates a real list — that nothing outside a test appends
+to, because `LocalNewsEventsFilePath` has no loader. **Every mechanical check passes on a rule that
+has never once been able to fire.** That is the fourth state — **`INERT`** — and only a runtime
+read, asking each rule how much evidence it had, can report it. Design in
+[UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §6a.
+
+Structural rather than asserted: no evaluator ⇒ `CONFIGURED-not-EVALUATED` **by construction**;
+empty evidence ⇒ `INERT`; `DeriveState` is the only place the vocabulary lives; the not-a-rule
+hatch **requires** a reason so it cannot quiet an inconvenient field.
+
+### 4. `P1-81` — an arming flag that arms nothing
+
+`PropFirmProtectionConfig.ArmedForLive` is read by its own `confirmLive` gate and the parser, and
+by nothing else. The prop rules that work are gated by the **guard's** mode instead. Both readings
+of the flag are wrong. Found *by having to state what reads it* — the registry earning its keep
+before it has a UI.
+
+### What the batteries taught, which is worth more than the features
+
+`UI3`'s 15 mutants: **three survived together and were one gap** — the evidence count is the
+mechanism that makes `INERT` work, and it was asserted for **1 of the 5** rules using it.
+
+Two things went wrong fixing that, both general:
+
+1. ⚠️ **My first fix was TOO BROAD and called four correct rules defects.** `MaxOrdersPerSecond`
+   and the three `StopGuard` settings are scalar — they always have their input and act on every
+   position. **A test that calls correct behaviour a defect gets the CODE changed to satisfy it**,
+   which here would have made the guard's own stop handling report as not protecting anything. Two
+   evaluators *were* genuinely wrong and were corrected instead.
+2. ⚠️ **The fix opened an escape route, and its own mutant proved it.** Scoping the check to
+   labelled rules made a *missing* label mean "do not check me" — deleting the news shield's label
+   exempted the one rule the design exists for, and nothing failed. The classification is
+   **derived** now: run every evaluator against an empty and a populated context; evidence that
+   moves must carry a label, scalar must not.
+
+**`UI2` is the companion lesson: a ONE-ROUND green is when to trust it least.** The loop took all
+12 acceptance tests red→green in a single pass — best result any ticket here has had — and 17 of 18
+mutants died, with the survivor showing that *absent-means-unchanged* was asserted for one request
+builder and never its twin. And **the panel filed three BLOCKERs, all false** (each inverted
+`ApplyArmingGate`'s condition), plus two false `MAJOR`s — but the invariant they pointed at was
+pinned by nothing, so it has three tests and two mutants now. **A wrong finding aimed at an
+unpinned invariant still earns the test.**
+
+⚠️ **What no gate here would ever have caught, and reading the diff did**: the `UI2` patch had
+stripped every emoji from the copier row labels. No test reads a label. **A model normalising
+non-ASCII is a silent scope change — diff the surface, not just the logic.**
+
+### State
+
+Suite **1101/0**. **Nine** mutation batteries, 0 survivors, all wired into CI (the guard fired on
+two commits this session). **81 IDs, 15 open, 66 closed.** The `P0` band and the untriaged band are
+both empty. Config files on the box: **six, each read by something** — three stale ones deleted.
+
+### Next
+
+`UI_REDESIGN_DESIGN.md` §10 items 3-4: **bridge routes** (static serving + a snapshot endpoint;
+SSE already exists) then **the page itself**. That is the first point at which any of this becomes
+something the operator can look at. `F-9` (firm mapping) follows, and is what makes the risk half
+of the inspector tell the truth.
+
+⚠️ Still true and still load-bearing: **`P1-57`'s fan-out did NOT fire** — only `Sim-ORB` acted
+because the third-party copier was not running. Re-measure the blast radius before the next live
+test rather than trusting the §0 pre-flight's "three followers".
