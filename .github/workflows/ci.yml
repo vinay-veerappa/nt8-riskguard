@@ -182,6 +182,19 @@ jobs:
       - name: Mutation battery UI7
         run: python mutation/mutate_ui7.py
 
+      # F-9 -- the firm-rule REPORTER must resolve the account's plan, as the ENFORCER has since
+      # P1-42. Eleven mutants, and the two that matter most keep the resolved BRANCH and report
+      # the TOP-LEVEL AMOUNT: every state assertion still passes, the row reads Enforcing
+      # correctly, and the number beside it is a limit the operator is not held to. That is
+      # P1-42's own lesson one layer out, and only the limit assertions see it. Two more restore
+      # the defect proper -- and it was a defect in BOTH directions, because the real Take Profit
+      # Trader profile has DailyLoss OFF, so the old reporter claimed a live rule that could not
+      # fire. One mutant pins the hole the loop's own candidate had: asking "did it resolve?"
+      # with ContainsKey rather than TryGetValue plus a null check, which a FirmProfiles entry
+      # holding null answers wrongly.
+      - name: Mutation battery F9
+        run: python mutation/mutate_f9.py
+
       # P1-82 -- a switch whose rule cannot fire must not default ON. The change is four
       # literals, which is precisely why it needs a battery: that is the size of diff that
       # gets half-applied, or reverted later by someone "restoring a sensible default".

@@ -401,7 +401,7 @@ not be renumbered into it.**
 | ID | Feature | Slot held in the layout |
 |---|---|---|
 | **F-1** *(existing)* | latency / slippage per follower | a **column** on the fleet row — text, `—` when unmeasured, session-scope marker. **No gauge** |
-| **F-9** | **account → firm-profile mapping** | inspector › risk. **Keystone**: firm-mirror rules are loaded but unmapped, so this is what moves them from CONFIGURED to EVALUATED |
+| **F-9** | **account → firm-profile mapping** | inspector › risk. **Keystone**: firm-mirror rules are loaded but unmapped, so this is what moves them from CONFIGURED to EVALUATED. ✅ **Code half landed 2026-08-13** — see item 5 below; the reporter now resolves the plan per account. `FirmProfiles` is keyed by **plan**, not firm (`Apex-100K`), because one dollar amount cannot serve a 50k and a 100k account |
 | **F-10** | Flatten Group / panic | group-header button. Exists over MCP, no UI |
 | **F-11** | no-edits-while-live session lock | inspector chrome. More honest than `F-3`'s PIN — a PIN in a config file is a speed bump against your own impulse, and the UI should say so |
 | **F-12** | reconciler actions as structured events | the events pane. `ReconcileAction { Verb, Subject, Leg, Reason }` exists and is flattened into a single append-only `TextBox` (`TradeCopierWindow.cs:641`) today |
@@ -457,6 +457,23 @@ is reachable **only through the bridge**.
    systems") is untouched. Also open: live SSE updates instead of the 5s poll, operator-readable
    notes (they currently cite defect IDs), and the NT8 Control Center menu item (§7.4).
 5. **`F-9`** firm mapping, which is what makes the risk half of the inspector tell the truth.
+   **Code half DONE 2026-08-13.** The two firm rules resolve `ResolveEffectiveFirmConfig` per
+   account and report the plan they resolved to. 11 mutants, 0 survivors; suite 1188 → 1198.
+   ⚠️ **It was a defect in BOTH directions, not one.** The acceptance matrix derives its
+   expectation *from the enforcer* rather than restating it, and caught the reporter calling a
+   rule `Disabled` that the guard runs (top-level off, the plan's rule on — the researched
+   shape) **and** calling one live that cannot fire (top-level on, the plan's rule off — the
+   real Take Profit Trader profile, which has no daily loss limit). The second is the direction
+   that costs money, and no state-only assertion would have found the wrong *number*: a mutant
+   that keeps the resolved branch and reports the top-level amount leaves every state correct.
+   ⚠️ **Evidence is per-account, not the map's size.** The old expression counted the whole
+   `AccountFirmMap`, so on the live box one mapped account reported evidence for **all 96
+   accounts**, 88 of which are expired prop accounts. A `PerAccount` rule counting a global
+   collection is the shape to look for elsewhere.
+   **Still to do here**: nothing machine-checks that a plan named `-100K` was derived for a
+   100k account — that wants `FirmProfile.AccountSize` and a preflight comparison against
+   observed equity. Until it exists the account size lives in a dictionary key
+   (CONFIG_DEFAULTS R3a).
 6. Then §5.6 item 5 onward, unchanged: `P3-31` ledger → timer → RiskGuard-side audit.
 
 ⚠️ **Do 1 before anything renders.** Every past defect in this area came from a surface that could
