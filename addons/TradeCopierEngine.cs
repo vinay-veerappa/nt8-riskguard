@@ -333,7 +333,101 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class TradeCopierEngine
     {
-        private static readonly Lazy<TradeCopierEngine> _instance = new Lazy<TradeCopierEngine>(() => new TradeCopierEngine());
+        private static readonly Lazy<TradeCopierEngine> _instance = new Lazy<TradeCopierEngine>(() =>
+        {
+            TradeCopierEngine engine = new TradeCopierEngine();
+            engine.StartReconcilerTimer();
+            return engine;
+        });
+
+        private void StartReconcilerTimer()
+        {
+            if (_reconcileTimer != null) return;
+            _reconcileTimer = new System.Threading.Timer(
+                state =>
+                {
+                    try { ReconcilerTimerCallback(); }
+                    catch { }
+                },
+                null,
+                System.TimeSpan.FromSeconds(5),
+                System.TimeSpan.FromSeconds(5));
+        }
+
+        public void Dispose()
+        {
+            System.Threading.Timer timer = _reconcileTimer;
+            _reconcileTimer = null;
+            if (timer != null)
+            {
+                try { timer.Dispose(); } catch { }
+            }
+        }
+
+        private void ReconcilerTimerCallback()
+        {
+            _inFlightLedger.PurgeExpired();
+
+            var work = new System.Collections.Generic.List<System.Tuple<FollowerBracket, Instrument, Account, string>>();
+            lock (_lock)
+            {
+                foreach (var kvp in _followerBrackets)
+                {
+                    FollowerBracket bracket = kvp.Value;
+                    if (bracket == null || bracket.FollowerQuantity == 0) continue;
+
+                    object key = kvp.Key;
+                    Instrument instrument = key as Instrument;
+                    string fullName = instrument != null ? instrument.FullName : key as string;
+
+                    Account account = null;
+                    try
+                    {
+                        account = Account.All.FirstOrDefault(a => a != null
+                            && string.Equals(a.Name, bracket.FollowerAccountName, System.StringComparison.OrdinalIgnoreCase));
+                    }
+                    catch { }
+
+                    work.Add(System.Tuple.Create(bracket, instrument, account, fullName));
+                }
+            }
+
+            foreach (System.Tuple<FollowerBracket, Instrument, Account, string> item in work)
+            {
+                FollowerBracket bracket = item.Item1;
+                Instrument instrument = item.Item2;
+                Account account = item.Item3;
+                string fullName = item.Item4;
+
+                if (account == null) continue;
+
+                if (instrument == null && !string.IsNullOrEmpty(fullName))
+                {
+                    try
+                    {
+                        Position pos = account.Positions.FirstOrDefault(p => p.Instrument != null
+                            && string.Equals(p.Instrument.FullName, fullName, System.StringComparison.OrdinalIgnoreCase));
+                        instrument = pos != null ? pos.Instrument : null;
+                    }
+                    catch { }
+                    if (instrument == null)
+                    {
+                        try
+                        {
+                            Order ord = account.Orders.FirstOrDefault(o => o.Instrument != null
+                                && string.Equals(o.Instrument.FullName, fullName, System.StringComparison.OrdinalIgnoreCase));
+                            instrument = ord != null ? ord.Instrument : null;
+                        }
+                        catch { }
+                    }
+                }
+
+                if (instrument == null) continue;
+
+                try { SyncFollowerStopOnce(account, instrument, bracket); } catch { }
+                try { SyncFollowerTargetOnce(account, instrument, bracket); } catch { }
+            }
+        }
         public static TradeCopierEngine Instance => _instance.Value;
 
         private readonly List<CopierRelationship> _relationships = new List<CopierRelationship>();
@@ -342,6 +436,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Queue<string> _executionIdQueue = new Queue<string>();
         private const int MaxExecutionCacheSize = 5000;
         private readonly object _lock = new object();
+        private readonly InFlightLedger _inFlightLedger = new InFlightLedger();
+        private System.Threading.Timer _reconcileTimer;
         // P0-63. Accounts whose provider has been observed ignoring Account.Change(). Once marked,
         // the copier goes straight to cancel-then-create on that account without issuing another
         // doomed Change(). Session-scoped; cleared in ResetBracketsForTest so tests do not leak,
@@ -3031,7 +3127,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // The same flag for both legs: this call only ever consumes one of them, and the
             // caller is asking about the leg it named.
-            var all = CopierBracketReconciler.Reconcile(desired, owned, submitInFlight, submitInFlight);
+            //
+            // P3-31: the event-driven callers pass false because their own bracket cache and
+            // in-flight flags serialise them. The background timer has no such cache, so the
+            // ledger records a submit that has not yet appeared in Account.Orders and DecideLegActions
+            // folds that in here.
+            bool legInFlight = submitInFlight
+                || _inFlightLedger.IsInFlight(followerAcc.Name, instrument.FullName, legName);
+            var all = CopierBracketReconciler.Reconcile(desired, owned, legInFlight, legInFlight);
 
             var mine = new List<ReconcileAction>();
             foreach (var a in all)
@@ -3181,6 +3284,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 p.Instrument.FullName.Equals(instrument.FullName, StringComparison.OrdinalIgnoreCase));
             if (livePos == null) return;
 
+            bool stopSubmitRegistered = false;
             try
             {
                 // Outside the lock: Cancel/Change/CreateOrder/Submit are broker calls, and holding
@@ -3396,7 +3500,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                         PrintTo.OutputTab1);
                     return;
                 }
+
+                // P3-31. Record the submit in the ledger before it appears in Account.Orders,
+                // so a background reconciler cannot issue a second Create for the same leg.
+                _inFlightLedger.Register(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedStopName);
+                stopSubmitRegistered = true;
                 followerAcc.Submit(new[] { stop });
+                _inFlightLedger.Settle(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedStopName);
+                stopSubmitRegistered = false;
 
                 // Deliberately does NOT reset StopAttempts. The failure this bound exists for is a
                 // broker that ACCEPTS the submit and rejects the order a moment later, so
@@ -3412,10 +3523,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
+                // P3-31. If the submit itself failed, clear the ledger entry so the background
+                // reconciler knows the leg is no longer in flight and may retry.
+                if (stopSubmitRegistered)
+                {
+                    _inFlightLedger.Fail(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedStopName);
+                    stopSubmitRegistered = false;
+                }
+
                 // P0-63. If the cancel itself threw, the old order is still working and the
                 // request record still points at it. Leave the record set and the next OrderUpdate
-                // will re-detect the no-op and re-drive forever. Clear it when the order we were
-                // trying to cancel is the one the record belongs to.
+                // will re-drive forever. Clear it when the order we were trying to cancel is the
+                // one the record belongs to.
                 int attempts;
                 lock (_lock)
                 {
@@ -3555,7 +3674,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P0-50 on the target leg. An orphan LIMIT against a flat account opens a position
             // when it fills exactly as an orphan stop does when it triggers.
             //
-            // Note what this deliberately does NOT do: it leaves FollowerQuantity and FollowerSide
+            // Note what this deliberately does Not do: it leaves FollowerQuantity and FollowerSide
             // alone. Zeroing them here would let a target sync switch the stop sync off.
             if (!desired.HasPosition)
             {
@@ -3629,6 +3748,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 p.Instrument.FullName.Equals(instrument.FullName, StringComparison.OrdinalIgnoreCase));
             if (livePos == null) return;
 
+            bool targetSubmitRegistered = false;
             try
             {
                 // Broker calls outside `_lock` (P1-10/P1-35), as the stop sync does.
@@ -3776,7 +3896,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return;
                 }
 
+                // P3-31. Record the target submit in the ledger before it appears in
+                // Account.Orders, so the background reconciler cannot duplicate the leg.
+                _inFlightLedger.Register(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedTargetName);
+                targetSubmitRegistered = true;
                 followerAcc.Submit(new[] { target });
+                _inFlightLedger.Settle(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedTargetName);
+                targetSubmitRegistered = false;
+
                 lock (_lock) { bracket.WorkingTarget = target; }
 
                 CopierLog(followerAcc.Name, "BRACKET_TARGET_MIRRORED",
@@ -3785,6 +3912,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
+                // P3-31. Clear the ledger entry if the target submit failed.
+                if (targetSubmitRegistered)
+                {
+                    _inFlightLedger.Fail(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedTargetName);
+                    targetSubmitRegistered = false;
+                }
+
                 // P0-63. If the cancel itself threw, the old order is still working and the
                 // request record still points at it. Clear it when the order we were trying to
                 // cancel is the one the record belongs to, so the next OrderUpdate does not

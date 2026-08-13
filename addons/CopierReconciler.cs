@@ -151,19 +151,93 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
     }
 
-    // P3-31 stub: exists so the acceptance tests compile. The real implementation
-    // is the agent loop's job. This stub makes every assertion fail, which is the
-    // baseline-red gate the loop requires (tests must be failing, not uncompilable).
+    // P3-31: the in-flight order ledger. Records a submitted order's identity
+    // BEFORE the broker call and removes it when the order appears in
+    // Account.Orders (Settle) or the submit failed (Fail). A stale entry
+    // (past timeoutSeconds with no settlement) is cleared by PurgeExpired so a
+    // crashed submit does not permanently suppress Create. Thread-safe under a
+    // lock. The key is (accountName, instrumentFullName, legName), all
+    // OrdinalIgnoreCase. Reconcile's submitInFlight parameter reads this.
     internal class InFlightLedger
     {
+        private readonly object _lock = new object();
         private readonly int _timeoutSeconds;
-        public InFlightLedger(int timeoutSeconds = 30) { _timeoutSeconds = timeoutSeconds; }
-        public int Count { get { return 0; } }
-        public void Register(string accountName, string instrumentFullName, string legName) { }
-        public void Settle(string accountName, string instrumentFullName, string legName) { }
-        public void Fail(string accountName, string instrumentFullName, string legName) { }
-        public bool IsInFlight(string accountName, string instrumentFullName, string legName) { return false; }
-        public void PurgeExpired() { }
+        private readonly Dictionary<string, DateTime> _entries
+            = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+        internal InFlightLedger(int timeoutSeconds = 30)
+        {
+            _timeoutSeconds = timeoutSeconds;
+        }
+
+        internal int Count
+        {
+            get
+            {
+                lock (_lock) { return _entries.Count; }
+            }
+        }
+
+        internal void Register(string accountName, string instrumentFullName, string legName)
+        {
+            if (string.IsNullOrEmpty(accountName) || string.IsNullOrEmpty(legName)) return;
+            lock (_lock)
+            {
+                _entries[Key(accountName, instrumentFullName, legName)] = DateTime.UtcNow;
+            }
+        }
+
+        internal void Settle(string accountName, string instrumentFullName, string legName)
+        {
+            lock (_lock)
+            {
+                _entries.Remove(Key(accountName, instrumentFullName, legName));
+            }
+        }
+
+        internal void Fail(string accountName, string instrumentFullName, string legName)
+        {
+            lock (_lock)
+            {
+                _entries.Remove(Key(accountName, instrumentFullName, legName));
+            }
+        }
+
+        internal bool IsInFlight(string accountName, string instrumentFullName, string legName)
+        {
+            lock (_lock)
+            {
+                if (_entries.TryGetValue(Key(accountName, instrumentFullName, legName), out var ts))
+                {
+                    if (_timeoutSeconds <= 0 || (DateTime.UtcNow - ts).TotalSeconds < _timeoutSeconds)
+                        return true;
+                    _entries.Remove(Key(accountName, instrumentFullName, legName));
+                }
+                return false;
+            }
+        }
+
+        internal void PurgeExpired()
+        {
+            if (_timeoutSeconds <= 0) return;
+            var now = DateTime.UtcNow;
+            lock (_lock)
+            {
+                var expired = new List<string>();
+                foreach (var kvp in _entries)
+                {
+                    if ((now - kvp.Value).TotalSeconds >= _timeoutSeconds)
+                        expired.Add(kvp.Key);
+                }
+                foreach (var key in expired)
+                    _entries.Remove(key);
+            }
+        }
+
+        private static string Key(string accountName, string instrumentFullName, string legName)
+        {
+            return (accountName ?? "") + "|" + (instrumentFullName ?? "") + "|" + (legName ?? "");
+        }
     }
 
     internal static class CopierBracketReconciler
