@@ -10198,17 +10198,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             var bad = F9bPreflight(typo, F9bAccount("Sim_All_Day_ORB", 49833.70));
 
             Assert(!bad.Passed, "a mapping to a non-existent account refuses to arm");
+            Console.WriteLine("        preflight said: " + (bad.Message ?? "<null>"));
             Assert(bad.Message != null
                    && bad.Message.IndexOf("Sim_All_Day-ORB", StringComparison.Ordinal) >= 0,
-                "and the refusal names the account that does not resolve, so the operator can see "
-                + "WHICH of the mappings is wrong: " + (bad.Message ?? "<null>"));
+                "the refusal names the account that does not resolve, so the operator can see "
+                + "WHICH of the mappings is wrong");
 
             // The paired positive: the same mapping, spelled correctly, arms. Without this, a
             // preflight that refused everything would pass the assertions above.
             var ok = F9bConfig("Sim_All_Day_ORB", "Apex-100K", 50000.0);
             var good = F9bPreflight(ok, F9bAccount("Sim_All_Day_ORB", 49833.70));
-            Assert(good.Passed, string.Format(
-                "the correctly-spelled mapping still arms (got {0}: {1})", good.Code, good.Message));
+            Console.WriteLine(string.Format("        correctly-spelled: passed={0} {1} {2}",
+                good.Passed, good.Code, good.Message));
+            Assert(good.Passed, "the correctly-spelled mapping still arms");
         }
 
         /// <summary>
@@ -10225,20 +10227,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             var bad = F9bPreflight(wrong, F9bAccount("Sim-ORB", 100170.0));
 
             Assert(!bad.Passed, "a 100k account mapped to a 50k plan refuses to arm");
+            Console.WriteLine("        preflight said: " + (bad.Message ?? "<null>"));
             Assert(bad.Message != null
                    && bad.Message.IndexOf("TakeProfitTrader-50K", StringComparison.Ordinal) >= 0
                    && bad.Message.IndexOf("50000", StringComparison.Ordinal) >= 0
                    && bad.Message.IndexOf("100170", StringComparison.Ordinal) >= 0,
-                "and the refusal names the plan and BOTH numbers, because 'size mismatch' without "
-                + "them is not actionable: " + (bad.Message ?? "<null>"));
+                "the refusal names the plan and BOTH numbers, because 'size mismatch' without them "
+                + "is not actionable");
 
             // Ordinary drawdown is not a mismatch. A 50k account down 2,300 must still arm, or
             // this check fires on a normal week and gets switched off -- CONFIG_DEFAULTS R5.
             var drawn = F9bConfig("Sim_All_Day_ORB", "TakeProfitTrader-50K", 50000.0);
             var stillOk = F9bPreflight(drawn, F9bAccount("Sim_All_Day_ORB", 47700.0));
-            Assert(stillOk.Passed, string.Format(
-                "a 50k account drawn down to 47,700 is still a 50k account and still arms (got {0}: {1})",
-                stillOk.Code, stillOk.Message));
+            Console.WriteLine(string.Format("        drawn-down 50k: passed={0} {1} {2}",
+                stillOk.Passed, stillOk.Code, stillOk.Message));
+            Assert(stillOk.Passed,
+                "a 50k account drawn down to 47,700 is still a 50k account and still arms");
         }
 
         /// <summary>
@@ -10262,26 +10266,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             // though the equity is nowhere near any plausible plan size.
             var unstated = F9bConfig("Sim-ORB", "Apex-Unstated", 0.0);
             var r1 = F9bPreflight(unstated, F9bAccount("Sim-ORB", 100170.0));
-            Assert(r1.Passed, string.Format(
-                "a plan that states no account size is checked for nothing (got {0}: {1})", r1.Code, r1.Message));
+            Console.WriteLine(string.Format("        unstated size: passed={0} {1} {2}", r1.Passed, r1.Code, r1.Message));
+            Assert(r1.Passed, "a plan that states no account size is checked for nothing");
 
             // (2) A zero-equity account is real but unmeasurable. It must not fail the SIZE check.
             var expired = F9bConfig("APEX10121500000151", "Apex-100K", 100000.0);
             var r2 = F9bPreflight(expired,
                 F9bAccount("APEX10121500000151", 0.0), F9bAccount("Sim101", 99482.0));
-            Assert(r2.Passed, string.Format(
-                "an account reporting zero equity is not size-checked -- 89 of 96 on the live box "
-                + "read zero (got {0}: {1})", r2.Code, r2.Message));
+            Console.WriteLine(string.Format("        zero-equity: passed={0} {1} {2}", r2.Passed, r2.Code, r2.Message));
+            Assert(r2.Passed,
+                "an account reporting zero equity is not size-checked -- 89 of 96 on the live box read zero");
 
             // (3) ...but it is still EXISTENCE-checked. Remove it from the platform and the same
             // mapping must refuse. This is what stops (2) from being a hole big enough to swallow
             // the whole check.
             var r3 = F9bPreflight(expired, F9bAccount("Sim101", 99482.0));
+            Console.WriteLine("        absent account: " + (r3.Message ?? "<null>"));
             Assert(!r3.Passed
                    && r3.Message != null
                    && r3.Message.IndexOf("APEX10121500000151", StringComparison.Ordinal) >= 0,
                 "a mapping to an account the platform does not report still refuses, even though "
-                + "its size could never have been checked: " + (r3.Message ?? "<null>"));
+                + "its size could never have been checked");
         }
 
         // ================================================================================
@@ -10420,13 +10425,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
 
             var rotted = exempt.Where(kv => kv.Value != 1).Select(kv => kv.Key + " matched " + kv.Value).ToList();
+            if (rotted.Count > 0)
+                Console.WriteLine("        rotted exemptions: " + string.Join(" | ", rotted));
             Assert(rotted.Count == 0,
-                "each exemption in this gate still names exactly one lockout site: " + string.Join(" | ", rotted));
+                "each exemption in this lockout gate still names exactly one site");
 
-            Assert(gated >= 10 && ungated.Count == 0, string.Format(
-                "all {0} rule-breach lockout sites record whether the guard could act ({1} do not{2})",
-                gated, ungated.Count,
-                ungated.Count == 0 ? "" : ": " + string.Join(" | ", ungated.Take(5))));
+            // ⚠️ THE DETAIL GOES TO THE CONSOLE, NOT INTO THE ASSERTION MESSAGE, and this cost a
+            // loop run to learn. The message started as "all {gated} sites ... ({n} do not: line
+            // 1482 ...)". agent-loop matches an `expect_green` string ANYWHERE inside a failure
+            // line, so volatile trailing detail is fine THERE -- but it also diffs the whole set of
+            // failure lines against the baseline to find regressions. When T1 fixed two of the ten
+            // sites, the counts and line numbers in this message changed, so the loop saw the old
+            // line vanish (scored NEWLY PASSING) and a new line appear (scored a REGRESSION), on a
+            // test that had simply moved from 0/10 to 2/10. A failure message is an IDENTIFIER for
+            // baseline diffing and a DESCRIPTION for a human; when those two conflict, the
+            // identifier wins and the description moves to stdout.
+            if (ungated.Count > 0)
+                Console.WriteLine(string.Format(
+                    "        {0} site(s) record it, {1} do not: {2}",
+                    gated, ungated.Count, string.Join(" | ", ungated)));
+            Assert(gated >= 10 && ungated.Count == 0,
+                "every rule-breach lockout site records whether the guard could act");
         }
 
         /// <summary>

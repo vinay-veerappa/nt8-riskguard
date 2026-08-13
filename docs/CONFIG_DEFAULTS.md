@@ -143,10 +143,49 @@ So the keys change: `FirmProfiles` is now keyed by **plan**, not by firm — `Ap
 entry carrying one dollar amount **cannot** serve a 50k and a 100k account, which is the fleet this
 box actually has.
 
-**Still not machine-checked, and filed rather than left to be rediscovered:** nothing verifies that
-the amounts on a plan named `-100K` were derived for a 100k account. That wants an `AccountSize` on
-`FirmProfile` and a preflight check against observed equity. Until it exists, the size lives in a
-string.
+#### R3b. The map cannot be completed from measurement, and here is exactly why
+
+Measured 2026-08-13 via `nt_accounts`, because "map the rest of the accounts" turns out not to be a
+typing exercise.
+
+**Only 6 of the 96 accounts report any equity at all**: the five Sim accounts and
+`TAKEPROFITPRO524207503`. The other ~89 return `cashValue: 0, netLiquidation: 0` — expired or
+unconnected prop accounts the connection still lists. **So the platform does not know their size**,
+and equity cannot supply it. There is no field that can: the payload is
+`name / provider / denomination / cashValue / netLiquidation / realizedPnL / unrealizedPnL / buyingPower`.
+
+What the names *do* carry:
+
+| Prefix | Firm | Size in the name? |
+|---|---|---|
+| `TAKEPROFIT*`, `TAKEPROFITPRO*` | Take Profit Trader | no |
+| `APEX*`, `PAAPEX*` (`PA` = performance/funded) | Apex | no — `101215` is an account id, not a size |
+| `TDYG*`, `TDFYG*`, `FTDFYG*` | Tradeify | ⚠️ **apparently yes** |
+| `LFE*` | Lucid | no |
+
+⚠️ **The Tradeify pattern is an OBSERVATION, not a rule, and must not be used to write risk config
+until someone confirms it.** Five accounts read `TDYG50...` and one reads `TDYG100...`, which looks
+exactly like the plan size in thousands — but that is six samples and an inference, and the whole
+point of R3 is that a dollar limit is not inferred. `provider` is `Provider31` for every real prop
+account and `Simulator` for every Sim one, which is worth knowing separately: `P1-20` already
+settled that sim accounts are identified by provider and never by a name prefix.
+
+**So completing the map needs the operator to state a size per account.** That is not a gap in the
+tooling; it is information that exists only outside the platform.
+
+**What IS machine-checkable, and is `F-9b`:** `FirmProfile.AccountSize` (added 2026-08-13) plus a
+preflight refusal on two silent failures — a mapping naming an account that does not exist, and a
+plan whose stated size contradicts the account's observed equity. The first is `P1-90`'s class one
+layer out: there a name that did not resolve placed an order on the wrong account, here it removes
+protection from the right one, and the operator's own spelling of `Sim_All_Day_ORB` in the session
+that mapped it used a **hyphen**. Both refusals name the offending value, because a refusal that
+does not is not actionable.
+
+⚠️ Two things that check must NOT do, each pinned by a test: an **unstated** size (`0`) is checked
+for nothing — the check is opt-in per plan, or adding a plan locks you out of arming until you have
+researched a number you may not have; and a **zero-equity** account is not size-checked, because 89
+of 96 read zero and refusing over those would mean this box never arms again. But a zero-equity
+account is still *existence*-checked, or that exemption swallows the whole gate.
 
 ### R4. Two names for one concept carry one number.
 

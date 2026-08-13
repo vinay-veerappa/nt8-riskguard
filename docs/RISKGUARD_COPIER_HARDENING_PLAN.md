@@ -62,10 +62,10 @@ but not as an open item.)
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
 | **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-90` | 49 | **5** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92` | 14 | **7** | ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83`, `P2-92`, `P2-93` | 15 | **8** | ⚠️ **`P2-93` NEW 2026-08-13**: `pure` and `override_with_friction` are recognised modes that pass preflight's *enforcement* gate (`MinShadowSessions`) and then act on nothing, because `IsActingMode()` names only `live` -- an operator had to WAIT OUT five shadow sessions to reach a mode that enforces nothing. ⚠️ **`P2-92` NEW 2026-08-13**: `shadow` mode is not observation-only — a shadow breach sets `IsLockedOut`, and `CanTrade` reads that flag *above* its own mode/arming escape hatch, so the account stops trading while nothing is flattened. Filed while scoping `F-9`, which arms two more lockout-capable rules. Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **93** | **17** | **76 closed or superseded** |
+| | | **95** | **18** | **76 closed or superseded** |
 
 > ⚠️ **These counts and the handover's §0 counts are derived independently and have drifted before.**
 > `docs/RISKGUARD_HARDENING_HANDOVER.md` §0 is the authoritative one (CLAUDE.md says so); re-derive
@@ -2305,6 +2305,51 @@ exactly this reason.
 options are (a) record the would-be lockout on a separate shadow field that `CanTrade` ignores, or
 (b) let `CanTrade` consult the mode the way `ProcessAction` does. (b) is one line and (a) is more
 truthful; (a) also gives the shadow session the count it is supposed to be collecting.
+
+### P2-93. `pure` and `override_with_friction` pass the enforcement gate and then enforce nothing — OPEN
+
+*(filed 2026-08-13 while scoping `P2-92`, by reading what `IsActingMode` actually returns)*
+
+**Where**: `RiskGuardAddOn.cs:3670` (`IsActingMode`) against `:3423` (preflight's mode check) and
+`:3431` (the `MinShadowSessions` gate).
+
+Four modes are recognised:
+
+```csharp
+if (_mode != "shadow" && _mode != "live" && _mode != "pure" && _mode != "override_with_friction")
+    result.Fail("MODE", $"Unrecognised mode '{_mode}'");
+```
+
+and three of them are treated as **enforcement** modes by the soft gate immediately below, which
+refuses to arm until `MinShadowSessions` shadow sessions have completed:
+
+```csharp
+if ((_mode == "live" || _mode == "pure" || _mode == "override_with_friction")
+    && _config.MinShadowSessions > 0 && _shadowSessionsCompleted < _config.MinShadowSessions)
+```
+
+But the predicate that decides whether anything **acts** names only one:
+
+```csharp
+internal bool IsActingMode(bool forceLive = false) { return _mode == "live" || forceLive; }
+```
+
+So an operator who sets `pure`, waits out five shadow sessions to satisfy a gate that exists *only*
+for enforcement modes, and arms, gets `ProcessAction` returning **`SHADOW (SKIPPED)`** for every
+action. The friction gate for `override_with_friction` (`Override.WaitSeconds >= 30`) is validated
+in the same block, for a mode that overrides nothing.
+
+This is the canonical class in this programme — **a config that reads as protection that does not
+exist** — and it is worse than `P1-77`, because the operator had to *pass a gate* to get here.
+
+**Not fixed deliberately.** Making the two modes act is a protection **increase**, and turning two
+dormant modes live on a box that trades funded accounts is the operator's call, not a side effect of
+a defect fix. `P2-92` uses `IsActingMode()` precisely so the two consequences of "acting" stay
+governed by one predicate rather than two definitions — which is what makes this findable at all.
+
+**The honest options**: (a) implement the two modes, with tests that distinguish them from `live`;
+(b) delete them from the recognised list, so setting one is refused at preflight instead of accepted
+and ignored. **(b) is the fail-closed choice** and is one line.
 
 ---
 
