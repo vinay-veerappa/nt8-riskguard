@@ -191,6 +191,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             return list;
         }
+
+        /// <summary>
+        /// The rule inventory for every account the guard knows about (UI4).
+        ///
+        /// This method's ONLY job is to gather what the registry cannot reach -- the mode, the
+        /// armed flag, the account states and the news-event count -- and hand them over. It must
+        /// contain no rule logic and no state derivation of its own: everything that decides
+        /// whether a rule is protecting you lives in `GuardRuleRegistry`, so there is one place
+        /// for it to be wrong.
+        /// </summary>
+        public GuardSnapshot BuildGuardSnapshot()
+        {
+            string mode;
+            bool isArmed;
+            RiskConfig config;
+            lock (_stateLock)
+            {
+                mode = _mode;
+                isArmed = _isArmed;
+                config = _config;
+            }
+
+            return GuardRuleRegistry.BuildSnapshot(
+                config,
+                PropFirmProtectionSuite.Instance.Config,
+                mode,
+                isArmed,
+                GetAccountSnapshots(),
+                PropFirmProtectionSuite.Instance.NewsEventCount);
+        }
         private string _logDir;
         private string _logFile;
         private string _stateFile;

@@ -57,6 +57,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly object _lock = new object();
         public PropFirmProtectionConfig Config { get; private set; } = new PropFirmProtectionConfig();
 
+        /// <summary>
+        /// How many news events are loaded. This is `P2-25`'s evidence count, and it is the only
+        /// number that distinguishes a working news shield from one that can never fire -- so it
+        /// is exposed rather than inferred, and the rule inventory reads it here.
+        /// </summary>
+        public int NewsEventCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _newsEvents.Count;
+                }
+            }
+        }
+
         public void AddTestNewsEvent(EconomicNewsEvent ev)
         {
             lock (_lock)

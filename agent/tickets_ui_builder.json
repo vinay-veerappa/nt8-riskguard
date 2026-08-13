@@ -1,0 +1,113 @@
+{
+  "_comment": "UI redesign, landing 4. See docs/UI_REDESIGN_DESIGN.md section 6, section 6a and section 10 item 2. UI3 declared the rules and the four states but produced NOTHING -- GuardSnapshot was a DTO with no producer, so the bridge route in section 10 item 3 would have had nothing to serve. This landing is the producer, and it is the last host-agnostic piece before anything renders.",
+  "tickets": [
+    {
+      "id": "UI4",
+      "title": "The producer for the guard rule inventory -- one snapshot, derived, and honest when it has nothing to say",
+      "defect": "`GuardRuleRegistry` (added in UI3) declares 25 rules, 30 explicit non-rules, and `DeriveState`, which turns one definition plus one reading into one of the four states. Nothing calls any of it outside the test suite.\n\n`GuardSnapshot`, `GuardAccountRules` and `GuardRuleRow` are declared and never constructed. There is no path from a running guard to an inventory, so §10 item 3's bridge route has nothing to serve and §10 item 4's page has nothing to render. The registry is, today, an elaborately tested description of a thing that does not happen.\n\nThe builder is also where every guarantee UI3 bought can be quietly given back, and the failure direction is asymmetric: a snapshot that is MORE REASSURING than the truth is the only kind that can cost money. Four specific ways to do that, each with a test:\n\n1. Compute the state in the builder instead of calling `DeriveState`, so the four-state vocabulary gets a second implementation and the two drift. That is `P?-64`'s shape exactly -- two owners of one fact.\n2. Let one evaluator's exception abort the build (the inventory blanks, and an operator reads a blank page as calm) or swallow it into a healthy row (worse -- the rule reports green because it could not be checked). The guard's config is NULL until `LoadConfig` runs, so this input is not hypothetical; it is what a read during startup sees.\n3. Report `Enforcing` without the guard being both in an acting mode AND armed. The box has spent its whole life in `shadow` while armed, so \"armed\" is precisely the state an operator misreads as protected.\n4. Show the inventory only underneath an account. `P1-77`'s consistency cap is broken for every account equally -- it is a property of the BUILD -- so a box with no accounts loaded would render an empty, entirely reassuring page. \"Nothing to show\" and \"nothing is wrong\" must not look the same. That is INERT's own argument, one level up.\n\nAnd one smaller defect found while writing the tests: `GuardRuleRegistry.Rules` and `.NonRules` expose the backing `List<>` as `IList<>`, so any caller can `Add` a rule. A surface that can invent a rule can claim protection this codebase does not implement -- the inverse of `P1-77` and just as false.",
+      "spec": "Implement the four stubs so that the inventory can be produced from a running guard, with the derivation staying in exactly one place.\n\nA. `GuardRuleRegistry.CanAct(string mode, bool isArmed)` -- currently `return false;`. The guard can act when it is in an ACTING mode and armed. The guard's own test is `RiskGuardAddOn.IsActingMode()`, which is `_mode == \"live\"` (the four modes the validator accepts are `shadow`, `live`, `pure` and `override_with_friction`), combined with `_isArmed`, which every enforcement site checks separately. Return the conjunction. Its doc comment records why this duplicate is tolerated; keep it.\n\nB. `GuardRuleRegistry.BuildSnapshot(config, propConfig, mode, isArmed, accounts, newsEventCount)` -- currently `return null;`. Return a `GuardSnapshot` with:\n   * `TakenUtc = DateTime.UtcNow`, and `Mode`/`IsArmed` set from the arguments. These describe the world the rows were derived in; a header that disagrees with its rows is the cheapest possible lie.\n   * `Accounts` -- one `GuardAccountRules` per entry in `accounts`, in the order given, each carrying `AccountName`, `IsExcluded` and `IsLockedOut` copied from the account snapshot, and `Rules` containing EXACTLY one `GuardRuleRow` per registered rule.\n   * `UnevaluatedRules` -- one row per registered rule with `Evaluator == null`, built once and independently of any account, with `State = ConfiguredNotEvaluated` and `Note` carrying that rule's `UnevaluatedReason`.\n   * `Accounts` and `UnevaluatedRules` are NEVER null. An empty account list produces an empty `Accounts` and a fully populated `UnevaluatedRules`.\n\n   For each rule and account, build one `GuardRuleContext` (`AccountName`, `Config`, `PropConfig`, `Account` = that account's snapshot, `AllAccounts` = the whole list, `NewsEventCount`), invoke the evaluator, and set the row's `State` by calling `GuardRuleRegistry.DeriveState(def, reading, CanAct(mode, isArmed), account.IsExcluded)`. DO NOT re-implement the state ladder -- `DeriveState` is the only place the vocabulary lives, and a second copy is the defect this ticket exists to avoid.\n\n   Copy `Name`, `ConfigPath`, `Source` and `Scope` from the definition, and `CurrentValue`, `Limit`, `EvidenceCount` and `Note` from the reading. When there is no reading (no evaluator, or the evaluator threw), leave the numbers null, set `EvidenceCount` 0, and set `Note` from `UnevaluatedReason` or from the failure (see C).\n\nC. AN EVALUATOR THAT THROWS IS CONTAINED AND NAMED. Wrap each evaluator call. On an exception: that ONE rule reports `ConfiguredNotEvaluated` with a `Note` that names the failure (the exception type and message are enough), and every other rule still builds. Do not let the exception escape `BuildSnapshot`, and do not let a caught exception produce any state other than `ConfiguredNotEvaluated` -- a rule that could not be checked is, to the operator, indistinguishable from one nothing checks, so it reports the same thing. A null `config` must therefore yield a COMPLETE inventory of red rows rather than a throw.\n\nD. `RiskGuardAddOn.BuildGuardSnapshot()` -- currently `return null;`. Gather `_config`, `PropFirmProtectionSuite.Instance.Config`, `_mode`, `_isArmed`, `GetAccountSnapshots()` and `PropFirmProtectionSuite.Instance.NewsEventCount`, and return `GuardRuleRegistry.BuildSnapshot(...)` of them. Read `_mode` and `_isArmed` under `_stateLock`, as `IsActingMode` does. NO rule logic and NO state derivation here -- this method exists only to reach the things the registry cannot.\n\nE. `PropFirmProtectionSuite.NewsEventCount` -- currently `return -1;`. Return `_newsEvents.Count` under `_lock`.\n\nF. MAKE THE REGISTRY READ-ONLY. `Rules` and `NonRules` must return a collection whose `Add` throws `NotSupportedException` -- `_rules.AsReadOnly()` returns `ReadOnlyCollection<T>`, which does that and still satisfies `IList<T>`. Both accessors, not just the one the test names.\n\nOUT OF SCOPE, and do not touch: any bridge route, any HTTP or JSON serialization, any file under `addons/TradeCopier*`, the rule definitions themselves (no evaluator is to be added, removed or edited -- in particular do NOT give the consistency cap an evaluator; its null is an assertion), and `DeriveState`'s ladder.",
+      "context": "THE STUBS ALREADY EXIST -- DO NOT REDECLARE ANYTHING. `GuardRuleRegistry.CanAct`, `GuardRuleRegistry.BuildSnapshot`, `RiskGuardAddOn.BuildGuardSnapshot`, `PropFirmProtectionSuite.NewsEventCount` and `GuardSnapshot.UnevaluatedRules` are all declared, with bodies that return a degenerate value. Replace the BODIES. Declaring any of them again is `error CS0102`/`CS0111`, which has cost previous tickets several rounds.\n\nEVERYTHING IN THIS TICKET IS COMPILED AND EXECUTED BY THE SUITE. Unlike UI2, there is no `#if !TESTING` file in scope, so every acceptance test really runs the code you write. `dotnet build` in `tests/` is the truth.\n\nEXACT MEMBER NAMES -- DO NOT GUESS. `GuardRuleDefinition`, `GuardRuleReading`, `GuardRuleContext`, `GuardRuleRow`, `GuardAccountRules`, `GuardSnapshot` and `RiskGuardAddOn.AccountStateSnapshot` are all included as read-only regions so their real property names are visible. `GuardRuleReading` has `CurrentValue`, `Limit`, `EvidenceCount`, `DisabledByConfig` and `Note` -- note that `DisabledByConfig` is consumed by `DeriveState` and is NOT copied onto the row.\n\nTHIS IS C# 7.3 TARGETING NT8. No target-typed `new`, no records, no switch expressions, no range operators. Match the surrounding style: explicit types in public signatures, `var` for locals.\n\nWHY THE PAIRED ASSERTIONS. Several acceptance tests assert BOTH that something reports zero enforcing rules AND that something else reports some. That is deliberate: `return new GuardSnapshot()` satisfies every \"nothing enforces\" assertion on its own. If you find yourself making a test pass by producing less, you are producing the defect.",
+      "expect_green": [
+        "the built snapshot gives every account exactly the rules the registry declares, no more and no fewer",
+        "no caller can add a rule to the registry through its public accessor -- a surface that can invent a rule can claim protection that does not exist",
+        "a null config still produces a complete inventory instead of throwing, so one failing evaluator cannot blank every other rule",
+        "an evaluator that could not run reports CONFIGURED-not-EVALUATED with the reason named, and nothing reports ENFORCING",
+        "the registry's CanAct matches the guard's own acting-and-armed test for all 8 mode/arming combinations",
+        "shadow-and-armed and live-but-disarmed both report ZERO enforcing rules, while live-and-armed reports some",
+        "the snapshot reports the mode and arming its rows were derived against, and when it was taken",
+        "the excluded account reports zero enforcing rules while the account beside it reports many, in the same live-and-armed snapshot",
+        "the news shield reports INERT through the built snapshot with no events loaded, and ENFORCING once three are -- so the count is carried, not assumed",
+        "PropFirmProtectionSuite reports the number of news events it is actually holding",
+        "with zero accounts the snapshot still lists every rule that nothing evaluates, each red and each saying why",
+        "each account row carries its own excluded and locked-out flags, so an amber inventory says WHY it is amber",
+        "RiskGuardAddOn.BuildGuardSnapshot reports the guard's own mode and arming and never returns null lists"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static bool CanAct(string mode, bool isArmed)",
+          "note": "STUB -- already declared, returns false. Replace the body only; keep the doc comment, which records why this duplicate of the guard's own rule is tolerated."
+        },
+        {
+          "id": "R2",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static GuardSnapshot BuildSnapshot(",
+          "note": "THE BUILDER -- already declared, returns null. This is the whole ticket. Keep the doc comment."
+        },
+        {
+          "id": "R3",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static GuardRuleState DeriveState(",
+          "note": "READ-ONLY. The ONLY implementation of the four-state ladder. Call it; do not copy it, do not reorder it, do not add a rung."
+        },
+        {
+          "id": "R4",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static IList<GuardRuleDefinition> Rules",
+          "note": "The RULES accessor. Must return a read-only view -- `_rules.AsReadOnly()`. R12 is its twin and needs the same change. Do not change the backing field."
+        },
+        {
+          "id": "R5",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public class GuardRuleRow",
+          "note": "READ-ONLY. The row's exact property names. R13 is the snapshot it goes into. Do not modify."
+        },
+        {
+          "id": "R6",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public class GuardRuleReading",
+          "note": "READ-ONLY. The reading and the context. Note `DisabledByConfig`: it is consumed by DeriveState and is NOT a row field. Do not modify."
+        },
+        {
+          "id": "R7",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public class GuardRuleDefinition",
+          "note": "READ-ONLY. A null `Evaluator` is an ASSERTION that nothing evaluates the field, and `UnevaluatedReason` is the text the red row shows. Do not add an evaluator to any rule."
+        },
+        {
+          "id": "R8",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public GuardSnapshot BuildGuardSnapshot()",
+          "note": "STUB -- already declared, returns null. Gather and delegate. Read _mode and _isArmed under _stateLock. No logic."
+        },
+        {
+          "id": "R9",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public class AccountStateSnapshot",
+          "note": "READ-ONLY. The account snapshot's real property names, including IsExcluded and IsLockedOut. Do not modify."
+        },
+        {
+          "id": "R10",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal bool IsActingMode(bool forceLive = false)",
+          "note": "READ-ONLY. The guard's OWN acting test, which CanAct must agree with. A test compares them across all four modes."
+        },
+        {
+          "id": "R11",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "public int NewsEventCount",
+          "note": "STUB -- already declared, returns -1. Return _newsEvents.Count under _lock. This is P2-25's evidence count and the only number that separates a working news shield from one that can never fire."
+        },
+        {
+          "id": "R12",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static IList<GuardNonRule> NonRules",
+          "note": "The NON-RULES accessor. Same change as R4 -- `_nonRules.AsReadOnly()`. Listed separately because it is a separate one-line member and the ticket's spec says BOTH; a fix applied to only one of two identical accessors is how a widened surface survives a review."
+        },
+        {
+          "id": "R13",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public class GuardSnapshot",
+          "note": "READ-ONLY. What BuildSnapshot returns, including `UnevaluatedRules` -- whose doc comment states why it exists and why it must be populated even when there are no accounts. Do not modify."
+        },
+        {
+          "id": "R14",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public class GuardAccountRules",
+          "note": "READ-ONLY. One account's group: AccountName, IsExcluded, IsLockedOut, Rules. Do not modify."
+        }
+      ]
+    }
+  ]
+}

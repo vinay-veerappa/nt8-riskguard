@@ -424,7 +424,12 @@ is reachable **only through the bridge**.
    `TradeCopierEngine` and `RiskGuardAddOn`; one path constant in core with the bridge delegating;
    **`P?-64` + `P?-65` closed**. All inside `RiskGuardTests.csproj`. This is handover §5.6 item 2 and
    is directly agent-loop-able.
-2. **The read model** — §6's snapshot contents, including the three-state per rule. Tested in core.
+2. **The read model** — §6's snapshot contents, including the per-rule state. Tested in core.
+   **DONE in two landings.** `UI3` declared the rules and the four states (§6a); `UI4` built the
+   **producer**, which was the half that could quietly give the honesty back. Registry immutable
+   (`P2-82`), evaluator failures contained and named, and `UnevaluatedRules` reported independently
+   of any account (`P2-83`) so a box with no accounts cannot render as healthy. 21 mutants, 0
+   survivors.
 3. **Bridge routes** — static serving + a snapshot endpoint; SSE already exists.
 4. **The UI itself** — one static file, fleet + inspector + events.
 5. **`F-9`** firm mapping, which is what makes the risk half of the inspector tell the truth.

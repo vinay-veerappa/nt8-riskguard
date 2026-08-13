@@ -45,27 +45,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**81 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**83 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 78 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 80 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 78 + 3 = 81. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+write-up yet. 80 + 3 = 83. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
 but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
 | **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-81` | 40 | **4** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
-| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78` | 11 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
+| **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83` | 13 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
-| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. ⚠️ Branch `feat/ui-config-single-owner`, **unmerged**. |
-| | | **81** | **15** | **66 closed or superseded** |
+| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
+| | | **83** | **15** | **68 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1771,6 +1771,58 @@ see `P3-34`, which asks the same question about the copier.
 (parser). No other reference exists in either repo.
 **Reported by**: the `UI3` registry, which carries it as a rule with no evaluator and states the
 reason — so it renders red rather than being invisible.
+
+---
+
+### P2-82. The rule registry was publicly mutable — CLOSED (`UI4`, 2026-08-13)
+
+*(found while writing `UI4`'s acceptance tests, not by review.)*
+
+`GuardRuleRegistry.Rules` and `.NonRules` returned their backing `List<T>` typed as `IList<T>`, so
+`GuardRuleRegistry.Rules.Add(...)` compiled and worked from anywhere in the assembly.
+
+The registry's entire value is that it is the **single** statement of what this codebase does and
+does not enforce. A caller that can add an entry can make the inventory report protection that no
+code implements — **`P1-77` inverted**: instead of a config field with no evaluator rendering red,
+an invented rule renders green. It is the more dangerous direction of the two, because `P1-77` at
+least fails safe.
+
+**Fixed** by returning `AsReadOnly()` from both accessors, pinned by a test that asserts `Add`
+throws on **each**, and by two mutants — one per accessor.
+
+⚠️ **The second mutant is the point.** The fix was applied to both accessors, but the first test
+exercised only `Rules`, and the `NonRules` mutant **survived**. The defect lived in two identical
+members and a test aimed at the one a mutant happened to name would have left half of it open.
+That is the general shape of "a fix applied to one of N identical sites", and the only thing that
+caught it was mutating both.
+
+**Where**: `addons/GuardRules.cs` — the two accessors immediately after `_nonRules`.
+**Shipped in**: `v1.3.0` (as the defect); closed on `feat/ui-snapshot-builder`.
+
+---
+
+### P2-83. A snapshot with no accounts rendered as healthy — CLOSED (`UI4`, 2026-08-13)
+
+*(design defect in `UI3`'s DTO, found by writing the producer for it. It never reached an operator
+because nothing rendered the DTO.)*
+
+`GuardSnapshot` carried its rule inventory **only underneath an account**. On a box with no
+accounts loaded — during startup, after a connection loss, or on a machine where the guard has
+seen no account activity yet — the inventory would have been empty, and an empty page reads as
+*nothing is wrong*.
+
+But `P1-77`'s consistency cap is broken for **every account equally**: a rule with no evaluator is
+a property of the **build**, not of an account. Reporting it zero times because there is no
+account to hang it on is the same lie `INERT` exists to prevent, told one level up — *"nothing to
+show"* and *"nothing is wrong"* rendered identically.
+
+**Fixed** by `GuardSnapshot.UnevaluatedRules`, built once per snapshot and independently of any
+account, and by treating a **null** account list as an empty one so that nothing about the account
+set can make `BuildSnapshot` throw — an exception there blanks the inventory, which is the same
+failure by another route.
+
+**Where**: `addons/GuardRules.cs`, `GuardSnapshot` and `GuardRuleRegistry.BuildSnapshot`.
+**Shipped in**: `v1.3.0` (as the defect, unrendered); closed on `feat/ui-snapshot-builder`.
 
 ---
 

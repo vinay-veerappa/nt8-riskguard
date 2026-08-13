@@ -1021,6 +1021,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi3_TheWorstStateSortsFirst();
             TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
             TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
+            TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
+            TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing();
+            TestUi4_TheCanActCopyAgreesWithTheGuardItself();
+            TestUi4_NothingEnforcesUnlessTheSnapshotSaysLiveAndArmed();
+            TestUi4_AnExcludedAccountEnforcesNothingBesideOneThatDoes();
+            TestUi4_TheNewsEvidenceReachesTheRuleThroughTheSnapshot();
+            TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates();
+            TestUi4_TheSnapshotCarriesTheGuardsOwnModeArmingAndAccountFlags();
+            TestUi4_NothingAboutTheBuildCanBlankTheInventoryOrLeaveARedRowMute();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -2823,6 +2832,473 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "EvidenceLabel, and no scalar rule claims one ({0} mismatched{1})",
                 mislabelled.Count,
                 mislabelled.Count == 0 ? "" : ": " + string.Join("; ", mislabelled)));
+        }
+
+        // ── UI4: the snapshot BUILDER ────────────────────────────────────────────────────
+        //
+        // UI3 declared the rules and the four states. Nothing produced a GuardSnapshot from
+        // them -- it was a DTO with no producer, so the bridge route in §10 item 3 would have
+        // had nothing to serve.
+        //
+        // The builder is where the honesty UI3 bought can be quietly given back. Every test
+        // below is aimed at one specific way of doing that, and they share a shape: a snapshot
+        // that is MORE REASSURING than the truth is the only failure direction that can hurt
+        // someone. A builder that reports nothing at all is safe-but-useless, so the tests that
+        // check "nothing enforces here" are paired with a case that MUST enforce -- otherwise
+        // `return new GuardSnapshot()` passes them all.
+
+        /// <summary>Builds a plausible account snapshot without needing an NT8 Account.</summary>
+        private static RiskGuardAddOn.AccountStateSnapshot Ui4Account(string name, bool excluded = false, bool lockedOut = false)
+        {
+            return new RiskGuardAddOn.AccountStateSnapshot
+            {
+                AccountName = name,
+                IsExcluded = excluded,
+                IsLockedOut = lockedOut,
+                RealizedPnL = -250.0,
+                UnrealizedPnL = -50.0,
+                TradesToday = 4,
+                ConsecutiveLosses = 1,
+                AccountEquity = 50000.0,
+                PositionString = "L 1 MNQ"
+            };
+        }
+
+        /// <summary>A config with the switches on, so rules have something to be enforcing ABOUT.</summary>
+        private static RiskConfig Ui4Config()
+        {
+            var cfg = new RiskConfig();
+            cfg.PnLRules.DailyLossLimit = 1000.0;
+            cfg.PnLRules.TrailingDrawdown = 2000.0;
+            cfg.BlockedInstruments.Add("ZB");
+            cfg.InstrumentLimits["NQ"] = new PerInstrumentRiskConfig { MaxContracts = 2 };
+            cfg.FirmMirror.Enabled = true;
+            cfg.FirmMirror.TrailingDD.Enabled = true;
+            cfg.FirmMirror.DailyLoss.Enabled = true;
+            cfg.FirmMirror.AccountFirmMap["Ui4Acc"] = "Apex";
+            return cfg;
+        }
+
+        private static void TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited()
+        {
+            Console.WriteLine("\n[TEST] UI4: every account carries every rule, and the registry is not editable through its accessor");
+
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot>
+            {
+                Ui4Account("Ui4Acc"), Ui4Account("Ui4Other")
+            };
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true, accounts, 0);
+
+            // A rule silently missing from an account's inventory is the SAME defect this whole
+            // registry exists to close -- a limit that is not reported is a limit nobody checks --
+            // so it is asserted as a set equality, not a count. A count alone passes when one rule
+            // is dropped and another duplicated.
+            var expected = new HashSet<string>(GuardRuleRegistry.Rules.Select(r => r.ConfigPath));
+            bool everyAccountComplete = snap != null && snap.Accounts != null && snap.Accounts.Count == 2;
+            if (everyAccountComplete)
+            {
+                foreach (var acct in snap.Accounts)
+                {
+                    if (acct.Rules == null || acct.Rules.Count != expected.Count
+                        || !expected.SetEquals(acct.Rules.Select(r => r.ConfigPath)))
+                    {
+                        everyAccountComplete = false;
+                        break;
+                    }
+                }
+            }
+
+            Assert(everyAccountComplete, string.Format(
+                "the built snapshot gives every account exactly the rules the registry declares, "
+                + "no more and no fewer ({0} expected)", expected.Count));
+
+            // The registry is exposed as IList over a List, so `Rules.Add(...)` compiles and
+            // works. A surface that can add its own rule can report protection this codebase
+            // does not implement -- the inverse of P1-77 and just as false. The registry is the
+            // single source of truth or it is not worth having.
+            // BOTH accessors. The first draft tested only `Rules`, and the mutant that handed
+            // `NonRules` back its backing list SURVIVED -- the exact "a fix applied to one of two
+            // identical accessors" hazard this ticket's own region note warned about, missed by
+            // the test that warned about it.
+            bool rulesRefuses = false, nonRulesRefuses = false;
+            try
+            {
+                GuardRuleRegistry.Rules.Add(new GuardRuleDefinition { Name = "injected", ConfigPath = "injected" });
+                GuardRuleRegistry.Rules.RemoveAt(GuardRuleRegistry.Rules.Count - 1);   // undo if it got in
+            }
+            catch (NotSupportedException) { rulesRefuses = true; }
+            try
+            {
+                GuardRuleRegistry.NonRules.Add(new GuardNonRule { ConfigPath = "injected", Reason = "injected" });
+                GuardRuleRegistry.NonRules.RemoveAt(GuardRuleRegistry.NonRules.Count - 1);
+            }
+            catch (NotSupportedException) { nonRulesRefuses = true; }
+
+            Assert(rulesRefuses && nonRulesRefuses,
+                "no caller can add a rule to the registry through its public accessor -- a surface "
+                + "that can invent a rule can claim protection that does not exist");
+        }
+
+        private static void TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing()
+        {
+            Console.WriteLine("\n[TEST] UI4: a null config degrades to CONFIGURED-not-EVALUATED rather than throwing");
+
+            // This is not a hypothetical input. The guard's config is null until LoadConfig runs,
+            // and the bridge route this snapshot exists to serve can be called at any moment --
+            // including during startup, which is exactly when an operator most wants to look.
+            //
+            // Two things must hold and they pull in opposite directions: one rule blowing up must
+            // not blank the inventory (or a single bad evaluator hides all the others), and it
+            // must not be swallowed into a green row either. An evaluator that could not run is
+            // indistinguishable, to the operator, from one that does not exist -- so it reports
+            // the same state, with the failure named in the note.
+            GuardSnapshot snap = null;
+            Exception threw = null;
+            try { snap = GuardRuleRegistry.BuildSnapshot(null, null, "live", true,
+                    new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") }, 0); }
+            catch (Exception ex) { threw = ex; }
+
+            Assert(threw == null && snap != null && snap.Accounts != null && snap.Accounts.Count == 1
+                   && snap.Accounts[0].Rules != null
+                   && snap.Accounts[0].Rules.Count == GuardRuleRegistry.Rules.Count,
+                "a null config still produces a complete inventory instead of throwing, so one "
+                + "failing evaluator cannot blank every other rule"
+                + (threw == null ? "" : " (threw " + threw.GetType().Name + ")"));
+
+            int enforcing = snap == null || snap.Accounts == null ? -1
+                : snap.Accounts[0].Rules.Count(r => r.State == GuardRuleState.Enforcing);
+            var unnamed = snap == null || snap.Accounts == null ? new List<string>()
+                : snap.Accounts[0].Rules
+                    .Where(r => r.State == GuardRuleState.ConfiguredNotEvaluated && string.IsNullOrWhiteSpace(r.Note))
+                    .Select(r => r.ConfigPath).ToList();
+
+            Assert(enforcing == 0 && unnamed.Count == 0, string.Format(
+                "an evaluator that could not run reports CONFIGURED-not-EVALUATED with the reason "
+                + "named, and nothing reports ENFORCING ({0} enforcing, {1} red rows with no reason)",
+                enforcing, unnamed.Count));
+        }
+
+        private static void TestUi4_TheCanActCopyAgreesWithTheGuardItself()
+        {
+            Console.WriteLine("\n[TEST] UI4: the registry's can-act rule agrees with the guard's own, for every valid mode");
+
+            // GuardRuleRegistry.CanAct DUPLICATES RiskGuardAddOn.IsActingMode plus its arming
+            // check, so that the registry stays host-agnostic. A duplicated rule is P?-64's shape
+            // -- two owners, drifting apart in silence -- and the only thing that makes the
+            // duplication acceptable is this test. Every mode the validator accepts is covered,
+            // so adding a fifth mode to one side and not the other fails here.
+            var mismatches = new List<string>();
+            foreach (var mode in new[] { "shadow", "live", "pure", "override_with_friction" })
+            {
+                foreach (var armed in new[] { true, false })
+                {
+                    var addon = new RiskGuardAddOn();
+                    addon.SetConfigForTest(new RiskConfig());
+                    addon.SetModeForTest(mode);
+                    addon.SetArmedForTest(armed);
+
+                    bool truth = addon.IsActingMode() && addon.GetIsArmed();
+                    if (GuardRuleRegistry.CanAct(mode, armed) != truth)
+                        mismatches.Add(mode + "/armed=" + armed);
+                }
+            }
+
+            Assert(mismatches.Count == 0, string.Format(
+                "the registry's CanAct matches the guard's own acting-and-armed test for all 8 "
+                + "mode/arming combinations ({0} disagreed{1})",
+                mismatches.Count, mismatches.Count == 0 ? "" : ": " + string.Join(", ", mismatches)));
+        }
+
+        private static void TestUi4_NothingEnforcesUnlessTheSnapshotSaysLiveAndArmed()
+        {
+            Console.WriteLine("\n[TEST] UI4: no rule reports ENFORCING unless the snapshot itself says live and armed");
+
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") };
+            Func<string, bool, GuardSnapshot> build = (mode, armed) => GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), mode, armed, accounts, 0);
+            Func<GuardSnapshot, int> enforcingIn = s => s == null || s.Accounts == null ? -1
+                : s.Accounts.Sum(a => a.Rules == null ? 0 : a.Rules.Count(r => r.State == GuardRuleState.Enforcing));
+
+            // The box has been sitting in `shadow` while ARMED for its whole life (handover §0),
+            // so "armed" is the state an operator is most likely to read as "protected". It is
+            // not: in shadow every action is logged and none is taken.
+            int shadowArmed = enforcingIn(build("shadow", true));
+            int liveDisarmed = enforcingIn(build("live", false));
+            int liveArmed = enforcingIn(build("live", true));
+
+            // The pairing is the point. `return new GuardSnapshot()` satisfies the two zeros.
+            Assert(shadowArmed == 0 && liveDisarmed == 0 && liveArmed > 0, string.Format(
+                "shadow-and-armed and live-but-disarmed both report ZERO enforcing rules, while "
+                + "live-and-armed reports some (got {0}, {1}, {2})",
+                shadowArmed, liveDisarmed, liveArmed));
+
+            // And the header must describe the same world the rows were derived in. A snapshot
+            // whose rows say `Enforcing` above a header saying `shadow` is a lie either way round,
+            // and it is the cheapest lie to introduce -- one stale field.
+            // Both directions of BOTH fields. Asserting only the armed case let a mutant that
+            // hardcoded `IsArmed = true` survive: every build in this test happened to be armed,
+            // so the field was never observed being false, and "always armed" is the single most
+            // reassuring thing a header can say.
+            var s = build("shadow", true);
+            var d = build("live", false);
+            Assert(s != null && s.Mode == "shadow" && s.IsArmed
+                   && d != null && d.Mode == "live" && !d.IsArmed
+                   && s.TakenUtc > DateTime.UtcNow.AddMinutes(-5) && s.TakenUtc <= DateTime.UtcNow.AddMinutes(1),
+                "the snapshot reports the mode and arming its rows were derived against, and when "
+                + "it was taken");
+        }
+
+        private static void TestUi4_AnExcludedAccountEnforcesNothingBesideOneThatDoes()
+        {
+            Console.WriteLine("\n[TEST] UI4: an excluded account enforces nothing, in the same snapshot as one that does");
+
+            // Both accounts in ONE snapshot, live and armed. Asserting only that the excluded
+            // account is quiet would pass on a builder that never enforces anything at all -- the
+            // contrast is what makes it evidence.
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>
+                {
+                    Ui4Account("Ui4Acc"),
+                    Ui4Account("Ui4Excluded", excluded: true)
+                },
+                0);
+
+            var included = snap == null || snap.Accounts == null ? null
+                : snap.Accounts.FirstOrDefault(a => a.AccountName == "Ui4Acc");
+            var excluded = snap == null || snap.Accounts == null ? null
+                : snap.Accounts.FirstOrDefault(a => a.AccountName == "Ui4Excluded");
+
+            int inc = included == null || included.Rules == null ? -1
+                : included.Rules.Count(r => r.State == GuardRuleState.Enforcing);
+            int exc = excluded == null || excluded.Rules == null ? -1
+                : excluded.Rules.Count(r => r.State == GuardRuleState.Enforcing);
+
+            Assert(inc > 0 && exc == 0, string.Format(
+                "the excluded account reports zero enforcing rules while the account beside it "
+                + "reports many, in the same live-and-armed snapshot (got {0} included, {1} excluded)",
+                inc, exc));
+        }
+
+        private static void TestUi4_TheNewsEvidenceReachesTheRuleThroughTheSnapshot()
+        {
+            Console.WriteLine("\n[TEST] UI4: the news-event count reaches the shield through the snapshot, and the suite reports it honestly");
+
+            // P2-25 END TO END. Every earlier UI3 test handed the evaluator a context by hand;
+            // this one asserts the number survives the journey the production path actually takes.
+            // If the builder forgets to pass it -- or passes a constant -- the shield reports green
+            // on a box where the branch is unreachable, which is the exact defect this design was
+            // built to make visible.
+            var prop = new PropFirmProtectionConfig { EnableNewsShield = true };
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") };
+
+            Func<int, GuardRuleState> shieldAt = n =>
+            {
+                var s = GuardRuleRegistry.BuildSnapshot(Ui4Config(), prop, "live", true, accounts, n);
+                if (s == null || s.Accounts == null || s.Accounts.Count == 0 || s.Accounts[0].Rules == null)
+                    return GuardRuleState.Enforcing;   // fail loudly rather than pass on a null
+                var row = s.Accounts[0].Rules.FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableNewsShield");
+                return row == null ? GuardRuleState.Enforcing : row.State;
+            };
+
+            Assert(shieldAt(0) == GuardRuleState.Inert && shieldAt(3) == GuardRuleState.Enforcing,
+                "the news shield reports INERT through the built snapshot with no events loaded, "
+                + "and ENFORCING once three are -- so the count is carried, not assumed");
+
+            // And the row must SHOW the evidence, not merely be classified by it. §6a's whole
+            // demand is that every rule report the SIZE of what it evaluated against; a row whose
+            // state is right but whose displayed count is forged tells the operator that the news
+            // shield is watching one event when it is watching none. The note is the same
+            // argument: "0 events loaded, LocalNewsEventsFilePath has no loader" is the only part
+            // of an INERT row that says what to do about it.
+            Func<int, GuardRuleRow> shieldRowAt = n =>
+            {
+                var s = GuardRuleRegistry.BuildSnapshot(Ui4Config(), prop, "live", true, accounts, n);
+                return s == null || s.Accounts == null || s.Accounts.Count == 0 || s.Accounts[0].Rules == null
+                    ? null
+                    : s.Accounts[0].Rules.FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableNewsShield");
+            };
+            var inertRow = shieldRowAt(0);
+            var liveRow = shieldRowAt(3);
+
+            Assert(inertRow != null && liveRow != null
+                   && inertRow.EvidenceCount == 0 && liveRow.EvidenceCount == 3
+                   && !string.IsNullOrWhiteSpace(inertRow.Note),
+                "the news row shows the evidence count it was judged on and keeps the note that "
+                + "says what is missing, rather than only carrying the verdict");
+
+            // And the number the production path reads must be the real one. A hardcoded accessor
+            // would satisfy every test above, because they all inject the count directly.
+            // Asserted as a DELTA: the suite is a singleton another test already appends to.
+            var suite = PropFirmProtectionSuite.Instance;
+            int before = suite.NewsEventCount;
+            suite.AddTestNewsEvent(new EconomicNewsEvent { EventTimeUtc = DateTime.UtcNow.AddHours(6), Title = "UI4-A" });
+            suite.AddTestNewsEvent(new EconomicNewsEvent { EventTimeUtc = DateTime.UtcNow.AddHours(7), Title = "UI4-B" });
+
+            Assert(before >= 0 && suite.NewsEventCount == before + 2, string.Format(
+                "PropFirmProtectionSuite reports the number of news events it is actually holding "
+                + "(was {0}, now {1} after loading two)", before, suite.NewsEventCount));
+        }
+
+        private static void TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates()
+        {
+            Console.WriteLine("\n[TEST] UI4: a snapshot with no accounts still reports the rules nothing evaluates");
+
+            // INERT's argument, one level up. P1-77's consistency cap is broken for every account
+            // equally -- it is a property of the BUILD, not of an account -- so if the inventory
+            // only ever appears underneath an account, then a box with no accounts loaded renders
+            // an empty page and an operator reads "nothing to show" as "nothing is wrong".
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0);
+
+            var expected = new HashSet<string>(
+                GuardRuleRegistry.Rules.Where(r => r.Evaluator == null).Select(r => r.ConfigPath));
+
+            bool ok = snap != null && snap.Accounts != null && snap.Accounts.Count == 0
+                      && snap.UnevaluatedRules != null
+                      && expected.SetEquals(snap.UnevaluatedRules.Select(r => r.ConfigPath))
+                      && snap.UnevaluatedRules.All(r => r.State == GuardRuleState.ConfiguredNotEvaluated)
+                      // the reason is what makes the row actionable; a red row with no cause is noise
+                      && snap.UnevaluatedRules.All(r => !string.IsNullOrWhiteSpace(r.Note));
+
+            Assert(expected.Count > 0 && ok, string.Format(
+                "with zero accounts the snapshot still lists every rule that nothing evaluates, "
+                + "each red and each saying why ({0} of them)", expected.Count));
+        }
+
+        private static void TestUi4_TheSnapshotCarriesTheGuardsOwnModeArmingAndAccountFlags()
+        {
+            Console.WriteLine("\n[TEST] UI4: the addon's own snapshot reports its real mode and arming, and rows carry the account flags");
+
+            // The per-account flags are not decoration: `IsExcluded` is WHY every rule on that
+            // account reads EvaluatedNotEnforcing, and without it the operator sees a wall of
+            // amber with no cause. Same argument as UnevaluatedReason, at account scope.
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>
+                {
+                    Ui4Account("Ui4Acc"),
+                    Ui4Account("Ui4Excluded", excluded: true),
+                    Ui4Account("Ui4Locked", lockedOut: true)
+                },
+                0);
+
+            var byName = snap == null || snap.Accounts == null
+                ? new Dictionary<string, GuardAccountRules>()
+                : snap.Accounts.ToDictionary(a => a.AccountName);
+
+            Assert(byName.Count == 3
+                   && !byName["Ui4Acc"].IsExcluded && !byName["Ui4Acc"].IsLockedOut
+                   && byName["Ui4Excluded"].IsExcluded && !byName["Ui4Excluded"].IsLockedOut
+                   && !byName["Ui4Locked"].IsExcluded && byName["Ui4Locked"].IsLockedOut,
+                "each account row carries its own excluded and locked-out flags, so an amber "
+                + "inventory says WHY it is amber");
+
+            // The addon-side entry point: it must gather the guard's REAL mode and arming rather
+            // than defaulting them. Nothing here has accounts loaded, which is the point -- it is
+            // also the state in which the previous test's empty page would have looked healthy.
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(Ui4Config());
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            GuardSnapshot live = null;
+            Exception threw = null;
+            try { live = addon.BuildGuardSnapshot(); }
+            catch (Exception ex) { threw = ex; }
+
+            Assert(threw == null && live != null && live.Mode == "shadow" && live.IsArmed
+                   && live.Accounts != null && live.UnevaluatedRules != null
+                   && live.UnevaluatedRules.Count > 0,
+                "RiskGuardAddOn.BuildGuardSnapshot reports the guard's own mode and arming and "
+                + "never returns null lists"
+                + (threw == null ? "" : " (threw " + threw.GetType().Name + ")"));
+        }
+
+        private static void TestUi4_NothingAboutTheBuildCanBlankTheInventoryOrLeaveARedRowMute()
+        {
+            Console.WriteLine("\n[TEST] UI4: a null account list cannot blank the inventory, and no red row is left without a reason");
+
+            // ADDED AFTER THE REVIEW PANEL, and not because the panel was right. Its BLOCKER
+            // claimed an unlocked `_config` read lets an evaluator see a half-built config and
+            // throw, "producing a MORE REASSURING snapshot" -- but ConfiguredNotEvaluated is the
+            // WORST state in the ladder, so the argument is inverted, and `_config` is assigned
+            // as a whole replacement reference that is never null. Two of its four REQUIRED fixes
+            // are for conditions that cannot occur (`_newsEvents` is readonly and initialized;
+            // `Inert` is "not red" only if you have not read §6a, where it renders red).
+            //
+            // What survived is the CLASS of hazard: anything that makes BuildSnapshot throw
+            // blanks the inventory, and a blank page reads as calm. So the two cheap guards go
+            // in -- and they go in WITH THIS TEST, because unpinned defensive code is just more
+            // surface. If it is worth adding, it is worth being unable to delete silently.
+            GuardSnapshot snap = null;
+            Exception threw = null;
+            try { snap = GuardRuleRegistry.BuildSnapshot(Ui4Config(), new PropFirmProtectionConfig(), "live", true, null, 0); }
+            catch (Exception ex) { threw = ex; }
+
+            Assert(threw == null && snap != null && snap.Accounts != null && snap.Accounts.Count == 0
+                   && snap.UnevaluatedRules != null && snap.UnevaluatedRules.Count > 0,
+                "a null account list builds the same snapshot an empty one does, rather than "
+                + "throwing and leaving the operator a blank page"
+                + (threw == null ? "" : " (threw " + threw.GetType().Name + ")"));
+
+            // The other half: a red row that does not say why is noise, and noise trains an
+            // operator to ignore red rows. `UnevaluatedReason` is null for every rule that HAS an
+            // evaluator, so a reading of null -- returned rather than thrown -- would otherwise
+            // produce a mute red row. Asserted over EVERY row of a snapshot built with a null
+            // config, where every evaluator fails, plus the unevaluated list.
+            var broken = GuardRuleRegistry.BuildSnapshot(
+                null, null, "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") }, 0);
+
+            var mute = broken.Accounts.SelectMany(a => a.Rules)
+                .Concat(broken.UnevaluatedRules)
+                .Where(r => r.State == GuardRuleState.ConfiguredNotEvaluated && string.IsNullOrWhiteSpace(r.Note))
+                .Select(r => r.ConfigPath).ToList();
+
+            Assert(mute.Count == 0, string.Format(
+                "no rule can report red without stating a cause, however it came to be red ({0} "
+                + "mute{1})", mute.Count, mute.Count == 0 ? "" : ": " + string.Join(", ", mute)));
+
+            // ── the third survivor, closed by making the case IMPOSSIBLE rather than handled ──
+            // A mutant deleting a last-resort note in the builder survived, and correctly: it
+            // covered "an evaluator returns null instead of throwing", which NO evaluator does,
+            // so nothing could reach it. The fallback was unreachable defensive state -- more
+            // surface, unpinnable, and the registry is read-only now so a test cannot even inject
+            // a null-returning rule to exercise it.
+            //
+            // So the contract moved up: RETURNING A READING IS MANDATORY. Asserted here over
+            // every evaluator against both a starved and a populated context, which means a rule
+            // added later with a `return null` path fails the build instead of quietly producing
+            // a red row nobody can act on. The builder's fallback was then deleted.
+            var starved = new GuardRuleContext
+            {
+                AccountName = "Ui4Contract", Config = new RiskConfig(),
+                PropConfig = new PropFirmProtectionConfig(), Account = null,
+                AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot>(), NewsEventCount = 0
+            };
+            var fed = new GuardRuleContext
+            {
+                AccountName = "Ui4Contract", Config = Ui4Config(),
+                PropConfig = new PropFirmProtectionConfig(), Account = Ui4Account("Ui4Contract"),
+                AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Contract") },
+                NewsEventCount = 2
+            };
+
+            var returnedNull = new List<string>();
+            foreach (var rule in GuardRuleRegistry.Rules)
+            {
+                if (rule.Evaluator == null) continue;
+                if (rule.Evaluator(starved) == null) returnedNull.Add(rule.ConfigPath + " (starved)");
+                if (rule.Evaluator(fed) == null) returnedNull.Add(rule.ConfigPath + " (fed)");
+            }
+
+            Assert(returnedNull.Count == 0, string.Format(
+                "every evaluator returns a reading rather than null, so 'no reading' can only mean "
+                + "the evaluator threw ({0} returned null{1})",
+                returnedNull.Count, returnedNull.Count == 0 ? "" : ": " + string.Join(", ", returnedNull)));
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

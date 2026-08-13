@@ -10,3 +10,4 @@
 {"ts": "2026-08-12T14:06:19", "ticket": "UI1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["compile", "test"]}
 {"ts": "2026-08-12T14:54:44", "ticket": "UI1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": "compile"}
 {"ts": "2026-08-12T16:47:55", "ticket": "UI2", "verdict": "PANEL_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "review"}
+{"ts": "2026-08-12T18:48:52", "ticket": "UI4", "verdict": "PANEL_UNREACHABLE", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["compile", "review", "static", "test"]}
