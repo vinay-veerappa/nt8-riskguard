@@ -535,12 +535,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// else fell through to the permissive branch, and here the permissive branch submits
         /// real orders to a real account.
         /// </summary>
-        internal static bool IsCopierActingMode(string mode)
+        /// <summary>
+        /// public, not internal: the bridge derives what it REPORTS from this, so that the
+        /// displayed state cannot disagree with the enforced one. That is F-9's finding --
+        /// a rule's reported state had drifted from its enforced state in BOTH directions --
+        /// and the remedy there was the same, to derive the display from the enforcer.
+        /// </summary>
+        public static bool IsCopierActingMode(string mode)
         {
             return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase);
         }
 
-        internal static bool IsRecognisedCopierMode(string mode)
+        public static bool IsRecognisedCopierMode(string mode)
         {
             return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase)
