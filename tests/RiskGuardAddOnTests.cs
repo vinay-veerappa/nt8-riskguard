@@ -10006,7 +10006,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             var previousAccounts = Account.All;
             try
             {
-                Account.All = new List<Account> { new Account { Name = "Sim_All_Day_ORB" } };
+                // ⚠️ ALL FIVE mapped accounts, with the equities the box actually reports.
+                // The first draft of this test stubbed only ONE while mapping five, and asserted
+                // that the deployed configuration arms -- so it claimed to pin the live mapping
+                // while three quarters of it was untested. F-9b's account-exists check found that
+                // the moment it existed, by regressing this test. The fixture was wrong and the
+                // new check was right, which is the outcome a gate is for.
+                Account.All = new List<Account>
+                {
+                    F9bAccount("Sim_All_Day_ORB", 49833.70),
+                    F9bAccount("Sim-ORB", 100170.00),
+                    F9bAccount("Sim101", 99482.00),
+                    F9bAccount("SimCopy2", 98140.50),
+                    F9bAccount("SimCopyTest1", 100511.50),
+                };
 
                 var cfg = new RiskConfig();
                 cfg.Mode = "shadow";

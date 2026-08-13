@@ -3439,12 +3439,42 @@ namespace NinjaTrader.NinjaScript.AddOns
             // (e) FR-36: override friction minimums enforced.
             if (_mode == "override_with_friction" && _config.Override != null && _config.Override.WaitSeconds < 30)
                 result.Fail("OVERRIDE_FRICTION", "Override.WaitSeconds below FR-36 enforced minimum of 30s.");
-            // (f) FirmMirror validation (P2-8): if enabled, every mapped account's firm must exist in FirmProfiles,
-            // and each referenced firm profile must have non-zero amounts when its sub-rule is enabled.
+            // (f) FirmMirror validation (P2-8, F-9b): if enabled, every mapped account must exist on the platform,
+            // its firm must exist in FirmProfiles, and each referenced firm profile must have non-zero amounts when its sub-rule is enabled.
             if (_config.FirmMirror != null && _config.FirmMirror.Enabled)
             {
                 var fm = _config.FirmMirror;
-                if (fm.AccountFirmMap != null)
+
+                // F-9b: every mapped account name must resolve in Account.All (OrdinalIgnoreCase), regardless of equity.
+                if (result.Passed && fm.AccountFirmMap != null)
+                {
+                    int platformAccountCount = 0;
+                    var accountNameSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (Account a in Account.All)
+                    {
+                        if (a != null)
+                        {
+                            platformAccountCount++;
+                            if (!string.IsNullOrEmpty(a.Name))
+                                accountNameSet.Add(a.Name);
+                        }
+                    }
+
+                    foreach (var kvp in fm.AccountFirmMap)
+                    {
+                        if (string.IsNullOrEmpty(kvp.Value))
+                            continue;
+
+                        if (!accountNameSet.Contains(kvp.Key))
+                        {
+                            result.Fail("FIRM_MIRROR", $"Account '{kvp.Key}' mapped to firm '{kvp.Value}' was not found among the {platformAccountCount} account(s) reported by the platform. Correct the account name or connect the account.");
+                            break;
+                        }
+                    }
+                }
+
+                // P2-8: every mapped firm must exist in FirmProfiles.
+                if (result.Passed && fm.AccountFirmMap != null)
                 {
                     foreach (var kvp in fm.AccountFirmMap)
                     {
@@ -3455,6 +3485,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                     }
                 }
+
+                // P2-8: enabled firm sub-rules must have positive amounts.
                 if (result.Passed && fm.FirmProfiles != null)
                 {
                     foreach (var fp in fm.FirmProfiles)
