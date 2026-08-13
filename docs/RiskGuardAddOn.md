@@ -13,7 +13,9 @@
 >
 > **Do not make a decision from this file without checking the code.** It is "the artifact most
 > likely to cause a wrong decision under pressure", and it describes behaviour that several closed
-> defects changed. Re-checked 2026-08-13; the catalogue below is what is known to be wrong.
+> defects changed. Re-checked 2026-08-13 (session 34); the catalogue below is what is known to be
+> wrong. The authoritative source is
+> [RISKGUARD_HARDENING_HANDOVER.md](RISKGUARD_HARDENING_HANDOVER.md) §0.
 >
 > **Corrected in this pass** (single verified fact, safe to change in isolation):
 >
@@ -30,10 +32,12 @@
 > | §3 data-flow: sweep → `EvaluateRules` | the sweep no longer calls `EvaluateRules` |
 > | §6.5: the sweep keeps aggregate sizing, firm-mirror and grace-expiry polling | all three moved to event handlers / per-FSM timers. The sweep keeps only heartbeat, log flush, session reset, persist, lockout watchdog and FSM watchdog |
 > | §6.7: `EvaluateGraceExpiry` "called from a per-FSM Timer **or the sweep**" | the sweep never calls it — that "defensive" path does not exist |
-> | §9.1: automatic relationship quarantine on execution error / risk breach | not implemented (`P2-24`) |
-> | §9.3: news / target / giveback auto-lockout and auto-flatten | news is unreachable (`P2-25`); giveback was mis-wired (`P0-7`); target semantics were wrong (`P1-17`) |
-> | §2/§4/§8: "87 unit tests" / "84 comprehensive test methods" / "60 original + 24 FSM" | three different numbers **in one document**. The suite is **953** |
-> | "central `v1.1.0` version info" | accurate as a *constant*, but it is **not the version of anything** — git says `v1.0.2`. See [VERSION.md](VERSION.md) |
+> | §9.1: automatic relationship quarantine on execution error / risk breach | ✅ `P2-24` closed — dead code removed; the reconciler (P3-30/P3-31) is the repair path |
+> | §9.3: news / target / giveback auto-lockout and auto-flatten | ✅ `P2-25` closed — news shield now loads events from disk; giveback was fixed (P0-7); target semantics were fixed (P1-17) |
+> | §2/§4/§8: "87 unit tests" / "84 comprehensive test methods" / "60 original + 24 FSM" | three different numbers **in one document**. The suite is **1265** |
+> | "central `v1.1.0` version info" | the constant is now `1.13.0` and matches tag `v1.13.0` |
+> | §5/§6: "guard evaluation on the WPF dispatcher" | ✅ `P1-13` closed — `RunGuardWork` now runs inline always; the dispatcher is no longer in the path |
+> | §9.1: "order identification by name substring" | ✅ `P1-57` closed — orders are tracked by object reference, not name substring |
 >
 > **Entirely undescribed here**, all of it live behaviour: the pending-cancel queue and
 > `DrainPendingCancels` (`P1-35`), the sweep's three-phase lockout ordering (`P1-11`),
