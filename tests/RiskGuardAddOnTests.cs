@@ -152,6 +152,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP331_StaleLedgerEntryIsClearedAfterTimeout();
             TestP331_TimerCreatesMissingLegWhenNoInFlight();
             TestP331_TimerDoesNotCreateDuplicateWhenInFlight();
+            TestP330_AuditDetectsNakedPosition();
+            TestP330_AuditDetectsOrphanStop();
+            TestP330_AuditDetectsFsmBrokerDivergence();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18594,6 +18597,155 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool stopInFlight = ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_STOP");
             Assert(stopInFlight,
                 "with a registration, IsInFlight is true -- Reconcile suppresses Create, preventing a duplicate leg");
+        }
+
+        // ================================================================================
+        // P3-30: RiskGuard-side audit (naked position, orphan stop, FSM/broker divergence).
+        //
+        // The copier half shipped (reconciler + timer from P3-31). The guard half
+        // needs a periodic audit that checks the FSM state against the broker on a
+        // clock -- events alone miss a divergence with no subsequent event. The audit
+        // is an observer: it emits LogEvent, never actions.
+        //
+        // These tests are authored BEFORE the implementation (test-first per 6.0).
+        // They call RunAuditNow() which does not exist yet -- baseline red.
+        // ================================================================================
+
+        private static void TestP330_AuditDetectsNakedPosition()
+        {
+            Console.WriteLine("\n[TEST] P3-30: the audit detects a naked position");
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Naked" };
+            var state = new AccountState("P330Naked");
+            addon.SetAccountStateForTest("P330Naked", state);
+            addon.SetSubscribedAccountForTest("P330Naked");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // Give the account a position but no protective stop
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 1,
+                AveragePrice = 18000
+            });
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try
+            {
+                addon.RunAuditNow();
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Any(e => e.StartsWith("P330Naked/NAKED_POSITION", StringComparison.Ordinal)),
+                "the audit detects a naked position -- a position exists but no FSM is tracking it");
+        }
+
+        private static void TestP330_AuditDetectsOrphanStop()
+        {
+            Console.WriteLine("\n[TEST] P3-30: the audit detects an orphan stop");
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Orphan" };
+            var state = new AccountState("P330Orphan");
+            addon.SetAccountStateForTest("P330Orphan", state);
+            addon.SetSubscribedAccountForTest("P330Orphan");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // No positions, but a working stop order exists
+            account.Orders.Add(new Order
+            {
+                Instrument = new Instrument("MNQ"),
+                Name = "AUTO_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            });
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try
+            {
+                addon.RunAuditNow();
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Any(e => e.StartsWith("P330Orphan/ORPHAN_STOP", StringComparison.Ordinal)),
+                "the audit detects an orphan stop -- a working stop exists but the position is flat");
+        }
+
+        private static void TestP330_AuditDetectsFsmBrokerDivergence()
+        {
+            Console.WriteLine("\n[TEST] P3-30: the audit detects FSM/broker divergence");
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Div" };
+            var state = new AccountState("P330Div");
+            addon.SetAccountStateForTest("P330Div", state);
+            addon.SetSubscribedAccountForTest("P330Div");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // Give the account a position
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 1,
+                AveragePrice = 18000
+            });
+
+            // Create an FSM that claims Protected
+            var fsm = new PositionGuardFsm("P330Div", "MNQ");
+            fsm.State = GuardFsmState.Protected;
+            fsm.PositionQuantity = 1;
+            // Add a recognized stop to the FSM so CoveredQuantity reads as 1
+            fsm.AddRecognizedStop(new Order
+            {
+                Instrument = new Instrument("MNQ"),
+                Name = "AUTO_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            });
+            addon.SetFsmForTest("P330Div", "MNQ", fsm);
+
+            // But the broker has NO working stop order (divergence -- the FSM's
+            // recognized stop is not in account.Orders)
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try
+            {
+                addon.RunAuditNow();
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Any(e => e.StartsWith("P330Div/FSM_DIVERGENCE", StringComparison.Ordinal)),
+                "the audit detects FSM/broker divergence -- FSM says Protected but no working stop exists at the broker");
         }
     }
 }

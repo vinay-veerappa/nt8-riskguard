@@ -558,6 +558,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (_stateLock) { _guardFsms.Clear(); _pendingStops.Clear(); }
         }
 
+        // P3-30 stub: exists so the acceptance tests compile. The real audit is the
+        // agent loop's job. This stub does nothing, so every assertion fails.
+        internal void SetFsmForTest(string accountName, string instrument, PositionGuardFsm fsm)
+        {
+            lock (_stateLock) { _guardFsms[FsmKey(accountName, instrument)] = fsm; }
+        }
+        internal void RunAuditNow() { }
+
         // --- pending-stop buffer seams (P1-14) ---
         internal int TestPendingStopCount(string accountName, string instrument)
         {

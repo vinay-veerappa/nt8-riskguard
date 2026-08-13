@@ -1,0 +1,46 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P3-30: RiskGuard-side audit (naked position, orphan stop, FSM/broker divergence)",
+      "defect": "The copier half of P3-30 shipped (reconciler + timer from P3-31). The RiskGuard-side audit does not exist. The guard's FsmWatchdog runs on events only, so a divergence arriving with no subsequent event is permanent. The audit needs three checks on a clock: (1) naked position -- broker has a position but the FSM says Unprotected or CoveredQuantity < PositionQuantity; (2) orphan stop -- broker has a stop order but the position is flat or the FSM has no record; (3) FSM/broker divergence -- the FSM says Protected but the broker has no working stop order for that instrument. The guard's CoveredQuantity already answers the multi-stop coverage sum (handover 4a says: share it, do not rebuild it).",
+      "spec": "Add a periodic audit timer to RiskGuardAddOn that runs every ~10 seconds and performs three checks per account+instrument pair:\n\n1. NAKED POSITION: For each position in account.Positions, check if the FSM (_guardFsms) exists and is in a Protected state with CoveredQuantity >= PositionQuantity. If the FSM is Unprotected or CoveredQuantity < PositionQuantity, emit a NAKED_POSITION audit event with the account name, instrument, FSM state, and coverage gap. The existing FsmWatchdog already arms a grace timer for this; the audit is the clock-driven complement that catches the case where no event arrives.\n\n2. ORPHAN STOP: For each working stop order in account.Orders (OrderState.Working/Accepted), check if a corresponding position exists. If the position is flat or the FSM has no record of this instrument, emit an ORPHAN_STOP audit event. This is P0-50's class: an orphan stop on a flat account is a new position in the opposite direction the moment it triggers.\n\n3. FSM/BROKER DIVERGENCE: For each FSM in _guardFsms that claims Protected, verify that a working stop order exists in account.Orders for that instrument. If the FSM says Protected but the broker has no working stop, emit a FSM_DIVERGENCE audit event. This is the case where the FSM's optimistic fast path lost the truth.\n\nCONSTRAINTS:\n- The audit timer must NOT hold _stateLock across broker reads (P1-10/12). Read FSM state under _lock, release, enumerate account.Positions and account.Orders, compare.\n- The audit must NOT emit actions -- it emits LOG EVENTS only (LogEvent). Actions come from the existing FsmWatchdog/EvaluateRules path. The audit is an observer, not an enforcer.\n- Use LogEvent(accountName, eventType, message) so the LogEventObserver test probe can see the events.\n- The audit should be started in State.Configure (or the constructor) and disposed in Terminate.\n- Guard the timer callback with a try/catch so a broker enumeration error does not crash the timer.\n- The audit runs in every mode (shadow and live) because it logs only.\n- Share CoveredQuantity from the existing FSM -- do not rebuild the coverage calculation.\n- The audit interval should be configurable via a new config field AuditIntervalSeconds (default 10, 0 = disabled).",
+      "context": "Look at FsmWatchdog (line ~2954) for the existing event-driven naked-position check. Look at EvaluateRules (line ~3243) for how the guard enumerates accounts. The _guardFsms dictionary maps 'accountName|instrument' to PositionGuardFsm. PositionGuardFsm has: State (GuardFsmState enum: Unprotected/ProtectedPending/Protected), CoveredQuantity, PositionQuantity, AccountName, Instrument. The guard already has LogEvent(accountName, eventType, message). Tests use LogEventObserver to assert events were emitted.",
+      "expect_green": [
+        "the audit detects a naked position",
+        "the audit detects an orphan stop",
+        "the audit detects FSM/broker divergence"
+      ],
+      "regions": [
+        {
+          "id": "AuditTimerField",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "private readonly Dictionary<string, PositionGuardFsm> _guardFsms",
+          "kind": "line",
+          "note": "add the System.Threading.Timer field for the audit, and an AuditIntervalSeconds field, beside the FSM dictionary"
+        },
+        {
+          "id": "AuditMethod",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "private void FsmWatchdog()",
+          "note": "add the RunGuardAudit method near FsmWatchdog. It does the three checks: naked position, orphan stop, FSM divergence. Emits LogEvent for each finding. Does NOT hold _lock across broker reads."
+        },
+        {
+          "id": "AuditStartStop",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal void SetConfigForTest",
+          "kind": "line",
+          "note": "the audit timer should be startable/stoppable. Add StartAuditTimer/StopAuditTimer methods. For tests, a way to trigger the audit synchronously is needed -- add an internal RunAuditNow() method that calls the audit directly."
+        },
+        {
+          "id": "ConfigField",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public int MinShadowSessions",
+          "kind": "line",
+          "note": "add AuditIntervalSeconds to RiskConfig (default 10, 0 = disabled)"
+        }
+      ],
+      "max_rounds": 6
+    }
+  ]
+}
