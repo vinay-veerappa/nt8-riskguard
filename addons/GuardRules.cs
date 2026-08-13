@@ -235,7 +235,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static readonly List<GuardRuleDefinition> _rules = new List<GuardRuleDefinition>
         {
-            // ── P&L, per account ──────────────────────────────────────────────────────
+            // -- P&L, per account -------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Daily loss limit", ConfigPath = "PnLRules.DailyLossLimit",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
@@ -253,7 +253,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         c.Config.PnLRules.TrailingDrawdown, c.Account == null ? 0 : 1)
             },
 
-            // ── sizing ────────────────────────────────────────────────────────────────
+            // -- sizing -----------------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Max contracts per account", ConfigPath = "Sizing.MaxContractsPerAccount",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
@@ -273,7 +273,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         c.AllAccounts == null ? 0 : c.AllAccounts.Count)
             },
 
-            // ── overtrading ───────────────────────────────────────────────────────────
+            // -- overtrading ------------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Max trades per session", ConfigPath = "Overtrading.MaxTradesPerSession",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
@@ -298,7 +298,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     c.Config.Overtrading.MaxOrdersPerSecond > 0 ? null : "falling back to the built-in 5/s")
             },
 
-            // ── stop guard ────────────────────────────────────────────────────────────
+            // -- stop guard -------------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Action on missing stop", ConfigPath = "StopGuard.OnMissing",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerPosition,
@@ -320,14 +320,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // Empty map = every instrument falls back to the default. Worth SEEING.
                 // Evidence is 1, not the map size: an instrument with no entry falls back to a
                 // built-in default, so the guard still places the stop. INERT would be the wrong
-                // reading -- it means "cannot fire", and this always fires.
+                // reading -- it means "not protecting", and this always fires.
                 Evaluator = c => R(null, null, 1,
                     "tick offsets used when the guard places a stop itself; "
                     + (c.Config.StopGuard.Offsets == null ? 0 : c.Config.StopGuard.Offsets.Count)
                     + " configured, the rest fall back to the default")
             },
 
-            // ── instruments ───────────────────────────────────────────────────────────
+            // -- instruments ------------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Blocked instruments", ConfigPath = "BlockedInstruments",
                 EvidenceLabel = "instruments on the block list",
@@ -340,7 +340,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Name = "Per-instrument contract caps", ConfigPath = "InstrumentLimits",
                 EvidenceLabel = "instruments with a configured cap",
                 Source = GuardRuleSource.InstrumentLimit, Scope = GuardRuleScope.PerOrder,
-                // ⚠️ Only MaxContracts is read. IsBlocked and StopOffsetTicks on the SAME object
+                // WARNING: Only MaxContracts is read. IsBlocked and StopOffsetTicks on the SAME object
                 // have zero references anywhere -- P2-78 -- so a per-instrument `IsBlocked: true`
                 // looks exactly like the way to block one instrument and does nothing.
                 Evaluator = c => R(null, null,
@@ -349,7 +349,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "object are read by nothing (P2-78) -- use BlockedInstruments to block")
             },
 
-            // ── trading windows ───────────────────────────────────────────────────────
+            // -- trading windows --------------------------------------------------------
             new GuardRuleDefinition {
                 Name = "Trading window gate", ConfigPath = "EnableWindowGate",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
@@ -360,7 +360,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Evaluator = c => !c.Config.EnableWindowGate
                     ? Off("window gate off; trading is not restricted to the windows below")
                     : R(null, null, 1, (c.Config.WindowsET == null || c.Config.WindowsET.Count == 0)
-                        ? "⚠️ the gate is ON with NO windows configured -- check what this permits"
+                        ? "WARNING: the gate is ON with NO windows configured -- check what this permits"
                         : c.Config.WindowsET.Count + " window(s) permitted")
             },
             new GuardRuleDefinition {
@@ -369,14 +369,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Evaluator = c => !c.Config.EnableWindowGate
                     ? Off("only consulted when EnableWindowGate is true")
                     : R(null, null, 1, (c.Config.WindowsET == null || c.Config.WindowsET.Count == 0)
-                        ? "⚠️ no windows configured while the gate is ON"
+                        ? "WARNING: no windows configured while the gate is ON"
                         : c.Config.WindowsET.Count + " window(s)")
             },
 
-            // ── firm mirror ───────────────────────────────────────────────────────────
-            // ⚠️ Evidence is the ACCOUNT->FIRM MAP SIZE, not 1. The firm rules being "loaded but
+            // -- firm mirror ------------------------------------------------------------
+            // WARNING: Evidence is the ACCOUNT->FIRM MAP SIZE, not 1. The firm rules being "loaded but
             // unmapped, so none can fire" is a state this system has already been in (handover
-            // §0), and an unmapped firm rule must read INERT rather than green.
+            // section 0), and an unmapped firm rule must read INERT rather than green.
             new GuardRuleDefinition {
                 Name = "Firm trailing drawdown", ConfigPath = "FirmMirror.TrailingDD.Amount",
                 EvidenceLabel = "accounts mapped to a firm",
@@ -399,7 +399,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         c.Config.FirmMirror.AccountFirmMap == null ? 0 : c.Config.FirmMirror.AccountFirmMap.Count)
             },
 
-            // ── prop-firm suite: the ones that DO work ────────────────────────────────
+            // -- prop-firm suite: the ones that DO work ---------------------------------
             new GuardRuleDefinition {
                 Name = "Profit target lock", ConfigPath = "PropFirm.EnableProfitTargetLock",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
@@ -417,7 +417,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         "ignores peaks below $" + c.PropConfig.MinPeakGainDollars + " (P1-40)")
             },
 
-            // ── prop-firm suite: THE NEWS SHIELD. P2-25, and the reason for INERT. ─────
+            // -- prop-firm suite: THE NEWS SHIELD. P2-25, and the reason for INERT. ----
             new GuardRuleDefinition {
                 Name = "News shield", ConfigPath = "PropFirm.EnableNewsShield",
                 EvidenceLabel = "news events loaded",
@@ -426,16 +426,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // flag, calls IsInNewsWindow, which iterates _newsEvents -- a list nothing
                 // outside a test appends to, because LocalNewsEventsFilePath has no loader.
                 // Evidence is the EVENT COUNT, so this reports INERT until one is loaded.
-                Evaluator = c => c.PropConfig == null || !c.PropConfig.EnableNewsShield
+                //
+                // General rule: Disabled means "this would work if you turned it on". A rule
+                // with nothing to evaluate does not qualify, however its switch is set, so the
+                // zero-event reading must come from the evidence branch and report INERT.
+                Evaluator = c => c.PropConfig == null
                     ? Off("news shield disabled")
-                    : R(null, null, c.NewsEventCount,
-                        c.NewsEventCount == 0
-                            ? "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "
-                              + "stored in the config and nothing ever opens it. (P2-25)"
-                            : null)
+                    : c.NewsEventCount == 0
+                        ? R(null, null, 0,
+                            "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "
+                            + "stored in the config and nothing ever opens it. (P2-25)")
+                        : !c.PropConfig.EnableNewsShield
+                            ? Off("news shield disabled")
+                            : R(null, null, c.NewsEventCount, null)
             },
 
-            // ── prop-firm suite: the ones with NO evaluator. Each is a finding. ────────
+            // -- prop-firm suite: the ones with NO evaluator. Each is a finding. --------
             new GuardRuleDefinition {
                 Name = "Consistency / daily-profit cap", ConfigPath = "PropFirm.EnableConsistencyCap",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
