@@ -45,10 +45,9 @@ ENTRY_POINT = re.compile(
 # Wiring one of these without removing it from here is also a failure: the gate must not
 # be able to describe the code inaccurately in either direction.
 KNOWN_DEAD = {
-    'RunCopierPreflight':
-        "P3-34 shipped preflight but not its caller. Where the copier 'arms' is a design "
-        "decision (the copier acts regardless of guard mode -- that is the open half of "
-        "P3-34), so wiring it is part of closing P3-34, not a drive-by fix.",
+    # RunCopierPreflight was here. It is now called by TrySetCopierMode, which refuses the
+    # transition to `live` when preflight fails -- and this gate is what reported that it had
+    # been wired, which is the reason the WIRED-BUT-LISTED direction exists.
     'ReconcileFollowerPosition':
         "Sits inside `#if !TESTING`, so it has ZERO coverage, and it FLATTENS a live "
         "follower position. Wiring an uncovered flatten into a 5-second timer is not a "

@@ -282,6 +282,15 @@ jobs:
       - name: Mutation battery P3-30
         run: python mutation/mutate_p330.py
 
+      # P3-34's copier mode. Every mutant here is a way of writing code that looks like a
+      # shadow mode and places real orders anyway. Mutant 3 is the one to know: it keeps
+      # the gate and deletes the `continue`, so the copy is logged as suppressed and then
+      # submitted -- P1-70's class, and the shape of the fix is entirely present for anyone
+      # skimming the diff. Mutant 2 is P1-87's: an unrecognised mode must not fall through
+      # to the permissive branch, because here the permissive branch trades.
+      - name: Mutation battery P3-34
+        run: python mutation/mutate_p334.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

@@ -328,6 +328,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
             TestCopier_P171_ASuccessfulCopyAnnouncesItself();
+            TestCopier_P334_ShadowModeDescribesTheCopyAndDoesNotSendIt();
+            TestCopier_P334_TheShadowLineNamesTheOrderItWouldHaveSent();
+            TestCopier_P334_LiveModeIsUnchangedAndIsTheDefault();
+            TestCopier_P334_DisabledIsDistinctFromShadow();
+            TestCopier_P334_AnUnrecognisedModeDoesNotFallThroughToTrading();
+            TestCopier_P334_GoingLiveRunsPreflightAndARefusalKeepsTheOldMode();
+            TestCopier_P334_APassingPreflightAllowsTheSwitchToLive();
+            TestCopier_P334_LeavingLiveIsNeverBlocked();
+            TestCopier_P334_TheModeSurvivesDiskAndATypoIsNotAdopted();
             TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed();
             TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog();
             TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome();
@@ -4403,6 +4412,361 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(LoggedEventContaining(log, "SimVanished"),
                 "The log names WHICH account went missing. An outcome count with no account name "
                 + "would tell you a copy was dropped without telling you whose.");
+        }
+
+        // ==================================================================================
+        // P3-34: arm/shadow discipline extended to the copier.
+        //
+        // Section 0: "The copier acts regardless of guard mode. `shadow` restrains RiskGuard,
+        // not the copier." That is only half true, and the half that is false is the dangerous
+        // one to assume. A LIVE follower is already gated three ways -- ArmedForLive, CanTrade,
+        // and IsGuardProtecting (which requires mode == "live", so a shadow guard blocks it).
+        // A SIM follower is gated by NONE of them, so on a sim follower the copier acts fully
+        // whatever the guard is doing.
+        //
+        // So the copier needs its OWN mode, not a reading of the guard's: the operator drives
+        // sim copies deliberately while the guard sits in shadow -- that is how section 5.13's
+        // live validation was run -- and making the copier follow the guard's mode would take
+        // that away. P3-34 asks for exactly this: "a global arm switch, a shadow mode that logs
+        // intended follower orders without submitting".
+        //
+        // The shadow log line is emitted AFTER the order is fully formed, because a shadow mode
+        // whose log cannot tell you the instrument, action and quantity it would have sent is
+        // not an observation of anything.
+        // ==================================================================================
+
+        /// <summary>
+        /// The point of the whole feature: in shadow the copy is described and not sent.
+        /// </summary>
+        private static void TestCopier_P334_ShadowModeDescribesTheCopyAndDoesNotSendIt()
+        {
+            Console.WriteLine("\n[TEST] P3-34: copier shadow mode logs the intended order and submits nothing");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("shadow");
+            List<string> log;
+            try
+            {
+                log = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P334-A")));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+
+            Assert(!follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "NOTHING was submitted to the follower. This is the entire feature; if it fails, "
+                + "shadow is a label on a copier that trades.");
+            Assert(LoggedEventContaining(log, "COPY_BLOCKED_COPIER_SHADOW"),
+                "and the copy that did not happen is announced. Got: " + string.Join(" / ", log));
+            Assert(!LoggedEventContaining(log, "COPY_SUBMITTED"),
+                "and it does NOT also claim a submit -- P1-70's class, a log asserting an outcome "
+                + "it did not observe. Got: " + string.Join(" / ", log));
+            Assert(CountCopyOutcomes(log) == 1,
+                "exactly one outcome for one relationship, so the P1-71 invariant still holds "
+                + "through the new gate. Got: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// A shadow log that says "a copy was skipped" without saying WHICH copy is UI7's finding
+        /// in another place: a refusal that is correct and useless. The operator's reason for
+        /// running shadow is to read what WOULD have been sent.
+        /// </summary>
+        private static void TestCopier_P334_TheShadowLineNamesTheOrderItWouldHaveSent()
+        {
+            Console.WriteLine("\n[TEST] P3-34: the shadow line names instrument, action and quantity");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("shadow");
+            List<string> log;
+            try
+            {
+                log = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P334-B")));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+
+            string line = log.FirstOrDefault(l => l.StartsWith("COPY_BLOCKED_COPIER_SHADOW", StringComparison.Ordinal));
+            Assert(line != null, "the shadow event was logged at all");
+            Assert(line.Contains("MNQ 03-26"),
+                "the line names the instrument it would have traded. Got: " + line);
+            Assert(line.Contains("SimFollower"),
+                "and the account it would have traded it on. Got: " + line);
+            Assert(line.Contains("Buy"),
+                "and the direction. Got: " + line);
+        }
+
+        /// <summary>
+        /// The complement, and the one that stops the gate from being a blanket off-switch: the
+        /// DEFAULT mode changes nothing. A protection that also breaks the working case gets
+        /// turned off, and then protects nothing.
+        /// </summary>
+        private static void TestCopier_P334_LiveModeIsUnchangedAndIsTheDefault()
+        {
+            Console.WriteLine("\n[TEST] P3-34: live is the default and copies exactly as before");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            Assert(TradeCopierEngine.Instance.GetCopierMode() == "live",
+                "the default mode is live, so adding this feature does not silently stop an "
+                + "operator's working copier. Got: " + TradeCopierEngine.Instance.GetCopierMode());
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P334-C")));
+
+            Assert(follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "the copy is still placed in live mode. Got: " + string.Join(" / ", log));
+            Assert(LoggedEventContaining(log, "COPY_SUBMITTED"),
+                "and still announces itself. Got: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// `disabled` is not `shadow`. Shadow is an observation the operator asked for; disabled
+        /// is the copier switched off. Both must submit nothing, and they must be distinguishable
+        /// in the log -- P1-87's finding: one outcome split across two names is unfindable, and
+        /// so is two outcomes sharing one.
+        /// </summary>
+        private static void TestCopier_P334_DisabledIsDistinctFromShadow()
+        {
+            Console.WriteLine("\n[TEST] P3-34: disabled blocks the copy under its own event name");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("disabled");
+            List<string> log;
+            try
+            {
+                log = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P334-D")));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+
+            Assert(!follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "nothing was submitted. Got: " + string.Join(" / ", log));
+            Assert(LoggedEventContaining(log, "COPY_BLOCKED_COPIER_DISABLED"),
+                "and it says disabled, not shadow -- the two are different operator intentions "
+                + "and a shared event name makes one of them unfindable. Got: " + string.Join(" / ", log));
+            Assert(!LoggedEventContaining(log, "COPY_BLOCKED_COPIER_SHADOW"),
+                "and does not ALSO log shadow. Got: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// An unrecognised mode must not read as live. P1-87 exactly: the dispatch compared
+        /// against literals with no else, so any other value fell through to the permissive
+        /// branch. Here the permissive branch places real orders.
+        /// </summary>
+        private static void TestCopier_P334_AnUnrecognisedModeDoesNotFallThroughToTrading()
+        {
+            Console.WriteLine("\n[TEST] P3-34: an unrecognised copier mode fails CLOSED, not open");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("Shadow_Mode_Typo");
+            List<string> log;
+            try
+            {
+                log = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Buy, 1, "P334-E")));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+
+            Assert(!follower.Orders.Any(o => o.Name == "COPIER_FOLLOW"),
+                "a mode nobody recognises does NOT place orders. A typo in a config field must "
+                + "not be the difference between observing and trading. Got: " + string.Join(" / ", log));
+            Assert(CountCopyOutcomes(log) == 1,
+                "and it still produces exactly one readable outcome. Got: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// A mode that does not survive a restart is not a mode. And the load half has to
+        /// refuse a value it does not recognise rather than adopt it: the gate fails CLOSED,
+        /// so adopting a typo would stop the copier with a config file that looks fine --
+        /// P2-41's shape, where a default and an erasure are indistinguishable on disk.
+        /// </summary>
+        private static void TestCopier_P334_TheModeSurvivesDiskAndATypoIsNotAdopted()
+        {
+            Console.WriteLine("\n[TEST] P3-34: the copier mode round-trips, and an unrecognised stored value is refused");
+
+            var engine = TradeCopierEngine.Instance;
+            string path = Path.Combine(Path.GetTempPath(), "p334_copier_" + Guid.NewGuid().ToString("N") + ".json");
+
+            try
+            {
+                engine.SetCopierModeForTest("shadow");
+                engine.SaveToDisk(path);
+
+                engine.SetCopierModeForTest("live");
+                engine.LoadFromDisk(path);
+                Assert(engine.GetCopierMode() == "shadow",
+                    "the stored mode came back off disk. A mode that resets to live on restart is "
+                    + "worse than no mode at all. Got: " + engine.GetCopierMode());
+
+                // Now corrupt it to something nobody recognises.
+                string json = File.ReadAllText(path);
+                File.WriteAllText(json.Contains("\"CopierMode\"")
+                    ? path : path, json.Replace("\"shadow\"", "\"Shadow_Mode_Typo\""));
+
+                engine.SetCopierModeForTest("live");
+                engine.LoadFromDisk(path);
+                Assert(engine.GetCopierMode() == "live",
+                    "an unrecognised stored mode is NOT adopted -- the in-memory mode is kept. "
+                    + "Adopting it would stop the copier (the gate fails closed) with nothing "
+                    + "about the config file looking wrong. Got: " + engine.GetCopierMode());
+            }
+            finally
+            {
+                engine.SetCopierModeForTest("live");
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// RunCopierPreflight scans EVERY stored relationship, which is correct in production
+        /// and means a test asserting on its verdict must own the whole set. TradeCopierEngine
+        /// is a singleton and SetupCopyPath only clears the one leader it is given, so
+        /// relationships from earlier tests otherwise leak in and fail the preflight for
+        /// reasons that have nothing to do with the test. Runs `body` against exactly the
+        /// relationships it is handed, and puts the others back afterwards.
+        /// </summary>
+        private static void WithOnlyTheseRelationships(Action body, params CopierRelationship[] only)
+        {
+            var engine = TradeCopierEngine.Instance;
+            var saved = engine.GetRelationshipsForTest();
+            // Snapshot the follower names too: a test that points one at a missing account is
+            // mutating the engine's own object, not a copy.
+            var savedFollowers = saved.Select(r => r.FollowerAccountName).ToList();
+
+            foreach (var rel in saved)
+                engine.RemoveRelationship(rel.LeaderAccountName, rel.FollowerAccountName);
+            foreach (var rel in only)
+                engine.UpsertRelationship(rel);
+
+            try { body(); }
+            finally
+            {
+                foreach (var rel in engine.GetRelationshipsForTest())
+                    engine.RemoveRelationship(rel.LeaderAccountName, rel.FollowerAccountName);
+                for (int i = 0; i < saved.Count; i++)
+                {
+                    saved[i].FollowerAccountName = savedFollowers[i];
+                    engine.UpsertRelationship(saved[i]);
+                }
+            }
+        }
+
+        /// <summary>
+        /// P3-34's preflight, wired. It shipped with tests calling it and production calling
+        /// nothing -- P2-24's class, in the same session that closed P2-24 by deleting a method
+        /// for being uncalled. The gate is: going LIVE runs preflight, and a failure refuses the
+        /// transition rather than reporting it.
+        /// </summary>
+        private static void TestCopier_P334_GoingLiveRunsPreflightAndARefusalKeepsTheOldMode()
+        {
+            Console.WriteLine("\n[TEST] P3-34: a failing preflight refuses the switch to live");
+
+            var rel = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            // Points at a follower that is not in Account.All -- the exact condition
+            // RunCopierPreflight was written to detect.
+            var broken = SlipRelationship(0);
+            broken.FollowerAccountName = "AccountThatDoesNotExist";
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("shadow");
+            try
+            {
+                WithOnlyTheseRelationships(() =>
+                {
+                    var result = TradeCopierEngine.Instance.TrySetCopierMode("live");
+
+                    Assert(!result.Passed,
+                        "the transition is REFUSED, and preflight is what refused it.");
+                    Assert(result.Failures.Any(f => f.Contains("AccountThatDoesNotExist")),
+                        "and the refusal names the follower that does not exist -- a refusal that "
+                        + "does not say why is UI7's finding. Got: "
+                        + string.Join(" | ", result.Failures));
+                    Assert(TradeCopierEngine.Instance.GetCopierMode() == "shadow",
+                        "and the mode did NOT change. A refusal that reports and then applies the "
+                        + "change anyway is P1-88's class exactly. Got: "
+                        + TradeCopierEngine.Instance.GetCopierMode());
+                }, broken);
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+        }
+
+        /// <summary>
+        /// The other direction: preflight must not be a gate that never opens. A clean setup
+        /// goes live.
+        /// </summary>
+        private static void TestCopier_P334_APassingPreflightAllowsTheSwitchToLive()
+        {
+            Console.WriteLine("\n[TEST] P3-34: a passing preflight allows the switch to live");
+
+            var rel = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("shadow");
+            try
+            {
+                WithOnlyTheseRelationships(() =>
+                {
+                    var result = TradeCopierEngine.Instance.TrySetCopierMode("live");
+
+                    Assert(result.Passed,
+                        "a relationship whose follower exists passes preflight. Got: "
+                        + string.Join(" | ", result.Failures));
+                    Assert(TradeCopierEngine.Instance.GetCopierMode() == "live",
+                        "and the mode changed. Got: " + TradeCopierEngine.Instance.GetCopierMode());
+                }, SlipRelationship(0));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+        }
+
+        /// <summary>
+        /// Leaving live never needs a preflight -- moving to a mode that submits nothing cannot
+        /// be unsafe, and a gate that blocks the SAFE direction is one an operator learns to
+        /// route around.
+        /// </summary>
+        private static void TestCopier_P334_LeavingLiveIsNeverBlocked()
+        {
+            Console.WriteLine("\n[TEST] P3-34: switching AWAY from live is never gated");
+
+            var rel = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            var broken = SlipRelationship(0);
+            broken.FollowerAccountName = "AccountThatDoesNotExist";
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("live");
+            try
+            {
+                WithOnlyTheseRelationships(() =>
+                {
+                    var result = TradeCopierEngine.Instance.TrySetCopierMode("shadow");
+                    Assert(result.Passed,
+                        "going to shadow is allowed even with a broken relationship -- it submits "
+                        + "nothing, so there is nothing to preflight. Got: "
+                        + string.Join(" | ", result.Failures));
+                    Assert(TradeCopierEngine.Instance.GetCopierMode() == "shadow",
+                        "and it took effect.");
+                }, broken);
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
         }
 
         /// <summary>

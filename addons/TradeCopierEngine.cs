@@ -339,6 +339,11 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         public Dictionary<string, CopierRelationship> Relationships { get; set; } = new Dictionary<string, CopierRelationship>();
         public Dictionary<string, CopierGroup> Groups { get; set; } = new Dictionary<string, CopierGroup>();
+
+        // ⚠️ This class is referenced by nothing in either repo -- LoadFromDisk and SaveToDisk
+        // work on JObject directly. P3-34's CopierMode was briefly added here and moved to
+        // TradeCopierEngine._copierMode, because a field on an unused type is P2-25's state
+        // exactly: it reads as configuration and can never be read.
     }
 
     public class TradeCopierEngine
@@ -501,9 +506,99 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (int)rounded;
         }
 
+        // P3-34. The copier's own mode, deliberately NOT a reading of the guard's.
+        //
+        // Section 0 says "the copier acts regardless of guard mode", and half of that is
+        // already false: a LIVE follower is gated by ArmedForLive, CanTrade and
+        // IsGuardProtecting -- and the last of those requires the guard's mode to be "live",
+        // so a shadow guard already blocks live copies. What is ungated is the SIM follower,
+        // and that is deliberate: the operator drives sim copies while the guard sits in
+        // shadow, which is how section 5.13's live validation was run. Reading the guard's
+        // mode here would take that away, so the copier gets its own switch.
+        //
+        // Default is "live", which is exactly today's behaviour. A safety feature that
+        // silently stops a working copier on the next restart is one that gets turned off,
+        // and section 5.25 is the reason to be careful: a new default only applies to fields
+        // ABSENT from the stored config, so every existing config on disk lands here.
+        // Changing the default to "shadow" is a protection increase and the operator's call.
+        private string _copierMode = "live";
+
+        public string GetCopierMode()
+        {
+            lock (_lock) { return _copierMode; }
+        }
+
+        /// <summary>
+        /// The only modes that place orders. Anything else -- a typo, an empty string, a mode
+        /// someone added to a config surface and never implemented -- must not read as live.
+        /// P1-87 is the precedent and the reason: a dispatch comparing against literals with no
+        /// else fell through to the permissive branch, and here the permissive branch submits
+        /// real orders to a real account.
+        /// </summary>
+        internal static bool IsCopierActingMode(string mode)
+        {
+            return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool IsRecognisedCopierMode(string mode)
+        {
+            return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(mode, "disabled", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// P3-34's gate, and the caller RunCopierPreflight shipped without.
+        ///
+        /// Entering `live` runs preflight and a failure REFUSES the transition -- it does not
+        /// report it and apply the change anyway, which is P1-88's class (an unwritten write
+        /// reported as persisted). Leaving `live` is never gated: a mode that submits nothing
+        /// cannot be unsafe, and a gate that blocks the safe direction is one an operator learns
+        /// to route around.
+        /// </summary>
+        public CopierPreflightResult TrySetCopierMode(string mode)
+        {
+            var result = new CopierPreflightResult();
+
+            if (!IsRecognisedCopierMode(mode))
+            {
+                result.Fail("COPIER_MODE_UNRECOGNISED",
+                    $"'{mode}' is not a copier mode. Recognised: live, shadow, disabled.");
+                return result;
+            }
+
+            if (IsCopierActingMode(mode))
+            {
+                var preflight = RunCopierPreflight();
+                if (!preflight.Passed)
+                {
+                    foreach (string failure in preflight.Failures)
+                        result.Fail("COPIER_PREFLIGHT", failure);
+
+                    CopierLog(null, "COPIER_MODE_CHANGE_REFUSED",
+                        $"refusing to put the copier in '{mode}': preflight found "
+                        + $"{preflight.Failures.Count} problem(s). Mode stays '{GetCopierMode()}'. "
+                        + string.Join(" | ", preflight.Failures));
+                    return result;
+                }
+            }
+
+            string previous;
+            lock (_lock)
+            {
+                previous = _copierMode;
+                _copierMode = mode;
+            }
+
+            CopierLog(null, "COPIER_MODE_CHANGED",
+                $"copier mode '{previous}' -> '{mode}'.");
+            return result;
+        }
+
         // P3-34: copier preflight. Checks every enabled relationship's follower
         // exists in Account.All, and (if RiskGuardAddOn is loaded) is not locked out.
-        // Reports ALL failures, not just the first. Does NOT block arming -- it reports.
+        // Reports ALL failures, not just the first. Called by TrySetCopierMode, which
+        // refuses the transition to `live` when it fails.
         public CopierPreflightResult RunCopierPreflight()
         {
             var result = new CopierPreflightResult();
@@ -535,6 +630,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Sets the mode WITHOUT the preflight gate, so a test can arrange a state that
+        /// TrySetCopierMode would refuse. Tests that exercise the gate itself call
+        /// TrySetCopierMode; this is for arranging the world around it.
+        /// </summary>
+        internal void SetCopierModeForTest(string mode)
+        {
+            lock (_lock) { _copierMode = mode; }
         }
 
         internal List<CopierRelationship> GetRelationshipsForTest()
@@ -1677,6 +1782,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                     var grpsObj = jRoot["Groups"] as JObject ?? jRoot["groups"] as JObject;
                     bool hasStructuredSections = relsObj != null || grpsObj != null;
 
+                    // P3-34. An absent CopierMode leaves the current one alone rather than
+                    // resetting it -- slice 3b's rule, and the reason P1-73 was a defect: a
+                    // reader that materialises a default is a writer. An unrecognised value is
+                    // NOT adopted, because IsCopierActingMode fails closed and adopting it here
+                    // would leave the copier stopped with a config that looks fine.
+                    var modeToken = jRoot["CopierMode"] ?? jRoot["copierMode"];
+                    if (modeToken != null)
+                    {
+                        string loadedMode = modeToken.ToString();
+                        if (IsRecognisedCopierMode(loadedMode))
+                        {
+                            _copierMode = loadedMode;
+                        }
+                        else
+                        {
+                            CopierLog(null, "COPIER_MODE_UNRECOGNISED_IN_CONFIG",
+                                $"stored CopierMode '{loadedMode}' is not one of live/shadow/disabled; "
+                                + $"keeping '{_copierMode}'. Fix the config -- a mode nobody "
+                                + "recognises would stop the copier with nothing looking wrong.");
+                        }
+                    }
+
                     if (hasStructuredSections)
                     {
                         if (relsObj != null)
@@ -2319,7 +2446,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     var jRoot = new JObject
                     {
                         ["Relationships"] = jRels,
-                        ["Groups"] = jGrps
+                        ["Groups"] = jGrps,
+                        // P3-34. Written explicitly rather than left to the default, because
+                        // section 5.25's lesson is that a default only applies to a field that
+                        // is ABSENT -- so a mode that is never written is a mode that silently
+                        // reverts to "live" the moment the default changes.
+                        ["CopierMode"] = _copierMode
                     };
 
                     string jsonToSave = jRoot.ToString(Formatting.Indented);
@@ -4913,6 +5045,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
 
                 TimeInForce tif = (exec.Order.TimeInForce != TimeInForce.Gtc) ? exec.Order.TimeInForce : TimeInForce.Day;
+
+                // P3-34. The copier's own arm/shadow gate, evaluated HERE rather than at the top
+                // of the loop: a shadow mode exists so the operator can read what would have been
+                // sent, and instrument, action and quantity are only settled by this point. A
+                // shadow line that cannot name the order it suppressed observes nothing.
+                //
+                // Fails CLOSED on anything unrecognised (P1-87): the permissive branch here
+                // submits real orders, so a typo in a config field must not be the difference
+                // between observing and trading.
+                string copierMode = GetCopierMode();
+                if (!IsCopierActingMode(copierMode))
+                {
+                    string eventName =
+                        string.Equals(copierMode, "shadow", StringComparison.OrdinalIgnoreCase)
+                            ? "COPY_BLOCKED_COPIER_SHADOW"
+                            : string.Equals(copierMode, "disabled", StringComparison.OrdinalIgnoreCase)
+                                ? "COPY_BLOCKED_COPIER_DISABLED"
+                                : "COPY_BLOCKED_COPIER_MODE_UNRECOGNISED";
+
+                    CopierLog(followerAcc.Name, eventName,
+                        $"copier mode is '{copierMode}', so nothing was submitted. WOULD have sent "
+                        + $"{targetInstrument.FullName} {followerAction} {targetQty} to "
+                        + $"'{followerAcc.Name}', mirroring leader '{acctName}' "
+                        + $"{leadOrderAction} {exec.Quantity}@{exec.Price} (isExit={isExit}).");
+                    continue;
+                }
 
                 try
                 {
