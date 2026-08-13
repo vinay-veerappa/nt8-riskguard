@@ -121,6 +121,16 @@ jobs:
       - name: Mutation battery UI2
         run: python mutation/mutate_ui2.py
 
+      # UI3 (the guard rule inventory). Every mutant here makes the inventory MORE REASSURING
+      # than the truth, because that is the only direction that can hurt anyone: this registry
+      # exists to stop a config field lying about whether it protects anything, so "it crashes"
+      # is not the failure mode -- "it reports ENFORCING for a rule that has never been able to
+      # fire" is. Three survived the first run, all one gap (the evidence count was asserted for
+      # 1 of 5 rules that use it); the fix opened an escape route, and the mutant for THAT
+      # survived too. Read the file before adding to it.
+      - name: Mutation battery UI3
+        run: python mutation/mutate_ui3.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

@@ -1014,6 +1014,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi2_ARowEditCannotDISARMALiveRelationship();
             TestUi2_AGroupRowEditCannotDISARMALiveGroup();
             TestUi2_ArmingStillRequiresConfirmation();
+            TestUi3_EveryConfigLeafIsClassified();
+            TestUi3_NoFieldIsBothARuleAndANonRule();
+            TestUi3_AnUnevaluatedRuleMustSayWhy();
+            TestUi3_TheFourStatesAreDerivedNotDeclared();
+            TestUi3_TheWorstStateSortsFirst();
+            TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
+            TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -2513,6 +2520,309 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(unconfirmed != null && confirmed != null
                    && !unconfirmed.ArmedForLive && confirmed.ArmedForLive,
                 "an Add request asking to arm is refused without confirmLive and honoured with it");
+        }
+
+        // ================================================================================
+        // UI3 -- the guard-side rule inventory. docs/UI_REDESIGN_DESIGN.md §6 and §6a.
+        //
+        // The test that matters is TestUi3_EveryConfigLeafIsClassified. The other five defend
+        // the vocabulary it depends on. P1-77, P2-25 and P2-78 are one defect -- a config field
+        // can be born with no evaluator and nothing notices -- and this turns it from something
+        // found by audit into something that fails the build.
+        // ================================================================================
+
+        /// <summary>
+        /// Every leaf property path of a config class, "Outer.Inner.Leaf". Dictionaries and
+        /// lists terminate: their VALUE type's fields are separate rules keyed by instrument or
+        /// account, not additional leaves of the parent.
+        /// </summary>
+        private static List<string> Ui3ConfigLeaves(Type t, string prefix, HashSet<Type> seen = null)
+        {
+            seen = seen ?? new HashSet<Type>();
+            var outList = new List<string>();
+            if (!seen.Add(t)) return outList;
+
+            foreach (var p in t.GetProperties().OrderBy(x => x.Name))
+            {
+                var path = string.IsNullOrEmpty(prefix) ? p.Name : prefix + "." + p.Name;
+                var pt = p.PropertyType;
+                bool isLeafy = pt.IsPrimitive || pt == typeof(string) || pt == typeof(decimal)
+                               || pt == typeof(DateTime) || pt.IsEnum
+                               || (pt.IsGenericType && (pt.GetGenericTypeDefinition() == typeof(List<>)
+                                                        || pt.GetGenericTypeDefinition() == typeof(Dictionary<,>)));
+                if (isLeafy) outList.Add(path);
+                else outList.AddRange(Ui3ConfigLeaves(pt, path, seen));
+            }
+            return outList;
+        }
+
+        private static void TestUi3_EveryConfigLeafIsClassified()
+        {
+            Console.WriteLine("\n[TEST] UI3: every risk-config field is either a RULE or an explicit NON-RULE");
+
+            // THE GATE. P1-77, P2-25 and P2-78 all reached production the same way: a field was
+            // added to a config class, defaulted to something reassuring, and wired to nothing.
+            // Nothing connected the config schema to the enforcement code, so the only way to
+            // find one was to read every field and go looking for its evaluator -- which is
+            // exactly the audit that missed them for months.
+            //
+            // Classification is cheap and being FORCED to classify is the whole value: a new
+            // field cannot be added without someone stating, in the registry, whether anything
+            // enforces it.
+            var leaves = Ui3ConfigLeaves(typeof(RiskConfig), "")
+                .Concat(Ui3ConfigLeaves(typeof(PropFirmProtectionConfig), "PropFirm"))
+                .ToList();
+
+            var classified = new HashSet<string>(
+                GuardRuleRegistry.Rules.Select(r => r.ConfigPath)
+                    .Concat(GuardRuleRegistry.NonRules.Select(n => n.ConfigPath)),
+                StringComparer.OrdinalIgnoreCase);
+
+            var unclassified = leaves.Where(l => !classified.Contains(l)).ToList();
+
+            Assert(leaves.Count > 20 && unclassified.Count == 0, string.Format(
+                "all {0} risk-config leaves are classified ({1} unclassified{2})",
+                leaves.Count, unclassified.Count,
+                unclassified.Count == 0 ? "" : ": " + string.Join(", ", unclassified.Take(8))));
+        }
+
+        private static void TestUi3_NoFieldIsBothARuleAndANonRule()
+        {
+            Console.WriteLine("\n[TEST] UI3: the not-a-rule escape hatch cannot silence a real rule");
+
+            // Without this, the cheapest way to pass the gate above is to declare a field BOTH
+            // ways, or to quietly list a genuinely enforced limit as a non-rule. The hatch exists
+            // so nobody has to invent fake rules for `Mode`; a gate that makes people invent
+            // entries decays into no gate. It must not become a way to make a field go quiet.
+            var rulePaths = GuardRuleRegistry.Rules.Select(r => r.ConfigPath).ToList();
+            var nonRulePaths = GuardRuleRegistry.NonRules.Select(n => n.ConfigPath).ToList();
+
+            var both = rulePaths.Intersect(nonRulePaths, StringComparer.OrdinalIgnoreCase).ToList();
+            var dupeRules = rulePaths.GroupBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            bool everyNonRuleHasAReason = GuardRuleRegistry.NonRules
+                .All(n => !string.IsNullOrWhiteSpace(n.Reason));
+
+            Assert(rulePaths.Count > 0 && both.Count == 0 && dupeRules.Count == 0
+                   && everyNonRuleHasAReason,
+                "no config path is declared both a rule and a non-rule, none is declared twice, "
+                + "and every non-rule states its reason");
+        }
+
+        private static void TestUi3_AnUnevaluatedRuleMustSayWhy()
+        {
+            Console.WriteLine("\n[TEST] UI3: a rule with no evaluator has to state that, in writing");
+
+            // `Evaluator == null` is an ASSERTION -- nothing in this codebase evaluates this
+            // field -- not an unfinished entry. Requiring the reason is what keeps the two
+            // apart, and it is what a future reader needs: P1-77's row is only useful if it
+            // says WHY it is red.
+            var unevaluated = GuardRuleRegistry.Rules.Where(r => r.Evaluator == null).ToList();
+            bool allExplained = unevaluated.All(r => !string.IsNullOrWhiteSpace(r.UnevaluatedReason));
+
+            // The positive half. An empty registry passes the "all" above trivially.
+            Assert(GuardRuleRegistry.Rules.Count > 0 && allExplained, string.Format(
+                "every rule without an evaluator explains why ({0} of {1} rules unevaluated)",
+                unevaluated.Count, GuardRuleRegistry.Rules.Count));
+        }
+
+        private static void TestUi3_TheFourStatesAreDerivedNotDeclared()
+        {
+            Console.WriteLine("\n[TEST] UI3: DeriveState is the only place the vocabulary lives");
+
+            var evaluated = new GuardRuleDefinition { Name = "x", ConfigPath = "x", Evaluator = c => null };
+            var unevaluated = new GuardRuleDefinition { Name = "y", ConfigPath = "y", UnevaluatedReason = "none" };
+            var hasEvidence = new GuardRuleReading { EvidenceCount = 3, Limit = 1000 };
+            var noEvidence = new GuardRuleReading { EvidenceCount = 0, Limit = 1000 };
+            var switchedOff = new GuardRuleReading { EvidenceCount = 3, DisabledByConfig = true };
+
+            Assert(
+                // No evaluator wins over everything: it cannot act whatever the mode says.
+                GuardRuleRegistry.DeriveState(unevaluated, hasEvidence, true, false)
+                    == GuardRuleState.ConfiguredNotEvaluated
+                && GuardRuleRegistry.DeriveState(unevaluated, hasEvidence, false, false)
+                    == GuardRuleState.ConfiguredNotEvaluated
+                // Evidence-free evaluation is INERT even when the guard could otherwise act.
+                && GuardRuleRegistry.DeriveState(evaluated, noEvidence, true, false)
+                    == GuardRuleState.Inert
+                // Off by operator choice is not a defect and must not read as one.
+                && GuardRuleRegistry.DeriveState(evaluated, switchedOff, true, false)
+                    == GuardRuleState.Disabled
+                // shadow / disarmed
+                && GuardRuleRegistry.DeriveState(evaluated, hasEvidence, false, false)
+                    == GuardRuleState.EvaluatedNotEnforcing
+                // an excluded account cannot be acted on however armed the guard is
+                && GuardRuleRegistry.DeriveState(evaluated, hasEvidence, true, true)
+                    == GuardRuleState.EvaluatedNotEnforcing
+                && GuardRuleRegistry.DeriveState(evaluated, hasEvidence, true, false)
+                    == GuardRuleState.Enforcing,
+                "DeriveState returns each of the five states for the condition that defines it");
+        }
+
+        private static void TestUi3_TheWorstStateSortsFirst()
+        {
+            Console.WriteLine("\n[TEST] UI3: the enum ordering puts the dangerous states on top");
+
+            // A UI sorting by this enum must surface danger first. `ConfiguredNotEvaluated` is
+            // the most dangerous thing this system can report -- the config file reads as
+            // protection that does not exist -- so it is 0, and INERT is second because every
+            // static check passes on it.
+            Assert((int)GuardRuleState.ConfiguredNotEvaluated < (int)GuardRuleState.Inert
+                   && (int)GuardRuleState.Inert < (int)GuardRuleState.EvaluatedNotEnforcing
+                   && (int)GuardRuleState.EvaluatedNotEnforcing < (int)GuardRuleState.Enforcing,
+                "the rule states are ordered worst-first so a sort surfaces danger rather than hiding it");
+        }
+
+        private static void TestUi3_TheThreeKnownDefectsAppearWithTheirRealState()
+        {
+            Console.WriteLine("\n[TEST] UI3: P1-77, P2-25 and P2-78 report as what they actually are");
+
+            // The registry's own regression test. These three are measured, not guessed:
+            //   P1-77  EnableConsistencyCap: declaration + JSON parser only, no evaluator
+            //   P2-25  EnableNewsShield: fully wired, and its evidence set is always empty
+            //   P2-78  PerInstrumentRiskConfig.IsBlocked: zero references anywhere
+            // If a future change makes one of them enforce for real, THIS TEST SHOULD FAIL and
+            // be updated -- that is the point. It pins the inventory to reality.
+            var byPath = GuardRuleRegistry.Rules.ToDictionary(r => r.ConfigPath, StringComparer.OrdinalIgnoreCase);
+
+            GuardRuleDefinition consistency, news, blocked;
+            bool found = byPath.TryGetValue("PropFirm.EnableConsistencyCap", out consistency)
+                         & byPath.TryGetValue("PropFirm.EnableNewsShield", out news)
+                         & byPath.TryGetValue("InstrumentLimits", out blocked);
+
+            var newsReading = news != null && news.Evaluator != null
+                ? news.Evaluator(new GuardRuleContext
+                {
+                    AccountName = "Ui3Acct",
+                    Config = new RiskConfig(),
+                    PropConfig = new PropFirmProtectionConfig(),
+                    NewsEventCount = 0
+                })
+                : null;
+
+            Assert(found
+                   // P1-77: no evaluator at all, and it says so
+                   && consistency.Evaluator == null
+                   && !string.IsNullOrWhiteSpace(consistency.UnevaluatedReason)
+                   // P2-25: HAS an evaluator, and reports zero evidence -- which is INERT
+                   && news.Evaluator != null
+                   && newsReading != null && newsReading.EvidenceCount == 0
+                   && GuardRuleRegistry.DeriveState(news, newsReading, true, false) == GuardRuleState.Inert,
+                "the consistency cap reports CONFIGURED-not-EVALUATED and the news shield reports "
+                + "INERT with zero evidence -- the distinction a static check cannot make");
+        }
+
+        private static void TestUi3_AnEmptyCollectionCanNeverReportEnforcing()
+        {
+            Console.WriteLine("\n[TEST] UI3: every rule backed by a collection reports INERT when that collection is empty");
+
+            // ADDED AFTER THREE MUTANTS SURVIVED TOGETHER, and they shared one shape: the
+            // EVIDENCE COUNT is the mechanism that makes INERT work, and it was asserted for
+            // exactly ONE of the five rules that use it (the news shield). Hardcoding the other
+            // four to 1 changed no test outcome.
+            //
+            // Written as a CLASS-level assertion rather than three more cases, because the
+            // failure is not "these three rules are wrong" -- it is "nothing checks that a rule
+            // derives its evidence from anything". A per-rule test would have to be remembered
+            // for every rule added later; this one cannot be forgotten.
+            //
+            // The setup is the state this system has ACTUALLY BEEN IN: every feature switched
+            // ON, and every collection those features depend on EMPTY. Firm rules enabled with
+            // no account mapped to a firm is handover §0 verbatim -- "loaded but unmapped, so
+            // none can fire".
+            var cfg = new RiskConfig();
+            cfg.FirmMirror.Enabled = true;
+            cfg.FirmMirror.TrailingDD.Enabled = true;
+            cfg.FirmMirror.DailyLoss.Enabled = true;
+            cfg.EnableWindowGate = true;
+            cfg.BlockedInstruments.Clear();
+            cfg.InstrumentLimits.Clear();
+            cfg.FirmMirror.AccountFirmMap.Clear();
+            cfg.StopGuard.Offsets.Clear();
+            cfg.WindowsET.Clear();
+
+            var ctx = new GuardRuleContext
+            {
+                AccountName = "Ui3Empty",
+                Config = cfg,
+                PropConfig = new PropFirmProtectionConfig(),
+                Account = null,                                                   // no account state
+                AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot>(),    // no accounts at all
+                NewsEventCount = 0
+            };
+
+            // guardCanAct: true and the account NOT excluded -- the most permissive possible
+            // input, so anything that comes back Enforcing did so on its own merits.
+            // Scoped to rules that DECLARE a collection as their evidence source. The first
+            // draft asserted this of every rule and was wrong: four scalar rules
+            // (MaxOrdersPerSecond, and the three StopGuard settings) legitimately stay
+            // Enforcing, because their input is a number that is always present and they act on
+            // every position regardless. A test that calls correct behaviour a defect gets the
+            // CODE changed to satisfy it, which would have made the guard's own stop handling
+            // report as not protecting anything.
+            var wronglyEnforcing = new List<string>();
+            int checkedRules = 0;
+            foreach (var rule in GuardRuleRegistry.Rules)
+            {
+                if (rule.Evaluator == null || string.IsNullOrEmpty(rule.EvidenceLabel)) continue;
+                checkedRules++;
+                var reading = rule.Evaluator(ctx);
+                var state = GuardRuleRegistry.DeriveState(rule, reading, true, false);
+                if (state != GuardRuleState.Inert) wronglyEnforcing.Add(rule.ConfigPath + "=" + state);
+            }
+
+            Assert(checkedRules >= 5 && wronglyEnforcing.Count == 0, string.Format(
+                "with every switch ON and every collection EMPTY, all {0} collection-backed rules "
+                + "report INERT ({1} did not{2})",
+                checkedRules, wronglyEnforcing.Count,
+                wronglyEnforcing.Count == 0 ? "" : ": " + string.Join(", ", wronglyEnforcing)));
+
+            // ── the escape route the check above OPENED, closed ──────────────────────────
+            // Scoping to labelled rules made a MISSING label mean "do not check me", and a
+            // mutant proved it: deleting the news shield's EvidenceLabel exempted the one rule
+            // this whole design exists for, and nothing failed.
+            //
+            // So the classification is DERIVED rather than trusted. Run every evaluator against
+            // an empty context and a populated one, holding everything except the COLLECTIONS
+            // constant. If a rule's evidence count moves, it is collection-backed and must carry
+            // a label; if it does not move, it is scalar and must not. Neither direction can be
+            // asserted by hand, and neither can be forgotten for a rule added later.
+            var rich = new RiskConfig();
+            rich.FirmMirror.Enabled = true;
+            rich.FirmMirror.TrailingDD.Enabled = true;
+            rich.FirmMirror.DailyLoss.Enabled = true;
+            rich.EnableWindowGate = true;
+            rich.BlockedInstruments.Add("ZB");
+            rich.InstrumentLimits["NQ"] = new PerInstrumentRiskConfig { MaxContracts = 2 };
+            rich.FirmMirror.AccountFirmMap["Ui3Empty"] = "Apex";
+
+            var richCtx = new GuardRuleContext
+            {
+                AccountName = "Ui3Empty",
+                Config = rich,
+                PropConfig = new PropFirmProtectionConfig(),
+                Account = ctx.Account,          // held constant: account presence is not the variable
+                AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { null, null },
+                NewsEventCount = 3
+            };
+
+            var mislabelled = new List<string>();
+            foreach (var rule in GuardRuleRegistry.Rules)
+            {
+                if (rule.Evaluator == null) continue;
+                var lo = rule.Evaluator(ctx);
+                var hi = rule.Evaluator(richCtx);
+                bool varies = (lo == null ? 0 : lo.EvidenceCount) != (hi == null ? 0 : hi.EvidenceCount);
+                bool labelled = !string.IsNullOrEmpty(rule.EvidenceLabel);
+                if (varies != labelled)
+                    mislabelled.Add(rule.ConfigPath + (varies ? " varies but has NO label" : " has a label but never varies"));
+            }
+
+            Assert(mislabelled.Count == 0, string.Format(
+                "every rule whose evidence count moves with its collections declares an "
+                + "EvidenceLabel, and no scalar rule claims one ({0} mismatched{1})",
+                mislabelled.Count,
+                mislabelled.Count == 0 ? "" : ": " + string.Join("; ", mislabelled)));
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()
