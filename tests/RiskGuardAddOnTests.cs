@@ -435,6 +435,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi3_TheWorstStateSortsFirst();
             TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
             TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
+            TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken();
+            TestP186_TheNewsShieldIsRedOutOfTheBox();
             TestP182_AFlagThatCannotFireMustNotDefaultOn();
             TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag();
             TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
@@ -467,6 +469,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot();
             TestP185_TheCopierEngineNamesNoAccountOfItsOwn();
             TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented();
+            TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo();
+            TestP185_ASkippedConfigEntryReachesTheGuardLog();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -2378,6 +2382,137 @@ namespace NinjaTrader.NinjaScript.AddOns
             return current;
         }
 
+        /// <summary>Sets a dotted registry path to a bool. Returns false if the path is not a settable bool.</summary>
+        private static bool P186SetConfigPath(
+            string configPath, RiskConfig cfg, PropFirmProtectionConfig prop, bool value)
+        {
+            if (string.IsNullOrEmpty(configPath)) return false;
+
+            object current;
+            string[] parts;
+            if (configPath.StartsWith("PropFirm.", StringComparison.Ordinal))
+            {
+                current = prop;
+                parts = configPath.Substring("PropFirm.".Length).Split('.');
+            }
+            else
+            {
+                current = cfg;
+                parts = configPath.Split('.');
+            }
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (current == null) return false;
+                var pi = current.GetType().GetProperty(parts[i]);
+                if (pi == null) return false;
+                if (i == parts.Length - 1)
+                {
+                    if (pi.PropertyType != typeof(bool) || !pi.CanWrite) return false;
+                    pi.SetValue(current, value, null);
+                    return true;
+                }
+                current = pi.GetValue(current, null);
+            }
+            return false;
+        }
+
+        private static void TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken()
+        {
+            Console.WriteLine("\n[TEST] P1-86: a rule that cannot fire reports INERT whether it is switched on or off");
+
+            // THE OBJECTION P1-82 HAD TO ANSWER. The hardening plan's P1-77 entry says, in
+            // writing: do not "fix" a dead flag by defaulting it to false, because that keeps
+            // the lie and makes it QUIETER. Half of that survives P1-82 and half does not, and
+            // the half that survives is this one.
+            //
+            // For the consistency cap the objection no longer holds: CONFIGURED-not-EVALUATED is
+            // derived from `Evaluator == null`, so the row stays red whatever the flag says.
+            //
+            // For the news shield it holds exactly. Its evaluator opens with
+            // `!EnableNewsShield ? Off("news shield disabled")`, so with P1-82's default the
+            // inventory reports it `Disabled` -- a state this codebase documents as "switched off
+            // by the operator; NOT a defect, shown so it is not mistaken for one". Turning off a
+            // rule that could never have fired must not be able to convert its defect into a
+            // preference.
+            //
+            // THE RULE, stated generally: `Disabled` means "this WOULD work if you turned it on".
+            // A rule with no evidence to evaluate does not qualify, however its switch is set.
+            //
+            // So: for every rule keyed by a bool, evaluate it with that bool ON and with it OFF.
+            // If ON gives INERT -- no evidence, verdict a foregone conclusion -- then OFF must not
+            // give Disabled. Derived per rule rather than asserted for the news shield by name,
+            // because the next rule to go inert will have a different name.
+            var offenders = new List<string>();
+            int checkedRules = 0;
+
+            foreach (var rule in GuardRuleRegistry.Rules)
+            {
+                if (rule.Evaluator == null) continue;
+
+                var onCfg = new RiskConfig();
+                var onProp = new PropFirmProtectionConfig();
+                if (!P186SetConfigPath(rule.ConfigPath, onCfg, onProp, true)) continue;
+
+                var offCfg = new RiskConfig();
+                var offProp = new PropFirmProtectionConfig();
+                P186SetConfigPath(rule.ConfigPath, offCfg, offProp, false);
+
+                Func<RiskConfig, PropFirmProtectionConfig, GuardRuleContext> ctx =
+                    (c, p) => new GuardRuleContext
+                    {
+                        AccountName = "P186Acc",
+                        Config = c,
+                        PropConfig = p,
+                        Account = Ui4Account("P186Acc"),
+                        AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("P186Acc") },
+                        NewsEventCount = 0
+                    };
+
+                checkedRules++;
+                var onState = GuardRuleRegistry.DeriveState(rule, rule.Evaluator(ctx(onCfg, onProp)), true, false);
+                if (onState != GuardRuleState.Inert) continue;
+
+                var offState = GuardRuleRegistry.DeriveState(rule, rule.Evaluator(ctx(offCfg, offProp)), true, false);
+                if (offState == GuardRuleState.Disabled)
+                    offenders.Add(rule.ConfigPath + " is INERT when ON but reports Disabled when OFF");
+            }
+
+            Assert(checkedRules >= 3 && offenders.Count == 0, string.Format(
+                "of {0} switchable rules, {1} let their switch downgrade a defect to a preference{2}",
+                checkedRules, offenders.Count,
+                offenders.Count == 0 ? "" : ": " + string.Join("; ", offenders)));
+        }
+
+        private static void TestP186_TheNewsShieldIsRedOutOfTheBox()
+        {
+            Console.WriteLine("\n[TEST] P1-86: the inventory reports the news shield as broken with a DEFAULT config");
+
+            // The specific consequence, asserted against defaults because that is the state the
+            // operator's box is actually in. P1-82 turned the shield off; if that had made the
+            // one rule this whole registry was built to expose disappear from the red rows, P1-82
+            // would have been a net loss no matter how honest the config file became.
+            //
+            // Disabled is not acceptable here and neither is Enforcing. The rule cannot fire, and
+            // the inventory has to keep saying so.
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                new RiskConfig(), new PropFirmProtectionConfig(), "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("P186Acc") }, 0);
+
+            GuardRuleRow news = null;
+            foreach (var acct in snap.Accounts)
+                foreach (var row in acct.Rules)
+                    if (row.ConfigPath == "PropFirm.EnableNewsShield") news = row;
+
+            Assert(news != null && news.State == GuardRuleState.Inert, string.Format(
+                "the news shield reports {0} on a default config (P2-25 is still open, so INERT "
+                + "is the only honest reading)",
+                news == null ? "NOTHING AT ALL" : news.State.ToString()));
+            Assert(news != null && !string.IsNullOrWhiteSpace(news.Note)
+                   && news.Note.IndexOf("P2-25", StringComparison.Ordinal) >= 0,
+                "and it still names the defect that makes it inert");
+        }
+
         private static void TestP182_AFlagThatCannotFireMustNotDefaultOn()
         {
             Console.WriteLine("\n[TEST] P1-82: no rule that cannot fire may have its switch default ON");
@@ -3570,6 +3705,76 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(readable && found.Count == 0, string.Format(
                 "TradeCopierEngine.cs states {0} default identity literal(s){1}",
                 found.Count, found.Count == 0 ? "" : ": " + string.Join(", ", found)));
+        }
+
+        private static void TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo()
+        {
+            Console.WriteLine("\n[TEST] P1-85: an edit that explicitly blanks the group's leader is refused");
+
+            // Upheld by the review panel on the first P1-85 landing, and correctly.
+            //
+            // Refusing a request that OMITS the leader closes the create path, and merge
+            // semantics mean an edit does not have to restate it. But an edit that names the
+            // leader as an empty string is neither of those things: it is an explicit
+            // instruction to leave the group without one, and it lands through PopulateObject
+            // with no refusal in the way. The result is the exact state this whole ticket
+            // removes -- a group whose leader is blank -- reached by a different door.
+            //
+            // The relationship half needs no equivalent: there the two accounts ARE the lookup
+            // key, so a blank one is refused before anything is looked up at all.
+            var engine = new TradeCopierEngine();
+            string ok;
+            var made = engine.ApplyGroupRequest(JObject.Parse(
+                @"{""groupName"":""P185Blank"",""leaderAccount"":""P185Lead"",""quantityRatio"":1.0}"),
+                false, out ok);
+            Assert(made != null, "the group is created with a leader");
+
+            foreach (var blank in new[] { @"""""", @"""   """ })
+            {
+                string reason;
+                var edited = engine.ApplyGroupRequest(JObject.Parse(
+                    @"{""groupName"":""P185Blank"",""leaderAccount"":" + blank + "}"), false, out reason);
+
+                Assert(edited == null && !string.IsNullOrWhiteSpace(reason),
+                    "an edit naming the leader as " + blank + " is refused with a reason");
+            }
+
+            var stored = engine.GetGroups().FirstOrDefault(g => g.GroupName == "P185Blank");
+            Assert(stored != null && stored.LeaderAccountName == "P185Lead",
+                "and the stored leader is untouched by the refused edits");
+        }
+
+        private static void TestP185_ASkippedConfigEntryReachesTheGuardLog()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a config entry dropped at load is reported where an operator will see it");
+
+            // Also upheld by the panel. Refusing to invent an account name means malformed
+            // entries are now DROPPED at startup, and a drop that only reaches Console.WriteLine
+            // is a drop nobody sees: NT8's output window is not the guard's log, and this runs
+            // at startup with nobody watching.
+            //
+            // "Operator config vanishing without an error" is P?-64's shape, which is what made
+            // the copier window's writes disappear for weeks. Refusing to guess must not buy that
+            // defect back at load time -- so the skip goes through CopierLog, the same channel
+            // LoadFromDisk already uses to report a config conflict.
+            var path = Path.Combine(Path.GetTempPath(), "p185_skip_" + Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path,
+                @"{""relationships"":{""NoUnderscoreKey"":{""quantityRatio"":1.0}},"
+                + @"""groups"":{""GroupNoLeader"":{""quantityRatio"":1.0}}}");
+
+            var engine = new TradeCopierEngine();
+            var log = CaptureCopierLog(() => engine.LoadFromDisk(path));
+            try { File.Delete(path); } catch { }
+
+            Assert(engine.GetRelationships().Count == 0 && engine.GetGroups().Count == 0,
+                "both undecipherable entries were dropped rather than pointed at a guessed account");
+
+            bool relReported = log.Any(l => l.IndexOf("NoUnderscoreKey", StringComparison.OrdinalIgnoreCase) >= 0);
+            bool grpReported = log.Any(l => l.IndexOf("GroupNoLeader", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            Assert(relReported && grpReported, string.Format(
+                "and both skips reached the guard log naming the entry (relationship {0}, group {1})",
+                relReported ? "reported" : "SILENT", grpReported ? "reported" : "SILENT"));
         }
 
         private static void TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented()

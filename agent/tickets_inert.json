@@ -1,0 +1,25 @@
+{
+  "_comment": "P1-86 -- switching off a rule that could never fire must not downgrade its defect to a preference. Opened by re-reading the hardening plan's P1-77 entry AFTER shipping P1-82. The red tests are TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken and TestP186_TheNewsShieldIsRedOutOfTheBox; both are written and RED. Tests are protected -- do not edit them.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "A rule with no evidence reports INERT whether its switch is on or off",
+      "defect": "`P1-86`. The news-shield rule's evaluator (`addons/GuardRules.cs`, the `PropFirm.EnableNewsShield` entry) opens with `c.PropConfig == null || !c.PropConfig.EnableNewsShield ? Off(\"news shield disabled\") : R(null, null, c.NewsEventCount, ...)`. `Off(...)` sets `DisabledByConfig`, and `DeriveState` returns `Disabled` for that -- a state this codebase documents as *\"switched off by the operator. Not a defect; shown so it is not mistaken for one.\"*\n\n`P1-82` changed `EnableNewsShield` to default `false`. The rule is now reported as an operator preference on a default box, when in fact it is `P2-25`: fully wired, structurally unable to fire, because `LocalNewsEventsFilePath` has no loader and the event list is always empty. **Turning off a rule that could never have fired converted its defect into a preference, and it did so silently.**\n\nThe hardening plan's `P1-77` entry predicted exactly this in writing -- *do not \"fix\" a dead flag by defaulting it to false, that keeps the lie and makes it quieter.* Half of that objection survives `P1-82` and half does not. It does NOT survive for the consistency cap: `CONFIGURED-not-EVALUATED` is derived from `Evaluator == null`, so that row stays red whatever the flag says. It survives exactly here.",
+      "spec": "In `addons/GuardRules.cs`, and nowhere else, make the news-shield evaluator ask whether it CAN fire before it asks whether it is switched on.\n\nWhen `c.NewsEventCount` is zero the evaluator must return the same zero-evidence reading it returns today -- which `DeriveState` turns into `INERT` -- regardless of `EnableNewsShield`. The existing note must still be produced in that case: it names `P2-25` and says no news events are loaded, and a test asserts the note still mentions `P2-25`.\n\nOnly when there IS at least one event loaded may the disabled branch report `Off(...)`, because only then does \"switched off\" mean something an operator could reverse.\n\nA null `c.PropConfig` keeps its current behaviour.\n\nState the rule in a comment on the evaluator, in general terms rather than as a special case, because it is the general rule: `Disabled` means *this would work if you turned it on*. A rule with nothing to evaluate does not qualify however its switch is set.\n\nWHAT NOT TO DO:\n* Do NOT change `DeriveState`. Moving the evidence check above the `DisabledByConfig` check there would be the shorter diff and a real defect: the FirmMirror rules, `EnableWindowGate` and the profit/peak rules all short-circuit to `Off(...)` WITHOUT gathering evidence when they are switched off, so they would all start reporting `INERT` and the inventory would call five deliberately-disabled rules defects. A check that calls correct behaviour a defect gets the code changed to satisfy it.\n* Do NOT re-enable the flag. `P1-82`'s default stands; this ticket is what makes it safe.\n* Do NOT implement the news loader. `P2-25` stays open and the row must stay red.\n* Do NOT touch `addons/PropFirmProtectionSuite.cs`.",
+      "context": "THE GATE IS A CLASS GATE. `TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken` walks every rule keyed by a bool, evaluates it with that bool ON and with it OFF, and fails any rule that reports `INERT` when on and `Disabled` when off. It checks 4 rules today and names one offender. The second test asserts the specific consequence against a DEFAULT config, which is the state the operator's box is actually in.\n\nBOTH DIRECTIONS ARE TESTED. `TestUi3_AnEmptyCollectionCanNeverReportEnforcing` and the EvidenceLabel check next to it run every evaluator against an empty context and a populated one; they will catch a change that makes the shield report evidence it does not have, or that stops it varying with `NewsEventCount`.\n\nASCII only. C# 8.0 / .NET Framework 4.8 and a net8.0 test build.",
+      "expect_green": [
+        "let their switch downgrade a defect to a preference",
+        "on a default config",
+        "and it still names the defect that makes it inert"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/GuardRules.cs",
+          "anchor": "private static readonly List<GuardRuleDefinition> _rules",
+          "note": "THE RULE LIST. Exactly ONE entry changes -- the one whose ConfigPath is \"PropFirm.EnableNewsShield\". Every other entry in this list, and the `_nonRules` list after it, stays byte-identical."
+        }
+      ]
+    }
+  ]
+}
