@@ -1,0 +1,114 @@
+{
+  "plan": "docs/RISKGUARD_COPIER_HARDENING_PLAN.md, section P2-92",
+  "note": "P2-92. `shadow` mode is not observation-only: a shadow breach flattens nothing AND stops the account trading.\n\nThe acceptance tests were written BY HAND FIRST. tests/*Tests.cs is a PROTECTED path -- you cannot reach it and must not try. TWO assertions are red and must pass. THREE more are ALREADY GREEN and must STAY green; each one exists to make a specific wrong fix unshippable, and they are the most important part of this ticket:\n\n  * `TestP292_SwitchingToShadowIsNotALockoutBypass` -- if `CanTrade` simply consulted the CURRENT mode, an operator locked out in live could escape by switching to shadow. FR-30 and judge-loop P1-4 already settled that a panic toggle-off must not defeat a lockout; a mode switch is the same bypass through a different setting.\n  * `TestP292_ALockoutFromAnOlderStateFileStillBites` -- absence of the new field must read as ENFORCED.\n  * `TestP292_AManualLockoutBitesInEveryMode` -- `LockAccount` is an operator instruction, not a rule breach.\n\n⚠️ EIGHT EXISTING TESTS BREACH A RULE IN THE DEFAULT MODE -- which is `shadow` -- AND ASSERT `state.IsLockedOut`. Do NOT stop writing that flag. The state model is not the defect: `IsLockedOut` meaning 'this account has breached' is correct, and the ENFORCEMENT decision belongs to the consumer. A fix that stopped writing the flag would break all eight and be indistinguishable, from the test output, from a fix that broke the guard.\n\n⚠️ SPLIT INTO TWO TICKETS. T1 is the mechanism plus the one rule path the behavioural test drives; T2 routes the remaining eight sites and is gated by the source scan. The split is deliberate: a single 13-region ticket over a 6,000-line file is what made the F-9 run end NOT_CONVERGING, with the panel opening new surface each round instead of closing the defect. RUN T1 FIRST -- T2's regions do not exist until T1's helper does.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P2-92 (1/2): CanTrade cannot tell an ENFORCED lockout from a shadow observation, so a shadow breach stops the account trading",
+      "defect": "`ProcessAction` gates EXECUTION on mode: `IsActingMode()` is false in `shadow`, so a breach's flatten is logged as `SHADOW_ACTION` and never sent. That is the entire promise of the mode, and the `MinShadowSessions` gate exists to make watching-before-acting the default.\n\nBut ten rule paths set `stateModel.IsLockedOut = true` BEFORE the action is dispatched, outside any mode check, and `RiskGuardAddOn.cs:112` `CanTrade` reads that flag ABOVE its own escape hatch:\n\n    if (_accountStates.TryGetValue(accountName, out var state) && state.IsLockedOut)\n    {\n        bool bypassAllowed = !_isArmed && _config.LockoutBypassWhileDisarmedAccounts...\n        if (!bypassAllowed) return false;\n    }\n    if (!_isArmed) return true;          // <- the arming escape hatch is BELOW the lockout\n\nSo in `shadow`: nothing is flattened, and the account **stops being allowed to trade**. `CanTrade` is the universal pre-trade gate -- the copier calls `CanTrade(followerName, instrument, \"TradeCopier\")` and every strategy calls it through `RiskManagerBase` -- so a shadow breach silently halts a bot. Its three refusal paths log to `NinjaTrader.Code.Output.Process` only, which no readable sink captures (`P1-71`), so nothing says why.\n\nThe missing information is the AUTHORITY under which a lockout was imposed. `IsLockedOut` records THAT a breach happened; nothing records whether the guard was in a position to act on it, so the consumer cannot tell an enforced lockout from an observation.\n\nThis became load-bearing when `F-9` mapped five accounts to firm plans, arming two more lockout-capable rules: an `Apex-100K` trailing breach needs an 1800 drop from peak, which is an ordinary week for an ORB strategy.",
+      "spec": "Record the authority beside the flag, and have the consumer read it. Do NOT change what `IsLockedOut` means.\n\n1. ADD `public bool LockoutWasShadowOnly { get; set; } = false;` to `AccountState`, beside the lockout fields.\n   ⚠️ **The field is named for the SHADOW case deliberately, and the direction is the whole point.** A `bool` absent from a JSON state file deserialises as `false`, which must read as *enforced* -- the safe direction. Naming it `LockoutWasEnforced` would make every state file written before this change release its lockouts on upgrade. `P1-54` reasoned exactly this way about `LockoutUntil`: an upgrade must not be able to shorten a lockout that was meant to hold. Do not rename or invert it.\n\n2. ADD ONE private helper beside `IsActingMode`, and route every RULE site through it:\n\n       private void MarkRuleLockout(AccountState st, string ruleId)\n\n   It sets `st.IsLockedOut = true`, sets `st.LockoutWasShadowOnly = !IsActingMode()`, sets `_stateDirty = true`, and when it is NOT an acting mode also emits `LogEvent(st.AccountName, \"SHADOW_LOCKOUT\", ...)` naming the rule -- the shadow session is supposed to be collecting exactly this, and today it records nothing. It must NOT touch `LockoutUntil`: the deadline is per-rule config (`PnLRules.LockoutMinutes` vs `Overtrading.LockoutMinutes`, and the flood detector has its own `P1-45` logic), and moving that into the helper would change lockout DURATIONS, which is a protection change nobody asked for.\n\n   `IsActingMode()` takes `_stateLock`, which is RE-ENTRANT, so calling it from a site that already holds the lock is safe and is what `ProcessAction` already does.\n\n3. CONVERT the TWO rule sites in the one region you are given -- `DAILY_LOSS_BREACH` and `TRAILING_DD_BREACH` -- to call the helper instead of assigning the flag directly. Keep each site's surrounding `if (!stateModel.IsLockedOut)` guard and its own `LockoutUntil` handling exactly as written.\n\n   The other EIGHT rule sites are deliberately NOT in this ticket; T2 routes them. That is why the source-scan gate stays RED after this ticket and is not in its `expect_green` -- do not go looking for the other sites, you cannot reach them.\n\n4. LEAVE THESE TWO SITES ASSIGNING DIRECTLY, and add a one-line comment at each saying why:\n   * the rehydration path (`_accountStates[accName] = state;` block in `LoadPersistedState`) -- a persisted lockout came from a real session, and its authority is restored from the file in item 5.\n   * `LockAccount` (`state.LockoutUntil = DateTime.MinValue;`, the `minutes == -1` branch) -- the operator asked for it, in whatever mode. Set `LockoutWasShadowOnly = false` here EXPLICITLY, so a manual lockout overrides an earlier shadow observation on the same account rather than inheriting its flag.\n\n5. PERSIST IT. Add `LockoutWasShadowOnly` to the persisted per-account DTO (`public bool LockoutWasShadowOnly { get; set; }`), write it in the DTO construction in `SavePersistedState` beside `LockoutUntil`, and read it in the rehydration block beside `state.LockoutUntil = kvp.Value.LockoutUntil;`. Absent in an older file gives `false` = enforced, which is the intended fail-closed default and is asserted by a test.\n\n6. `CanTrade` refuses only for a lockout that carries acting authority:\n\n       if (... out var state) && state.IsLockedOut && !state.LockoutWasShadowOnly)\n\n   Change NOTHING else about that method -- not the bypass clause, not the order of the checks below it, not the instrument or exclusion handling. The `!_isArmed` hatch staying BELOW the lockout is `FR-30`/`P1-4` and is correct.\n\n7. Change nothing else in the file. Do not alter `ProcessAction`, `IsActingMode`, any `LockoutUntil` value, or any place that CLEARS `IsLockedOut` (the session reset and the lapse path both make the authority flag irrelevant by clearing the lockout itself).",
+      "context": "`IsActingMode()` is `_mode == \"live\" || forceLive` -- and note that `shadow`, `live`, `pure` and `override_with_friction` are all recognised modes while only `live` acts. That asymmetry is a SEPARATE issue and is out of scope: use `IsActingMode()` so this fix agrees with `ProcessAction` exactly, rather than inventing a second definition of 'acting'.\n\n`GuardRuleRegistry.CanAct(mode, isArmed)` in `GuardRules.cs` is `mode == \"live\" && isArmed` -- the inventory's deliberate duplicate, pinned against the real guard by a test. Do not touch it.\n\nWhy the authority has to be recorded rather than computed: the current mode at READ time is not the mode at BREACH time. A lockout imposed in live and then read in shadow must still bite, or the mode setting becomes a one-click lockout bypass -- and `LockoutBypassWhileDisarmedAccounts` cannot mitigate that, because it only applies while DISARMED and the guard here is armed. A green test already pins this.\n\nThe class gate is a SOURCE assertion over `addons/RiskGuardAddOn.cs` and says so: it requires every non-exempt `IsLockedOut = true` to sit within six lines of a `LockoutWasShadowOnly` write, and it asserts that each of its two exemptions still matches exactly one site, so a rotted exemption fails loudly instead of silently exempting nothing. It exists because fixing only the path the behavioural test drives would leave nine, and because a rule added later would reintroduce the defect with every test green -- which is how `P1-36` came to live in a second place.",
+      "expect_green": [
+        "a shadow-mode breach leaves the account TRADABLE"
+      ],
+      "regions": [
+        {
+          "id": "CanTrade",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public bool CanTrade(string accountName, string instrument, string strategyName = \"DefaultStrategy\")",
+          "note": "ONE condition changes: the lockout test gains `&& !state.LockoutWasShadowOnly`. The bypass clause, the `if (!_isArmed) return true;` below it, and the exclusion/instrument checks are all correct and must come back byte-identical. The hatch being BELOW the lockout is FR-30 / judge-loop P1-4."
+        },
+        {
+          "id": "TheHelperAndTheModePredicate",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal bool IsActingMode(bool forceLive = false)",
+          "note": "ADD `MarkRuleLockout` here, next to the predicate it consults. Do NOT modify IsActingMode itself, and do not modify ProcessAction below it -- its mode gate is the behaviour this fix is being made consistent WITH, not a thing to change."
+        },
+        {
+          "id": "AccountStateFields",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public double FirmStartingBalance { get; set; } = 0.0;",
+          "note": "ADD `LockoutWasShadowOnly` to AccountState. This anchor also appears in the persisted DTO, so make sure the field lands on the class that has `public AccountState(string name)` -- the DTO needs its own copy, handled by the SavePersistedState region."
+        },
+        {
+          "id": "SavePersistedState",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "LockoutUntil = state.LockoutUntil   // P1-54",
+          "note": "Add `LockoutWasShadowOnly = state.LockoutWasShadowOnly` to the DTO construction. Mind the comma: the P1-54 line is currently last in the initializer."
+        },
+        {
+          "id": "LoadPersistedState",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "private void LoadPersistedState()",
+          "note": "Two changes, in a long method -- everything else must come back byte-identical. (a) The `state.IsLockedOut = true;` in the LockedOutAccounts loop stays a DIRECT assignment, because a persisted lockout came from a real session; add a one-line comment saying so. (b) The field-copy block gains `state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;` beside the existing `state.LockoutUntil = kvp.Value.LockoutUntil;`. Absent in an older file deserialises false = enforced, which is the fail-closed default a green test pins."
+        },
+        {
+          "id": "LockAccount",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public void LockAccount(string accountName, int minutes)",
+          "note": "A manual lockout is an operator INSTRUCTION, not a rule breach: it must bite in every mode. Keep the direct assignment, add a one-line comment saying why, and set `state.LockoutWasShadowOnly = false;` EXPLICITLY so a manual lockout overrides an earlier shadow observation on the same account instead of inheriting its flag. A green test pins this."
+        },
+        {
+          "id": "PnLRules",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"DAILY_LOSS_BREACH\"",
+          "note": "Covers the DAILY_LOSS_BREACH and TRAILING_DD_BREACH sites. Each keeps its own `if (_config.PnLRules.LockoutMinutes > 0) LockoutUntil = ...` exactly as written -- the helper must not touch deadlines."
+        }
+      ]
+    },
+    {
+      "id": "T2",
+      "title": "P2-92 (2/2): route the remaining eight rule-breach lockout sites through the helper",
+      "defect": "`T1` added `AccountState.LockoutWasShadowOnly`, the `MarkRuleLockout` helper, the persistence and the `CanTrade` condition, and routed the two P&L sites through it. EIGHT rule paths still assign `IsLockedOut = true` directly, so each of them still stops the account trading on a shadow breach: the news shield, the evaluation target, the order-rate flood, the per-instrument contract cap, max trades, consecutive losses, and BOTH firm-mirror rules.\n\nFixing only the path the behavioural test drives is how `P1-36` came to live in a second place -- it was closed where it was reported and survived in eight other call sites. The two firm-mirror sites are the reason this is urgent rather than tidy: `F-9` mapped five accounts to firm plans on 2026-08-13, and an `Apex-100K` trailing breach needs an 1800 drop from peak.",
+      "spec": "In each region, replace the direct `IsLockedOut = true` assignment with a call to the helper `MarkRuleLockout(stateModel, \"<THE RULE ID>\")` that `T1` added. The rule id string must match the `RuleId` on the `GuardAction` the same block emits, so the shadow log and the action name the same rule.\n\nRULES:\n1. Keep every surrounding `if (!stateModel.IsLockedOut)` guard exactly as it is. It is what makes a lockout one-shot.\n2. Keep every `LockoutUntil` assignment exactly as it is, including which config field it reads (`Overtrading.LockoutMinutes` vs `PnLRules.LockoutMinutes`). The helper does NOT touch deadlines, and moving one would change a lockout DURATION -- a protection change nobody asked for.\n3. The helper already sets `_stateDirty = true`. Where a site's only other statement was `_stateDirty = true;`, that line goes; where the site does more, leave the rest alone.\n4. The two firm-mirror sites are one-liners: `if (!st.IsLockedOut) { st.IsLockedOut = true; _stateDirty = true; }` becomes `if (!st.IsLockedOut) MarkRuleLockout(st, \"FIRM_TRAILING_DD_BREACH\");` and the `FIRM_DAILY_LOSS_BREACH` equivalent. Note the local there is `st`, not `stateModel`.\n5. The order-rate flood's deadline logic is `P1-45`'s and is load-bearing: the lockout test is `IsLockedOut || UtcNow < LockoutUntil`, an OR, so the flag outlives its own deadline unless both are set. Change only the flag assignment there.\n6. Add no new behaviour, no new log line beyond what the helper emits, and no new condition. This ticket is mechanical on purpose; its gate is a source scan that counts sites.",
+      "context": "`IsActingMode()` is `_mode == \"live\" || forceLive` -- and note that `shadow`, `live`, `pure` and `override_with_friction` are all recognised modes while only `live` acts. That asymmetry is a SEPARATE issue and is out of scope: use `IsActingMode()` so this fix agrees with `ProcessAction` exactly, rather than inventing a second definition of 'acting'.\n\n`GuardRuleRegistry.CanAct(mode, isArmed)` in `GuardRules.cs` is `mode == \"live\" && isArmed` -- the inventory's deliberate duplicate, pinned against the real guard by a test. Do not touch it.\n\nWhy the authority has to be recorded rather than computed: the current mode at READ time is not the mode at BREACH time. A lockout imposed in live and then read in shadow must still bite, or the mode setting becomes a one-click lockout bypass -- and `LockoutBypassWhileDisarmedAccounts` cannot mitigate that, because it only applies while DISARMED and the guard here is armed. A green test already pins this.\n\nThe class gate is a SOURCE assertion over `addons/RiskGuardAddOn.cs` and says so: it requires every non-exempt `IsLockedOut = true` to sit within six lines of a `LockoutWasShadowOnly` write, and it asserts that each of its two exemptions still matches exactly one site, so a rotted exemption fails loudly instead of silently exempting nothing. It exists because fixing only the path the behavioural test drives would leave nine, and because a rule added later would reintroduce the defect with every test green -- which is how `P1-36` came to live in a second place.",
+      "expect_green": [
+        "rule-breach lockout sites record whether the guard could act"
+      ],
+      "regions": [
+        {
+          "id": "PropSuiteRules",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"NEWS_SHIELD_LOCKOUT\"",
+          "note": "Covers NEWS_SHIELD_LOCKOUT and EVALUATION_TARGET_REACHED. Neither sets a LockoutUntil today; do not add one."
+        },
+        {
+          "id": "FloodDetector",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "if (stateModel.RecentOrderIds.Count > maxPerSecond)",
+          "note": "The order-rate flood. Its deadline logic is P1-45's and is load-bearing: the lockout test is `IsLockedOut || UtcNow < LockoutUntil`, an OR, so the flag outlives its own deadline unless both are set. Leave every line of that alone -- only the flag assignment is replaced by the helper call."
+        },
+        {
+          "id": "PerInstrumentContracts",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "if (pos.Quantity > limit)",
+          "note": "The per-instrument contract cap. Its GuardAction's RuleId is emitted just below the flag assignment -- read it and pass that exact string. This site sets no LockoutUntil today; do not add one."
+        },
+        {
+          "id": "MaxTrades",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"MAX_TRADES_BREACH\"",
+          "note": "Keeps its `Overtrading.LockoutMinutes` handling exactly as written."
+        },
+        {
+          "id": "ConsecutiveLosses",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"CONSECUTIVE_LOSS_BREACH\"",
+          "note": "Keeps its `Overtrading.LockoutMinutes` handling exactly as written."
+        },
+        {
+          "id": "FirmTrailing",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"FIRM_TRAILING_DD_BREACH\"",
+          "note": "One-liner, and the local is `st`. F-9 armed this rule on five accounts, which is why it is in this ticket rather than a later one."
+        },
+        {
+          "id": "FirmDailyLoss",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "RuleId = \"FIRM_DAILY_LOSS_BREACH\"",
+          "note": "One-liner, local is `st`. Live on the four Apex-100K-mapped Sim accounts; the TakeProfitTrader-50K plan has no daily loss limit, so it cannot fire there."
+        }
+      ]
+    }
+  ]
+}

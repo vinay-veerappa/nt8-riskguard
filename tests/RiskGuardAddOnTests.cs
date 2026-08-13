@@ -133,6 +133,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
             TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan();
             TestF9_TheDeployedFirmMappingPassesPreflight();
+            TestP292_AShadowBreachMustNotStopTheAccountTrading();
+            TestP292_EveryRuleLockoutRecordsWhetherItCouldAct();
+            TestP292_SwitchingToShadowIsNotALockoutBypass();
+            TestP292_ALockoutFromAnOlderStateFileStillBites();
+            TestP292_AManualLockoutBitesInEveryMode();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -10077,6 +10082,245 @@ namespace NinjaTrader.NinjaScript.AddOns
             finally
             {
                 Account.All = previousAccounts;
+            }
+        }
+
+        // ================================================================================
+        // P2-92 -- `shadow` mode is not observation-only.
+        //
+        // `ProcessAction` gates EXECUTION on mode, so a shadow breach logs `SHADOW_ACTION` and
+        // flattens nothing. That is the whole promise of the mode. But the rules set
+        // `IsLockedOut` BEFORE dispatch, outside any mode check, and `CanTrade` reads that flag
+        // ABOVE its own `if (!_isArmed) return true;` escape hatch. So in shadow: nothing is
+        // flattened AND the account stops being allowed to trade. The copier consults
+        // `CanTrade(followerName, ...)` and every strategy consults it through `RiskManagerBase`,
+        // and the three refusal paths log to `Output.Process` only (P1-71) -- so nothing readable
+        // says why a bot stood down.
+        //
+        // ⚠️ THE FIX IS NOT "MAKE CanTrade CONSULT THE MODE", and the tests below are arranged to
+        // make that impossible to ship. A lockout imposed while the guard could ACT must keep
+        // biting after the operator switches to shadow, or switching mode becomes a lockout
+        // bypass -- which is FR-30 / judge-loop P1-4's exact concern wearing new clothes. What is
+        // missing is the AUTHORITY under which a lockout was imposed, so that is what gets
+        // recorded.
+        //
+        // ⚠️ AND THE SUITE HAS BEEN DEFENDING THIS DEFECT. Eight existing tests breach a rule in
+        // the DEFAULT mode -- which is `shadow` -- and assert `state.IsLockedOut`. That is the
+        // `P1-87` shape: a test asserting the defect as correct behaviour. They are left ALONE
+        // here, deliberately: the state model is not the defect. `IsLockedOut` meaning "this
+        // account has breached" is right, and the enforcement decision belongs to the consumer.
+        // A fix that stopped writing the flag would have broken all eight and been indistinguish-
+        // able, from the test output, from a fix that broke the guard.
+        // ================================================================================
+
+        /// <summary>
+        /// Builds a guard with one account state registered, so `CanTrade` can see it.
+        /// `EvaluatePnLRules` takes the state directly and does not register it.
+        /// </summary>
+        private static RiskGuardAddOn P292Guard(string mode, bool armed, out AccountState state, out Account account)
+        {
+            var cfg = new RiskConfig();
+            cfg.Mode = mode;
+            cfg.PnLRules.DailyLossLimit = 1000.0;
+            cfg.PnLRules.LockoutMinutes = 60;
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(cfg);
+            addon.SetModeForTest(mode);
+            addon.SetArmedForTest(armed);
+
+            state = new AccountState("P292Acc");
+            addon.SetAccountStateForTest("P292Acc", state);
+            account = new Account { Name = "P292Acc" };
+            return addon;
+        }
+
+        /// <summary>
+        /// THE DEFECT. In shadow, a breach must not stop the account trading -- and the paired
+        /// live case must still stop it, or this test passes on a guard that protects nothing.
+        /// </summary>
+        private static void TestP292_AShadowBreachMustNotStopTheAccountTrading()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a breach in shadow mode does not stop the account trading");
+
+            AccountState shadowState; Account shadowAcct;
+            var shadow = P292Guard("shadow", true, out shadowState, out shadowAcct);
+            shadowState.RealizedPnL = -1100.0;
+            var shadowActions = shadow.EvaluatePnLRules(shadowAcct, shadowState);
+
+            // The rule must still FIRE and still be recorded -- the point is that the shadow
+            // observation is intact, not that the rule was switched off.
+            Assert(shadowActions.Any(a => a.RuleId == "DAILY_LOSS_BREACH"),
+                "precondition: the daily-loss rule still fires in shadow, and is still observed");
+
+            Assert(shadow.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "a shadow-mode breach leaves the account TRADABLE: shadow gates execution, and a "
+                + "lockout that stops the copier and every strategy is not an observation");
+
+            AccountState liveState; Account liveAcct;
+            var live = P292Guard("live", true, out liveState, out liveAcct);
+            liveState.RealizedPnL = -1100.0;
+            live.EvaluatePnLRules(liveAcct, liveState);
+
+            Assert(!live.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "and the same breach in an ACTING mode still stops it, so the assertion above is "
+                + "not passing on a guard that permits everything");
+        }
+
+        /// <summary>
+        /// THE CLASS GATE, and it is a SOURCE ASSERTION -- it proves less than an execution would
+        /// and must be labelled as such.
+        ///
+        /// Ten rule paths set `IsLockedOut`, spread over 2,800 lines: daily loss, trailing
+        /// drawdown, the news shield, the evaluation target, the order-rate flood, per-instrument
+        /// contracts, max trades, consecutive losses, and both firm-mirror rules. Fixing the one
+        /// the acceptance test above drives would leave nine. Worse, a rule added LATER would
+        /// reintroduce the defect with every test still green, which is how `P1-36` came to live
+        /// in a second place.
+        ///
+        /// So every `IsLockedOut = true` in the addon must sit beside a write recording whether
+        /// the guard could act, and the two sites that must NOT be gated are named explicitly
+        /// rather than pattern-matched:
+        ///   * the rehydration path -- a persisted lockout came from a real session
+        ///   * `LockAccount` -- the operator asked for it, in whatever mode
+        /// </summary>
+        private static void TestP292_EveryRuleLockoutRecordsWhetherItCouldAct()
+        {
+            Console.WriteLine("\n[TEST] P2-92: every rule that locks out records whether it could act (SOURCE assertion)");
+
+            var src = File.ReadAllText(AddonSourcePath()).Split('\n');
+
+            // Sites the fix must NOT touch, matched on a nearby distinctive line rather than a
+            // line number so this does not rot the moment the file shifts. Each one's HIT COUNT
+            // is asserted below: `mutation/check_anchors.py` exists because a find-string that
+            // stops matching scores its mutant a survivor in silence, and an exemption that stops
+            // matching would quietly turn this gate into a demand that the two legitimate sites be
+            // broken -- or, worse, exempt nothing and then everything.
+            var exempt = new Dictionary<string, int>
+            {
+                { "state.LockoutUntil = DateTime.MinValue;", 0 },        // LockAccount, minutes == -1
+                { "_accountStates[accName] = state;", 0 },               // rehydration from persisted state
+            };
+
+            int gated = 0;
+            var ungated = new List<string>();
+            for (int i = 0; i < src.Length; i++)
+            {
+                if (src[i].IndexOf("IsLockedOut = true", StringComparison.Ordinal) < 0) continue;
+                if (src[i].TrimStart().StartsWith("//", StringComparison.Ordinal)) continue;
+
+                // A window either side, because the recording write may precede or follow.
+                int lo = Math.Max(0, i - 6), hi = Math.Min(src.Length - 1, i + 6);
+                string window = string.Join("\n", src.Skip(lo).Take(hi - lo + 1));
+
+                var hit = exempt.Keys.FirstOrDefault(e => window.IndexOf(e, StringComparison.Ordinal) >= 0);
+                if (hit != null) { exempt[hit] = exempt[hit] + 1; continue; }
+
+                if (window.IndexOf("LockoutWasShadowOnly", StringComparison.Ordinal) >= 0) gated++;
+                else ungated.Add("line " + (i + 1) + ": " + src[i].Trim());
+            }
+
+            var rotted = exempt.Where(kv => kv.Value != 1).Select(kv => kv.Key + " matched " + kv.Value).ToList();
+            Assert(rotted.Count == 0,
+                "each exemption in this gate still names exactly one lockout site: " + string.Join(" | ", rotted));
+
+            Assert(gated >= 10 && ungated.Count == 0, string.Format(
+                "all {0} rule-breach lockout sites record whether the guard could act ({1} do not{2})",
+                gated, ungated.Count,
+                ungated.Count == 0 ? "" : ": " + string.Join(" | ", ungated.Take(5))));
+        }
+
+        /// <summary>
+        /// The wrong fix, made unshippable. GREEN AT BASELINE and must stay green.
+        ///
+        /// If `CanTrade` simply consulted the CURRENT mode, an operator who had been locked out in
+        /// live could escape it by switching to shadow. FR-30 and judge-loop `P1-4` already
+        /// settled that a panic toggle-off must not defeat a lockout; a mode switch is the same
+        /// bypass through a different setting, and `LockoutBypassWhileDisarmedAccounts` cannot
+        /// help because the guard is still armed.
+        /// </summary>
+        private static void TestP292_SwitchingToShadowIsNotALockoutBypass()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a lockout imposed while ACTING survives a switch to shadow");
+
+            AccountState state; Account account;
+            var addon = P292Guard("live", true, out state, out account);
+            state.RealizedPnL = -1100.0;
+            addon.EvaluatePnLRules(account, state);
+            Assert(!addon.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "precondition: the live-mode breach locked the account out");
+
+            addon.SetModeForTest("shadow");
+            Assert(!addon.CanTrade("P292Acc", "MNQ 03-26", "P292"),
+                "switching to shadow does NOT release a lockout that was imposed while the guard "
+                + "could act -- otherwise the mode setting is a one-click lockout bypass");
+        }
+
+        /// <summary>
+        /// Fail closed on ABSENCE. GREEN AT BASELINE and must stay green.
+        ///
+        /// A state file written before this change records the lockout and says nothing about its
+        /// authority. A `bool` deserialises absent as `false`, so the field is deliberately named
+        /// for the SHADOW case -- `LockoutWasShadowOnly` -- and absence therefore reads as
+        /// "enforced", which is the safe direction. `P1-54` reasoned exactly this way about
+        /// `LockoutUntil`: an upgrade must not be able to shorten a lockout that was meant to hold.
+        /// </summary>
+        private static void TestP292_ALockoutFromAnOlderStateFileStillBites()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a lockout from a state file that predates this change still bites");
+
+            string path = Path.Combine(Path.GetTempPath(), "p292_legacy_state_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                // Exactly the shape an older build wrote: the fact of the lockout, in the
+                // top-level name list, and no authority field anywhere.
+                File.WriteAllText(path,
+                    "{\"IsArmed\":true,\"ShadowSessionsCompleted\":0,"
+                    + "\"LockedOutAccounts\":[\"P292Legacy\"],"
+                    + "\"AccountsData\":{\"P292Legacy\":{\"TradesToday\":3}},"
+                    + "\"Timestamp\":\"2026-08-01T00:00:00Z\"}");
+
+                var cfg = new RiskConfig();
+                cfg.Mode = "shadow";
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigForTest(cfg);
+                addon.SetModeForTest("shadow");
+                addon.SetArmedForTest(true);
+                addon.SetStateFileForTest(path);
+                addon.LoadPersistedStateForTest();
+
+                var restored = addon.GetAccountStateForTest("P292Legacy");
+                Assert(restored != null && restored.IsLockedOut,
+                    "precondition: the legacy lockout was restored at all");
+                Assert(!addon.CanTrade("P292Legacy", "MNQ 03-26", "P292"),
+                    "a restored lockout with no recorded authority is treated as ENFORCED, because "
+                    + "absence must fail closed -- an upgrade cannot be allowed to release a lockout");
+            }
+            finally
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// The over-application guard. GREEN AT BASELINE and must stay green.
+        ///
+        /// The cheapest way to pass the class gate is to gate EVERY `IsLockedOut = true`, which
+        /// would make a lockout the operator asked for evaporate in shadow. `LockAccount` is an
+        /// instruction, not a rule breach.
+        /// </summary>
+        private static void TestP292_AManualLockoutBitesInEveryMode()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a lockout the operator asked for holds in shadow too");
+
+            foreach (var mode in new[] { "shadow", "live" })
+            {
+                AccountState state; Account account;
+                var addon = P292Guard(mode, true, out state, out account);
+                addon.LockAccount("P292Acc", -1);
+                Assert(!addon.CanTrade("P292Acc", "MNQ 03-26", "P292"), string.Format(
+                    "a manual EOD lockout holds in {0} mode -- the operator asked for it, and the "
+                    + "mode describes what the RULES may do, not what the operator may do", mode));
             }
         }
 
