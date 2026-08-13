@@ -337,6 +337,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCopier_P334_APassingPreflightAllowsTheSwitchToLive();
             TestCopier_P334_LeavingLiveIsNeverBlocked();
             TestCopier_P334_TheModeSurvivesDiskAndATypoIsNotAdopted();
+            TestCopier_P334_EveryRefusedModeChangeLeavesATrace();
             TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed();
             TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog();
             TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome();
@@ -4590,6 +4591,55 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "not be the difference between observing and trading. Got: " + string.Join(" / ", log));
             Assert(CountCopyOutcomes(log) == 1,
                 "and it still produces exactly one readable outcome. Got: " + string.Join(" / ", log));
+        }
+
+        /// <summary>
+        /// P1-71's class, found on the LIVE box rather than by reading the code: the
+        /// unrecognised-mode branch returned a refusal to the HTTP caller and wrote NOTHING to
+        /// the audit log. An operator grepping afterwards for why the copier is not in the mode
+        /// they set would find silence. The response body is not the record.
+        ///
+        /// Both refusal paths are asserted, because they are separate returns and only one of
+        /// them logged.
+        /// </summary>
+        private static void TestCopier_P334_EveryRefusedModeChangeLeavesATrace()
+        {
+            Console.WriteLine("\n[TEST] P3-34: every refused mode change is in the audit log, not just the response");
+
+            var rel = SlipRelationship(0);
+            SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            TradeCopierEngine.Instance.SetCopierModeForTest("shadow");
+            try
+            {
+                // Path 1: a mode nobody recognises.
+                var unrecognised = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.TrySetCopierMode("Shadow_Mode_Typo"));
+                Assert(LoggedEventContaining(unrecognised, "MODE_CHANGE_REFUSED"),
+                    "an unrecognised mode is refused IN THE LOG, not only in the response. Got: "
+                    + string.Join(" / ", unrecognised));
+
+                // Path 2: a recognised mode that preflight rejects. Separate return, and it was
+                // the only one of the two that logged.
+                var broken = SlipRelationship(0);
+                broken.FollowerAccountName = "AccountThatDoesNotExist";
+                WithOnlyTheseRelationships(() =>
+                {
+                    var refused = CaptureCopierLog(() =>
+                        TradeCopierEngine.Instance.TrySetCopierMode("live"));
+                    Assert(LoggedEventContaining(refused, "MODE_CHANGE_REFUSED"),
+                        "and so is a preflight refusal. Got: " + string.Join(" / ", refused));
+                }, broken);
+
+                // And a change that WORKS is recorded too -- a log that only carries failures
+                // cannot answer "when did this become shadow?", which is the question asked after
+                // a copier silently stops copying.
+                var changed = CaptureCopierLog(() =>
+                    TradeCopierEngine.Instance.TrySetCopierMode("disabled"));
+                Assert(LoggedEventContaining(changed, "MODE_CHANGED"),
+                    "a successful change is recorded. Got: " + string.Join(" / ", changed));
+            }
+            finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
         }
 
         /// <summary>

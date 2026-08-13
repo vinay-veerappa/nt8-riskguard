@@ -66,10 +66,10 @@ COPIER = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 MUTANTS = [
     ("IsCopierActingMode accepts \"shadow\" as well. The mode is honoured everywhere, reported\n"
      "     everywhere, and submits orders -- the most direct way for this feature to be decorative",
-     'return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase);\n        }\n\n        internal static bool IsRecognisedCopierMode',
+     'return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase);\n        }\n\n        public static bool IsRecognisedCopierMode',
      'return string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase)\n'
      '                || string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase);\n        }\n\n'
-     '        internal static bool IsRecognisedCopierMode'),
+     '        public static bool IsRecognisedCopierMode'),
 
     ("an UNRECOGNISED mode acts. P1-87's shape, with the permissive branch placing real orders --\n"
      "     a typo in a config field becomes the difference between observing and trading",
@@ -119,6 +119,22 @@ MUTANTS = [
      "     cannot see, which is why the round-trip test drives both",
      '                        ["CopierMode"] = _copierMode',
      '                        ["CopierModeUnused"] = _copierMode'),
+
+    ("the UNRECOGNISED-mode refusal goes back to being silent in the audit log. It still returns\n"
+     "     a refusal to the HTTP caller, so every response-shaped test stays green -- and an\n"
+     "     operator grepping afterwards for why the copier is not in the mode they set finds\n"
+     "     nothing. P1-71's class, and it was found on the LIVE box, not by reading the code",
+     '                CopierLog(null, "MODE_CHANGE_REFUSED",\n'
+     '                    $"refusing to put the copier in \'{mode}\': not one of live/shadow/disabled. "\n'
+     '                    + $"Mode stays \'{GetCopierMode()}\'.");\n'
+     '                return result;',
+     '                return result;'),
+
+    ("a successful mode change stops being logged. Nothing fails that looks at outcomes -- and\n"
+     "     the log can no longer answer 'when did this become shadow?', which is the question\n"
+     "     asked after a copier silently stops copying",
+     '            CopierLog(null, "MODE_CHANGED",',
+     '            if (false) CopierLog(null, "MODE_CHANGED",'),
 ]
 
 

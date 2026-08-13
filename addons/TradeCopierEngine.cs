@@ -570,6 +570,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 result.Fail("COPIER_MODE_UNRECOGNISED",
                     $"'{mode}' is not a copier mode. Recognised: live, shadow, disabled.");
+                // P1-71: this branch returned a refusal to the CALLER and left nothing in the
+                // audit log, so an operator grepping afterwards for why the copier is not in
+                // the mode they set would find silence. The HTTP response is not the record.
+                CopierLog(null, "MODE_CHANGE_REFUSED",
+                    $"refusing to put the copier in '{mode}': not one of live/shadow/disabled. "
+                    + $"Mode stays '{GetCopierMode()}'.");
                 return result;
             }
 
@@ -581,7 +587,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (string failure in preflight.Failures)
                         result.Fail("COPIER_PREFLIGHT", failure);
 
-                    CopierLog(null, "COPIER_MODE_CHANGE_REFUSED",
+                    CopierLog(null, "MODE_CHANGE_REFUSED",
                         $"refusing to put the copier in '{mode}': preflight found "
                         + $"{preflight.Failures.Count} problem(s). Mode stays '{GetCopierMode()}'. "
                         + string.Join(" | ", preflight.Failures));
@@ -596,7 +602,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 _copierMode = mode;
             }
 
-            CopierLog(null, "COPIER_MODE_CHANGED",
+            CopierLog(null, "MODE_CHANGED",
                 $"copier mode '{previous}' -> '{mode}'.");
             return result;
         }
@@ -1803,7 +1809,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                         else
                         {
-                            CopierLog(null, "COPIER_MODE_UNRECOGNISED_IN_CONFIG",
+                            CopierLog(null, "MODE_UNRECOGNISED_IN_CONFIG",
                                 $"stored CopierMode '{loadedMode}' is not one of live/shadow/disabled; "
                                 + $"keeping '{_copierMode}'. Fix the config -- a mode nobody "
                                 + "recognises would stop the copier with nothing looking wrong.");
