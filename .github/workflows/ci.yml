@@ -141,6 +141,14 @@ jobs:
       - name: Mutation battery UI4
         run: python mutation/mutate_ui4.py
 
+      # UI5 (the JSON contract). Fifteen lines of serializer settings, batteried because the
+      # route that serves the payload is UNTESTABLE (P2-27) and the settings are exactly what a
+      # future tidy-up would change. Dropping the enum converter couples the page to an enum
+      # order that exists for sorting; NullValueHandling.Ignore turns "no limit" into a limit
+      # of zero, which is UI1's bare-zero defect one layer out.
+      - name: Mutation battery UI5
+        run: python mutation/mutate_ui5.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

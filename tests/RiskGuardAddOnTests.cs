@@ -1030,6 +1030,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates();
             TestUi4_TheSnapshotCarriesTheGuardsOwnModeArmingAndAccountFlags();
             TestUi4_NothingAboutTheBuildCanBlankTheInventoryOrLeaveARedRowMute();
+            TestUi5_TheStatesTravelAsNamesNotNumbers();
+            TestUi5_ANullLimitStaysNullRatherThanBecomingZero();
+            TestUi5_AnEmptyInventoryIsStillAnInventory();
+            TestUi5_TheJsonRoundTripsBackToTheSameStates();
+            TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -3299,6 +3304,156 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "every evaluator returns a reading rather than null, so 'no reading' can only mean "
                 + "the evaluator threw ({0} returned null{1})",
                 returnedNull.Count, returnedNull.Count == 0 ? "" : ": " + string.Join(", ", returnedNull)));
+        }
+
+        // ── UI5: the JSON contract ───────────────────────────────────────────────────────
+        //
+        // The bridge route that serves this is one line, and it is UNTESTABLE (`P2-27` --
+        // McpBridgeAddOn.cs is excluded from the test build). So the contract lives here,
+        // where it can be asserted, and the route stays thin enough to read.
+
+        /// <summary>A snapshot covering every state, source and scope the UI can be handed.</summary>
+        private static GuardSnapshot Ui5Snapshot()
+        {
+            return GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig { EnableNewsShield = true }, "shadow", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>
+                {
+                    Ui4Account("Ui5Acc"),
+                    Ui4Account("Ui5Excluded", excluded: true)
+                },
+                0);
+        }
+
+        private static void TestUi5_TheStatesTravelAsNamesNotNumbers()
+        {
+            Console.WriteLine("\n[TEST] UI5: every enum crosses the wire as a NAME, never as an integer");
+
+            // `"state": 1` would force the page to hardcode this enum's integer order -- an order
+            // UI3's battery pins for an unrelated reason (worst sorts first). The two would then
+            // be silently coupled, and reordering the enum for the sort would relabel every row
+            // in the UI. Names cost nothing and cannot drift.
+            string json = GuardSnapshotJson.ToJson(Ui5Snapshot());
+
+            bool namesPresent = json != null
+                && json.Contains("\"Inert\"")                    // the state that matters most
+                && json.Contains("\"EvaluatedNotEnforcing\"")    // shadow mode
+                && json.Contains("\"ConfiguredNotEvaluated\"")   // P1-77
+                && json.Contains("\"Session\"")                  // a scope
+                && json.Contains("\"Config\"");                  // a source
+
+            // And no numeric state anywhere -- the positive check above passes just as well on a
+            // payload that ALSO carries integers under the same keys.
+            bool numericState = json != null
+                && System.Text.RegularExpressions.Regex.IsMatch(json, "\"(state|source|scope)\"\\s*:\\s*-?\\d");
+
+            Assert(namesPresent && !numericState,
+                "the snapshot's states, sources and scopes serialize as names, and no numeric enum "
+                + "reaches the page");
+        }
+
+        private static void TestUi5_ANullLimitStaysNullRatherThanBecomingZero()
+        {
+            Console.WriteLine("\n[TEST] UI5: a null limit crosses as null, not omitted and not zero");
+
+            // UI1's copier-metrics defect, one layer out. `NullValueHandling.Ignore` drops
+            // `"limit": null`, and a page reading `row.limit ?? 0` then renders a limit of ZERO
+            // for a rule that has none -- "not applicable" displayed as a real number, which is
+            // the exact confusion the `measured: bool` flag was added to remove.
+            string json = GuardSnapshotJson.ToJson(Ui5Snapshot());
+            var parsed = Newtonsoft.Json.Linq.JObject.Parse(json ?? "{}");
+            var rows = parsed["accounts"] == null || !parsed["accounts"].Any()
+                ? null : parsed["accounts"][0]["rules"];
+
+            // The news shield has neither a current value nor a limit -- it is not a numeric rule.
+            var shield = rows == null ? null
+                : rows.FirstOrDefault(r => (string)r["configPath"] == "PropFirm.EnableNewsShield");
+
+            Assert(shield != null
+                   && shield["limit"] != null && shield["limit"].Type == Newtonsoft.Json.Linq.JTokenType.Null
+                   && shield["currentValue"] != null && shield["currentValue"].Type == Newtonsoft.Json.Linq.JTokenType.Null,
+                "a rule with no numeric limit carries an explicit null rather than having the key "
+                + "dropped, so the page cannot mistake 'not applicable' for zero");
+        }
+
+        private static void TestUi5_AnEmptyInventoryIsStillAnInventory()
+        {
+            Console.WriteLine("\n[TEST] UI5: empty lists are present as empty, never omitted");
+
+            // `unevaluatedRules` absent and `unevaluatedRules: []` mean opposite things, and
+            // P2-83 exists because "nothing to show" and "nothing is wrong" must not render the
+            // same. A page that does `(data.accounts || [])` cannot tell them apart either.
+            string json = GuardSnapshotJson.ToJson(GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "shadow", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0));
+            var parsed = Newtonsoft.Json.Linq.JObject.Parse(json ?? "{}");
+
+            Assert(parsed["accounts"] != null && parsed["accounts"].Type == Newtonsoft.Json.Linq.JTokenType.Array
+                   && !parsed["accounts"].Any()
+                   && parsed["unevaluatedRules"] != null && parsed["unevaluatedRules"].Any(),
+                "a snapshot with no accounts still carries an accounts array and a populated "
+                + "unevaluatedRules, rather than omitting either");
+        }
+
+        private static void TestUi5_TheJsonRoundTripsBackToTheSameStates()
+        {
+            Console.WriteLine("\n[TEST] UI5: the payload round-trips, so the names really are the enum's");
+
+            // The name checks above are string containment, which would pass on a payload whose
+            // names were close but wrong ("Inert2", a typo'd converter). Round-tripping proves the
+            // strings ARE the enum members, and that every row survived the trip.
+            var original = Ui5Snapshot();
+            GuardSnapshot revived = null;
+            try { revived = Newtonsoft.Json.JsonConvert.DeserializeObject<GuardSnapshot>(GuardSnapshotJson.ToJson(original) ?? "null"); }
+            catch { revived = null; }
+
+            bool same = revived != null
+                && revived.Mode == original.Mode && revived.IsArmed == original.IsArmed
+                && revived.Accounts != null && revived.Accounts.Count == original.Accounts.Count
+                && revived.UnevaluatedRules.Count == original.UnevaluatedRules.Count;
+            if (same)
+            {
+                for (int a = 0; a < original.Accounts.Count && same; a++)
+                {
+                    var o = original.Accounts[a];
+                    var r = revived.Accounts[a];
+                    if (r.AccountName != o.AccountName || r.IsExcluded != o.IsExcluded
+                        || r.Rules == null || r.Rules.Count != o.Rules.Count) { same = false; break; }
+                    for (int i = 0; i < o.Rules.Count; i++)
+                    {
+                        if (r.Rules[i].State != o.Rules[i].State
+                            || r.Rules[i].ConfigPath != o.Rules[i].ConfigPath
+                            || r.Rules[i].EvidenceCount != o.Rules[i].EvidenceCount
+                            || r.Rules[i].Limit != o.Rules[i].Limit) { same = false; break; }
+                    }
+                }
+            }
+
+            Assert(same,
+                "the serialized snapshot deserializes back to the same states, paths, evidence "
+                + "counts and limits, so the names on the wire are the enum's own");
+        }
+
+        private static void TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull()
+        {
+            Console.WriteLine("\n[TEST] UI5: a missing snapshot serves a stated error, not the literal null");
+
+            // The route can only get null if the guard is not loaded. Serving the four characters
+            // `null` gives the page nothing to display and nothing to say, and the operator sees
+            // an empty screen -- P2-83's failure by a third route. Whatever comes back must be an
+            // object the page can render a message from.
+            string json = GuardSnapshotJson.ToJson(null);
+            bool ok = false;
+            try
+            {
+                var parsed = Newtonsoft.Json.Linq.JObject.Parse(json ?? "{}");
+                ok = parsed["error"] != null && !string.IsNullOrWhiteSpace((string)parsed["error"]);
+            }
+            catch { ok = false; }
+
+            Assert(ok,
+                "a null snapshot serializes to an object carrying a stated error, so the page "
+                + "always has something to display");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

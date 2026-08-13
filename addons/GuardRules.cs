@@ -29,6 +29,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
+using Newtonsoft.Json.Serialization;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
@@ -661,4 +664,60 @@ namespace NinjaTrader.NinjaScript.AddOns
             return snapshot;
         }
     }
+
+    /// <summary>
+    /// How a GuardSnapshot becomes JSON for the browser UI.
+    ///
+    /// ⚠️ THIS LIVES IN CORE ON PURPOSE. The obvious home is the bridge route, one line of
+    /// `JsonConvert.SerializeObject`. But `McpBridgeAddOn.cs` is excluded from the test build
+    /// (`P2-27`), so anything put there is unverifiable by construction -- and the serialization
+    /// is not a detail. Three of its properties are load-bearing, and each has already been the
+    /// shape of a defect in this codebase:
+    ///
+    ///   * ENUMS AS NAMES. `"state": 1` forces the page to hardcode the enum's integer order --
+    ///     an order UI3's battery pins for a completely different reason (worst-sorts-first), so
+    ///     the two would be silently coupled and a reordering would relabel every row.
+    ///   * NULLS PRESERVED. `NullValueHandling.Ignore` drops `"limit": null`, and a page reading
+    ///     `row.limit ?? 0` then renders a limit of ZERO for a rule that has none. That is UI1's
+    ///     copier-metrics defect exactly: a bare 0 that means "not applicable".
+    ///   * EMPTY LISTS PRESENT. `unevaluatedRules` missing and `unevaluatedRules: []` mean
+    ///     opposite things, and the whole point of `P2-83` is that they must not look the same.
+    /// </summary>
+    public static class GuardSnapshotJson
+    {
+        private static readonly JsonSerializerSettings _settings = new JsonSerializerSettings
+        {
+            // camelCase because the only consumer is JavaScript, and the page's field names are
+            // then the same characters as these ones.
+            ContractResolver = new CamelCasePropertyNamesContractResolver(),
+
+            // ⚠️ NOT `Ignore`. Dropping `"limit": null` is what turns "this rule has no numeric
+            // limit" into a page rendering `0`, because `row.limit ?? 0` cannot tell an absent
+            // key from an absent value.
+            NullValueHandling = NullValueHandling.Include,
+
+            // Names, not integers. See the class remarks.
+            Converters = { new StringEnumConverter() },
+
+            // A human hitting this endpoint in a browser is the first debugging tool anyone will
+            // reach for; on localhost the bytes do not matter.
+            Formatting = Formatting.Indented
+        };
+
+        public static string ToJson(GuardSnapshot snapshot)
+        {
+            // The route can only be handed null when the guard is not loaded. Serving the four
+            // characters `null` leaves the page with nothing to render and nothing to say, so the
+            // operator gets a blank screen -- which is `P2-83` reached by a third route. Say it.
+            if (snapshot == null)
+            {
+                return JsonConvert.SerializeObject(
+                    new { error = "the RiskGuard add-on is not loaded, so no rule inventory exists to report" },
+                    _settings);
+            }
+
+            return JsonConvert.SerializeObject(snapshot, _settings);
+        }
+    }
+
 }
