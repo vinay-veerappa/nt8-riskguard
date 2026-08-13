@@ -17,6 +17,20 @@ import sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
+def names_match(name, failure):
+    """The SAME rule agent_loop.gates uses -- whole-identifier, not substring.
+
+    ⚠️ This started life as exact set equality, which is a DIFFERENT test from the
+    one the loop applies, so this helper could pass a ticket the loop refuses and
+    refuse one the loop accepts. A checker that models something other than the gate
+    it is checking is the thing this repo keeps catching (handover §5.0). The loop
+    matches an expect_green string ANYWHERE inside a failure line, on word
+    boundaries, which is what lets an assertion carry a trailing "(got 3, expected 4)"
+    without the ticket having to predict the numbers.
+    """
+    return re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", failure, re.IGNORECASE) is not None
+
+
 def suite_failures():
     tests = os.path.join(REPO, "tests")
     subprocess.run(["dotnet", "build", "RiskGuardTests.csproj", "-v", "q", "--nologo"],
@@ -42,10 +56,11 @@ def main():
         if wanted_id and t["id"] != wanted_id:
             continue
         eg = set(t["expect_green"])
-        missing = sorted(eg - fails)
-        extra = sorted(fails - eg)
+        missing = sorted(s for s in eg if not any(names_match(s, f) for f in fails))
+        extra = sorted(f for f in fails if not any(names_match(s, f) for s in eg))
+        matched = len(eg) - len(missing)
         print("ticket %s: %d expect_green, %d suite failures, %d matched"
-              % (t["id"], len(eg), len(fails), len(eg & fails)))
+              % (t["id"], len(eg), len(fails), matched))
         # A string that is NOT failing right now can never go red-then-green, so
         # the test-first gate is VACUOUS for it -- the run passes without the
         # implementation having done anything.

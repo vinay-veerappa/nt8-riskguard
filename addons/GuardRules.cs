@@ -168,6 +168,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string Mode { get; set; }
         public bool IsArmed { get; set; }
         public List<GuardAccountRules> Accounts { get; set; }
+
+        /// <summary>
+        /// The rules nothing evaluates, reported ONCE and independently of any account.
+        ///
+        /// ⚠️ This exists because of a hazard one level up from INERT: `P1-77`'s consistency cap is
+        /// broken for every account equally, and if the inventory only ever appears UNDER an
+        /// account, then a box with no accounts loaded renders a clean, empty, entirely reassuring
+        /// page. "Nothing to show" and "nothing is wrong" must not look the same -- that is the
+        /// same defect as INERT, told at the level of the snapshot instead of the rule.
+        /// </summary>
+        public List<GuardRuleRow> UnevaluatedRules { get; set; }
     }
 
     /// <summary>
@@ -498,6 +509,38 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (reading.EvidenceCount <= 0) return GuardRuleState.Inert;
             if (!guardCanAct || accountExcluded) return GuardRuleState.EvaluatedNotEnforcing;
             return GuardRuleState.Enforcing;
+        }
+
+        /// <summary>
+        /// Whether the guard can ACT, from the two things that decide it.
+        ///
+        /// ⚠️ This duplicates `RiskGuardAddOn.IsActingMode()` plus its arming check, and a
+        /// duplicated rule is exactly the shape of `P?-64`. It is duplicated deliberately, so the
+        /// registry stays host-agnostic -- and a test compares this against the real guard across
+        /// every valid mode, so the copy cannot drift in silence. If that test is ever deleted,
+        /// delete this method with it and take `guardCanAct` as a parameter instead.
+        /// </summary>
+        public static bool CanAct(string mode, bool isArmed)
+        {
+            return false;   // UI4 stub
+        }
+
+        /// <summary>
+        /// The whole inventory, for every account, as one value.
+        ///
+        /// Host-agnostic on purpose: it takes config and state rather than reaching for an engine,
+        /// so the suite can build the exact situations that matter (shadow, disarmed, excluded, no
+        /// accounts, no news events) without an NT8 in the room.
+        /// </summary>
+        public static GuardSnapshot BuildSnapshot(
+            RiskConfig config,
+            PropFirmProtectionConfig propConfig,
+            string mode,
+            bool isArmed,
+            IList<RiskGuardAddOn.AccountStateSnapshot> accounts,
+            int newsEventCount)
+        {
+            return null;   // UI4 stub
         }
     }
 }
