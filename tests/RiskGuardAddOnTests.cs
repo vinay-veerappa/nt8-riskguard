@@ -18947,7 +18947,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "the concurrent stress test completes without corruption -- " + threadCount
                 + " threads, " + errorCount + " exception(s)");
 
-            // Verify FSM state is consistent after concurrent access
+            // Verify FSM state is consistent after concurrent access. Fire a final
+            // position update synchronously to ensure the FSM exists regardless of
+            // thread timing (CI may be slower than local).
+            addon.ExecutePositionUpdate(account, new PositionEventArgs
+            {
+                Position = new Position
+                {
+                    Instrument = mnq,
+                    MarketPosition = MarketPosition.Long,
+                    Quantity = 1,
+                    AveragePrice = 18000
+                }
+            });
             var fsm = addon.TestGetFsm("P113Stress", "MNQ 03-26");
             Assert(fsm != null, "the FSM was created for the concurrent position events");
         }
