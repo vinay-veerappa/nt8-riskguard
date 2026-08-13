@@ -88,25 +88,25 @@ MUTANTS = [
      "the Add-relationship builder drops maxPositionSize, so the operator's position cap\n"
      "     never reaches the engine and the field appears to do nothing -- P1-74's shape",
      '                { "maxPositionSize", maxPositionSize },\n                { "autoSymbolConversion", autoSymbolConversion },\n'
-     '                { "stealthMode", stealthMode },\n                { "armedForLive", armedForLive },\n'
+     '                { "armedForLive", armedForLive },\n'
      '                { "isEnabled", isEnabled },\n                { "fixedLotMode", fixedLotMode },\n'
      '                { "fixedLotSize", fixedLotSize }\n            };\n        }\n\n'
      '        /// <summary>Everything the window\'s "Add Group" form collects, and nothing else.</summary>',
      '                { "autoSymbolConversion", autoSymbolConversion },\n'
-     '                { "stealthMode", stealthMode },\n                { "armedForLive", armedForLive },\n'
+     '                { "armedForLive", armedForLive },\n'
      '                { "isEnabled", isEnabled },\n                { "fixedLotMode", fixedLotMode },\n'
      '                { "fixedLotSize", fixedLotSize }\n            };\n        }\n\n'
      '        /// <summary>Everything the window\'s "Add Group" form collects, and nothing else.</summary>'),
 
     (ENGINE,
-     "one builder key is MISSPELLED ('stealth' for 'stealthMode'). NormalizeRequest drops\n"
+     "one builder key is MISSPELLED ('autoSymbol' for 'autoSymbolConversion'). It drops\n"
      "     an unrecognised key without an error, so the control silently does nothing --\n"
      "     which is P1-74 exactly, and the reason the keys are asserted rather than proofread",
-     '                { "stealthMode", stealthMode },\n                { "armedForLive", armedForLive },\n'
+     '                { "autoSymbolConversion", autoSymbolConversion },\n                { "armedForLive", armedForLive },\n'
      '                { "isEnabled", isEnabled },\n                { "fixedLotMode", fixedLotMode },\n'
      '                { "fixedLotSize", fixedLotSize }\n            };\n        }\n\n'
      '        /// <summary>Everything the window\'s "Add Group" form collects, and nothing else.</summary>',
-     '                { "stealth", stealthMode },\n                { "armedForLive", armedForLive },\n'
+     '                { "autoSymbol", autoSymbolConversion },\n                { "armedForLive", armedForLive },\n'
      '                { "isEnabled", isEnabled },\n                { "fixedLotMode", fixedLotMode },\n'
      '                { "fixedLotSize", fixedLotSize }\n            };\n        }\n\n'
      '        /// <summary>Everything the window\'s "Add Group" form collects, and nothing else.</summary>'),
@@ -167,9 +167,9 @@ MUTANTS = [
     (WINDOW,
      "the Add button builds a fresh CopierRelationship again (P?-65) -- the subset write\n"
      "     that wipes the ratio matrix, the symbol map and the slippage cap",
-     '                var req = CopierRequests.Relationship(\n                    leader, follower, mode, ratio, maxPos, autoSymbol, stealth, armed, true);',
+     '                var req = CopierRequests.Relationship(\n                    leader, follower, mode, ratio, maxPos, autoSymbol, armed, true);',
      '                var rel = new CopierRelationship { LeaderAccountName = leader, FollowerAccountName = follower };\n'
-     '                var req = CopierRequests.Relationship(\n                    leader, follower, mode, ratio, maxPos, autoSymbol, stealth, armed, true);'),
+     '                var req = CopierRequests.Relationship(\n                    leader, follower, mode, ratio, maxPos, autoSymbol, armed, true);'),
 
     (WINDOW,
      "a row button assigns to the STORED object before writing, so a write the engine\n"

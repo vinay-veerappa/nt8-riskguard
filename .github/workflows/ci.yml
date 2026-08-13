@@ -214,6 +214,17 @@ jobs:
       - name: Mutation battery P1-84
         run: python mutation/mutate_p184.py
 
+      # P1-83 -- config that is stored, settable, and read by nothing. The gate is a class
+      # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
+      # excluding the declaration, `X = something.X` clone/serialize lines, and the
+      # field-name string list. Scoping it to the engine is the whole design -- scanning the
+      # window too would score StealthMode as READ, because the window printed "Stealth: ON"
+      # for a feature with no implementation, which is the worst form of the defect rather
+      # than an absolution from it. Mutant 4 reintroduces a field WITH a fake read, which is
+      # the cheapest way to satisfy any "is it referenced?" check.
+      - name: Mutation battery P1-83
+        run: python mutation/mutate_p183.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

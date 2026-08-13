@@ -164,7 +164,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         private ComboBox _newSizingModeCombo;
         private TextBox _newRatioText;
         private CheckBox _newAutoSymbolCheck;
-        private CheckBox _newStealthCheck;
         private TextBox _newMaxPosText;
         private CheckBox _newArmedCheck;
 
@@ -175,7 +174,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         private ComboBox _groupSizingModeCombo;
         private TextBox _groupRatioText;
         private CheckBox _groupAutoSymbolCheck;
-        private CheckBox _groupStealthCheck;
         private TextBox _groupMaxPosText;
         private CheckBox _groupArmedCheck;
 
@@ -345,7 +343,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             var footerText = new TextBlock
             {
-                Text = "Institutional Local Engine | Bidirectional Mini<->Micro Scaling | Stealth Order Tagging | RiskGuard v1.1.0 Integrated",
+                Text = "Institutional Local Engine | Bidirectional Mini<->Micro Scaling | RiskGuard Integrated",
                 Foreground = Brushes.Gray,
                 FontSize = 11
             };
@@ -438,8 +436,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             _newAutoSymbolCheck = new CheckBox { Content = "Auto Mini<->Micro", IsChecked = true, Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 15, 0) };
             inputRow.Children.Add(_newAutoSymbolCheck);
 
-            _newStealthCheck = new CheckBox { Content = "Stealth Tagging", IsChecked = true, Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 15, 0) };
-            inputRow.Children.Add(_newStealthCheck);
 
             _newArmedCheck = new CheckBox { Content = "Arm Live", IsChecked = false, Foreground = new SolidColorBrush(Color.FromRgb(255, 165, 0)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 15, 0) };
             inputRow.Children.Add(_newArmedCheck);
@@ -526,8 +522,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             var gFlagsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 10) };
             _groupAutoSymbolCheck = new CheckBox { Content = "Auto Mini<->Micro", IsChecked = true, Foreground = Brushes.LightGray, Margin = new Thickness(0, 0, 12, 0) };
             gFlagsRow.Children.Add(_groupAutoSymbolCheck);
-            _groupStealthCheck = new CheckBox { Content = "Stealth Tagging", IsChecked = true, Foreground = Brushes.LightGray, Margin = new Thickness(0, 0, 12, 0) };
-            gFlagsRow.Children.Add(_groupStealthCheck);
             _groupArmedCheck = new CheckBox { Content = "Arm Live", IsChecked = false, Foreground = new SolidColorBrush(Color.FromRgb(255, 165, 0)) };
             gFlagsRow.Children.Add(_groupArmedCheck);
             leftPanel.Children.Add(gFlagsRow);
@@ -854,7 +848,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 FontSize = 14
             });
 
-            string statusText = $"Mode: {rel.SizingMode} | Ratio: {rel.QuantityRatio:F1}x | MaxPos: {rel.MaxPositionSize} | Latency: {rel.LatencyMs:F0}ms | Slippage: {rel.AvgSlippageTicks:F1}t | Stealth: {(rel.StealthMode ? "ON" : "OFF")} | Armed: {(rel.ArmedForLive ? "LIVE" : "SIM")}";
+            string statusText = $"Mode: {rel.SizingMode} | Ratio: {rel.QuantityRatio:F1}x | MaxPos: {rel.MaxPositionSize} | Latency: {rel.LatencyMs:F0}ms | Slippage: {rel.AvgSlippageTicks:F1}t | Armed: {(rel.ArmedForLive ? "LIVE" : "SIM")}";
             info.Children.Add(new TextBlock
             {
                 Text = statusText,
@@ -983,7 +977,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ? string.Join(", ", grp.FollowerAccounts)
                 : "None";
 
-            string statusText = $"Followers ({grp.FollowerAccounts?.Count ?? 0}): [{followersStr}] | Mode: {grp.SizingMode} | Ratio: {grp.QuantityRatio:F1}x | Stealth: {(grp.StealthMode ? "ON" : "OFF")} | Armed: {(grp.ArmedForLive ? "LIVE" : "SIM")}";
+            string statusText = $"Followers ({grp.FollowerAccounts?.Count ?? 0}): [{followersStr}] | Mode: {grp.SizingMode} | Ratio: {grp.QuantityRatio:F1}x | Armed: {(grp.ArmedForLive ? "LIVE" : "SIM")}";
             info.Children.Add(new TextBlock
             {
                 Text = statusText,
@@ -1066,13 +1060,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double ratio = double.TryParse(_newRatioText.Text, out var r) ? r : 1.0;
                 int maxPos = int.TryParse(_newMaxPosText.Text, out var m) ? m : 100;
                 bool autoSymbol = _newAutoSymbolCheck.IsChecked ?? true;
-                bool stealth = _newStealthCheck.IsChecked ?? true;
                 bool armed = _newArmedCheck.IsChecked ?? false;
 
                 var mode = _newSizingModeCombo.SelectedItem?.ToString() == "FixedLot" ? CopierSizingMode.FixedLot : CopierSizingMode.QuantityRatio;
 
                 var req = CopierRequests.Relationship(
-                    leader, follower, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
+                    leader, follower, mode, ratio, maxPos, autoSymbol, armed, true);
 
                 string refusal;
                 var result = TradeCopierEngine.Instance.ApplyRelationshipRequest(req, armed, out refusal);
@@ -1122,13 +1115,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double ratio = double.TryParse(_groupRatioText.Text, out var r) ? r : 1.0;
                 int maxPos = int.TryParse(_groupMaxPosText.Text, out var m) ? m : 100;
                 bool autoSymbol = _groupAutoSymbolCheck.IsChecked ?? true;
-                bool stealth = _groupStealthCheck.IsChecked ?? true;
                 bool armed = _groupArmedCheck.IsChecked ?? false;
 
                 var mode = _groupSizingModeCombo.SelectedItem?.ToString() == "FixedLot" ? CopierSizingMode.FixedLot : CopierSizingMode.QuantityRatio;
 
                 var req = CopierRequests.Group(
-                    grpName, leader, selectedFollowers, mode, ratio, maxPos, autoSymbol, stealth, armed, true);
+                    grpName, leader, selectedFollowers, mode, ratio, maxPos, autoSymbol, armed, true);
 
                 string refusal;
                 var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, armed, out refusal);

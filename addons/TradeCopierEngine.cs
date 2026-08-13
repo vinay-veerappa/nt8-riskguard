@@ -24,7 +24,6 @@ using NinjaTrader.Core;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    public enum CopierExecutionMode { Executions, Orders }
     public enum CopierSizingMode { QuantityRatio, FixedLot, NetLiquidationRatio, AvailableCashPercent, PerTickerMatrix }
 
     /// <summary>
@@ -53,7 +52,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static JObject Relationship(
             string leaderAccount, string followerAccount, CopierSizingMode sizingMode,
             double quantityRatio, int maxPositionSize, bool autoSymbolConversion,
-            bool stealthMode, bool armedForLive, bool isEnabled)
+            bool armedForLive, bool isEnabled)
         {
             bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
             int fixedLotSize = (int)Math.Round(quantityRatio);
@@ -66,7 +65,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 { "quantityRatio", quantityRatio },
                 { "maxPositionSize", maxPositionSize },
                 { "autoSymbolConversion", autoSymbolConversion },
-                { "stealthMode", stealthMode },
                 { "armedForLive", armedForLive },
                 { "isEnabled", isEnabled },
                 { "fixedLotMode", fixedLotMode },
@@ -78,7 +76,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static JObject Group(
             string groupName, string leaderAccount, IEnumerable<string> followerAccounts,
             CopierSizingMode sizingMode, double quantityRatio, int maxPositionSize,
-            bool autoSymbolConversion, bool stealthMode, bool armedForLive, bool isEnabled)
+            bool autoSymbolConversion, bool armedForLive, bool isEnabled)
         {
             bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
             int fixedLotSize = (int)Math.Round(quantityRatio);
@@ -101,7 +99,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 { "quantityRatio", quantityRatio },
                 { "maxPositionSize", maxPositionSize },
                 { "autoSymbolConversion", autoSymbolConversion },
-                { "stealthMode", stealthMode },
                 { "armedForLive", armedForLive },
                 { "isEnabled", isEnabled },
                 { "fixedLotMode", fixedLotMode },
@@ -160,7 +157,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string FollowerAccountName { get; set; } = "";
         public bool IsEnabled { get; set; } = true;
         public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
-        public CopierExecutionMode Mode { get; set; } = CopierExecutionMode.Executions;
         public CopierSizingMode SizingMode { get; set; } = CopierSizingMode.QuantityRatio;
         public double QuantityRatio { get; set; } = 1.0;
         public bool FixedLotMode { get; set; } = false;
@@ -175,7 +171,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The leader's real stop is now mirrored (P0-9); a copier-side DEFAULT bracket is
         // deliberately NOT reintroduced, because RiskGuard's auto-stop already owns "position with
         // no stop", and two independent stop sources on one position over-cover and flip it.
-        public bool StealthMode { get; set; } = true;
         // P1-84 / R4. Was 100. This caps the same quantity as
         // RiskConfig.Sizing.MaxContractsPerAccount, and the LOWER of the two always binds --
         // so at 100 against the guard's 10 this cap had never stopped anything. It was not a
@@ -184,7 +179,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Raising one of them without the other silently makes that one dead again; a test
         // asserts the inequality rather than either number, so it survives the next change.
         public int MaxPositionSize { get; set; } = 10;
-        public double DailyLossLimit { get; set; } = 1000.0;
         public bool IsQuarantined { get; set; } = false;
         public string QuarantineReason { get; set; }
 
@@ -256,7 +250,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool ArmedForLive { get; set; }
         public bool IsQuarantined { get; set; }
         public string QuarantineReason { get; set; }
-        public bool StealthMode { get; set; }
 
         public MarketPosition LeaderSide { get; set; }
         public int LeaderQuantity { get; set; }        // ABSOLUTE; side is carried separately
@@ -285,7 +278,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string LeaderAccountName { get; set; } = "";
         public bool IsEnabled { get; set; } = true;
         public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
-        public CopierExecutionMode Mode { get; set; } = CopierExecutionMode.Executions;
         public CopierSizingMode SizingMode { get; set; } = CopierSizingMode.QuantityRatio;
         public double QuantityRatio { get; set; } = 1.0;
         public bool FixedLotMode { get; set; } = false;
@@ -293,7 +285,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool AutoSymbolConversion { get; set; } = true;
         public Dictionary<string, double> PerTickerRatios { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> CustomSymbolMappings { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        public bool StealthMode { get; set; } = true;
         // P1-84 / R4. Was 100. This caps the same quantity as
         // RiskConfig.Sizing.MaxContractsPerAccount, and the LOWER of the two always binds --
         // so at 100 against the guard's 10 this cap had never stopped anything. It was not a
@@ -302,7 +293,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Raising one of them without the other silently makes that one dead again; a test
         // asserts the inequality rather than either number, so it survives the next change.
         public int MaxPositionSize { get; set; } = 10;
-        public double DailyLossLimit { get; set; } = 1000.0;
         public double MaxSlippageTicks { get; set; } = 0.0;   // P1-22
         public List<string> FollowerAccounts { get; set; } = new List<string>();
 
@@ -320,7 +310,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     FollowerAccountName = follower.Trim(),
                     IsEnabled = this.IsEnabled,
                     ArmedForLive = this.ArmedForLive,
-                    Mode = this.Mode,
                     SizingMode = this.SizingMode,
                     QuantityRatio = this.QuantityRatio,
                     FixedLotMode = this.FixedLotMode,
@@ -328,9 +317,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     AutoSymbolConversion = this.AutoSymbolConversion,
                     PerTickerRatios = this.PerTickerRatios != null ? new Dictionary<string, double>(this.PerTickerRatios, StringComparer.OrdinalIgnoreCase) : new Dictionary<string, double>(),
                     CustomSymbolMappings = this.CustomSymbolMappings != null ? new Dictionary<string, string>(this.CustomSymbolMappings, StringComparer.OrdinalIgnoreCase) : new Dictionary<string, string>(),
-                    StealthMode = this.StealthMode,
                     MaxPositionSize = this.MaxPositionSize,
-                    DailyLossLimit = this.DailyLossLimit,
                     MaxSlippageTicks = this.MaxSlippageTicks
                 });
             }
@@ -694,7 +681,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     FollowerAccountName = source.FollowerAccountName,
                     IsEnabled = source.IsEnabled,
                     ArmedForLive = source.ArmedForLive,
-                    Mode = source.Mode,
                     SizingMode = source.SizingMode,
                     QuantityRatio = source.QuantityRatio,
                     FixedLotMode = source.FixedLotMode,
@@ -706,9 +692,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     CustomSymbolMappings = source.CustomSymbolMappings != null
                         ? new Dictionary<string, string>(source.CustomSymbolMappings, StringComparer.OrdinalIgnoreCase)
                         : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                    StealthMode = source.StealthMode,
                     MaxPositionSize = source.MaxPositionSize,
-                    DailyLossLimit = source.DailyLossLimit,
                     IsQuarantined = source.IsQuarantined,
                     QuarantineReason = source.QuarantineReason,
                     LatencyMs = source.LatencyMs,
@@ -878,7 +862,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ArmedForLive = rel.ArmedForLive,
                     IsQuarantined = rel.IsQuarantined,
                     QuarantineReason = rel.QuarantineReason,
-                    StealthMode = rel.StealthMode,
                     LeaderSide = leaderSide,
                     LeaderQuantity = leaderQty,
                     ExpectedSide = expectedSide,
@@ -1544,8 +1527,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 "Id", "LeaderAccountName", "FollowerAccountName", "IsEnabled", "ArmedForLive",
                 "QuantityRatio", "FixedLotMode", "FixedLotSize", "AutoSymbolConversion",
-                "MaxPositionSize", "DailyLossLimit", "IsQuarantined", "MaxSlippageTicks",
-                "SizingMode", "Mode", "PerTickerRatios", "CustomSymbolMappings", "StealthMode",
+                "MaxPositionSize", "IsQuarantined", "MaxSlippageTicks",
+                "SizingMode", "PerTickerRatios", "CustomSymbolMappings",
                 "GroupName", "FollowerAccounts"
             })
             {

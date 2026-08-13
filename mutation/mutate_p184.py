@@ -76,20 +76,16 @@ MUTANTS = [
      "the RELATIONSHIP cap goes back to 100 -- roughly $4.5M of MNQ notional, which is not a\n"
      "     cap but the absence of one",
      '        public int MaxPositionSize { get; set; } = 10;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public bool IsQuarantined { get; set; } = false;',
      '        public int MaxPositionSize { get; set; } = 100;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public bool IsQuarantined { get; set; } = false;'),
 
     (COPIER,
      "the GROUP cap goes back to 100. The other half -- and the first draft of the test only\n"
      "     looked at the relationship, which is exactly how P1-69 and P1-75 happened",
      '        public int MaxPositionSize { get; set; } = 10;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public double MaxSlippageTicks { get; set; } = 0.0;',
      '        public int MaxPositionSize { get; set; } = 100;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public double MaxSlippageTicks { get; set; } = 0.0;'),
 
     (COPIER,
@@ -97,10 +93,8 @@ MUTANTS = [
      "     This is what proves the assertion is an inequality between two files and not a\n"
      "     pinned 10 that happens to match",
      '        public int MaxPositionSize { get; set; } = 10;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public bool IsQuarantined { get; set; } = false;',
      '        public int MaxPositionSize { get; set; } = 11;\n'
-     '        public double DailyLossLimit { get; set; } = 1000.0;\n'
      '        public bool IsQuarantined { get; set; } = false;'),
 
     # ---- the arming precondition ----

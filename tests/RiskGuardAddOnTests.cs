@@ -468,6 +468,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi7_ARefusedGroupWriteNamesEveryClashingFollower();
             TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently();
             TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload();
+            TestP183_EveryCopierConfigFieldIsConsultedByTheEngine();
+            TestP183_NoSurfaceStillAssertsAProtectionThatIsGone();
             TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed();
             TestP185_AGroupRequestThatNamesNoGroupIsRefusedRatherThanGuessed();
             TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot();
@@ -1616,12 +1618,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             stored.PerTickerRatios["MNQ"] = 4.0;
             stored.CustomSymbolMappings["ES"] = "MES";
             stored.MaxSlippageTicks = 7;
-            stored.DailyLossLimit = 250.0;
+            stored.IsQuarantined = true;
+            stored.QuarantineReason = "P?-65 probe: the form cannot see this";
 
             // The operator re-submits the Add form for the same pair with a new ratio.
             var merged = TradeCopierEngine.Instance.ApplyRelationshipRequest(
                 CopierRequests.Relationship("Ui2KeepLeader", "Ui2KeepFollower",
-                    CopierSizingMode.QuantityRatio, 2.0, 50, false, true, false, true),
+                    CopierSizingMode.QuantityRatio, 2.0, 50, false, false, true),
                 confirmLive: false);
 
             Assert(merged != null
@@ -1631,7 +1634,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && merged.PerTickerRatios["MNQ"] == 4.0
                    && merged.CustomSymbolMappings != null && merged.CustomSymbolMappings.ContainsKey("ES")
                    && merged.MaxSlippageTicks == 7
-                   && merged.DailyLossLimit == 250.0,
+                   && merged.IsQuarantined
+                   && merged.QuarantineReason == "P?-65 probe: the form cannot see this",
                 "the Add-relationship request updates the form's fields and preserves the ones it cannot see");
         }
 
@@ -1655,7 +1659,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             var merged = TradeCopierEngine.Instance.ApplyGroupRequest(
                 CopierRequests.Group("Ui2KeepGroup", "Ui2GrpLeader",
                     new List<string> { "Ui2GrpA", "Ui2GrpB" },
-                    CopierSizingMode.QuantityRatio, 2.0, 50, false, true, false, true),
+                    CopierSizingMode.QuantityRatio, 2.0, 50, false, false, true),
                 confirmLive: false);
 
             Assert(merged != null
@@ -1681,7 +1685,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var merged = TradeCopierEngine.Instance.ApplyRelationshipRequest(
                 CopierRequests.Relationship("Ui2FieldLeader", "Ui2FieldFollower",
-                    CopierSizingMode.FixedLot, 3.0, 42, false, false, false, false),
+                    CopierSizingMode.FixedLot, 3.0, 42, false, false, false),
                 confirmLive: false);
 
             Assert(merged != null
@@ -1691,7 +1695,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && merged.QuantityRatio == 3.0
                    && merged.MaxPositionSize == 42
                    && merged.AutoSymbolConversion == false
-                   && merged.StealthMode == false
                    && merged.ArmedForLive == false
                    && merged.IsEnabled == false,
                 "every field the Add form collects reaches the stored relationship under the right key");
@@ -1962,13 +1965,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var unconfirmed = TradeCopierEngine.Instance.ApplyRelationshipRequest(
                 CopierRequests.Relationship("Ui2GateLeader", "Ui2GateFollower",
-                    CopierSizingMode.QuantityRatio, 1.0, 10, false, true,
+                    CopierSizingMode.QuantityRatio, 1.0, 10, false,
                     armedForLive: true, isEnabled: true),
                 confirmLive: false);
 
             var confirmed = TradeCopierEngine.Instance.ApplyRelationshipRequest(
                 CopierRequests.Relationship("Ui2GateLeader", "Ui2GateFollower",
-                    CopierSizingMode.QuantityRatio, 1.0, 10, false, true,
+                    CopierSizingMode.QuantityRatio, 1.0, 10, false,
                     armedForLive: true, isEnabled: true),
                 confirmLive: true);
 
@@ -2593,7 +2596,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(parsed != null
                    && parsed.EnableNewsShield == declared.EnableNewsShield
                    && parsed.EnableConsistencyCap == declared.EnableConsistencyCap
-                   && parsed.EnableAutoDayFiller == declared.EnableAutoDayFiller
                    && parsed.EnableProfitTargetLock == declared.EnableProfitTargetLock
                    && parsed.EnablePeakEquityProtection == declared.EnablePeakEquityProtection,
                 "a config file that names none of the prop-firm switches gets the same defaults "
@@ -3722,6 +3724,125 @@ namespace NinjaTrader.NinjaScript.AddOns
             return string.Join("\n", File.ReadAllText(path)
                 .Split('\n')
                 .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }));
+        }
+
+        /// <summary>
+        /// Copier config fields that the engine legitimately never consults, each with the
+        /// reason stated. Same escape hatch as `GuardNonRule`, and mandatory for the same
+        /// reason: a gate that forces people to invent entries decays into no gate, and a
+        /// hatch with no reason attached becomes the way to make an inconvenient field quiet.
+        ///
+        /// Empty today. If it is ever not empty, the reason has to survive being read aloud.
+        /// </summary>
+        private static readonly Dictionary<string, string> P183CarriedNotConsulted =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
+        private static void TestP183_EveryCopierConfigFieldIsConsultedByTheEngine()
+        {
+            Console.WriteLine("\n[TEST] P1-83: no copier config field is settable, stored, and consulted by nothing");
+
+            // P1-77's shape, on the copier. A field gets added to a DTO, defaulted to something
+            // reassuring, serialized, made settable from two surfaces -- and no code ever
+            // branches on it. Three of them were found by hand while writing
+            // docs/CONFIG_DEFAULTS.md, and finding them by hand is exactly the audit that missed
+            // them for months.
+            //
+            // THE SCOPE IS THE ENGINE, DELIBERATELY. TradeCopierEngine.cs is where copying
+            // decisions are made, so a field the engine never consults cannot change any
+            // behaviour whatever a surface renders. Scanning the window as well would score
+            // StealthMode as READ -- the window prints "Stealth: ON" for it -- which is the
+            // worst version of the defect, not an absolution from it.
+            //
+            // Three kinds of appearance do not count as a use, and each is a way a dead field
+            // looks alive:
+            //   * its own declaration;
+            //   * `X = something.X`, which is a clone or a serializer copying it onward;
+            //   * the field-name string list, which exists to enumerate names, not read values.
+            //
+            // ⚠️ WHAT THIS CANNOT SEE, stated so nobody mistakes it for more than it is. It is a
+            // source-text check, so it cannot catch P2-25's class: a field genuinely read, by a
+            // branch that can never be reached. The guard side needed a runtime registry for
+            // that and this side would too. What it does catch is the cheaper and more common
+            // defect -- the field nothing reads at all.
+            var enginePath = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(P184ThisFile()), "..", "addons", "TradeCopierEngine.cs"));
+            string code = File.Exists(enginePath)
+                ? string.Join("\n", File.ReadAllText(enginePath).Split('\n')
+                    .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }))
+                : null;
+
+            var dead = new List<string>();
+            int examined = 0;
+
+            foreach (var dto in new[] { typeof(CopierRelationship), typeof(CopierGroup) })
+            {
+                foreach (var prop in dto.GetProperties())
+                {
+                    if (!prop.CanRead || !prop.CanWrite) continue;
+                    string name = prop.Name;
+                    if (P183CarriedNotConsulted.ContainsKey(dto.Name + "." + name)) continue;
+                    examined++;
+
+                    int uses = 0;
+                    foreach (var line in (code ?? "").Split('\n'))
+                    {
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                                line, @"(?<!\w)" + name + @"(?!\w)")) continue;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(
+                                line, @"public\s+[\w<>,\?\[\]\. ]+\s+" + name + @"\s*\{")) continue;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(
+                                line, @"(?<!\w)" + name + @"\s*=\s*[\w\.]*\." + name + @"(?!\w)",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+                        if (line.Contains("\"" + name + "\"")) continue;
+                        uses++;
+                    }
+
+                    if (uses == 0) dead.Add(dto.Name + "." + name);
+                }
+            }
+
+            Assert(code != null && examined > 15 && dead.Count == 0, string.Format(
+                "of {0} copier config fields, {1} are stored and settable and consulted by no "
+                + "engine logic at all{2}",
+                examined, dead.Count,
+                dead.Count == 0 ? "" : ": " + string.Join(", ", dead)));
+        }
+
+        private static void TestP183_NoSurfaceStillAssertsAProtectionThatIsGone()
+        {
+            Console.WriteLine("\n[TEST] P1-83: nothing renders a status for a field that no longer exists");
+
+            // The half that makes StealthMode the worst of the three. P1-77 and P1-81 are
+            // silent; this one had the NT8 window printing "Stealth: ON" in both the
+            // relationship and the group status lines, and the browser page pushing a
+            // "stealth" flag, for a feature with no implementation anywhere.
+            //
+            // Deleting a dead field without deleting what displays it either fails to compile
+            // (if you are lucky) or leaves a surface asserting something it can no longer even
+            // read. So the display sites are asserted from source, because TradeCopierWindow's
+            // body is entirely `#if !TESTING` and there is no executable path to check.
+            //
+            // ⚠️ The browser page lives in the OTHER repo (nt8-mcp-bridge, ui/index.html) and
+            // cannot be reached from here. It reads `r.stealthMode` off the copier snapshot; the
+            // emitter for that key is in GuardRules.cs and IS in scope, so removing it is what
+            // makes the page's flag go away. That leaves a dead branch over there, and it is
+            // named in the P1-83 entry of the hardening plan rather than left to be discovered.
+            var dir = Path.GetDirectoryName(P184ThisFile());
+            var offenders = new List<string>();
+
+            foreach (var file in new[] { "TradeCopierWindow.cs", "GuardRules.cs", "TradeCopierEngine.cs" })
+            {
+                var path = Path.GetFullPath(Path.Combine(dir, "..", "addons", file));
+                if (!File.Exists(path)) continue;
+                var text = File.ReadAllText(path);
+                foreach (var needle in new[] { "StealthMode", "stealthMode", "Stealth:", "CopierExecutionMode" })
+                    if (text.Contains(needle)) offenders.Add(file + " still says " + needle);
+            }
+
+            Assert(offenders.Count == 0, string.Format(
+                "{0} surface reference(s) to a deleted field remain{1}",
+                offenders.Count,
+                offenders.Count == 0 ? "" : ": " + string.Join("; ", offenders)));
         }
 
         private static void TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed()
@@ -15329,10 +15450,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 LeaderAccountName = "Cm2Leader",
                 FollowerAccountName = "Cm2Follower",
                 SizingMode = CopierSizingMode.PerTickerMatrix,
-                Mode = CopierExecutionMode.Executions,
                 QuantityRatio = 7.0,
-                AutoSymbolConversion = true,
-                StealthMode = false,
+                AutoSymbolConversion = false,
                 MaxSlippageTicks = 2.5,
                 MaxPositionSize = 100
             };
@@ -15373,8 +15492,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(rel != null && rel.PerTickerRatios != null
                    && rel.PerTickerRatios.TryGetValue("MES", out mes) && mes == 3.0, string.Format(
                 "reloaded PerTickerRatios['MES'] is 3.0 (got {0})", mes));
-            Assert(rel != null && rel.StealthMode == false,
-                "reloaded StealthMode kept its non default value of false");
+            Assert(rel != null && rel.AutoSymbolConversion == false,
+                "reloaded AutoSymbolConversion kept its non default value of false");
             Assert(rel != null && rel.MaxSlippageTicks == 2.5, string.Format(
                 "reloaded MaxSlippageTicks is 2.5 (got {0})", rel == null ? -1.0 : rel.MaxSlippageTicks));
 
@@ -15394,7 +15513,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 LeaderAccountName = "Cm2GroupLeader",
                 SizingMode = CopierSizingMode.PerTickerMatrix,
                 QuantityRatio = 7.0,
-                StealthMode = false,
+                AutoSymbolConversion = false,
                 MaxSlippageTicks = 4.0,
                 FollowerAccounts = new List<string> { "Cm2GroupFollower1", "Cm2GroupFollower2" }
             };
@@ -15675,7 +15794,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 LeaderAccountName = "Cm3Leader",
                 SizingMode = CopierSizingMode.PerTickerMatrix,
                 QuantityRatio = 1.0,
-                StealthMode = false,
+                AutoSymbolConversion = false,
                 MaxSlippageTicks = 2.5,
                 MaxPositionSize = 42
             };
@@ -15712,8 +15831,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 merged == null || merged.PerTickerRatios == null ? -1 : merged.PerTickerRatios.Count));
             Assert(merged != null && merged.CustomSymbolMappings != null && merged.CustomSymbolMappings.Count == 1,
                 "CustomSymbolMappings survived");
-            Assert(merged != null && merged.StealthMode == false,
-                "StealthMode kept its non default value of false");
+            Assert(merged != null && merged.AutoSymbolConversion == false,
+                "AutoSymbolConversion kept its non default value of false");
             Assert(merged != null && merged.MaxSlippageTicks == 2.5, string.Format(
                 "MaxSlippageTicks survived (got {0})", merged == null ? -1.0 : merged.MaxSlippageTicks));
             Assert(merged != null && merged.MaxPositionSize == 42, string.Format(
@@ -15834,11 +15953,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && merged.CustomSymbolMappings.TryGetValue("MNQ", out mapped) && mapped == "NQ",
                 "customSymbolMappings");
             Assert(merged != null && merged.MaxSlippageTicks == 8.0, "maxSlippageTicks");
-            Assert(merged != null && merged.DailyLossLimit == 500.0, "dailyLossLimit");
             Assert(merged != null && merged.IsEnabled, "isEnabled");
             Assert(merged != null && merged.MaxPositionSize == 42, "maxPositionSize");
-            Assert(merged != null && merged.StealthMode, "stealthMode");
-            Assert(merged != null && merged.Mode == CopierExecutionMode.Executions, "mode");
         }
 
         private static void TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped()
@@ -16248,7 +16364,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // selected by any means except editing C# and recompiling.
             var engine = new TradeCopierEngine();
             var merged = engine.ApplyGroupRequest(JObject.Parse(
-                @"{""groupName"":""Cm3New"",""leaderAccount"":""L1"",""sizingMode"":""PerTickerMatrix"",""perTickerRatios"":{""MES"":3.0},""maxSlippageTicks"":1.5,""stealthMode"":false}"),
+                @"{""groupName"":""Cm3New"",""leaderAccount"":""L1"",""sizingMode"":""PerTickerMatrix"",""perTickerRatios"":{""MES"":3.0},""maxSlippageTicks"":1.5}"),
                 false);
 
             Assert(merged != null && merged.SizingMode == CopierSizingMode.PerTickerMatrix, string.Format(
@@ -16259,7 +16375,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && merged.PerTickerRatios.TryGetValue("MES", out mes) && mes == 3.0, string.Format(
                 "perTickerRatios arrived (got {0})", mes));
             Assert(merged != null && merged.MaxSlippageTicks == 1.5, "maxSlippageTicks arrived");
-            Assert(merged != null && merged.StealthMode == false, "stealthMode arrived");
             Assert(merged != null && merged.LeaderAccountName == "L1",
                 "the camelCase leaderAccount alias still maps to LeaderAccountName");
 

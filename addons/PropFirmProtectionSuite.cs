@@ -45,7 +45,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double MinPeakGainDollars { get; set; } = 50.0;
         public bool EnableConsistencyCap { get; set; } = false; // P1-77: the consistency-cap rule is never evaluated. Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
         public double MaxDailyProfitPctOfTarget { get; set; } = 0.35;
-        public bool EnableAutoDayFiller { get; set; } = false;
     }
 
     public class PropFirmProtectionSuite
@@ -192,8 +191,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 MaxPeakGivebackPct = jObj["MaxPeakGivebackPct"] != null ? (double)jObj["MaxPeakGivebackPct"] : (jObj["maxPeakGivebackPct"] != null ? (double)jObj["maxPeakGivebackPct"] : (jObj["givebackPct"] != null ? (double)jObj["givebackPct"] : 0.30)),
                 MinPeakGainDollars = jObj["MinPeakGainDollars"] != null ? (double)jObj["MinPeakGainDollars"] : (jObj["minPeakGainDollars"] != null ? (double)jObj["minPeakGainDollars"] : 50.0),
                 EnableConsistencyCap = jObj["EnableConsistencyCap"] != null ? (bool)jObj["EnableConsistencyCap"] : (jObj["enableConsistencyCap"] != null ? (bool)jObj["enableConsistencyCap"] : false),
-                MaxDailyProfitPctOfTarget = jObj["MaxDailyProfitPctOfTarget"] != null ? (double)jObj["MaxDailyProfitPctOfTarget"] : (jObj["maxDailyProfitPctOfTarget"] != null ? (double)jObj["maxDailyProfitPctOfTarget"] : 0.35),
-                EnableAutoDayFiller = jObj["EnableAutoDayFiller"] != null ? (bool)jObj["EnableAutoDayFiller"] : (jObj["enableAutoDayFiller"] != null ? (bool)jObj["enableAutoDayFiller"] : false)
+                MaxDailyProfitPctOfTarget = jObj["MaxDailyProfitPctOfTarget"] != null ? (double)jObj["MaxDailyProfitPctOfTarget"] : (jObj["maxDailyProfitPctOfTarget"] != null ? (double)jObj["maxDailyProfitPctOfTarget"] : 0.35)
             };
         }
     }

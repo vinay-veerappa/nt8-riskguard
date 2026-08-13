@@ -123,10 +123,8 @@ MUTANTS = [
     ("a rule is DELETED from the registry, leaving its config field classified by nothing.\n"
      "     This is how P1-77, P2-25 and P2-78 all reached production, so the gate that\n"
      "     catches it must be proven to fire",
-     '            new GuardRuleDefinition {\n'
-     '                Name = "Auto day filler", ConfigPath = "PropFirm.EnableAutoDayFiller",',
-     '            new GuardRuleDefinition {\n'
-     '                Name = "Auto day filler", ConfigPath = "PropFirm.EnableAutoDayFillerTYPO",'),
+     '                Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLive",',
+     '                Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLiveTYPO",'),
 
     ("a non-rule loses its REASON, so the escape hatch becomes a way to make an\n"
      "     inconvenient field go quiet without saying why",

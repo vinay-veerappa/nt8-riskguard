@@ -465,12 +465,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "(P2-25)"
             },
             new GuardRuleDefinition {
-                Name = "Auto day filler", ConfigPath = "PropFirm.EnableAutoDayFiller",
-                Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "NO CODE READS THIS. Unlike the cap above it is switched OFF "
-                    + "by default, so it is a dead option rather than a false promise."
-            },
-            new GuardRuleDefinition {
                 Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLive",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
                 UnevaluatedReason = "THIS SWITCH DOES NOTHING. No prop-firm rule checks it before "
@@ -905,7 +899,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     armedForLive = r.ArmedForLive,
                     isQuarantined = r.IsQuarantined,
                     quarantineReason = r.QuarantineReason,
-                    stealthMode = r.StealthMode,
                     leaderSide = r.LeaderSide,
                     leaderQuantity = r.LeaderQuantity,
                     expectedSide = r.ExpectedSide,
