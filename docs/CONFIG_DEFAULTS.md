@@ -1,0 +1,226 @@
+# Config defaults — what they are, and why
+
+**Status:** doctrine agreed 2026-08-13. The *rules* below are decisions. The *deltas* in §4 are
+proposals with the code changes named; nothing in §4 has been applied yet.
+**Scope:** all three config surfaces — the copier (`copier_config.json`), the guard
+(`RiskGuard/config.json`), and the prop-firm suite (`prop_limits.json`, which does not exist on
+this box until something writes it).
+**Related:** `RISKGUARD_COPIER_HARDENING_PLAN.md` (`P1-77`, `P2-25`, `P1-81`), `UI_REDESIGN_DESIGN.md`
+§2.1 (the five-state vocabulary), `RISKGUARD_HARDENING_HANDOVER.md` §0.
+
+---
+
+## 1. What a default is for, here
+
+This is not a preferences file. Every value below either prevents an account-ending mistake or
+gets in the way of a legitimate trade, and most of them can do both depending on the number.
+
+So the frame is a trader's, not an engineer's:
+
+* **The account being protected is a prop evaluation account.** Losing it costs the eval fee and
+  the reset, and the loss is *discrete* — one breach ends it, regardless of how the rest of the
+  month went.
+* **The worst outcome is not a losing trade.** It is a rule breach that fails the account
+  instantly: the daily loss limit, or the trailing drawdown. Those are hard fails with no appeal.
+* **The second worst outcome is the guard flattening a good trade for no reason.** That is not
+  merely annoying. It is how the guard ends up switched off, and a guard that is off during the
+  one session that mattered has provided exactly nothing. **A default that fires on a normal day
+  is a default that disarms the system.**
+
+Everything below follows from those three.
+
+---
+
+## 2. The five rules
+
+### R1. Ship disarmed. Always.
+
+`Mode = "shadow"`, and every `ArmedForLive` on every object defaults to `false`. A guard that
+arrives armed, carrying dollar limits it guessed, will flatten a live position on day one. Already
+true everywhere, and it is the one rule with no exceptions.
+
+### R2. A default must never read as protection that does not exist.
+
+**This is the rule the system currently breaks, and it breaks it in the two places that matter
+most.** If the rule inventory reports a rule as `CONFIGURED-not-EVALUATED` or `INERT`, then its
+enabling flag must default to `false`.
+
+The reasoning is not stylistic. A flag that defaults `true` on a rule nothing reads produces a
+config file that *reads as protection* — you open it, you see `"EnableNewsShield": true`, and you
+size your position accordingly. Defaulting it `false` costs nothing (the rule does nothing either
+way) and removes the false assurance entirely.
+
+Measured on the live box, 2026-08-13, via `/api/riskguard/inventory`:
+
+| Flag | Default | Inventory state | Defect |
+|---|---|---|---|
+| `PropFirm.EnableNewsShield` | **`true`** | `INERT` — 0 events loaded, `IsInNewsWindow` can only return false | `P2-25` |
+| `PropFirm.EnableConsistencyCap` | **`true`** | `CONFIGURED-not-EVALUATED` — no code reads it | `P1-77` |
+
+Those are the **only two flags in the entire system that default ON while doing nothing**, which
+is what makes them the highest-value change in this document.
+
+### R3. A dollar limit is derived from the account, never guessed.
+
+Every dollar-denominated default in the system was chosen for one unstated account size:
+
+* `PnLRules.DailyLossLimit = 1000`
+* `PnLRules.TrailingDrawdown = 1500`
+* `FirmMirror.TrailingDD.Amount = 2500`, `FirmMirror.DailyLoss.Amount = 1500`
+* `PropFirm.EvaluationTargetProfit = 3000`
+
+On a $50k evaluation those are roughly right. On a $150k account the $1,000 daily limit fires on
+an ordinary red day — R1's failure mode, and you will turn it off. On a $25k evaluation the same
+$1,000 sits *above* some firms' own limit and is therefore not a buffer at all; the firm fails you
+before the guard speaks.
+
+The mechanism that fixes this already exists and is switched off: `FirmMirror.Enabled = false`
+with an empty `AccountFirmMap`. **Until an account is mapped to a firm, the honest default is not
+a different number — it is no number, and a rule that says so.** The inventory can render that
+now; it could not when these values were chosen.
+
+This is `F-9`, and it is the single change that makes the risk half of the UI tell the truth.
+
+### R4. Two names for one concept carry one number.
+
+The copier's `MaxPositionSize` defaults to **100**. The guard's `Sizing.MaxContractsPerAccount`
+defaults to **10**. They cap the same thing. The lower always binds, so **the copier's cap has
+never stopped anything** — it is decoration that reads like a limit.
+
+Two limits on one quantity is worse than one, because you will read whichever you happen to open
+and size against it.
+
+### R5. A default that fires on a normal day trains you to disarm.
+
+`StopGuard.StopAttachSeconds = 3`. Three seconds from fill to a working stop, or the guard acts —
+and `StopGuard.OnMissing = "Flatten"`, so it acts by flattening you.
+
+If you enter manually and then place your stop, three seconds is not enough time to reach the
+mouse. The guard will flatten good entries, repeatedly, on days when nothing is wrong. **This is
+the most likely single reason this system gets switched off**, and it is a one-line change.
+
+---
+
+## 3. The defaults, with the trader's reason
+
+Values marked **→** are proposed changes; everything else is a decision to keep what is there.
+
+### 3.1 Copier — per relationship and per group
+
+| Field | Default | Why |
+|---|---|---|
+| `ArmedForLive` | `false` | R1. Non-negotiable. |
+| `IsEnabled` | `true` | A relationship you just created, you want on. Harmless while disarmed. |
+| `QuantityRatio` | `1.0` | A mirror is the least surprising thing a copier can do. |
+| `SizingMode` | `QuantityRatio` | Same reason. Notional-based sizing is a deliberate choice, not a default. |
+| `AutoSymbolConversion` | `true` | Leader on NQ, follower on MNQ is the common prop setup. |
+| `MaxPositionSize` | `100` **→ 10** | R4 — agree with the guard's per-account cap. 100 MNQ is ~$4.5M notional; it is not a cap, it is the absence of one. |
+| `MaxSlippageTicks` | `0.0` (off) | **Deliberately off, and this is not an oversight.** A wrong threshold quarantines a *healthy* relationship mid-session, and a quarantine that blocks an entry is survivable while one that delays your read on an exit is not. When you do set it: normal copy slippage on MNQ/MES is 0–2 ticks, so **8** catches genuinely bad routing without firing on noise. |
+| `StealthMode` | `true` **→ delete** | See §4. Read by no logic — and the NT8 window *displays* "Stealth: ON". |
+| `DailyLossLimit` | `1000.0` **→ delete** | See §4. Read by nothing at all. |
+| `Mode` (`Executions`/`Orders`) | `Executions` **→ delete** | See §4. The enum is declared, persisted, settable, and branched on nowhere. |
+| `LeaderAccountName` | `"Sim101"` **→ no fallback** | A request that omits the account is currently routed to a *guessed* account. That is how you copy to the wrong one. Refuse instead. |
+| `FollowerAccountName` | `"SimCopy2"` **→ no fallback** | Same. |
+
+### 3.2 Guard — `RiskConfig`
+
+| Field | Default | Why |
+|---|---|---|
+| `Mode` | `"shadow"` | R1. |
+| `MinShadowSessions` | `0` **→ 5** | A soft gate on arming, currently disabled. You should not be able to point this at live money until it has watched you trade several sessions without wanting to intervene wrongly. Five sessions is a week. |
+| `Sizing.MaxContractsPerAccount` | `10` | Generous for a micro-futures prop account without being absurd. |
+| `Sizing.MaxContractsAggregate` | `20` | Two accounts at full size. Binds before the per-account cap on a 3-way mirror, which is the correct order. |
+| `Overtrading.MaxTradesPerSession` | `8` | Overtrading is the most common way an evaluation dies — not one big loss, but eleven small ones. Erring low is correct here. |
+| `Overtrading.MaxConsecutiveLosses` | `3` → 60 min lockout | Standard tilt protection. Three in a row is a bad read, not bad luck. |
+| `Overtrading.CooldownMinutes` | `5` | Enough to break the re-entry reflex. |
+| `Overtrading.MaxOrdersPerSecond` | `5` | A runaway-loop guard, not a trading rule. |
+| `StopGuard.OnMissing` | `"Flatten"` | **The most important default in the file, and it is right.** The alternative (`AutoStop`) invents a stop at a guessed offset, which can be worse than being flat. Flat is always a known quantity. |
+| `StopGuard.StopAttachSeconds` | `3` **→ 15** | R5. Long enough to place a stop by hand; short enough that an unstopped position does not survive a spike. |
+| `StopGuard.MaxAutoStopAttempts` | `2` | Two failures means the route is broken, not busy. |
+| `StopGuard.Offsets` | NQ/MNQ 40t (10 pts), ES/MES 16t (4 pts), default 30t | These are **emergency backstops, not strategy stops** — the distance at which "no stop at all" becomes worse than a bad stop. 10 points on NQ against 4 on ES is roughly volatility-proportionate. |
+| `PnLRules.DailyLossLimit` | `1000.0` | R3 — must come from the firm. See §4. |
+| `PnLRules.TrailingDrawdown` | `1500.0` | R3. |
+| `EnableWindowGate` | `false` | A gate that refuses to let you trade outside fixed hours is extremely intrusive and wrong for a discretionary trader. Off is right. |
+| `FirmMirror.Enabled` | `false` + empty `AccountFirmMap` | Not a default to tune — this is `F-9`, the missing mechanism behind R3. |
+| `LockoutBypassWhileDisarmedAccounts` | empty | Empty means lockouts persist for **all** accounts even when disarmed. Correct for prop accounts: a lockout you can escape by disarming is not a lockout. |
+
+### 3.3 Prop-firm suite — `PropFirmProtectionConfig`
+
+| Field | Default | Why |
+|---|---|---|
+| `ArmedForLive` | `false` | R1 — though `P1-81` means nothing reads it, so it is currently decoration. |
+| `EnableNewsShield` | `true` **→ false** | **R2.** `INERT` (`P2-25`). |
+| `NewsBufferMinutesBefore/After` | `2` / `2` **→ 5 / 15** when the shield works | Two minutes is too short to be useful. NFP and CPI move price for five to fifteen minutes after the release, and the dangerous part is the *reversal*, not the spike. |
+| `EnableProfitTargetLock` | `true` | Evaluated and real. Locking after the target is hit is exactly right for an evaluation — the account has already done its job. |
+| `EvaluationTargetProfit` | `3000.0` | R3 — correct for a $50k Apex evaluation, wrong elsewhere. Must come from the firm profile. |
+| `EnablePeakEquityProtection` | `true` | Evaluated and real, and genuinely good: it stops a winner round-tripping. |
+| `MaxPeakGivebackPct` | `0.30` | Give back at most 30% of an open peak. Tight enough to protect the trade, loose enough to survive normal noise. |
+| `MinPeakGainDollars` | `50.0` | `P1-40`. Without a floor, a one-tick peak makes any retrace a 100% giveback and flattens you seconds after entry. |
+| `EnableConsistencyCap` | `true` **→ false** | **R2.** `CONFIGURED-not-EVALUATED` (`P1-77`). |
+| `MaxDailyProfitPctOfTarget` | `0.35` | A real firm rule (most sit between 30% and 50%), and a sane number — *if it were implemented*. |
+| `EnableAutoDayFiller` | `false` **→ delete or implement** | Read by nothing. |
+
+---
+
+## 4. Fields that are not defaults — they are dead
+
+Found 2026-08-13 while writing this document, by asking what actually reads each field rather than
+what each field is set to. All three are on the copier, all three are persisted to
+`copier_config.json`, and all three are settable from the NT8 window.
+
+**`StealthMode` (defaults `true`).** Read by no logic anywhere. It is, however, *displayed* — the
+copier window renders `Stealth: ON` in both the relationship and the group status lines. This is
+the worst form of this defect in the repo so far: `P1-77` and `P1-81` are silent, but this one has
+a UI actively asserting that a protection is on. **Delete the field and the two display fragments.**
+
+**`DailyLossLimit` (defaults `1000.0`).** Read by nothing, displayed by nothing. It appears only in
+the two clone paths and the field-name list. It sits in the config file next to the guard's *real*
+`PnLRules.DailyLossLimit`, which is exactly the R4 confusion — two identically named limits, one of
+which does nothing. **Delete.**
+
+**`Mode` / `CopierExecutionMode` (defaults `Executions`).** The enum is declared, carried on both
+DTOs, serialized (`"Mode": 0`), and settable — and no code branches on it. It is the most
+consequential-sounding of the three: "copy on execution" versus "copy on order" is a genuine
+copier design decision, and the config implies the choice is yours. It is not. **Delete the enum
+and the field**, or implement it — but it must not stay as it is.
+
+All three are `P1-77`'s exact shape. The pattern that finds them is the one this repo already
+trusts: **ask what reads a field, not what sets it.**
+
+---
+
+## 5. What "at defaults" means operationally
+
+Verified on the live box 2026-08-13 after this document was written:
+
+* Both copier relationships (`Sim101 → Sim-ORB`, `Sim101 → SimCopy2`) reset to the code defaults —
+  enabled, **disarmed**, ratio 1.0, `MaxPositionSize` 100, auto symbol conversion on, no per-ticker
+  ratios, no custom symbol maps, `MaxSlippageTicks` 0, not quarantined.
+* No groups. No config conflicts (`DetectConfigConflicts` returns empty).
+* Guard `Mode = shadow`. Inventory reports 5 rules `CONFIGURED-not-EVALUATED`, 3 `INERT`,
+  13 `EvaluatedNotEnforcing`, 4 `Disabled` — and **zero `Enforcing`**, which is what shadow mode
+  should look like.
+* `prop_limits.json` does not exist. That is the correct state: the first write creates it, and
+  `P1-75` is a reminder that reading it used to disarm the rules it described.
+
+---
+
+## 6. An open gap this exercise exposed
+
+While reconstructing how the two relationships came to be disabled, the audit record answered
+**what changed** and could not answer **who changed it**.
+
+`interventions.jsonl` records every copier write with its exact payload and timestamp — that part
+works, and it is how the timeline was reconstructed at all. What no record carries is a client
+identity. There is one shared bearer token, and the bridge does not log a source. So a config
+change made by the browser page, by an MCP tool, by `curl`, or by another machine on the network is
+**indistinguishable after the fact**.
+
+Two writes at `04:47:43` and `04:47:52` on 2026-08-13, one per relationship, could not be
+attributed to any action taken in that session. They may well have been mine. The point is that the
+system cannot say, and for a system whose entire purpose is that configuration must not lie, "the
+protection was switched off and nobody can tell you by whom" is a gap worth closing before this
+guards a funded account.
+
+Not filed as a defect ID yet — it needs a decision about what identity even means here (a
+per-client token? a source header the page sets?) before it can be specified.

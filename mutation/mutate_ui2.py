@@ -180,11 +180,22 @@ MUTANTS = [
     (WINDOW,
      "one dispatch stops checking for the refusal it can now receive, so a P1-76 overlap\n"
      "     refusal saves and redraws as though it had succeeded",
-     '                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive);\n'
+     # Anchor re-pointed 2026-08-13. UI7 rewrote this block (the two-argument overload
+     # became the three-argument one and the message gained `+ refusal`), so the old
+     # find-string stopped matching -- and a battery whose anchor misses prints [SKIP]
+     # and scores the mutant as a SURVIVOR. It had been doing that silently since UI7
+     # landed, which is to say this mutant was not being tested at all.
+     #
+     # Found by a fresh pair of eyes re-running the whole suite of batteries after an
+     # unrelated refactor, not by the commit that broke it. That is the argument for
+     # running every battery on every change rather than the one you think you touched.
+     '                string refusal;\n'
+     '                var result = TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive, out refusal);\n'
      '                if (result == null)\n                {\n'
-     '                    MessageBox.Show("The engine refused to toggle this group.", "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);\n'
+     '                    MessageBox.Show("The engine refused to toggle this group.\\n\\n" + refusal, "Toggle Refused", MessageBoxButton.OK, MessageBoxImage.Warning);\n'
      '                    return;\n                }',
-     '                TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive);'),
+     '                string refusal;\n'
+     '                TradeCopierEngine.Instance.ApplyGroupRequest(req, grp.ArmedForLive, out refusal);'),
 
     # ---- the arming gate: what three BLOCKERs claimed, made real ----
     (ENGINE,
