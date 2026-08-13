@@ -117,7 +117,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // explicitly listed in LockoutBypassWhileDisarmedAccounts (e.g. personal/SIM accounts).
                 // This prevents a panic toggle-off from defeating a daily-loss/consecutive-loss lockout
                 // on prop-firm accounts.
-                if (_accountStates.TryGetValue(accountName, out var state) && state.IsLockedOut)
+                if (_accountStates.TryGetValue(accountName, out var state) && state.IsLockedOut && !state.LockoutWasShadowOnly)
                 {
                     bool bypassAllowed = !_isArmed
                         && _config.LockoutBypassWhileDisarmedAccounts != null
@@ -862,7 +862,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                         state = new AccountState(accName);
                                         _accountStates[accName] = state;
                                     }
-                                    state.IsLockedOut = true;
+                                    state.IsLockedOut = true; // P2-92: persisted lockout came from a real session; authority is restored from AccountsData.
                                 }
                             }
                             if (data.AccountsData != null)
@@ -879,6 +879,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // deadline" -- the previous behaviour -- so an upgrade cannot
                                     // shorten a lockout that was meant to hold.
                                     state.LockoutUntil = kvp.Value.LockoutUntil;
+                                    state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;
                                     state.LastSessionDate = kvp.Value.LastSessionDate;
                                     state.TradesToday = kvp.Value.TradesToday;
                                     state.ConsecutiveLosses = kvp.Value.ConsecutiveLosses;
@@ -951,7 +952,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             FirmDailyDate = state.FirmDailyDate,
                             FirmDailyStartRealized = state.FirmDailyStartRealized,
                             FirmStartingBalance = state.FirmStartingBalance,
-                            LockoutUntil = state.LockoutUntil   // P1-54
+                            LockoutUntil = state.LockoutUntil,   // P1-54
+                            LockoutWasShadowOnly = state.LockoutWasShadowOnly
                         };
                     }
                     return new PersistedStateData
@@ -1034,6 +1036,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ControlCenter cc = window as ControlCenter;
             if (cc == null) return;
+            _controlCenter = cc;
 
             if (_myMenuItem != null)
             {
@@ -1479,7 +1482,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    stateModel.IsLockedOut = true;
+                    MarkRuleLockout(stateModel, "DAILY_LOSS_BREACH");
                     if (_config.PnLRules.LockoutMinutes > 0)
                         stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.PnLRules.LockoutMinutes);
                     _stateDirty = true;
@@ -1519,7 +1522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    stateModel.IsLockedOut = true;
+                    MarkRuleLockout(stateModel, "TRAILING_DD_BREACH");
                     if (_config.PnLRules.LockoutMinutes > 0)
                         stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.PnLRules.LockoutMinutes);
                     _stateDirty = true;
@@ -3653,7 +3656,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (minutes == -1)
                     {
-                        state.IsLockedOut = true;
+                        state.IsLockedOut = true; // P2-92: manual lockout is an operator instruction, not a rule breach; it must bite in every mode.
+                        state.LockoutWasShadowOnly = false;
                         state.LockoutUntil = DateTime.MinValue;
                     }
                     else if (minutes > 0)
@@ -3672,6 +3676,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (_stateLock)
             {
                 return _mode == "live" || forceLive;
+            }
+        }
+
+        private void MarkRuleLockout(AccountState st, string ruleId)
+        {
+            st.IsLockedOut = true;
+            st.LockoutWasShadowOnly = !IsActingMode();
+            _stateDirty = true;
+            if (st.LockoutWasShadowOnly)
+            {
+                LogEvent(st.AccountName, "SHADOW_LOCKOUT", $"Rule {ruleId} recorded a shadow-only lockout observation; no flatten executed.");
             }
         }
 
@@ -4935,6 +4950,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public DateTime FirmDailyDate { get; set; } = DateTime.MinValue;
         public double FirmDailyStartRealized { get; set; } = 0.0;
         public double FirmStartingBalance { get; set; } = 0.0;
+        public bool LockoutWasShadowOnly { get; set; } = false;
 
         public AccountState(string name)
         {
@@ -5459,6 +5475,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // left at MinValue, so any restart -- and a recompile is a restart here -- silently
         // converted a 60-minute lockout into one that lasts until the session reset.
         public DateTime LockoutUntil { get; set; }
+        public bool LockoutWasShadowOnly { get; set; }
     }
 
     // -
