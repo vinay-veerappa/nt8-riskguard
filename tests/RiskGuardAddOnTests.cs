@@ -141,6 +141,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP292_SwitchingToShadowIsNotALockoutBypass();
             TestP292_ALockoutFromAnOlderStateFileStillBites();
             TestP292_AManualLockoutBitesInEveryMode();
+            TestP292_TheAuthoritySurvivesASaveLoadRoundTrip();
+            TestP292_AShadowLockoutIsRECORDED();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -10019,6 +10021,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     F9bAccount("Sim101", 99482.00),
                     F9bAccount("SimCopy2", 98140.50),
                     F9bAccount("SimCopyTest1", 100511.50),
+                    F9bAccount("TAKEPROFITPRO524207503", 50357.00),
                 };
 
                 var cfg = new RiskConfig();
@@ -10029,41 +10032,68 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // "the honest default is not a different number, it is no number".
                 cfg.FirmMirror.TrailingDD.Enabled = false;
                 cfg.FirmMirror.DailyLoss.Enabled = false;
-                cfg.FirmMirror.FirmProfiles["TakeProfitTrader-50K"] = new FirmProfile
+                // ⚠️ THESE VALUES CAME FROM THE FIRMS' PUBLISHED TABLES, not from the config
+                // backup, and the difference is the point. See docs/FIRM_PLANS_RESEARCH.md. The
+                // profiles recovered from the 2026-08-07 backup carried NO account size, and the
+                // sizes inferred for two of them were wrong: the "TakeProfitTrader" profile's 1500
+                // is TPT's 25K max loss (a 50K is 2000) and the "Apex" profile's 2000/1000 is
+                // Apex's 50K EOD row exactly (a 100K is 3000/1500). Both were deployed at the
+                // wrong size by F-9 and are corrected here.
+                //
+                // The TYPE correction is the one that mattered: a TPT PRO account trails INTRADAY
+                // until the buffer is hit, not EOD. An intraday trail follows peak equity including
+                // unrealized, so its floor rises during a winning session while an EOD model's
+                // stays stale and LOWER -- the firm's floor ends up above the guard's and the firm
+                // fails you first, which is R3's stated failure mode. LockAtProfit = Amount encodes
+                // "trails until the buffer is hit": the floor locks at the starting balance once
+                // the peak reaches start + 2000.
+                cfg.FirmMirror.FirmProfiles["TPT-50K-PRO"] = new FirmProfile
                 {
-                    Name = "TakeProfitTrader-50K",
+                    Name = "TPT-50K-PRO",
+                    AccountSize = 50000.0,
                     TrailingDD = new FirmTrailingDDConfig
                     {
-                        Enabled = true, Type = "eod", IncludesUnrealized = false,
-                        Amount = 1500.0, Buffer = 200.0, LockAtProfit = 0.0
+                        Enabled = true, Type = "intraday", IncludesUnrealized = true,
+                        Amount = 2000.0, Buffer = 200.0, LockAtProfit = 2000.0
                     },
-                    // TPT has no daily loss limit. Enabled=false WITH Amount=0 is the shape that
-                    // matters here: preflight's "enabled but Amount <= 0" check must not fire on
-                    // a sub-rule that is switched off, or a truthful profile cannot be armed.
+                    // TPT has NO daily loss limit at any size or stage -- removed January 2025, so
+                    // this is the firm's actual rule and not an omission. Enabled=false WITH
+                    // Amount=0 is also the shape that matters for preflight: its "enabled but
+                    // Amount <= 0" check must not fire on a sub-rule that is switched off, or a
+                    // truthful profile cannot be armed.
                     DailyLoss = new FirmDailyLossConfig
                     {
                         Enabled = false, Basis = "realized", Amount = 0.0, Buffer = 0.0
                     }
                 };
-                cfg.FirmMirror.FirmProfiles["Apex-100K"] = new FirmProfile
+                cfg.FirmMirror.FirmProfiles["Apex-100K-EOD"] = new FirmProfile
                 {
-                    Name = "Apex-100K",
+                    Name = "Apex-100K-EOD",
+                    AccountSize = 100000.0,
+                    // The key names the VARIANT because Apex sells two products at every size: an
+                    // EOD one that HAS a daily loss limit and an intraday one that does not. Firm
+                    // plus size is not a plan.
                     TrailingDD = new FirmTrailingDDConfig
                     {
                         Enabled = true, Type = "eod", IncludesUnrealized = false,
-                        Amount = 2000.0, Buffer = 200.0, LockAtProfit = 0.0
+                        Amount = 3000.0, Buffer = 200.0, LockAtProfit = 0.0
                     },
+                    // Realised basis, per the operator: every firm here is on realised except some
+                    // Apex accounts, which are not yet identified.
                     DailyLoss = new FirmDailyLossConfig
                     {
-                        Enabled = true, Basis = "include_unrealized_peak",
-                        Amount = 1000.0, Buffer = 100.0
+                        Enabled = true, Basis = "realized", Amount = 1500.0, Buffer = 100.0
                     }
                 };
-                cfg.FirmMirror.AccountFirmMap["Sim_All_Day_ORB"] = "TakeProfitTrader-50K";
-                cfg.FirmMirror.AccountFirmMap["Sim-ORB"] = "Apex-100K";
-                cfg.FirmMirror.AccountFirmMap["Sim101"] = "Apex-100K";
-                cfg.FirmMirror.AccountFirmMap["SimCopy2"] = "Apex-100K";
-                cfg.FirmMirror.AccountFirmMap["SimCopyTest1"] = "Apex-100K";
+                // The live funded account is mapped now that P2-92 is closed: before it, a shadow
+                // breach set an enforced-looking lockout and stopped the account trading while
+                // flattening nothing.
+                cfg.FirmMirror.AccountFirmMap["TAKEPROFITPRO524207503"] = "TPT-50K-PRO";
+                cfg.FirmMirror.AccountFirmMap["Sim_All_Day_ORB"] = "TPT-50K-PRO";
+                cfg.FirmMirror.AccountFirmMap["Sim-ORB"] = "Apex-100K-EOD";
+                cfg.FirmMirror.AccountFirmMap["Sim101"] = "Apex-100K-EOD";
+                cfg.FirmMirror.AccountFirmMap["SimCopy2"] = "Apex-100K-EOD";
+                cfg.FirmMirror.AccountFirmMap["SimCopyTest1"] = "Apex-100K-EOD";
 
                 var addon = new RiskGuardAddOn();
                 addon.SetConfigForTest(cfg);
@@ -10625,6 +10655,123 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(!shadowFirst.CanTrade("P292Acc", "MNQ 03-26", "P292"),
                 "a manual lockout on an account that already breached in SHADOW still bites -- the "
                 + "operator's authority replaces the observation's, it does not inherit it");
+        }
+
+        /// <summary>
+        /// A shadow lockout must be RECORDED, or `P2-92`'s fix is a deletion rather than a move.
+        ///
+        /// ⚠️ WRITTEN TO KILL THE LAST MUTATION SURVIVOR, and the survivor is the interesting part:
+        /// deleting the `SHADOW_LOCKOUT` log line left all 1,224 tests green. Nothing in this suite
+        /// could observe that an audit event happened at all, so every claim about this addon's log
+        /// was pinned by a source scan or not at all -- including `P1-70`'s (a log must not claim an
+        /// outcome it has not observed) and `P1-71`'s (a relationship that produced no order and left
+        /// no diagnosable trace). `LogEventObserver` was added for this, under `#if TESTING`.
+        ///
+        /// What makes it matter rather than tidy: the whole point of shadow mode is to collect what
+        /// the guard WOULD have done, and `MinShadowSessions` gates live arming on having done that.
+        /// A shadow breach that stops the account trading was the defect. A shadow breach that
+        /// records NOTHING is the defect's mirror image -- the observation is gone, and the operator
+        /// has no way to learn that the rule would have fired.
+        /// </summary>
+        private static void TestP292_AShadowLockoutIsRECORDED()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a shadow-mode lockout is recorded in the audit log, naming the rule");
+
+            var seen = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => seen.Add(acct + "/" + evt);
+            try
+            {
+                AccountState state; Account account;
+                var addon = P292Guard("shadow", true, out state, out account);
+                state.RealizedPnL = -1100.0;
+                addon.EvaluatePnLRules(account, state);
+
+                Console.WriteLine("        events: " + string.Join(", ", seen));
+                Assert(seen.Any(e => e == "P292Acc/SHADOW_LOCKOUT"),
+                    "a shadow-mode breach emits SHADOW_LOCKOUT for that account, so the shadow "
+                    + "session MinShadowSessions gates on has something in it");
+
+                // The paired negative: an ACTING breach must not report itself as a shadow
+                // observation, or the shadow session's count is inflated by real lockouts.
+                seen.Clear();
+                AccountState liveState; Account liveAcct;
+                var live = P292Guard("live", true, out liveState, out liveAcct);
+                liveState.RealizedPnL = -1100.0;
+                live.EvaluatePnLRules(liveAcct, liveState);
+                Assert(!seen.Any(e => e.EndsWith("/SHADOW_LOCKOUT", StringComparison.Ordinal)),
+                    "and an ACTING-mode breach emits no SHADOW_LOCKOUT, so the shadow record is not "
+                    + "inflated by lockouts that really fired");
+            }
+            finally
+            {
+                RiskGuardAddOn.LogEventObserver = null;
+            }
+        }
+
+        /// <summary>
+        /// The authority must SURVIVE a restart, in both directions.
+        ///
+        /// ⚠️ WRITTEN TO KILL TWO MUTATION SURVIVORS, and they survived for the same reason: both
+        /// fail CLOSED, so nothing about the guard's behaviour looked wrong. Deleting the write to
+        /// the persisted DTO, or the read back out of it, leaves every restored lockout reading as
+        /// ENFORCED. On a funded account that is the safe direction and it is still wrong: a
+        /// restart PROMOTES a shadow observation into a real lockout, so the account stops trading
+        /// for a breach that never enforced, with no breach in the current session to point at. A
+        /// phantom lockout is exactly the kind of thing that gets the whole system switched off.
+        ///
+        /// A recompile is a restart here (`P1-54` says so about `LockoutUntil`), so this is not an
+        /// edge case — it is what happens the next time anyone touches the addon.
+        ///
+        /// Both directions are asserted, because "always restore as shadow-only" would pass the
+        /// first half while removing protection from a real lockout.
+        /// </summary>
+        private static void TestP292_TheAuthoritySurvivesASaveLoadRoundTrip()
+        {
+            Console.WriteLine("\n[TEST] P2-92: a lockout's authority survives a save/load round trip, in both directions");
+
+            foreach (var mode in new[] { "shadow", "live" })
+            {
+                string path = Path.Combine(Path.GetTempPath(),
+                    "p292_roundtrip_" + mode + "_" + Guid.NewGuid().ToString("N") + ".json");
+                try
+                {
+                    AccountState state; Account account;
+                    var before = P292Guard(mode, true, out state, out account);
+                    before.SetStateFileForTest(path);
+                    state.RealizedPnL = -1100.0;
+                    before.EvaluatePnLRules(account, state);
+                    Assert(state.IsLockedOut, string.Format(
+                        "precondition: the {0}-mode breach recorded a lockout", mode));
+                    before.SavePersistedStateForTest();
+
+                    var cfg = new RiskConfig();
+                    cfg.Mode = mode;
+                    var after = new RiskGuardAddOn();
+                    after.SetConfigForTest(cfg);
+                    after.SetModeForTest(mode);
+                    after.SetArmedForTest(true);
+                    after.SetStateFileForTest(path);
+                    after.LoadPersistedStateForTest();
+
+                    var restored = after.GetAccountStateForTest("P292Acc");
+                    Assert(restored != null && restored.IsLockedOut, string.Format(
+                        "the lockout itself survives the round trip in {0} mode", mode));
+
+                    bool canTrade = after.CanTrade("P292Acc", "MNQ 03-26", "P292");
+                    if (mode == "shadow")
+                        Assert(canTrade,
+                            "a SHADOW lockout is still shadow-only after a restart -- a recompile "
+                            + "must not promote an observation into an enforced lockout");
+                    else
+                        Assert(!canTrade,
+                            "a LIVE lockout is still enforced after a restart -- a restart must not "
+                            + "release a lockout that was imposed while the guard could act");
+                }
+                finally
+                {
+                    try { if (File.Exists(path)) File.Delete(path); } catch { }
+                }
+            }
         }
 
         /// <summary>

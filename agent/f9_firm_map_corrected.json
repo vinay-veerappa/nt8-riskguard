@@ -1,0 +1,87 @@
+{
+  "_note": [
+    "The FirmMirror block as it should be, after the 2026-08-13 research (docs/FIRM_PLANS_RESEARCH.md)",
+    "and the operator's corrections. This is applied by EDITING config.json directly rather than by",
+    "POSTing to /api/riskguard/config, because the POST path MERGES and therefore cannot REMOVE the",
+    "two wrongly-numbered keys F-9 deployed (TakeProfitTrader-50K holding TPT's 25K max loss, and",
+    "Apex-100K holding Apex's 50K row). nt_compile reloads every addon and re-reads config.json, so",
+    "the deploy step doubles as the reload.",
+    "",
+    "OPERATOR CORRECTIONS APPLIED:",
+    "  - TAKEPROFITPRO524207503 is a 50K PRO account.",
+    "  - TPT PRO trails INTRADAY until the buffer is hit -> Type=intraday plus LockAtProfit.",
+    "  - PAAPEX* are the funded (performance) accounts.",
+    "  - TDYG = Tradeify Growth; the F indicates funded.",
+    "  - LFE = Lucid evaluation.",
+    "  - All firms are on a REALISED daily-loss basis except some Apex accounts.",
+    "",
+    "STILL UNRESOLVED, so nothing is mapped for them: which Apex accounts are the exception to the",
+    "realised DLL basis; whether APEX* eval accounts are the EOD or the intraday product (they differ",
+    "in whether a DLL exists at all); and what FTDFYG's leading F denotes as distinct from TDFYG."
+  ],
+  "FirmMirror": {
+    "Enabled": true,
+    "TrailingDD": {
+      "Enabled": false,
+      "Type": "intraday",
+      "IncludesUnrealized": true,
+      "Amount": 2500.0,
+      "Buffer": 300.0,
+      "LockAtProfit": 0.0
+    },
+    "DailyLoss": {
+      "Enabled": false,
+      "Basis": "realized",
+      "Amount": 1500.0,
+      "Buffer": 200.0
+    },
+    "DailyResetHourUtc": 22,
+    "DailyResetMinuteUtc": 0,
+    "AccountFirmMap": {
+      "TAKEPROFITPRO524207503": "TPT-50K-PRO",
+      "Sim_All_Day_ORB": "TPT-50K-PRO",
+      "Sim-ORB": "Apex-100K-EOD",
+      "Sim101": "Apex-100K-EOD",
+      "SimCopy2": "Apex-100K-EOD",
+      "SimCopyTest1": "Apex-100K-EOD"
+    },
+    "FirmProfiles": {
+      "TPT-50K-PRO": {
+        "Name": "TPT-50K-PRO",
+        "AccountSize": 50000.0,
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "intraday",
+          "IncludesUnrealized": true,
+          "Amount": 2000.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 2000.0
+        },
+        "DailyLoss": {
+          "Enabled": false,
+          "Basis": "realized",
+          "Amount": 0.0,
+          "Buffer": 0.0
+        }
+      },
+      "Apex-100K-EOD": {
+        "Name": "Apex-100K-EOD",
+        "AccountSize": 100000.0,
+        "TrailingDD": {
+          "Enabled": true,
+          "Type": "eod",
+          "IncludesUnrealized": false,
+          "Amount": 3000.0,
+          "Buffer": 200.0,
+          "LockAtProfit": 0.0
+        },
+        "DailyLoss": {
+          "Enabled": true,
+          "Basis": "realized",
+          "Amount": 1500.0,
+          "Buffer": 100.0
+        }
+      }
+    }
+  }
+}

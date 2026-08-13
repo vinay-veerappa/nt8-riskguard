@@ -623,6 +623,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // still inside it whenever its caller was itself called under the lock -- which is how
         // three of the four original sites got there.
         internal static Action<string> FileWriteObserver;
+
+        // --- audit-event probe (P2-92) ---
+        // Same argument as the two probes above, for the addon's OTHER product: the audit record.
+        // A mutant that deleted the SHADOW_LOCKOUT log line survived 1,224 passing tests, because
+        // nothing in the suite could observe that an event was emitted at all. `(account, eventType)`
+        // is deliberately the whole signature -- a test asserting on the message TEXT would break on
+        // every rewording, and the thing worth pinning is that the event HAPPENS and carries the
+        // right type. See `P1-71`: a message must not NAME another event type, because this log is
+        // grepped by type after the fact.
+        internal static Action<string, string> LogEventObserver;
 #endif
 
         public void ResetStateForDev()
@@ -4606,6 +4616,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void LogEvent(string account, string eventType, JObject data)
         {
+#if TESTING
+            // P2-92. Added because a mutant that DELETED a log line survived the whole suite: the
+            // audit record is a first-class product of this addon -- `P1-70` is about a log claiming
+            // an outcome it has not observed, and `P1-71` is about a relationship that produced no
+            // order and left no diagnosable trace -- and none of it was assertable, because nothing
+            // could observe a LogEvent call. Every claim in that class was pinned by source scan or
+            // not at all.
+            //
+            // Fires BEFORE the try, so a test sees the event even if the disk write throws, which is
+            // the case a source scan cannot distinguish from a working one.
+            var observer = LogEventObserver;
+            if (observer != null) observer(account, eventType);
+#endif
             try
             {
                 JObject logEntry = new JObject
