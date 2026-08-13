@@ -155,6 +155,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP330_AuditDetectsNakedPosition();
             TestP330_AuditDetectsOrphanStop();
             TestP330_AuditDetectsFsmBrokerDivergence();
+            TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder();
+            TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18746,6 +18748,133 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(events.Any(e => e.StartsWith("P330Div/FSM_DIVERGENCE", StringComparison.Ordinal)),
                 "the audit detects FSM/broker divergence -- FSM says Protected but no working stop exists at the broker");
+        }
+
+        // ================================================================================
+        // P1-57: stop identifying our own orders by name substring -- track by reference.
+        //
+        // The only thing stopping the copier from mirroring a mirrored stop is that
+        // our legs are named COPIER_STOP/COPIER_TARGET. Replikanto copies leader names
+        // verbatim (Stop1, Target1), so we read its mirrored stop as a genuine leader
+        // stop. The fix: track orders by reference, not by name substring.
+        // ================================================================================
+
+        private static void TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder()
+        {
+            Console.WriteLine("\n[TEST] P1-57: a submitted order is not treated as a leader order");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "P157Leader",
+                FollowerAccountName = "P157Follower",
+                IsEnabled = true,
+                FixedLotMode = true,
+                FixedLotSize = 1,
+                AutoSymbolConversion = false,
+                MaxPositionSize = 100
+            };
+
+            TradeCopierEngine.Instance.ResetBracketsForTest();
+            SetupCopyPath("P157Leader", "P157Follower", rel, 1, mnq, MarketPosition.Long);
+            var leader = Account.All.First(a => a.Name == "P157Leader");
+            var follower = Account.All.First(a => a.Name == "P157Follower");
+
+            // A stop that we submitted on the follower account, named Stop1 (like Replikanto would)
+            var ourStop = new Order
+            {
+                Instrument = mnq,
+                Name = "Stop1",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            };
+            follower.Orders.Add(ourStop);
+
+            // Register it as our own (the real implementation would do this on Submit)
+            TradeCopierEngine.Instance.RegisterSubmittedOrderForTest(ourStop);
+
+            // Set up a second relationship: P157Follower -> P157Follower2
+            var rel2 = new CopierRelationship
+            {
+                LeaderAccountName = "P157Follower",
+                FollowerAccountName = "P157Follower2",
+                IsEnabled = true,
+                FixedLotMode = true,
+                FixedLotSize = 1,
+                AutoSymbolConversion = false,
+                MaxPositionSize = 100
+            };
+            TradeCopierEngine.Instance.UpsertRelationship(rel2);
+
+            var follower2 = new Account { Name = "P157Follower2" };
+            Account.All.Add(follower2);
+
+            // The COPIER_STOP arrives as a "leader order" on P157Follower
+            // P1-57: this must be skipped because we submitted it
+            TradeCopierEngine.Instance.OnLeaderOrderUpdate(follower, ourStop);
+
+            var follower2Stops = follower2.Orders.Where(o => o.Name == "Stop1" || o.Name == "COPIER_STOP").ToList();
+            Assert(follower2Stops.Count == 0,
+                "P1-57: a submitted order (our own stop, named Stop1 like Replikanto would) is NOT "
+                + "treated as a leader order to mirror onward -- it is tracked by reference, not by name");
+        }
+
+        private static void TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder()
+        {
+            Console.WriteLine("\n[TEST] P1-57: a non-submitted order with COPIER in its name IS treated as a leader order");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "P157LeaderB",
+                FollowerAccountName = "P157FollowerB",
+                IsEnabled = true,
+                FixedLotMode = true,
+                FixedLotSize = 1,
+                AutoSymbolConversion = false,
+                MaxPositionSize = 100
+            };
+
+            TradeCopierEngine.Instance.ResetBracketsForTest();
+            var follower = SetupCopyPath("P157LeaderB", "P157FollowerB", rel, 0, mnq, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "P157LeaderB");
+
+            // Leader has a position
+            leader.Positions.Add(new Position
+            {
+                Instrument = mnq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 1,
+                AveragePrice = 18000
+            });
+
+            // A DIFFERENT copier placed an order named "COPIER_STOP" on the leader account.
+            // We did NOT submit this order. P1-57: it must still be treated as a leader order.
+            var foreignStop = new Order
+            {
+                Instrument = mnq,
+                Name = "COPIER_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            };
+            leader.Orders.Add(foreignStop);
+
+            // NOT registered in _submittedOrders -- it is NOT ours
+
+            // The copier sees this order and should mirror it (it is a real leader stop,
+            // placed by a different program, but it IS on the leader account)
+            TradeCopierEngine.Instance.OnLeaderOrderUpdate(leader, foreignStop);
+
+            var followerStop = follower.Orders.FirstOrDefault(o => o.Name == "COPIER_STOP");
+            Assert(followerStop != null,
+                "P1-57: a non-submitted order with COPIER in its name IS still treated as a leader "
+                + "order -- the name substring is no longer the filter; reference tracking is");
         }
     }
 }

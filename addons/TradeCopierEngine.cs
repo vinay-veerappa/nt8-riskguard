@@ -4050,6 +4050,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// Drops all bracket state. The engine is a singleton, so without this one test's
         /// brackets become the next test's starting conditions.
         /// </summary>
+        // P1-57 stub: exists so the acceptance tests compile. The real implementation
+        // is the agent loop's job. This stub does nothing, so the test that expects
+        // a submitted order to be skipped will fail (baseline red).
+        internal void RegisterSubmittedOrderForTest(Order o) { }
+
         internal void ResetBracketsForTest()
         {
             lock (_lock)

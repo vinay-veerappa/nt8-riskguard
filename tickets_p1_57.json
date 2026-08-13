@@ -1,0 +1,48 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P1-57: stop identifying our own orders by name substring -- track by object reference",
+      "defect": "The only thing stopping the copier from mirroring a mirrored stop is that our own legs are named COPIER_STOP/COPIER_TARGET. A third-party copier (Replikanto) copies its leader's order names verbatim (Stop1, Target1), so if an account is both another copier's follower and one of our leaders, we read its mirrored stop as a genuine leader stop and mirror it onward. The live chain Sim101 -> Sim-ORB -> {SimCopyTest1, SimCopy2} exists on this box today. A mirrored distance gets re-mirrored down a chain, so the far end's risk is anchored to an entry two hops away. The fix: stop identifying our own orders by name substring. Track the orders we submit by object reference, and refuse to anchor to an order we did not observe the leader place itself. Do NOT fix by adding more name patterns -- matching Stop1/Target1 would blacklist the most common legitimate NT8 ATM names.",
+      "spec": "Replace all `order.Name.Contains(\"COPIER\")` substring checks in TradeCopierEngine with object-reference tracking.\n\n1. Add a `HashSet<Order>` (by reference, using DefaultEqualityComparer) called `_submittedOrders` that records every order this engine submits. Add to it right before/after every `followerAcc.Submit(...)` call. Remove entries when the order goes terminal (in OnFollowerOrderUpdate).\n\n2. In `OnLeaderOrderUpdate` (line ~2845): replace `if (!string.IsNullOrEmpty(order.Name) && order.Name.Contains(\"COPIER\")) return;` with `if (_submittedOrders.Contains(order)) return;`. This is the main gate -- a leader order that WE submitted (as a follower's leg) must not be treated as a leader order to mirror onward.\n\n3. In `ReevaluateLeaderStops` (line ~2820): replace `&& (string.IsNullOrEmpty(o.Name) || !o.Name.Contains(\"COPIER\"))` with `&& !_submittedOrders.Contains(o)`.\n\n4. In `OnExecution` (line ~4639): replace `exec.Order.Name.Contains(\"COPIER\")` with `_submittedOrders.Contains(exec.Order)`.\n\n5. In the second `ReevaluateLeaderStops` candidate filter (line ~3010): same replacement.\n\n6. Clear `_submittedOrders` in `ResetBracketsForTest` so tests do not leak.\n\nCONSTRAINTS:\n- The HashSet must use reference equality (DefaultEqualityComparer<Order>), NOT OrderId, because NT8 does not guarantee the id is unique and it can change over an order's lifetime.\n- The HashSet operations must be under _lock or use a thread-safe set (ConcurrentDictionary<Order, bool> is simpler).\n- Do NOT add more name patterns. The whole point is that name-based identification is wrong.\n- The CopierBracketReconciler.OwnedStopName/OwnedTargetName constants are a SEPARATE concern (the reconciler's ownership test for the follower's own legs). Those stay as-is -- they are exact-match, not substring, and they identify legs WE placed on a follower, not leader orders to skip.\n- The `OnExecution` filter at line ~4639 also checks `exec.Name.Contains(\"COPIER\")` -- replace both checks with reference tracking.\n- Existing tests that rely on the name-based filter (e.g. tests that create orders named COPIER_STOP and expect them to be filtered) must still pass. If a test breaks because it was relying on the substring, update the test to register the order in _submittedOrders instead.",
+      "context": "The substring checks are at lines ~2820, ~2845, ~3010, ~4639-4640 in TradeCopierEngine.cs. The Replikanto chain is Sim101 -> Sim-ORB -> {SimCopyTest1, SimCopy2}. OnExecution filters at ~4639 check both exec.Order.Name and exec.Name for COPIER. ResetBracketsForTest is the test cleanup method. The reconciler's OwnedStopName/OwnedTargetName are EXACT-MATCH (not substring) and are a separate concern.",
+      "expect_green": [
+        "a non-submitted order with COPIER in its name IS still treated as a leader order"
+      ],
+      "regions": [
+        {
+          "id": "SubmittedOrdersField",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "private readonly HashSet<string> _accountsIgnoringChange",
+          "kind": "line",
+          "note": "add the _submittedOrders set here. Use a ConcurrentDictionary<Order, bool> or a HashSet<Order> under _lock. Records every order this engine submits."
+        },
+        {
+          "id": "OnLeaderOrderUpdate",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal void OnLeaderOrderUpdate(Account leaderAccount, Order order)",
+          "note": "replace the Name.Contains(\"COPIER\") check at ~2845 with _submittedOrders.Contains(order)"
+        },
+        {
+          "id": "ReevaluateLeaderStops",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "private void ReevaluateLeaderStops(Account leaderAccount, Instrument instrument)",
+          "note": "replace the Name.Contains(\"COPIER\") filter at ~2820 and ~3010 with _submittedOrders.Contains(o)"
+        },
+        {
+          "id": "OnExecution",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public void OnExecution(Execution exec)",
+          "note": "replace exec.Order.Name.Contains(\"COPIER\") and exec.Name.Contains(\"COPIER\") at ~4639-4640 with _submittedOrders.Contains(exec.Order)"
+        },
+        {
+          "id": "RegisterSubmitted",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "followerAcc.Submit(new[] { stop })",
+          "note": "add _submittedOrders registration after every Submit call (stop and target legs). Also clear in ResetBracketsForTest."
+        }
+      ],
+      "max_rounds": 6
+    }
+  ]
+}
