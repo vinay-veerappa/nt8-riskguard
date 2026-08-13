@@ -445,8 +445,17 @@ is reachable **only through the bridge**.
    returned **96 accounts × 25 rules = 2400 rows and 648 KB**, on a page that polls. The summary
    brought the poll to **22 KB**. Reasoning about this would not have produced it; asking the
    deployed system did.
-   **Still to do here**: the copier half (relationships, verdicts, latency/slippage with
-   `measured:`), and the NT8 Control Center menu item that launches the browser (§7.4).
+   **The copier half landed too** (`UI6`): `/api/copier/snapshot`, one row per relationship per
+   instrument root, with leader / expected / **actual** position, verdict, and latency+slippage
+   that render *"not measured"* rather than `0 ms` when no copy has filled (`P1-22`).
+   ⚠️ **`CopierConformance`'s integers are NOT severity order** — `Idle=0 … Quarantined=5`, so
+   sorting by the cast puts a healthy row first and an **Orphan** below a quarantined one. The
+   rank is stated once in core and travels on each row; the page never re-derives it. This is the
+   opposite of `GuardRuleState`, whose integer order *is* its severity order and is pinned as
+   such. **The two enums look alike and must be treated differently.**
+   **Still to do here**: nothing on the page is EDITABLE — goal 1 of the two ("configure both
+   systems") is untouched. Also open: live SSE updates instead of the 5s poll, operator-readable
+   notes (they currently cite defect IDs), and the NT8 Control Center menu item (§7.4).
 5. **`F-9`** firm mapping, which is what makes the risk half of the inspector tell the truth.
 6. Then §5.6 item 5 onward, unchanged: `P3-31` ledger → timer → RiskGuard-side audit.
 
