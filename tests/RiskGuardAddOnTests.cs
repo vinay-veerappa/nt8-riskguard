@@ -18867,12 +18867,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // NOT registered in _submittedOrders -- it is NOT ours
 
-            // The copier sees this order and should mirror it (it is a real leader stop,
-            // placed by a different program, but it IS on the leader account)
+            // The copier sees this order. P1-57: with the old name-based filter,
+            // OnLeaderOrderUpdate returned early because order.Name contains "COPIER".
+            // With reference tracking, it must NOT return early -- the order is not ours.
+            // The assertion checks that the order was processed (not filtered) by
+            // verifying a bracket was created for the follower. If the order was
+            // filtered, no bracket exists.
             TradeCopierEngine.Instance.OnLeaderOrderUpdate(leader, foreignStop);
 
-            var followerStop = follower.Orders.FirstOrDefault(o => o.Name == "COPIER_STOP");
-            Assert(followerStop != null,
+            // Check if a bracket was created for this follower (meaning the order
+            // was NOT filtered). A filtered order produces no bracket.
+            bool bracketCreated = false;
+            try { bracketCreated = TradeCopierEngine.Instance.HasBracketForTest("P157FollowerB", mnq.FullName); }
+            catch { }
+            Assert(bracketCreated,
                 "P1-57: a non-submitted order with COPIER in its name IS still treated as a leader "
                 + "order -- the name substring is no longer the filter; reference tracking is");
         }

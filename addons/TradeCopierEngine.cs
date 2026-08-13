@@ -444,6 +444,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // and in SyncFollowerStopOnce when the last active bracket for the account is stood down
         // so a provider reconfiguration mid-session is not permanently penalised.
         private readonly HashSet<string> _accountsIgnoringChange = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<Order> _submittedOrders = new HashSet<Order>(EqualityComparer<Order>.Default);
 
         public void AddRelationship(CopierRelationship rel) => UpsertRelationship(rel);
 
@@ -2805,22 +2806,29 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (leaderAccount == null || instrument == null) return;
 
-            List<Order> candidates;
+            List<Order> allCandidates;
             try
             {
                 // BOTH protective legs, not just the stop. The first cut of the target work
                 // filtered on IsStopType here and silently left the target unanchored -- the live
                 // trace read "re-evaluating 1 working protective stop(s)" on a two-legged bracket,
                 // which is exactly the off-by-one-leg a stop-shaped test cannot see.
-                candidates = leaderAccount.Orders
+                allCandidates = leaderAccount.Orders
                     .Where(o => o != null && o.Instrument != null
                         && o.Instrument.FullName.Equals(instrument.FullName, StringComparison.OrdinalIgnoreCase)
                         && (RiskGuardAddOn.IsStopType(o) || o.OrderType == OrderType.Limit)
-                        && RiskGuardAddOn.ProvidesCoverage(o.OrderState)
-                        && (string.IsNullOrEmpty(o.Name) || !o.Name.Contains("COPIER")))
+                        && RiskGuardAddOn.ProvidesCoverage(o.OrderState))
                     .ToList();
             }
             catch { return; }
+
+            List<Order> candidates;
+            lock (_lock)
+            {
+                // P1-57: only skip orders this engine actually submitted. A foreign copier may
+                // copy a leader leg whose name happens to contain COPIER; we must still re-anchor it.
+                candidates = allCandidates.Where(o => !_submittedOrders.Contains(o)).ToList();
+            }
 
             if (candidates.Count == 0) return;
 
@@ -2842,7 +2850,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (leaderAccount == null || order == null || order.Instrument == null) return;
 
             // Never react to our own protective legs, or we would mirror a mirror.
-            if (!string.IsNullOrEmpty(order.Name) && order.Name.Contains("COPIER")) return;
+            // P1-57: identify by object reference, never by name substring. A third-party copier
+            // may copy an order named COPIER_STOP verbatim; if we did not submit it we must still
+            // treat it as a genuine leader leg.
+            lock (_lock)
+            {
+                if (_submittedOrders.Contains(order)) return;
+            }
 
             List<CopierRelationship> rels = GetActiveRelationshipsForLeader(leaderAccount.Name);
             if (rels.Count == 0) return;
@@ -2998,7 +3012,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// ReevaluateLeaderStops does: NT8 owns that collection and can mutate it under us. A throw
         /// here reports 0, which mirrors nothing -- deliberately the same direction as the refusal.
         /// </summary>
-        private static int CountLeaderTargetLegs(Account leaderAccount, Instrument instrument, Position leaderPos)
+        private int CountLeaderTargetLegs(Account leaderAccount, Instrument instrument, Position leaderPos)
         {
             try
             {
@@ -3007,7 +3021,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     && o.Instrument.FullName.Equals(instrument.FullName, StringComparison.OrdinalIgnoreCase)
                     && RiskGuardAddOn.ProvidesCoverage(o.OrderState)
                     && RiskGuardAddOn.IsProtectiveSide(o, leaderPos.MarketPosition)
-                    && (string.IsNullOrEmpty(o.Name) || !o.Name.Contains("COPIER")));
+                    && !_submittedOrders.Contains(o));
             }
             catch { return 0; }
         }
@@ -3505,6 +3519,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // so a background reconciler cannot issue a second Create for the same leg.
                 _inFlightLedger.Register(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedStopName);
                 stopSubmitRegistered = true;
+                lock (_lock)
+                {
+                    _submittedOrders.Add(stop);
+                }
                 followerAcc.Submit(new[] { stop });
                 _inFlightLedger.Settle(followerAcc.Name, instrument.FullName, CopierBracketReconciler.OwnedStopName);
                 stopSubmitRegistered = false;
@@ -4053,7 +4071,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // P1-57 stub: exists so the acceptance tests compile. The real implementation
         // is the agent loop's job. This stub does nothing, so the test that expects
         // a submitted order to be skipped will fail (baseline red).
-        internal void RegisterSubmittedOrderForTest(Order o) { }
+        internal void RegisterSubmittedOrderForTest(Order o) { if (o != null) _submittedOrders.Add(o); }
+        internal bool HasBracketForTest(string followerAccount, string instrumentFullName)
+        {
+            lock (_lock)
+            {
+                foreach (var kvp in _followerBrackets)
+                {
+                    var b = kvp.Value;
+                    if (b != null
+                        && string.Equals(b.FollowerAccountName, followerAccount, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(b.InstrumentFullName, instrumentFullName, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            }
+        }
 
         internal void ResetBracketsForTest()
         {
@@ -4636,18 +4669,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
 
+            // Recursion Guard 2: Ignore executions originated by copier placement
+            // P1-57: reference equality, not name substring. exec.Name is just the order's name;
+            // if exec.Order is not an object we submitted, the execution is not ours.
             bool copierOriginated;
             lock (_lock)
             {
-                // Recursion Guard 2: Ignore executions originated by copier placement
-                copierOriginated =
-                    (!string.IsNullOrEmpty(exec.Order.Name) && exec.Order.Name.Contains("COPIER"))
-                    || (exec.Name != null && exec.Name.Contains("COPIER"));
+                copierOriginated = _submittedOrders.Contains(exec.Order);
             }
             if (copierOriginated)
             {
                 CopierLog(acctName, "EXEC_SELF_ORIGINATED",
-                    $"order '{exec.Order.Name}' / exec '{exec.Name}' contains COPIER, so this is our "
+                    $"order '{exec.Order.Name}' / exec '{exec.Name}' is an order this engine submitted, so this is our "
                     + "own placement coming back; dropped to prevent a feedback loop.");
                 return;
             }
@@ -4876,6 +4909,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // Submit follower order
                     if (followerOrder != null)
                     {
+                        // P1-57: register before Submit so any synchronous callback sees the order
+                        // as ours and does not treat it as a leader leg.
+                        lock (_lock)
+                        {
+                            _submittedOrders.Add(followerOrder);
+                        }
                         followerAcc.Submit(new[] { followerOrder });
 
                         // P1-22: remember what the leader paid so the follower's fill can be
