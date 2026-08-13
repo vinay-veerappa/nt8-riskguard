@@ -128,6 +128,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestFirmMirrorTrailingDDBreachEmitsAction();
             TestFirmMirrorDailyLossBreachEmitsAction();
             TestP1_42_MappedAccountIsEvaluatedAgainstItsFirmProfile();
+            TestF9_TheReporterAndTheEnforcerAgreeOnEveryFirmShape();
+            TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan();
+            TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -9662,6 +9665,307 @@ namespace NinjaTrader.NinjaScript.AddOns
             dailyFm.AccountFirmMap["TradeifyAcc"] = "Tradeify";
             Assert(evaluate(dailyFm, "TradeifyAcc").Any(a => a.RuleId == "FIRM_DAILY_LOSS_BREACH"),
                 "a mapped account's firm DailyLoss rule must be evaluated (-2000 breaches a 1250/100 limit)");
+        }
+
+        // ================================================================================
+        // F-9 -- the account -> firm-plan mapping. docs/UI_REDESIGN_DESIGN.md section 9.
+        //
+        // P1-42 made the ENFORCER read AccountFirmMap/FirmProfiles. The REPORTER never
+        // followed. GuardRules' two firm rules branch on the TOP-LEVEL
+        // FirmMirror.TrailingDD.Enabled / DailyLoss.Enabled and report the TOP-LEVEL Amount,
+        // while EvaluateFirmMirror resolves a per-account effective config first.
+        //
+        // In the shape the researched profiles actually use -- top-level sub-rules OFF, the
+        // firm profile's ON -- those two disagree in the reassuring direction's mirror image:
+        // the enforcer flattens and locks out on the profile's numbers while the inventory
+        // reports "Disabled - firm trailing drawdown not enabled". And in the TPT shape,
+        // whose profile has DailyLoss OFF, the disagreement runs the dangerous way: the
+        // inventory reports a live daily-loss rule that cannot fire.
+        //
+        // This is P1-42's own lesson applied to the reporter -- "logging the top-level
+        // amounts while breaching on a profile's would make the audit trail describe a rule
+        // that did not run" -- and it was latent only because AccountFirmMap was EMPTY. F-9
+        // populates it, so F-9 activates it.
+        // ================================================================================
+
+        /// <summary>One combination of the four switches that decide whether a firm rule runs.</summary>
+        private class F9Shape
+        {
+            public string Label;
+            public bool MasterEnabled;
+            public bool TopLevelEnabled;
+            public bool ProfilePresent;
+            public bool ProfileEnabled;
+            public bool Mapped;
+        }
+
+        private const string F9Plan = "TakeProfitTrader-50K";
+        private const string F9Account = "F9Acc";
+
+        /// <summary>
+        /// The live/researched shape, parameterised. Top-level amounts are deliberately DIFFERENT
+        /// from the profile's (2500/1500 vs 1500/1250) so a reporter reading the wrong one is
+        /// visible as a number, not just as a state.
+        /// </summary>
+        private static FirmMirrorConfig F9Config(F9Shape s, bool trailing)
+        {
+            var fm = new FirmMirrorConfig();
+            fm.Enabled = s.MasterEnabled;
+            fm.TrailingDD.Enabled = trailing && s.TopLevelEnabled;
+            fm.TrailingDD.Type = "eod";
+            fm.TrailingDD.IncludesUnrealized = false;
+            fm.TrailingDD.Amount = 2500.0;
+            fm.TrailingDD.Buffer = 200.0;
+            fm.DailyLoss.Enabled = !trailing && s.TopLevelEnabled;
+            fm.DailyLoss.Basis = "realized";
+            fm.DailyLoss.Amount = 1500.0;
+            fm.DailyLoss.Buffer = 200.0;
+
+            if (s.ProfilePresent)
+            {
+                fm.FirmProfiles[F9Plan] = new FirmProfile
+                {
+                    Name = F9Plan,
+                    TrailingDD = new FirmTrailingDDConfig
+                    {
+                        Enabled = trailing && s.ProfileEnabled, Type = "eod",
+                        IncludesUnrealized = false, Amount = 1500.0, Buffer = 200.0
+                    },
+                    DailyLoss = new FirmDailyLossConfig
+                    {
+                        Enabled = !trailing && s.ProfileEnabled, Basis = "realized",
+                        Amount = 1250.0, Buffer = 100.0
+                    }
+                };
+            }
+            if (s.Mapped) fm.AccountFirmMap[F9Account] = F9Plan;
+            return fm;
+        }
+
+        /// <summary>
+        /// Runs the REPORTER over one firm rule for one account, and returns the state a UI
+        /// would render. guardCanAct is true and the account is not excluded -- the most
+        /// permissive input, so anything that comes back Disabled did so on its own merits.
+        /// </summary>
+        private static GuardRuleState F9ReporterState(
+            FirmMirrorConfig fm, string accountName, string configPath, out GuardRuleReading reading)
+        {
+            var cfg = new RiskConfig();
+            cfg.FirmMirror = fm;
+            var rule = GuardRuleRegistry.Rules.First(
+                r => string.Equals(r.ConfigPath, configPath, StringComparison.OrdinalIgnoreCase));
+            var acct = Ui4Account(accountName, equity: 48000.0);
+            var ctx = new GuardRuleContext
+            {
+                AccountName = accountName,
+                Config = cfg,
+                PropConfig = new PropFirmProtectionConfig(),
+                Account = acct,
+                AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { acct },
+                NewsEventCount = 0
+            };
+            reading = rule.Evaluator(ctx);
+            return GuardRuleRegistry.DeriveState(rule, reading, true, false);
+        }
+
+        /// <summary>
+        /// Runs the ENFORCER over the same config, and answers "could this rule fire at all?".
+        ///
+        /// Two details make the probe honest, and the first draft got both wrong.
+        ///
+        /// (1) The inputs must breach EVERY amount in play, not just the smallest. A 50k start
+        /// with equity 48000 breaches the plan's 1500 floor (48700) but NOT the top-level 2500
+        /// floor (47700), so four shapes came back "silent" for a rule that was running fine and
+        /// would have been recorded as reporter defects. Equity 30000 and -10000 realized are
+        /// below every floor and every daily limit here, so "silent" means "cannot fire" rather
+        /// than "did not happen to breach".
+        ///
+        /// (2) `ComputeFirmMirror` does not check `FirmMirror.Enabled` -- the master switch is
+        /// applied by the CALLERS at RiskGuardAddOn.cs:1431 and :1502. A probe that calls
+        /// EvaluateFirmMirror directly therefore fires with the master switch OFF, which is not
+        /// what the deployed system does. The gate is applied here so the probe measures the
+        /// enforcer as it actually runs.
+        /// </summary>
+        private static bool F9EnforcerFires(FirmMirrorConfig fm, string accountName, string ruleId)
+        {
+            if (fm == null || !fm.Enabled) return false;
+
+            var account = new Account { Name = accountName };
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            config.FirmMirror = fm;
+            addon.SetConfigForTest(config);
+
+            var state = new AccountState(accountName);
+            state.FirmStartingBalance = 50000.0;
+            state.FirmTrailingPeak = 50000.0;
+            state.FirmDailyDate = FirmDailyDateFor(FirmTestClockUtc, fm);
+            account.Values[AccountItem.CashValue] = 30000.0;
+            account.Values[AccountItem.UnrealizedProfitLoss] = 0.0;
+            account.Values[AccountItem.RealizedProfitLoss] = -10000.0;
+
+            return addon.EvaluateFirmMirror(account, state, FirmTestClockUtc)
+                        .Any(a => a.RuleId == ruleId);
+        }
+
+        /// <summary>
+        /// THE CLASS TEST. For every combination of the four switches, and for BOTH firm rules,
+        /// the reporter saying "Disabled" must mean the enforcer cannot fire, and the reporter
+        /// not saying it must mean the enforcer can.
+        ///
+        /// The expectation is DERIVED FROM THE ENFORCER rather than restated by hand. That is
+        /// the whole point: a hand-written table of expected states would have to be updated by
+        /// whoever next changes the resolution order, which is exactly the person who would get
+        /// it wrong. Any future divergence between the two paths fails here without anyone
+        /// having thought of the specific case.
+        /// </summary>
+        private static void TestF9_TheReporterAndTheEnforcerAgreeOnEveryFirmShape()
+        {
+            Console.WriteLine("\n[TEST] F-9: the firm-rule reporter and the firm-rule enforcer agree on every shape");
+
+            var shapes = new List<F9Shape>();
+            foreach (bool master in new[] { true, false })
+            foreach (bool top in new[] { true, false })
+            foreach (bool present in new[] { true, false })
+            foreach (bool profOn in new[] { true, false })
+            foreach (bool mapped in new[] { true, false })
+            {
+                if (!present && profOn) continue;   // a profile cannot be enabled if it is absent
+                shapes.Add(new F9Shape
+                {
+                    Label = string.Format("master={0} top={1} profile={2}/{3} mapped={4}",
+                        master, top, present ? "present" : "absent", profOn ? "on" : "off", mapped),
+                    MasterEnabled = master, TopLevelEnabled = top,
+                    ProfilePresent = present, ProfileEnabled = profOn, Mapped = mapped
+                });
+            }
+
+            var disagreements = new List<string>();
+            int compared = 0;
+            foreach (var trailing in new[] { true, false })
+            {
+                string configPath = trailing ? "FirmMirror.TrailingDD.Amount" : "FirmMirror.DailyLoss.Amount";
+                string ruleId = trailing ? "FIRM_TRAILING_DD_BREACH" : "FIRM_DAILY_LOSS_BREACH";
+                foreach (var s in shapes)
+                {
+                    GuardRuleReading reading;
+                    var reported = F9ReporterState(F9Config(s, trailing), F9Account, configPath, out reading);
+                    bool fires = F9EnforcerFires(F9Config(s, trailing), F9Account, ruleId);
+                    compared++;
+
+                    bool reportedOff = reported == GuardRuleState.Disabled;
+                    if (reportedOff == fires)
+                    {
+                        disagreements.Add(string.Format("{0} [{1}]: reporter={2} enforcer={3}",
+                            configPath, s.Label, reported, fires ? "FIRES" : "silent"));
+                    }
+                }
+            }
+
+            Assert(compared >= 40 && disagreements.Count == 0, string.Format(
+                "across {0} shape/rule combinations the reporter never calls a rule Disabled that "
+                + "the enforcer runs, nor calls one live that cannot fire ({1} disagreed{2})",
+                compared, disagreements.Count,
+                disagreements.Count == 0 ? "" : ": " + string.Join(" | ", disagreements.Take(6))));
+        }
+
+        /// <summary>
+        /// The number a UI renders beside a mapped account must be the number in force. The
+        /// state test above cannot catch this: reporting Evaluated with the top-level 2500 while
+        /// the guard enforces the profile's 1500 passes every state assertion and still tells the
+        /// operator a limit they do not have.
+        /// </summary>
+        private static void TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan()
+        {
+            Console.WriteLine("\n[TEST] F-9: a mapped account's reported firm limit is its plan's, and the note names the plan");
+
+            // The live/researched shape: master on, top-level OFF, profile ON, account mapped.
+            var live = new F9Shape
+            {
+                MasterEnabled = true, TopLevelEnabled = false,
+                ProfilePresent = true, ProfileEnabled = true, Mapped = true
+            };
+
+            GuardRuleReading trailingReading;
+            var trailingState = F9ReporterState(
+                F9Config(live, true), F9Account, "FirmMirror.TrailingDD.Amount", out trailingReading);
+
+            Assert(trailingState != GuardRuleState.Disabled
+                   && trailingReading != null
+                   && trailingReading.Limit.HasValue
+                   && Math.Abs(trailingReading.Limit.Value - 1500.0) < 0.001,
+                string.Format("the trailing-drawdown limit reported is the plan's 1500, not the top-level 2500 (got {0}, state {1})",
+                    trailingReading == null || !trailingReading.Limit.HasValue ? "null" : trailingReading.Limit.Value.ToString(),
+                    trailingState));
+
+            Assert(trailingReading != null && !string.IsNullOrEmpty(trailingReading.Note)
+                   && trailingReading.Note.IndexOf(F9Plan, StringComparison.OrdinalIgnoreCase) >= 0,
+                "the note names the firm plan the account resolved to, so the operator can check it against the firm's rulebook");
+
+            // The daily-loss rule on the same shape resolves to the plan's 1250. Sign convention
+            // follows the existing rule, which reports the limit as a negative number.
+            GuardRuleReading dailyReading;
+            var dailyState = F9ReporterState(
+                F9Config(live, false), F9Account, "FirmMirror.DailyLoss.Amount", out dailyReading);
+
+            Assert(dailyState != GuardRuleState.Disabled
+                   && dailyReading != null
+                   && dailyReading.Limit.HasValue
+                   && Math.Abs(Math.Abs(dailyReading.Limit.Value) - 1250.0) < 0.001,
+                string.Format("the daily-loss limit reported is the plan's 1250, not the top-level 1500 (got {0}, state {1})",
+                    dailyReading == null || !dailyReading.Limit.HasValue ? "null" : dailyReading.Limit.Value.ToString(),
+                    dailyState));
+
+            // A mapping to a firm that is absent from FirmProfiles must not read as protection.
+            // Preflight refuses to arm on it (P2-8), but config can be reloaded while armed, so
+            // the reporter has to say what is actually in force: the top-level fallback.
+            var dangling = new F9Shape
+            {
+                MasterEnabled = true, TopLevelEnabled = true,
+                ProfilePresent = false, ProfileEnabled = false, Mapped = true
+            };
+            GuardRuleReading danglingReading;
+            F9ReporterState(F9Config(dangling, true), F9Account, "FirmMirror.TrailingDD.Amount", out danglingReading);
+            Assert(danglingReading != null && !string.IsNullOrEmpty(danglingReading.Note)
+                   && danglingReading.Note.IndexOf(F9Plan, StringComparison.OrdinalIgnoreCase) >= 0,
+                "a mapping to an absent profile still names the firm it points at, so the operator can see WHICH mapping is broken");
+        }
+
+        /// <summary>
+        /// The over-application guard. The cheapest way to make the shape test pass is to resolve
+        /// the effective config and keep using AccountFirmMap.Count as the evidence -- at which
+        /// point ONE mapped account turns every other account's firm rules green, including the
+        /// 88 expired prop accounts the live box reports. The evidence for a PerAccount rule is
+        /// whether THIS account is mapped.
+        /// </summary>
+        private static void TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen()
+        {
+            Console.WriteLine("\n[TEST] F-9: one mapped account does not make every other account's firm rules green");
+
+            var fm = F9Config(new F9Shape
+            {
+                MasterEnabled = true, TopLevelEnabled = true,
+                ProfilePresent = true, ProfileEnabled = true, Mapped = true
+            }, true);
+            // Two more accounts mapped, so the map is populated and Count is 3 -- the number a
+            // naive evaluator would report as evidence for an account that is in none of them.
+            fm.AccountFirmMap["SomeOtherAccount"] = F9Plan;
+            fm.AccountFirmMap["AndAnother"] = F9Plan;
+
+            GuardRuleReading reading;
+            var state = F9ReporterState(fm, "NotInTheMap", "FirmMirror.TrailingDD.Amount", out reading);
+
+            Assert(state == GuardRuleState.Inert && reading != null && reading.EvidenceCount == 0,
+                string.Format("an account absent from a 3-entry map reports Inert with 0 evidence, not {0} with {1}",
+                    state, reading == null ? "null" : reading.EvidenceCount.ToString()));
+
+            // And the paired positive: the account that IS mapped must not be dragged down with
+            // it. Without this, `EvidenceCount = 0` unconditionally passes the assertion above.
+            GuardRuleReading mappedReading;
+            var mappedState = F9ReporterState(fm, F9Account, "FirmMirror.TrailingDD.Amount", out mappedReading);
+            Assert(mappedState == GuardRuleState.Enforcing && mappedReading.EvidenceCount == 1,
+                string.Format("the mapped account itself still reports Enforcing on 1 piece of evidence (got {0}/{1})",
+                    mappedState, mappedReading == null ? "null" : mappedReading.EvidenceCount.ToString()));
         }
 
         // 3. Firm Mirror Daily Loss Integration
