@@ -86,11 +86,16 @@ MUTANTS = [
      '                    : R(null, null, c.NewsEventCount,',
      '                    : R(null, null, 1,'),
 
+    # Re-anchored 2026-08-13 by F-9. The evidence expression this used to find --
+    # `AccountFirmMap.Count` -- is GONE, because counting the whole map on a PerAccount rule
+    # was itself a defect: one mapped account greened all 96 of the live box's accounts. The
+    # evidence is now per-account (`mapped ? 1 : 0`), so the mutant that proves the same thing
+    # is hardcoding THAT to 1. check_anchors.py caught the stale find-string; without it this
+    # entry would have printed [SKIP] and scored a survivor for the rest of its life.
     ("the firm rules hardcode their evidence, so 'loaded but UNMAPPED, therefore none can\n"
      "     fire' reports green -- a state this system has already been in",
-     '                        c.Config.FirmMirror.AccountFirmMap == null ? 0 : c.Config.FirmMirror.AccountFirmMap.Count,\n'
-     '                        "unmapped accounts fall back to the top-level TrailingDD block")',
-     '                        1, "unmapped accounts fall back to the top-level TrailingDD block")'),
+     '                        sub.Amount, mapped ? 1 : 0, note);',
+     '                        sub.Amount, 1, note);'),
 
     # ---- the escape route the fix for the first three survivors OPENED ----
     ("a collection-backed rule loses its EvidenceLabel, so it is silently EXEMPTED from the\n"

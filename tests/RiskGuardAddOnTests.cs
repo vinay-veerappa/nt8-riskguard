@@ -131,6 +131,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF9_TheReporterAndTheEnforcerAgreeOnEveryFirmShape();
             TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan();
             TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
+            TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -9908,11 +9909,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             var dailyState = F9ReporterState(
                 F9Config(live, false), F9Account, "FirmMirror.DailyLoss.Amount", out dailyReading);
 
+            // The sign is asserted EXACTLY, not through Math.Abs. The rule has reported the daily
+            // limit as a negative number since it was written, next to a RealizedPnL that is also
+            // negative, and a UI comparing the two would render a loss as being under a POSITIVE
+            // limit if the sign flipped. The first draft of this assertion wrapped the reading in
+            // Math.Abs to avoid committing to the convention, which left a sign flip unpinned --
+            // a mutant survived it.
             Assert(dailyState != GuardRuleState.Disabled
                    && dailyReading != null
                    && dailyReading.Limit.HasValue
-                   && Math.Abs(Math.Abs(dailyReading.Limit.Value) - 1250.0) < 0.001,
-                string.Format("the daily-loss limit reported is the plan's 1250, not the top-level 1500 (got {0}, state {1})",
+                   && Math.Abs(dailyReading.Limit.Value - (-1250.0)) < 0.001,
+                string.Format("the daily-loss limit reported is the plan's 1250, negative by convention, not the top-level 1500 (got {0}, state {1})",
                     dailyReading == null || !dailyReading.Limit.HasValue ? "null" : dailyReading.Limit.Value.ToString(),
                     dailyState));
 
@@ -9966,6 +9973,61 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(mappedState == GuardRuleState.Enforcing && mappedReading.EvidenceCount == 1,
                 string.Format("the mapped account itself still reports Enforcing on 1 piece of evidence (got {0}/{1})",
                     mappedState, mappedReading == null ? "null" : mappedReading.EvidenceCount.ToString()));
+        }
+
+        /// <summary>
+        /// A dictionary ENTRY whose value is null is not a resolved plan.
+        ///
+        /// `ResolveEffectiveFirmConfig` falls back when `TryGetValue` succeeds but the profile is
+        /// null -- it tests `out profile` for null explicitly. An evaluator that asks the same
+        /// question with `ContainsKey` gets `true`, and then says "resolved to plan 'X'; its numbers
+        /// are in force" while the numbers actually in force are the top-level block's. That is a
+        /// note contradicting the enforcer, which is the whole defect F-9 closes, in the one shape
+        /// where the two lookups can disagree.
+        ///
+        /// Found by hand while arbitrating the loop's candidate, which used `ContainsKey`. Json.NET
+        /// produces exactly this shape from `"FirmProfiles": { "Apex-100K": null }` -- a typo away
+        /// from a real config file.
+        /// </summary>
+        private static void TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan()
+        {
+            Console.WriteLine("\n[TEST] F-9: a FirmProfiles entry whose value is null is not a resolved plan");
+
+            // Top-level ENABLED, so the fallback the resolver takes is a rule that evaluates --
+            // otherwise the row would come back Disabled and prove nothing about the note.
+            var fm = F9Config(new F9Shape
+            {
+                MasterEnabled = true, TopLevelEnabled = true,
+                ProfilePresent = true, ProfileEnabled = true, Mapped = true
+            }, true);
+            fm.FirmProfiles[F9Plan] = null;
+
+            GuardRuleReading reading;
+            var state = F9ReporterState(fm, F9Account, "FirmMirror.TrailingDD.Amount", out reading);
+
+            // The numbers in force are the top-level 2500, and the note must not claim otherwise.
+            Assert(state != GuardRuleState.Disabled
+                   && reading != null && reading.Limit.HasValue
+                   && Math.Abs(reading.Limit.Value - 2500.0) < 0.001,
+                string.Format("a null profile falls back to the top-level 2500, as the resolver does (got {0}, state {1})",
+                    reading == null || !reading.Limit.HasValue ? "null" : reading.Limit.Value.ToString(), state));
+
+            Assert(reading != null && !string.IsNullOrEmpty(reading.Note)
+                   && reading.Note.IndexOf("resolved to plan", StringComparison.OrdinalIgnoreCase) < 0,
+                "the note must NOT claim the plan resolved, because the resolver did not resolve it: "
+                + (reading == null ? "null" : "'" + reading.Note + "'"));
+
+            // Paired positive, so "never say resolved" cannot pass this test on its own.
+            var good = F9Config(new F9Shape
+            {
+                MasterEnabled = true, TopLevelEnabled = true,
+                ProfilePresent = true, ProfileEnabled = true, Mapped = true
+            }, true);
+            GuardRuleReading goodReading;
+            F9ReporterState(good, F9Account, "FirmMirror.TrailingDD.Amount", out goodReading);
+            Assert(goodReading != null && !string.IsNullOrEmpty(goodReading.Note)
+                   && goodReading.Note.IndexOf("resolved to plan", StringComparison.OrdinalIgnoreCase) >= 0,
+                "a genuinely resolved plan still says so");
         }
 
         // 3. Firm Mirror Daily Loss Integration

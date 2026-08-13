@@ -374,29 +374,91 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
 
             // -- firm mirror ------------------------------------------------------------
-            // WARNING: Evidence is the ACCOUNT->FIRM MAP SIZE, not 1. The firm rules being "loaded but
-            // unmapped, so none can fire" is a state this system has already been in (handover
-            // section 0), and an unmapped firm rule must read INERT rather than green.
+            // Both rules resolve the account's firm PLAN before reading anything, because the
+            // ENFORCER does: EvaluateFirmMirror calls ResolveEffectiveFirmConfig and flattens on
+            // the resolved plan's numbers (P1-42). These evaluators used to read the TOP-LEVEL
+            // block, and F-9's acceptance matrix caught them disagreeing with the enforcer in BOTH
+            // directions on the shapes the four researched profiles actually use:
+            //   reporter=Disabled  enforcer=FIRES   top-level off, the plan's rule on
+            //   reporter=Enforcing enforcer=silent  top-level on, the plan's rule off
+            // The second is the real Take Profit Trader profile, whose DailyLoss is OFF because TPT
+            // has no daily loss limit -- so the inventory claimed a live rule that could not fire.
+            //
+            // WARNING: Evidence is 1 when THIS account has a non-empty entry in AccountFirmMap, 0
+            // otherwise. NOT the map's SIZE -- these are PerAccount rules, and on the live box one
+            // mapped account would have turned all 96 accounts' firm rules green. The firm rules
+            // being "loaded but unmapped, so none can fire" is a state this system has already been
+            // in (handover section 0), and an unmapped firm rule must read INERT rather than green
+            // even though the top-level block would fire for it: a rule evaluating the guessed
+            // top-level number is not firm protection (CONFIG_DEFAULTS R3).
+            //
+            // "Did it resolve" is asked the way the resolver asks it -- TryGetValue plus a null
+            // check -- and not with ContainsKey. A dictionary holding a NULL profile answers
+            // ContainsKey true while ResolveEffectiveFirmConfig falls back, which would have the
+            // note claim a plan's numbers are in force when the top-level block's are.
             new GuardRuleDefinition {
                 Name = "Firm trailing drawdown", ConfigPath = "FirmMirror.TrailingDD.Amount",
                 EvidenceLabel = "accounts mapped to a firm",
                 Source = GuardRuleSource.FirmProfile, Scope = GuardRuleScope.PerAccount,
-                Evaluator = c => !c.Config.FirmMirror.Enabled || !c.Config.FirmMirror.TrailingDD.Enabled
-                    ? Off("firm trailing drawdown not enabled")
-                    : R(c.Account == null ? (double?)null : c.Account.AccountEquity,
-                        c.Config.FirmMirror.TrailingDD.Amount,
-                        c.Config.FirmMirror.AccountFirmMap == null ? 0 : c.Config.FirmMirror.AccountFirmMap.Count,
-                        "unmapped accounts fall back to the top-level TrailingDD block")
+                Evaluator = c =>
+                {
+                    var fm = c.Config.FirmMirror;
+                    if (fm == null || !fm.Enabled)
+                        return Off("firm mirror is off, so no firm trailing drawdown is evaluated for any account");
+                    string firmKey = null;
+                    bool mapped = !string.IsNullOrEmpty(c.AccountName)
+                        && fm.AccountFirmMap != null
+                        && fm.AccountFirmMap.TryGetValue(c.AccountName, out firmKey)
+                        && !string.IsNullOrEmpty(firmKey);
+                    FirmProfile plan = null;
+                    bool resolved = mapped && fm.FirmProfiles != null
+                        && fm.FirmProfiles.TryGetValue(firmKey, out plan) && plan != null;
+                    var eff = RiskGuardAddOn.ResolveEffectiveFirmConfig(fm, c.AccountName);
+                    var sub = eff.TrailingDD;
+                    if (sub == null || !sub.Enabled)
+                        return Off(resolved
+                            ? "plan '" + firmKey + "' does not set a trailing drawdown"
+                            : "firm trailing drawdown not enabled");
+                    string note = resolved
+                        ? "resolved to plan '" + firmKey + "'; its TrailingDD numbers are in force"
+                        : mapped
+                            ? "mapped to firm '" + firmKey + "', which is ABSENT from FirmProfiles; preflight refuses to arm on that, and the top-level TrailingDD block is what is in force"
+                            : "not mapped to a firm plan; the top-level TrailingDD block is what is in force, and it was chosen for no stated account size";
+                    return R(c.Account == null ? (double?)null : c.Account.AccountEquity,
+                        sub.Amount, mapped ? 1 : 0, note);
+                }
             },
             new GuardRuleDefinition {
                 Name = "Firm daily loss", ConfigPath = "FirmMirror.DailyLoss.Amount",
                 EvidenceLabel = "accounts mapped to a firm",
                 Source = GuardRuleSource.FirmProfile, Scope = GuardRuleScope.PerAccount,
-                Evaluator = c => !c.Config.FirmMirror.Enabled || !c.Config.FirmMirror.DailyLoss.Enabled
-                    ? Off("firm daily loss not enabled")
-                    : R(c.Account == null ? (double?)null : c.Account.RealizedPnL,
-                        -Math.Abs(c.Config.FirmMirror.DailyLoss.Amount),
-                        c.Config.FirmMirror.AccountFirmMap == null ? 0 : c.Config.FirmMirror.AccountFirmMap.Count)
+                Evaluator = c =>
+                {
+                    var fm = c.Config.FirmMirror;
+                    if (fm == null || !fm.Enabled)
+                        return Off("firm mirror is off, so no firm daily loss is evaluated for any account");
+                    string firmKey = null;
+                    bool mapped = !string.IsNullOrEmpty(c.AccountName)
+                        && fm.AccountFirmMap != null
+                        && fm.AccountFirmMap.TryGetValue(c.AccountName, out firmKey)
+                        && !string.IsNullOrEmpty(firmKey);
+                    FirmProfile plan = null;
+                    bool resolved = mapped && fm.FirmProfiles != null
+                        && fm.FirmProfiles.TryGetValue(firmKey, out plan) && plan != null;
+                    var eff = RiskGuardAddOn.ResolveEffectiveFirmConfig(fm, c.AccountName);
+                    var sub = eff.DailyLoss;
+                    if (sub == null || !sub.Enabled)
+                        return Off(resolved
+                            ? "plan '" + firmKey + "' has NO daily loss limit, which is that firm's actual rule -- not an oversight"
+                            : "firm daily loss not enabled");
+                    string note = resolved
+                        ? "resolved to plan '" + firmKey + "'; its DailyLoss numbers are in force"
+                        : mapped
+                            ? "mapped to firm '" + firmKey + "', which is ABSENT from FirmProfiles; preflight refuses to arm on that, and the top-level DailyLoss block is what is in force"
+                            : "not mapped to a firm plan; the top-level DailyLoss block is what is in force, and it was chosen for no stated account size";
+                    return R(c.Account == null ? (double?)null : c.Account.RealizedPnL,
+                        -Math.Abs(sub.Amount), mapped ? 1 : 0, note);
+                }
             },
 
             // -- prop-firm suite: the ones that DO work ---------------------------------
