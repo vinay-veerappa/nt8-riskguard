@@ -2854,7 +2854,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // `return new GuardSnapshot()` passes them all.
 
         /// <summary>Builds a plausible account snapshot without needing an NT8 Account.</summary>
-        private static RiskGuardAddOn.AccountStateSnapshot Ui4Account(string name, bool excluded = false, bool lockedOut = false)
+        private static RiskGuardAddOn.AccountStateSnapshot Ui4Account(
+            string name, bool excluded = false, bool lockedOut = false,
+            double equity = 50000.0, int tradesToday = 4)
         {
             return new RiskGuardAddOn.AccountStateSnapshot
             {
@@ -2863,9 +2865,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 IsLockedOut = lockedOut,
                 RealizedPnL = -250.0,
                 UnrealizedPnL = -50.0,
-                TradesToday = 4,
+                TradesToday = tradesToday,
                 ConsecutiveLosses = 1,
-                AccountEquity = 50000.0,
+                AccountEquity = equity,
                 PositionString = "L 1 MNQ"
             };
         }
@@ -3201,6 +3203,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && !byName["Ui4Locked"].IsExcluded && byName["Ui4Locked"].IsLockedOut,
                 "each account row carries its own excluded and locked-out flags, so an amber "
                 + "inventory says WHY it is amber");
+
+            // EQUITY AND TRADE COUNT TRAVEL AS FACTS, and the snapshot does NOT decide which
+            // accounts are worth showing. The live box lists 96 accounts of which 88 have zero
+            // cash and zero net liquidation -- expired prop accounts the connection still reports
+            // -- so a page rendering all of them is 92% noise. But the guard TRACKS all 96, and an
+            // API that quietly returned 8 would be lying about its own scope. The judgement
+            // belongs to the surface, where it can be stated and reversed; hiding an account that
+            // is momentarily reporting zero would hide RISK.
+            var mixed = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true,
+                new List<RiskGuardAddOn.AccountStateSnapshot>
+                {
+                    Ui4Account("Ui4Funded", equity: 50122.5, tradesToday: 3),
+                    Ui4Account("Ui4Dead", equity: 0.0, tradesToday: 0)
+                },
+                0);
+
+            var funded = mixed.Accounts.First(x => x.AccountName == "Ui4Funded");
+            var dead = mixed.Accounts.First(x => x.AccountName == "Ui4Dead");
+
+            Assert(mixed.Accounts.Count == 2
+                   && Math.Abs(funded.AccountEquity - 50122.5) < 0.001 && funded.TradesToday == 3
+                   && Math.Abs(dead.AccountEquity) < 0.001 && dead.TradesToday == 0,
+                "every account row carries its equity and trade count, and a zero-equity account "
+                + "is still REPORTED rather than dropped -- the snapshot states facts and leaves "
+                + "the filtering to the surface");
 
             // The addon-side entry point: it must gather the guard's REAL mode and arming rather
             // than defaulting them. Nothing here has accounts loaded, which is the point -- it is

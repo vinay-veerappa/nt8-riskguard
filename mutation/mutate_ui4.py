@@ -145,6 +145,20 @@ MUTANTS = [
      '                accountRules.IsLockedOut = account.IsLockedOut;',
      '                accountRules.IsLockedOut = false;'),
 
+    (RULES,
+     "the account's EQUITY is dropped, so a page cannot tell a funded account from one of the\n"
+     "     88 expired prop accounts the connection still lists -- and must either show 96 rows of\n"
+     "     noise or hide accounts on a guess",
+     '                accountRules.AccountEquity = account.AccountEquity;',
+     '                accountRules.AccountEquity = 0;'),
+
+    (RULES,
+     "the account's trade count is dropped, so 'traded today' cannot rescue an account whose\n"
+     "     equity has not synced yet -- and hiding a LIVE account is the one direction this\n"
+     "     design refuses to fail in",
+     '                accountRules.TradesToday = account.TradesToday;',
+     '                accountRules.TradesToday = 0;'),
+
     # ---- the evidence and the note, as DISPLAYED ----
     (RULES,
      "the row's evidence count is forged to 1, so the state is right and the number beside\n"

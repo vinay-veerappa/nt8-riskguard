@@ -162,6 +162,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string AccountName { get; set; }
         public bool IsExcluded { get; set; }
         public bool IsLockedOut { get; set; }
+
+        /// <summary>
+        /// Equity and trade count, carried as FACTS so a surface can decide what to show.
+        ///
+        /// ⚠️ The snapshot deliberately does NOT decide which accounts are "active". The live box
+        /// lists 96 accounts and 88 of them have zero cash and zero net liquidation -- expired
+        /// prop accounts the connection still reports -- so a page that renders all of them is
+        /// 92% noise. But the guard TRACKS all 96, and an API that quietly returned 8 would be
+        /// lying about its own scope.
+        ///
+        /// So the numbers travel and the judgement stays at the surface, where it can be stated
+        /// and reversed. An account momentarily reporting zero equity because its connection has
+        /// not synced must never be hidden without saying so -- that would hide RISK, which is
+        /// the one direction this whole design refuses to fail in.
+        /// </summary>
+        public double AccountEquity { get; set; }
+        public int TradesToday { get; set; }
+
         public List<GuardRuleRow> Rules { get; set; }
     }
 
@@ -565,6 +583,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 accountRules.AccountName = account.AccountName;
                 accountRules.IsExcluded = account.IsExcluded;
                 accountRules.IsLockedOut = account.IsLockedOut;
+                accountRules.AccountEquity = account.AccountEquity;
+                accountRules.TradesToday = account.TradesToday;
                 accountRules.Rules = new List<GuardRuleRow>();
                 snapshot.Accounts.Add(accountRules);
             }
@@ -754,6 +774,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     accountName = acct.AccountName,
                     isExcluded = acct.IsExcluded,
                     isLockedOut = acct.IsLockedOut,
+                    accountEquity = acct.AccountEquity,
+                    tradesToday = acct.TradesToday,
                     ruleCount = acct.Rules == null ? 0 : acct.Rules.Count,
                     worst = worst == null ? null : worst.Value.ToString(),
                     counts = counts
