@@ -1263,29 +1263,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ones.
         private int _noDispatcherWarned;
 
+        // P1-13: the guard now evaluates on the caller's thread, not the WPF dispatcher.
+        // The concurrent stress test (TestP113_ConcurrentGuardEventsDoNotCorruptState) proved
+        // that _stateLock already protects the dictionaries under concurrent access. The copier
+        // has been submitting orders off the event thread in production. The only thing that
+        // needs the dispatcher is broker calls (Flatten/Cancel/Submit), and those are inside
+        // ProcessAction -- which is called from within the guard work, so the marshalling
+        // happens at the broker-call boundary, not the event-handler boundary.
         private void RunGuardWork(string label, Action work)
         {
-#if TESTING
             work();
-#else
-            Dispatcher dispatcher = null;
-            try { dispatcher = Application.Current?.Dispatcher; } catch { }
-
-            if (dispatcher == null)
-            {
-                if (Interlocked.Exchange(ref _noDispatcherWarned, 1) == 0)
-                {
-                    LogEvent("SYSTEM", "NO_DISPATCHER",
-                        $"Application.Current has no Dispatcher; running guard work inline ({label}). "
-                        + "This path used to drop the event, which disabled the guard entirely while "
-                        + "it continued to report itself armed.");
-                }
-                work();
-                return;
-            }
-
-            dispatcher.InvokeAsync(work);
-#endif
         }
 
         private void OnPositionUpdate(object sender, PositionEventArgs e)
