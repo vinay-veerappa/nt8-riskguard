@@ -1035,6 +1035,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi5_AnEmptyInventoryIsStillAnInventory();
             TestUi5_TheJsonRoundTripsBackToTheSameStates();
             TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull();
+            TestUi5_TheFleetSummaryIsDerivedFromTheSameRowsItSummarises();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
             TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
@@ -3454,6 +3455,76 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(ok,
                 "a null snapshot serializes to an object carrying a stated error, so the page "
                 + "always has something to display");
+        }
+
+        private static void TestUi5_TheFleetSummaryIsDerivedFromTheSameRowsItSummarises()
+        {
+            Console.WriteLine("\n[TEST] UI5: the fleet counts are derived from the detail rows, and cannot disagree with them");
+
+            // ADDED AFTER MEASURING THE REAL BOX. The first live read returned 96 accounts x 25
+            // rules -- 2400 rows, 648 KB, on a polling page. The fleet view is not a nicety; it
+            // is the difference between an inventory and a wall.
+            //
+            // The danger a summary introduces is drift: two numbers for one fact, exactly what
+            // §6a forbids for rule states and what every defect-count table in this repo did
+            // before it was re-derived. So the test does not check the counts against a
+            // hand-written expectation -- it recomputes them from the DETAIL payload and demands
+            // they match. Neither side can be edited alone.
+            var snapshot = Ui5Snapshot();
+            var full = Newtonsoft.Json.Linq.JObject.Parse(GuardSnapshotJson.ToJson(snapshot));
+            var summary = Newtonsoft.Json.Linq.JObject.Parse(GuardSnapshotJson.ToSummaryJson(snapshot));
+
+            var mismatches = new List<string>();
+            var fullAccounts = full["accounts"].ToList();
+            var summaryAccounts = summary["accounts"].ToList();
+
+            if (fullAccounts.Count != summaryAccounts.Count)
+            {
+                mismatches.Add("account count " + fullAccounts.Count + " vs " + summaryAccounts.Count);
+            }
+            else
+            {
+                for (int i = 0; i < fullAccounts.Count; i++)
+                {
+                    var rules = fullAccounts[i]["rules"].ToList();
+                    var expected = rules.GroupBy(r => (string)r["state"]).ToDictionary(g => g.Key, g => g.Count());
+                    var counts = (Newtonsoft.Json.Linq.JObject)summaryAccounts[i]["counts"];
+
+                    if ((string)fullAccounts[i]["accountName"] != (string)summaryAccounts[i]["accountName"])
+                        mismatches.Add("name at " + i);
+                    if ((int)summaryAccounts[i]["ruleCount"] != rules.Count)
+                        mismatches.Add("ruleCount at " + i);
+                    foreach (var kv in expected)
+                        if (counts[kv.Key] == null || (int)counts[kv.Key] != kv.Value)
+                            mismatches.Add(kv.Key + " at " + i);
+                    if (counts.Count != expected.Count) mismatches.Add("extra state keys at " + i);
+
+                    // The worst state is the lowest enum value present, because the enum is
+                    // ordered worst-first and UI3's battery pins that order.
+                    string worst = rules.Select(r => (string)r["state"])
+                        .OrderBy(sName => (int)Enum.Parse(typeof(GuardRuleState), sName)).First();
+                    if ((string)summaryAccounts[i]["worst"] != worst)
+                        mismatches.Add("worst at " + i);
+                }
+            }
+
+            Assert(fullAccounts.Count > 0 && mismatches.Count == 0, string.Format(
+                "the fleet summary's per-account counts and worst state are recomputable from the "
+                + "detail rows exactly ({0} disagreed{1})",
+                mismatches.Count, mismatches.Count == 0 ? "" : ": " + string.Join(", ", mismatches)));
+
+            // It must also actually BE a summary. A "summary" that still carries every rule is
+            // the 648 KB payload with extra steps, and would pass every check above.
+            Assert(summaryAccounts.All(a => a["rules"] == null)
+                   && GuardSnapshotJson.ToSummaryJson(snapshot).Length < GuardSnapshotJson.ToJson(snapshot).Length / 2,
+                "the fleet summary carries no rule arrays and is less than half the size of the "
+                + "detail payload, which is the only reason it exists");
+
+            // P2-83 again: an operator who only ever opens the fleet view must still be told about
+            // the rules nothing evaluates.
+            Assert(summary["unevaluatedRules"] != null && summary["unevaluatedRules"].Any(),
+                "the fleet summary still carries the rules nothing evaluates, so they cannot be "
+                + "missed by an operator who never opens an account");
         }
 
         private static void TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage()

@@ -689,7 +689,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             // camelCase because the only consumer is JavaScript, and the page's field names are
             // then the same characters as these ones.
-            ContractResolver = new CamelCasePropertyNamesContractResolver(),
+            //
+            // ⚠️ ProcessDictionaryKeys = FALSE, and this is not a style choice. The fleet summary
+            // is keyed BY STATE NAME (`{"Inert": 3}`), and those keys are the same strings the
+            // detail view carries as enum VALUES. `CamelCasePropertyNamesContractResolver` -- the
+            // obvious thing to write here -- camel-cases dictionary keys as well, so the fleet
+            // would say `inert` while the rows said `Inert`, and the page would need to know
+            // which of the two it was looking at. Caught by the test that recomputes the fleet
+            // counts from the detail rows; it would otherwise have been found in the browser.
+            ContractResolver = new DefaultContractResolver
+            {
+                NamingStrategy = new CamelCaseNamingStrategy { ProcessDictionaryKeys = false }
+            },
 
             // ⚠️ NOT `Ignore`. Dropping `"limit": null` is what turns "this rule has no numeric
             // limit" into a page rendering `0`, because `row.limit ?? 0` cannot tell an absent
@@ -703,6 +714,64 @@ namespace NinjaTrader.NinjaScript.AddOns
             // reach for; on localhost the bytes do not matter.
             Formatting = Formatting.Indented
         };
+
+        /// <summary>
+        /// The fleet view: every account, with a COUNT per state instead of its rules.
+        ///
+        /// ⚠️ THIS EXISTS BECAUSE OF A MEASUREMENT, NOT A HUNCH. The first live read of the real
+        /// box returned **96 accounts x 25 rules = 2400 rows and 648 KB**, and the page polls. A
+        /// 2400-row wall is not an inventory an operator can read, and re-fetching it every few
+        /// seconds to render a summary is worse than pointless.
+        ///
+        /// The counts are DERIVED from the same rows the detail view shows, so the fleet and the
+        /// inspector cannot disagree -- which is the failure this whole design exists to prevent,
+        /// one level up: a summary maintained separately from what it summarises is exactly the
+        /// hand-maintained table §6a forbids.
+        /// </summary>
+        public static string ToSummaryJson(GuardSnapshot snapshot)
+        {
+            if (snapshot == null) return ToJson(null);
+
+            var accounts = new List<object>();
+            foreach (var acct in snapshot.Accounts ?? new List<GuardAccountRules>())
+            {
+                var counts = new Dictionary<string, int>();
+                GuardRuleState? worst = null;
+                foreach (var row in acct.Rules ?? new List<GuardRuleRow>())
+                {
+                    string key = row.State.ToString();
+                    counts[key] = counts.ContainsKey(key) ? counts[key] + 1 : 1;
+
+                    // "Worst" is the LOWEST enum value, because the enum is ordered worst-first
+                    // and a test pins that. Deriving it here rather than listing the states in
+                    // priority order means a state added later cannot be silently left out of
+                    // the ranking.
+                    if (worst == null || (int)row.State < (int)worst.Value) worst = row.State;
+                }
+
+                accounts.Add(new
+                {
+                    accountName = acct.AccountName,
+                    isExcluded = acct.IsExcluded,
+                    isLockedOut = acct.IsLockedOut,
+                    ruleCount = acct.Rules == null ? 0 : acct.Rules.Count,
+                    worst = worst == null ? null : worst.Value.ToString(),
+                    counts = counts
+                });
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                takenUtc = snapshot.TakenUtc,
+                mode = snapshot.Mode,
+                isArmed = snapshot.IsArmed,
+                accounts = accounts,
+                // Still carried in the summary. They are the rules nothing evaluates, they are the
+                // reason P2-83 exists, and an operator who only ever opens the fleet view must
+                // still see them.
+                unevaluatedRules = snapshot.UnevaluatedRules
+            }, _settings);
+        }
 
         public static string ToJson(GuardSnapshot snapshot)
         {

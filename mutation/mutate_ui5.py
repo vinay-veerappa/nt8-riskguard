@@ -55,7 +55,10 @@ MUTANTS = [
 
     ("camelCase is dropped, so every field the page reads is renamed at once while every\n"
      "     C#-side assertion still passes",
-     '            ContractResolver = new CamelCasePropertyNamesContractResolver(),',
+     '''            ContractResolver = new DefaultContractResolver
+            {
+                NamingStrategy = new CamelCaseNamingStrategy { ProcessDictionaryKeys = false }
+            },''',
      ''),
 
     ("a missing snapshot serializes to the literal `null`, leaving the page with nothing to\n"
@@ -72,6 +75,33 @@ MUTANTS = [
      "     still cannot tell the operator what",
      '                    new { error = "the RiskGuard add-on is not loaded, so no rule inventory exists to report" },',
      '                    new { error = "" },'),
+
+    # ---- the fleet summary, added after measuring the real box: 96 accounts x 25 rules ----
+    ("dictionary keys are camel-cased, so the fleet says `inert` where the detail rows say\n"
+     "     `Inert` -- the same fact spelled two ways in one payload, and the page cannot tell\n"
+     "     which view it is holding. This was a REAL defect, caught by a test rather than a browser",
+     '                NamingStrategy = new CamelCaseNamingStrategy { ProcessDictionaryKeys = false }',
+     '                NamingStrategy = new CamelCaseNamingStrategy { ProcessDictionaryKeys = true }'),
+
+    ("the worst state is taken as the HIGHEST enum value rather than the lowest, so an account\n"
+     "     with one unevaluated rule and twenty-four enforcing ones is ranked by its BEST row --\n"
+     "     the fleet then sorts the most broken account to the bottom",
+     '                    if (worst == null || (int)row.State < (int)worst.Value) worst = row.State;',
+     '                    if (worst == null || (int)row.State > (int)worst.Value) worst = row.State;'),
+
+    ("the fleet summary stops carrying the rules nothing evaluates, so an operator who only\n"
+     "     ever opens the fleet view never learns that five rules are evaluated by nothing",
+     '                unevaluatedRules = snapshot.UnevaluatedRules',
+     '                unevaluatedRules = new List<GuardRuleRow>()'),
+
+    # Written first as `ruleCount = 25` and it SURVIVED -- because 25 IS the number of
+    # rules in the registry today, so the mutant reinstated the truth and could not change
+    # any outcome. A mutant that cannot fail is as useless as a test that cannot fail
+    # (handover section 5.14): read the mutant before concluding the test is weak.
+    ("the per-account rule COUNT is hardcoded, so an account missing rules still reports a full\n"
+     "     inventory in the fleet view",
+     '                    ruleCount = acct.Rules == null ? 0 : acct.Rules.Count,',
+     '                    ruleCount = 99,'),
 ]
 
 
