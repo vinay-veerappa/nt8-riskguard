@@ -1557,7 +1557,7 @@ against — which is also why the rule could be introduced with zero migration r
 
 ---
 
-### P1-77. The Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere — OPEN
+### P1-77. The Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere — HONESTLY REPORTED, IMPLEMENTATION DEFERRED 2026-08-13
 
 *(found 2026-08-13 by auditing the operator's feature list against the source rather than
 against the config schema — §5.17.)*
