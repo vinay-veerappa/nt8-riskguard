@@ -5495,7 +5495,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool EnableWindowGate { get; set; } = false;
         // FR-29: minimum completed shadow sessions before live-mode arming is permitted (soft gate).
         // Set to 0 to disable. The counter is persisted in PersistedStateData and incremented on session reset.
-        public int MinShadowSessions { get; set; } = 0;
+        // P1-84. Was 0, and RunPreflight's FR-29 gate reads
+        // `MinShadowSessions > 0 && _shadowSessionsCompleted < MinShadowSessions` -- so zero
+        // does not relax the precondition, it SWITCHES IT OFF, and live arming was gated on
+        // nothing at all. Five is roughly a week of sessions watched without the guard wanting
+        // to intervene wrongly, before it can be pointed at live money.
+        public int MinShadowSessions { get; set; } = 5;
         public Dictionary<string, PerInstrumentRiskConfig> InstrumentLimits { get; set; } = new Dictionary<string, PerInstrumentRiskConfig>(StringComparer.OrdinalIgnoreCase);
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<string> BlockedInstruments { get; set; } = new List<string>();
@@ -5585,7 +5590,24 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class StopGuardConfig
     {
         public string OnMissing { get; set; } = "Flatten"; // "AutoStop", "Flatten", "WarnOnly"
-        public int StopAttachSeconds { get; set; } = 3;
+
+        // P1-84 / R5. Was 3, which is the single most likely reason this system gets switched
+        // off: three seconds from fill to a working stop, and OnMissing above is "Flatten", so
+        // entering manually and reaching for the mouse to place the stop gets you flattened on
+        // a day when nothing was wrong. A default that fires on a normal day is a default that
+        // disarms the guard, and a guard that is off during the one session that mattered has
+        // provided exactly nothing.
+        //
+        // ⚠️ THE NUMBER IS ONLY RIGHT FOR "Flatten", and that pairing is deliberate. If OnMissing
+        // were "AutoStop" a much shorter deadline would be correct, because an invented stop is
+        // recoverable and being taken out of the trade is not. It stays a plain default rather
+        // than a value computed from OnMissing: a getter that recomputes would let a config
+        // reload move a deadline while a grace timer was already running, and would read
+        // OnMissing off one thread while another wrote it. The relationship is real; expressing
+        // it as a mechanism costs more than it is worth. The test that guards this is
+        // conditional on OnMissing for exactly the same reason.
+        public int StopAttachSeconds { get; set; } = 15;
+
         public int MaxAutoStopAttempts { get; set; } = 2;
         public Dictionary<string, int> Offsets { get; set; } = new Dictionary<string, int>
         {

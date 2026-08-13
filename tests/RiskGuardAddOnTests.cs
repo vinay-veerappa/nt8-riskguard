@@ -441,6 +441,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag();
             TestP184_TheCopierCapIsNotLooserThanTheGuardCap();
             TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand();
+            TestP184_TheDefaultActionOnAMissingStopIsToFlatten();
             TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault();
             TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
             TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing();
@@ -2616,13 +2617,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             // for a bigger account must not silently make the copier's cap dead again, and
             // pinning either number would have to be edited every time the other moved -- which
             // is the maintenance shape that lets them drift apart in the first place.
-            int copierCap = new CopierRelationship().MaxPositionSize;
+            // BOTH DTOs, not just the relationship. The group carries its own copy of this
+            // field, and a fix applied to one of two identical declarations is the shape this
+            // repo keeps finding -- P1-69, P1-75, and the accepted-write half that survived the
+            // first UI7 battery run were all exactly this.
+            int relCap = new CopierRelationship().MaxPositionSize;
+            int grpCap = new CopierGroup().MaxPositionSize;
             int guardCap = new RiskConfig().Sizing.MaxContractsPerAccount;
 
-            Assert(copierCap > 0 && guardCap > 0 && copierCap <= guardCap, string.Format(
-                "the copier's MaxPositionSize ({0}) is at or below the guard's "
-                + "MaxContractsPerAccount ({1}), so it can actually bind",
-                copierCap, guardCap));
+            Assert(relCap > 0 && grpCap > 0 && guardCap > 0
+                   && relCap <= guardCap && grpCap <= guardCap, string.Format(
+                "the copier's MaxPositionSize (relationship {0}, group {1}) is at or below the "
+                + "guard's MaxContractsPerAccount ({2}), so it can actually bind",
+                relCap, grpCap, guardCap));
         }
 
         private static void TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand()
@@ -2649,6 +2656,40 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "OnMissing defaults to '{0}' and StopAttachSeconds to {1}s -- a deadline enforced "
                 + "by flattening has to be long enough to place a stop by hand",
                 cfg.StopGuard.OnMissing, seconds));
+        }
+
+        private static void TestP184_TheDefaultActionOnAMissingStopIsToFlatten()
+        {
+            Console.WriteLine("\n[TEST] P1-84: the default action on a missing stop is Flatten, and it is a decision");
+
+            // MUTANT 3 SURVIVED THE FIRST BATTERY RUN, and finding out why was worth more than
+            // the mutant. Changing `OnMissing` from "Flatten" to "AutoStop" broke NOTHING in
+            // 1180 tests. Nothing in this suite pins the guard's most consequential default.
+            //
+            // That also made the R5 deadline test an escape hatch: it only requires 15 seconds
+            // WHEN the action is Flatten, so any future deadline could be justified by quietly
+            // changing what happens when it expires, and no test would object.
+            //
+            // This is a constant check and there is no more general invariant hiding behind it
+            // -- the three options are a choice, not an ordering. What makes it worth writing is
+            // that the choice has a reason, and the reason belongs somewhere it cannot be
+            // changed silently: AutoStop invents a stop at a GUESSED offset, and a stop in the
+            // wrong place can be worse than no stop, because it converts an open position into
+            // a realised loss at a price nobody chose. Flat is always a known quantity.
+            var cfg = new RiskConfig();
+
+            Assert(cfg.StopGuard.OnMissing == "Flatten",
+                "the default action on a missing stop is Flatten -- flat is a known quantity, "
+                + "and the alternative invents a stop at a guessed offset");
+
+            // ⚠️ AND IT MUST BE ONE OF THE RECOGNISED SPELLINGS. The action is compared against
+            // two exact string literals, so ANY other value -- a lower-case "flatten", a typo,
+            // or the "WarnOnly" the declaration's own comment advertises -- means no branch
+            // matches and the stop guard does NOTHING, silently. That is P1-87, and this
+            // assertion is the part of it that can be pinned from here.
+            Assert(cfg.StopGuard.OnMissing == "AutoStop" || cfg.StopGuard.OnMissing == "Flatten",
+                "and it is spelled exactly as one of the two values the guard actually branches "
+                + "on, because anything else disables the stop guard without saying so (P1-87)");
         }
 
         private static void TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault()

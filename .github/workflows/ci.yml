@@ -204,6 +204,16 @@ jobs:
       - name: Mutation battery P1-85
         run: python mutation/mutate_p185.py
 
+      # P1-84 -- three defaults that made the guard easier to switch off than to live with.
+      # A battery over three literals looks like overkill until you notice that none of the
+      # tests pins a number: one asserts an inequality between two files, one is conditional
+      # on a neighbouring field, one reads the addon source. Mutant 6 raises the copier cap
+      # to ONE above the guard's, which is what proves the first is an inequality and not a
+      # pinned 10. Mutant 3 -- changing OnMissing to AutoStop -- SURVIVED the first run
+      # against 1180 green tests, and that survival is how P1-87 was found.
+      - name: Mutation battery P1-84
+        run: python mutation/mutate_p184.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

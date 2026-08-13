@@ -176,7 +176,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // deliberately NOT reintroduced, because RiskGuard's auto-stop already owns "position with
         // no stop", and two independent stop sources on one position over-cover and flip it.
         public bool StealthMode { get; set; } = true;
-        public int MaxPositionSize { get; set; } = 100;
+        // P1-84 / R4. Was 100. This caps the same quantity as
+        // RiskConfig.Sizing.MaxContractsPerAccount, and the LOWER of the two always binds --
+        // so at 100 against the guard's 10 this cap had never stopped anything. It was not a
+        // limit, it was decoration that read like one, and two limits on one quantity is worse
+        // than one because you size against whichever file you happened to open.
+        // Raising one of them without the other silently makes that one dead again; a test
+        // asserts the inequality rather than either number, so it survives the next change.
+        public int MaxPositionSize { get; set; } = 10;
         public double DailyLossLimit { get; set; } = 1000.0;
         public bool IsQuarantined { get; set; } = false;
         public string QuarantineReason { get; set; }
@@ -287,7 +294,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Dictionary<string, double> PerTickerRatios { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> CustomSymbolMappings { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public bool StealthMode { get; set; } = true;
-        public int MaxPositionSize { get; set; } = 100;
+        // P1-84 / R4. Was 100. This caps the same quantity as
+        // RiskConfig.Sizing.MaxContractsPerAccount, and the LOWER of the two always binds --
+        // so at 100 against the guard's 10 this cap had never stopped anything. It was not a
+        // limit, it was decoration that read like one, and two limits on one quantity is worse
+        // than one because you size against whichever file you happened to open.
+        // Raising one of them without the other silently makes that one dead again; a test
+        // asserts the inequality rather than either number, so it survives the next change.
+        public int MaxPositionSize { get; set; } = 10;
         public double DailyLossLimit { get; set; } = 1000.0;
         public double MaxSlippageTicks { get; set; } = 0.0;   // P1-22
         public List<string> FollowerAccounts { get; set; } = new List<string>();
