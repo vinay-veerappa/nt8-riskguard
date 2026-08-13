@@ -1,22 +1,31 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 25 — §5.22**, four landings). Core **`v1.3.0`** is tagged,
-deployed and **NT8-compiled clean (0 errors)**: `UI1`'s conformance snapshot and `UI2`'s
-single-owner config path, closing **`P?-64`, `P?-65`, `P1-79`** — the untriaged band is now empty.
-Then **`P1-80`** (three config files in `RiskGuard/`, one live; a bridge write returned
-`success` for config **nothing would ever read**, holding `trailingDrawdown 500` against a live
-`1500`), **`UI3`** the guard rule registry, and **`P1-81`**.
+**Last updated**: 2026-08-13 (**session 26 — §5.23**, five tags). Core **`v1.8.0`** is tagged,
+deployed and **NT8-compiled clean (0 errors)**. **There is now a browser page**: start NT8 and open
+**`http://localhost:7890/ui`** — it asks for the bridge token once and keeps it in `localStorage`.
 
-**The one to carry from `UI3`: a static "is this field read?" check MISSES `P2-25` completely.**
-The news shield is fully wired — flag defaults `true`, `RiskGuardAddOn.cs:1541` tests it, it calls
-a real `IsInNewsWindow` over a real list — and that list is **always empty**, because
-`LocalNewsEventsFilePath` has no loader. Every mechanical check passes on a rule that has never
-been able to fire. That is the fourth state, **`INERT`**, and it is why the rule inventory is a
-runtime read and not a linter.
+It shows, per account, every guard rule with its state **derived at read time** — and beside it the
+copier's relationships with **expected vs actual position**. `v1.4.0` gave the inventory a producer,
+`v1.5.0` a wire format, `v1.6.0` the fleet summary, `v1.7.0` account equity, `v1.8.0` the copier half.
+Two defects opened and closed on the way: **`P2-82`** (the rule registry was publicly mutable —
+`P1-77` inverted, and the direction that fails *un*safe) and **`P2-83`** (a snapshot with no accounts
+rendered as healthy).
 
-Suite **1101/0**, **nine** mutation batteries, 0 survivors. **81 IDs, 15 open**; the `P0` band and
-the untriaged band are both empty. Next code work is **`UI_REDESIGN_DESIGN.md` §10 items 3-4** —
-bridge routes, then the page.
+**The one to carry from `UI3`, still: a static "is this field read?" check MISSES `P2-25`
+completely.** The news shield is fully wired — flag defaults `true`, `RiskGuardAddOn.cs:1541` tests
+it, it calls a real `IsInNewsWindow` over a real list — and that list is **always empty**, because
+`LocalNewsEventsFilePath` has no loader. Every mechanical check passes on a rule that has never been
+able to fire. That is the fourth state, **`INERT`**, and it is why the inventory is a runtime read
+and not a linter. **The page now shows it to you.**
+
+**And the one to carry from this session: ASK THE DEPLOYED BOX BEFORE DESIGNING A VIEW OF IT.**
+The inventory passed 1123 tests and returned **96 accounts / 2400 rows / 648 KB per poll** in
+production, of which **88 accounts have zero equity**. Neither fact was reachable by reasoning; both
+took minutes to find by fetching the real payload. See §5.23.
+
+Suite **1134/0**, **twelve** mutation batteries, 0 survivors. **83 IDs, 15 open**; the `P0` band and
+the untriaged band are both empty. ⚠️ **Next: goal 1 of the two this UI exists for —
+*configure both systems* — is completely untouched. Nothing on the page is editable.**
 
 *(Earlier: session 21, the MCP wrapper — four defects `P1-72`…`P1-75`, all closed, §5.16, of which
 **`P1-75`: reading the prop-firm rules DISARMED them**. Session 20 — the whole `P0` band closed;
@@ -2917,8 +2926,8 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 |---|---|---|
 | Numbered entries in the plan | **78** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **81** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21) |
-| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ **`P?-64`, `P?-65` and `P1-79` closed in §5.21** — branch `feat/ui-config-single-owner`, unmerged. Thirteen closed 2026-08-13 |
+| **Total IDs** | **83** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23) |
+| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
 | **Closed or superseded** | **66** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
@@ -4571,3 +4580,108 @@ of the inspector tell the truth.
 ⚠️ Still true and still load-bearing: **`P1-57`'s fan-out did NOT fire** — only `Sim-ORB` acted
 because the third-party copier was not running. Re-measure the blast radius before the next live
 test rather than trusting the §0 pre-flight's "three followers".
+
+---
+
+## 5.23 Session 26 — 2026-08-13: the UI became something you can look at
+
+**Five tags — `v1.4.0` → `v1.8.0` — all deployed, `nt_compile` 0 errors each time.** The rule
+inventory now has a producer, a wire format, two bridge routes, a browser page, and the copier
+half. Suite **1134/0**, **12 mutation batteries** in CI.
+
+### What landed
+
+| | What | Evidence |
+|---|---|---|
+| `UI4` | **The producer.** `RiskGuardAddOn.BuildGuardSnapshot()`. UI3 declared 25 rules and four states and *nothing ever ran them* — `GuardSnapshot` was a DTO with no constructor call. | 13 tests, 23 mutants |
+| `UI5` | **The wire format, in core.** `GuardSnapshotJson` + the fleet summary. | 6 tests, 9 mutants |
+| bridge | `/api/riskguard/inventory` (`?view=summary`, `?account=`), `/api/copier/snapshot`, `/ui` | live-verified |
+| page | `nt8-mcp-bridge/ui/index.html` — fleet, inspector, copier | live-verified |
+| `UI6` | **The copier half.** `CopierSnapshotJson` with a stated severity rank. | 5 tests, 12 mutants |
+
+### The two things a future session must not rediscover
+
+⚠️ **1. `GuardRuleState` and `CopierConformance` look alike and must be treated differently.**
+`GuardRuleState`'s integer order **is** its severity order and a battery pins it. `CopierConformance`
+reads `Idle=0, Match=1, Shadow=2, Diverged=3, Orphan=4, Quarantined=5` — **historical numbering,
+not severity**. Sorting by that cast puts a healthy `Idle` row first and an **`Orphan`** — leader
+flat, follower still holding a live position nothing is managing — *below* a quarantined one. That
+is the worst row this system emits, sorted into the middle of the table. The rank is therefore
+stated once in `CopierSnapshotJson.SeverityRank` and travels **on each row**; the page sorts by a
+number it is handed. A mutant that replaces it with the cast is the reason `mutate_ui6.py` exists.
+
+⚠️ **2. There is now ONE auth exemption in the bridge, and it is scoped to static assets.**
+A browser cannot send an `Authorization` header on a top-level navigation, so `/ui`'s files are
+readable without a token — an HTML file and its JavaScript, **no account data**. The page holds the
+token in `localStorage` and sends it as a Bearer header on every `/api/` call, so the data path is
+unchanged. Traversal out of the ui directory returns 403 (verified live).
+**If a `/ui/` path ever returns anything account-derived, that exemption becomes a hole.**
+The alternative — a token in the query string — would put it in browser history and every referrer.
+
+> ⚠️ **A latent fail-open worth closing**: `CheckAuth` opens with
+> `if (string.IsNullOrEmpty(requiredToken)) return true;`. Delete `mcp_token.txt` with
+> `NT8_MCP_TOKEN` unset and **the bridge silently accepts everything** — no log line, no warning.
+> That is `configured / evaluated / enforcing` in the auth layer. Latent only because both sources
+> are present and agree today.
+
+### Two defects, opened and closed the same day
+
+* **`P2-82`** — the rule registry was **publicly mutable**: `Rules` exposed its backing `List` as
+  `IList`, so any caller could `Add` one. That is **`P1-77` inverted and the more dangerous
+  direction** — a config field with no evaluator renders red and fails safe; an *invented* rule
+  renders green.
+* **`P2-83`** — a snapshot with no accounts rendered as entirely healthy. `P1-77`'s cap is broken
+  for every account equally, so it is a property of the **build**. Hence `UnevaluatedRules`.
+
+### What measuring the deployed box changed, twice
+
+**Neither of these was reachable by reasoning, and both were found in minutes by fetching the real
+payload.**
+
+1. The inventory passed 1123 tests and returned **96 accounts × 25 rules = 2400 rows, 648 KB**, on
+   a page that polls. Every test used two accounts, because two proves the logic. Fixed with a
+   fleet summary → **22 KB**, whose counts are **recomputed from the detail rows in the test**
+   rather than compared to a hand-written expectation, so the two cannot drift.
+2. Opening the page showed all 96 accounts; **88 have zero cash and zero net liquidation** —
+   expired prop accounts the connection still lists. Exactly **one** is funded
+   (`TAKEPROFITPRO524207503`, $50,122). ⚠️ **The filter is in the PAGE, not the API**: the guard
+   tracks all 96 and the snapshot keeps saying so. The hidden count is always stated, an excluded
+   or locked-out account is never hidden whatever its equity, and anything that traded today stays
+   — because hiding a **live** account would hide risk.
+
+### The battery lessons this session
+
+Three UI4 mutants survived the first run and **no two shared a cause**: a field never observed
+being *false* (`IsArmed` hardcoded true — every build in the test happened to be armed); a fix
+applied to **one of two identical accessors** (`NonRules` kept handing back its list, and the
+ticket's own note had warned about exactly that); and an **unreachable fallback**, which was
+**deleted** rather than pinned — "an evaluator returns null" cannot happen, so returning a reading
+became a *contract asserted over every rule* instead. Three UI6 mutants survived for three more
+reasons, including one that echoed `expected` into `actual` and made **every row match** with no
+test noticing.
+
+⚠️ **A mutant that reinstates the TRUTH proves nothing.** `ruleCount = 25` survived because 25 *is*
+the registry's count today. Rewritten as `99`, it died instantly. Read the mutant before concluding
+the test is weak.
+
+✅ **One real defect the tests caught before a browser could**:
+`CamelCasePropertyNamesContractResolver` camel-cases **dictionary keys** as well as properties, so
+the fleet said `inert` where the detail rows said `Inert` — one fact, two spellings, in one payload.
+
+### Deploy note
+
+`deploy.py` ships the **vendored core**, so the pin must be bumped *before* deploying a bridge
+change that calls a new core method. One intermediate compile failed for exactly that reason
+(`ToSummaryJson` did not exist at `v1.5.0`); the running assembly was unaffected, because a failed
+compile does not hot-swap. The stale-pin guard refused a deploy earlier in the same sequence, which
+is precisely its job.
+
+### Next
+
+**Goal 1 of the two this UI exists for — *configure both systems* — is completely untouched.**
+Everything above serves goal 2 (*prove they do what was configured*). Nothing on the page is
+editable. Also open: live SSE updates instead of the 5 s poll (the channel already exists), notes
+that cite defect IDs instead of plain language, and the NT8 Control Center menu item (§7.4) so the
+page is reachable without typing a URL.
+
+`F-9` (firm mapping) still follows, and is what makes the risk half of the inspector tell the truth.
