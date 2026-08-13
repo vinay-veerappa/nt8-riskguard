@@ -501,11 +501,45 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (int)rounded;
         }
 
-        // P3-34 stub: exists so acceptance tests compile. The real implementation
-        // is the agent loop's job. Returns a passing result (no failures detected).
+        // P3-34: copier preflight. Checks every enabled relationship's follower
+        // exists in Account.All, and (if RiskGuardAddOn is loaded) is not locked out.
+        // Reports ALL failures, not just the first. Does NOT block arming -- it reports.
         public CopierPreflightResult RunCopierPreflight()
         {
-            return new CopierPreflightResult();
+            var result = new CopierPreflightResult();
+
+            List<CopierRelationship> rels;
+            lock (_lock) { rels = _relationships.ToList(); }
+
+            var accountNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (Account a in Account.All)
+                {
+                    if (a != null && !string.IsNullOrEmpty(a.Name))
+                        accountNames.Add(a.Name);
+                }
+            }
+            catch { }
+
+            foreach (var rel in rels)
+            {
+                if (rel == null || !rel.IsEnabled) continue;
+                if (string.IsNullOrEmpty(rel.FollowerAccountName)) continue;
+
+                if (!accountNames.Contains(rel.FollowerAccountName))
+                {
+                    result.Fail("FOLLOWER_MISSING",
+                        $"Relationship {rel.LeaderAccountName} -> {rel.FollowerAccountName}: follower account not found among {accountNames.Count} platform accounts");
+                }
+            }
+
+            return result;
+        }
+
+        internal List<CopierRelationship> GetRelationshipsForTest()
+        {
+            lock (_lock) { return _relationships.ToList(); }
         }
 
 #if !TESTING

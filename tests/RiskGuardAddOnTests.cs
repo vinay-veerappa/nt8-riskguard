@@ -18999,6 +18999,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine("\n[TEST] P3-34: the copier preflight passes when all followers are connected");
 
             TradeCopierEngine.Instance.ResetBracketsForTest();
+            // Clear all relationships to isolate this test
+            foreach (var r in TradeCopierEngine.Instance.GetRelationshipsForTest())
+                TradeCopierEngine.Instance.RemoveRelationship(r.LeaderAccountName, r.FollowerAccountName);
             Account.All.Clear();
             Account.All.Add(new Account { Name = "P334LeaderB" });
             Account.All.Add(new Account { Name = "P334FollowerB" });
