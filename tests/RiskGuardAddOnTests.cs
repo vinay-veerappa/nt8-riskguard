@@ -2114,6 +2114,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "the rule states are ordered worst-first so a sort surfaces danger rather than hiding it");
         }
 
+        /// <summary>
+        /// A prop-firm config with the two broken switches turned ON, which is what these three
+        /// tests have always meant by "every switch on".
+        ///
+        /// ⚠️ They used to get this from `new PropFirmProtectionConfig()`, because the news shield
+        /// DEFAULTED on. `P1-82` flipped that default to false -- a switch whose rule cannot fire
+        /// must not read as protection -- and the shield then reports `Disabled` instead of
+        /// `INERT`, which took the only worked example of INERT out of the suite.
+        ///
+        /// So the switch is set here, explicitly. That is not a workaround: INERT is precisely
+        /// the state an operator lands in when they turn the shield ON and it still cannot fire,
+        /// and a test demonstrating that should say so rather than lean on a default that was
+        /// itself the defect. It also means the demonstration survives the next default change.
+        /// </summary>
+        private static PropFirmProtectionConfig Ui3PropConfigWithTheBrokenSwitchesOn()
+        {
+            return new PropFirmProtectionConfig
+            {
+                EnableNewsShield = true,
+                EnableConsistencyCap = true
+            };
+        }
+
         private static void TestUi3_TheThreeKnownDefectsAppearWithTheirRealState()
         {
             Console.WriteLine("\n[TEST] UI3: P1-77, P2-25 and P2-78 report as what they actually are");
@@ -2136,7 +2159,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     AccountName = "Ui3Acct",
                     Config = new RiskConfig(),
-                    PropConfig = new PropFirmProtectionConfig(),
+                    PropConfig = Ui3PropConfigWithTheBrokenSwitchesOn(),
                     NewsEventCount = 0
                 })
                 : null;
@@ -2186,7 +2209,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 AccountName = "Ui3Empty",
                 Config = cfg,
-                PropConfig = new PropFirmProtectionConfig(),
+                PropConfig = Ui3PropConfigWithTheBrokenSwitchesOn(),
                 Account = null,                                                   // no account state
                 AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot>(),    // no accounts at all
                 NewsEventCount = 0
@@ -2241,7 +2264,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 AccountName = "Ui3Empty",
                 Config = rich,
-                PropConfig = new PropFirmProtectionConfig(),
+                PropConfig = Ui3PropConfigWithTheBrokenSwitchesOn(),
                 Account = ctx.Account,          // held constant: account presence is not the variable
                 AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { null, null },
                 NewsEventCount = 3

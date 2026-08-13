@@ -168,6 +168,18 @@ jobs:
       - name: Mutation battery UI7
         run: python mutation/mutate_ui7.py
 
+      # P1-82 -- a switch whose rule cannot fire must not default ON. The change is four
+      # literals, which is precisely why it needs a battery: that is the size of diff that
+      # gets half-applied, or reverted later by someone "restoring a sensible default".
+      # Each default is stated TWICE -- property initializer and parser fallback -- and the
+      # parser copy is the one that runs for every config file that predates the field, i.e.
+      # all of them. Mutants 3 and 4 flip only that copy, which the class gate cannot see
+      # because it builds its config with `new`. Two control mutants default the two
+      # genuinely-enforcing switches OFF, so R2 cannot be satisfied by removing real
+      # protection, and two more try to make the gate stop scanning rather than fail.
+      - name: Mutation battery P1-82
+        run: python mutation/mutate_p182.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

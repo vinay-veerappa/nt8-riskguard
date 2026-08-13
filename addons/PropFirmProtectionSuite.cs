@@ -30,7 +30,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class PropFirmProtectionConfig
     {
         public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
-        public bool EnableNewsShield { get; set; } = true;
+        public bool EnableNewsShield { get; set; } = false; // P2-25: the news-shield rule is inert (no loader populates _newsEvents). Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
         public int NewsBufferMinutesBefore { get; set; } = 2;
         public int NewsBufferMinutesAfter { get; set; } = 2;
         public string LocalNewsEventsFilePath { get; set; } = "";
@@ -43,7 +43,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ($0.50 on MNQ) makes any retrace a >=100% giveback and flattens the position seconds
         // after entry. Set to 0 for the old, purely proportional behaviour.
         public double MinPeakGainDollars { get; set; } = 50.0;
-        public bool EnableConsistencyCap { get; set; } = true;
+        public bool EnableConsistencyCap { get; set; } = false; // P1-77: the consistency-cap rule is never evaluated. Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
         public double MaxDailyProfitPctOfTarget { get; set; } = 0.35;
         public bool EnableAutoDayFiller { get; set; } = false;
     }
@@ -182,7 +182,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return new PropFirmProtectionConfig
             {
                 ArmedForLive = jObj["ArmedForLive"] != null ? (bool)jObj["ArmedForLive"] : (jObj["armedForLive"] != null ? (bool)jObj["armedForLive"] : false), // Default false
-                EnableNewsShield = jObj["EnableNewsShield"] != null ? (bool)jObj["EnableNewsShield"] : (jObj["enableNewsShield"] != null ? (bool)jObj["enableNewsShield"] : (jObj["newsShield"] != null ? (bool)jObj["newsShield"] : true)),
+                EnableNewsShield = jObj["EnableNewsShield"] != null ? (bool)jObj["EnableNewsShield"] : (jObj["enableNewsShield"] != null ? (bool)jObj["enableNewsShield"] : (jObj["newsShield"] != null ? (bool)jObj["newsShield"] : false)),
                 NewsBufferMinutesBefore = jObj["NewsBufferMinutesBefore"] != null ? (int)jObj["NewsBufferMinutesBefore"] : (jObj["newsBufferMinutesBefore"] != null ? (int)jObj["newsBufferMinutesBefore"] : 2),
                 NewsBufferMinutesAfter = jObj["NewsBufferMinutesAfter"] != null ? (int)jObj["NewsBufferMinutesAfter"] : (jObj["newsBufferMinutesAfter"] != null ? (int)jObj["newsBufferMinutesAfter"] : 2),
                 LocalNewsEventsFilePath = jObj["LocalNewsEventsFilePath"]?.ToString() ?? jObj["localNewsEventsFilePath"]?.ToString() ?? "",
@@ -191,7 +191,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 EnablePeakEquityProtection = jObj["EnablePeakEquityProtection"] != null ? (bool)jObj["EnablePeakEquityProtection"] : (jObj["enablePeakEquityProtection"] != null ? (bool)jObj["enablePeakEquityProtection"] : (jObj["peakEquityProtection"] != null ? (bool)jObj["peakEquityProtection"] : true)),
                 MaxPeakGivebackPct = jObj["MaxPeakGivebackPct"] != null ? (double)jObj["MaxPeakGivebackPct"] : (jObj["maxPeakGivebackPct"] != null ? (double)jObj["maxPeakGivebackPct"] : (jObj["givebackPct"] != null ? (double)jObj["givebackPct"] : 0.30)),
                 MinPeakGainDollars = jObj["MinPeakGainDollars"] != null ? (double)jObj["MinPeakGainDollars"] : (jObj["minPeakGainDollars"] != null ? (double)jObj["minPeakGainDollars"] : 50.0),
-                EnableConsistencyCap = jObj["EnableConsistencyCap"] != null ? (bool)jObj["EnableConsistencyCap"] : (jObj["enableConsistencyCap"] != null ? (bool)jObj["enableConsistencyCap"] : true),
+                EnableConsistencyCap = jObj["EnableConsistencyCap"] != null ? (bool)jObj["EnableConsistencyCap"] : (jObj["enableConsistencyCap"] != null ? (bool)jObj["enableConsistencyCap"] : false),
                 MaxDailyProfitPctOfTarget = jObj["MaxDailyProfitPctOfTarget"] != null ? (double)jObj["MaxDailyProfitPctOfTarget"] : (jObj["maxDailyProfitPctOfTarget"] != null ? (double)jObj["maxDailyProfitPctOfTarget"] : 0.35),
                 EnableAutoDayFiller = jObj["EnableAutoDayFiller"] != null ? (bool)jObj["EnableAutoDayFiller"] : (jObj["enableAutoDayFiller"] != null ? (bool)jObj["enableAutoDayFiller"] : false)
             };
