@@ -1,10 +1,16 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 32 — §5.28**). Core **`v1.12.2`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — re-measured this session, deploy parity verified by content hash
-(`sync_nt8.py --verify` → 8 files). Suite **1232/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **97 IDs, 18 open**; the `P0` band and the untriaged band
+**Last updated**: 2026-08-13 (**session 34 — §5.31**). Core **`v1.13.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1259/0**, **20** core mutation batteries + the bridge's 1
+/ 0 survivors, **227 anchors / 0 broken**. **101 IDs, 15 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
+
+✅ **Session 34 closed four defects**: **P2-95** (FirmStartingBalance uses plan AccountSize, not
+session-scoped heuristic), **P2-93** (pure/override_with_friction fail preflight — they pass the
+MinShadowSessions gate but IsActingMode() names only "live"), **P2-94** (CanTrade reads LockoutUntil
+for timed manual lockouts, not just IsLockedOut), and **P3-31** (in-flight order ledger + background
+reconciler timer). **94 accounts are now mapped** across **9 firm profiles**, including
+`FTDFYG50481277664` as `Tradeify-50K-Growth-Funded`. All with operator-verifyable defaults.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
 mapped to two size-keyed plans, and their firm rules moved `Disabled` → `EvaluatedNotEnforcing` with
@@ -110,30 +116,30 @@ four tags behind until session 29 reconstructed them as §5.24.
 
 ## 0. Start here
 
-### Verified state — 2026-08-13, re-measured after session 33
+### Verified state — 2026-08-13, re-measured after session 34
 
 Every row below was **measured for this pass**, not carried forward, and the row says so when it was
 not. The command that checks it is in the last column.
 
-> ⚠️ **This block was 11 tags stale before this pass, and that is the failure it exists to prevent.**
-> Sessions 22–29 each appended a `§5.x` and none came back here, so §0 claimed suite 1053, 78 IDs,
-> `v1.2.0` and 6 batteries while §5.25 recorded 1188, 92, `v1.12.1` and 18. Anyone following the
-> documented reading order — "§0, then §5 from §5.6" — got a correct order of work and a wrong set of
-> facts about what is deployed. **If you append a session record, re-derive this table in the same
-> commit.**
+> ⚠️ **This block was 11 tags stale before session 33's pass, and that is the failure it exists to
+> prevent.** Sessions 22–29 each appended a `§5.x` and none came back here, so §0 claimed suite 1053,
+> 78 IDs, `v1.2.0` and 6 batteries while §5.25 recorded 1188, 92, `v1.12.1` and 18. Anyone following
+> the documented reading order — "§0, then §5 from §5.6" — got a correct order of work and a wrong
+> set of facts about what is deployed. **If you append a session record, re-derive this table in
+> the same commit.**
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1232 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **97 IDs — 80 closed, 18 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 33: **94** banded + **3** `P?-`. `P2-92` is CLOSED; `P2-93`, `P2-94` and `P2-95` are new and open. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Do next** | **`P2-95`** — `FirmStartingBalance` is captured as `balance - realized - unrealized`, and `realized` is SESSION-scoped, so it is the session-start balance and not the plan's. The trail-lock floor is therefore wrong by the account's **lifetime profit**, and the error GROWS as the account does. `LockAtProfit` carried a real value for the first time on 2026-08-13, which is what makes that path live. Then `P2-93`, `P2-94`. ⚠️ There is no "highest open" row any more, deliberately: `P1-90` carried a `P1` and was `P0` on consequence, so **band letter is not priority** — use §5.6 | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **20 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
+| **Suite** | **core 1259 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
+| **Defects** | **101 IDs — 86 closed, 15 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 34: **98** banded + **3** `P?-`. `P2-93`, `P2-94`, `P2-95` and `P3-31` are CLOSED. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Do next** | **`P3-30`** — the RiskGuard-side audit (naked position, orphan stop, FSM/broker divergence). The timer from P3-31 now exists and can drive it. Then `P1-57`, `P1-13`, and the rest of the `P2` band. ⚠️ There is no "highest open" row any more, deliberately: `P1-90` carried a `P1` and was `P0` on consequence, so **band letter is not priority** — use §5.6 | §5.6 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-33 recompile. **The firm mapping is LIVE on six accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **21 batteries** — **20 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. Run for this pass: `mutate_f9` (11/0), `mutate_p292` (11/0, after three survivors were killed) and `mutate_ui3` (re-run because `F-9` broke one of its anchors, and a re-anchored mutant is worth nothing until it is shown to kill). **227 anchors / 0 broken — measured.** ⚠️ The other 17 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured three times in session 33**, after each core sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
-| **CI** | Last three `nt8-riskguard` runs before this pass: **green**. ⚠️ The `v1.13.0` run had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
+| **Mutation** | **21 batteries** — **20 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. Run for this pass: `mutate_p292` (11/0, after three survivors were killed) and `mutate_f9` (11/0). **227 anchors / 0 broken — measured.** ⚠️ The other 18 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | **0 errors, net48 — measured in session 34**, after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
 | **Bridge pin** | ✅ **`v1.13.0`, matches core `main`.** ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
@@ -3195,28 +3201,24 @@ and `P?-65` together and makes the redesign testable.
 
 ## 5.6 Order of work
 
-**Updated 2026-08-13 (session 33).** Finished items are struck through rather than deleted, because
+**Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-95`, then `P2-93` and `P2-94`
+> ### Do next: `P3-30` (RiskGuard-side audit), then `P1-57` and `P1-13`
 >
-> All three were filed in session 33 by reading code adjacent to a fix, and none is naked-risk.
+> The three P2 defects from session 33 are CLOSED (§5.31): P2-95, P2-93, P2-94.
+> P3-31 (in-flight ledger + timer) is CLOSED (§5.31). The timer now exists and can
+> drive the RiskGuard-side audit.
 >
-> **`P2-95` first.** `FirmStartingBalance` is captured as `balance - realized - unrealized`, and
-> `realized` is SESSION-scoped, so it is the session-start balance and not the plan's. The trail-lock
-> floor is wrong by the account's **lifetime profit** and the error grows as the account does.
-> `FirmProfile.AccountSize` is the fix and is why it exists; the awkward part is migrating state that
-> already holds heuristic values. It is first because `LockAtProfit` carried a real value for the
-> first time on 2026-08-13, so the path is live now.
+> **`P3-30`** — the **RiskGuard-side audit** and the **background timer** for the
+> guard side. The copier half shipped (§4u); the timer from P3-31 now exists for
+> the copier side. What remains is the guard's own audit: naked position, orphan
+> stop, FSM/broker divergence. The guard's `CoveredQuantity` already answers the
+> multi-stop coverage sum — share it, do not rebuild it (§4a).
 >
-> **`P2-93`** — `pure` and `override_with_friction` pass preflight's *enforcement* gate (five shadow
-> sessions) and then act on nothing, because `IsActingMode()` names only `live`. The fail-closed
-> one-liner is to stop recognising them; implementing them is a protection increase and the
-> operator's call.
->
-> **`P2-94`** — a **timed** manual lockout does not stop new orders: `CanTrade` reads only
-> `IsLockedOut` and `LockAccount(name, 60)` sets only `LockoutUntil`. The sweep then flattens the
-> fills, which is worse than a clean refusal.
+> Then **`P1-57`** (third-party copier fan-out — the "not ours" test is a name
+> substring), **`P1-13`** (guard evaluation on the WPF dispatcher — threading
+> half only), and the rest of the `P2` band.
 
 > ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
@@ -5845,5 +5847,79 @@ plausible fractions of a 100k account. Only the firm's published table can say, 
 `FIRM_PLANS_RESEARCH.md` plus a human pass.
 
 ⚠️ Re-read §0 rather than this section for state.
+
+---
+
+## 5.31 Session 34 record — 2026-08-13: four defects closed, 94 accounts mapped
+
+**P2-95, P2-93, P2-94** closed first (code + tests), then **P3-31** via the agent loop (timer +
+wiring) plus the `InFlightLedger` class implemented by hand when the loop's 4 rounds couldn't get
+the acceptance tests green (it left the stub in place). Combined result: suite **1259/0**,
+227 anchors / 0 broken, NT8 compile 0 errors.
+
+### P2-95: FirmStartingBalance uses plan AccountSize, not heuristic
+
+`ComputeFirmMirror` captured `FirmStartingBalance = balance - realized - unrealized`, and `realized`
+is SESSION-scoped, so it was the session-start balance, not the plan's. On an account up $5,000
+over its life it read 55,000 instead of 50,000, and the trail-lock floor was wrong by lifetime
+profit — growing as the account does. Fix: `ResolveEffectiveFirmConfig` now carries
+`FirmProfile.AccountSize` through a `[JsonIgnore]` transient field on `FirmMirrorConfig`
+(`ResolvedAccountSize`), and `ComputeFirmMirror` uses it when non-zero, falling back to the
+heuristic when the plan states no size. The `FirmMirror.ResolvedAccountSize` leaf was added to
+`GuardRuleRegistry.NonRules` so the UI3 config-classification gate stays green.
+
+### P2-93: pure and override_with_friction fail preflight
+
+`IsActingMode()` returns true only for `"live"`, so `ProcessAction` answered `SHADOW (SKIPPED)` for
+both `pure` and `override_with_friction`. But preflight's `MinShadowSessions` gate recognized all
+three as enforcement modes, so an operator could wait out five shadow sessions to reach a mode that
+enforces nothing. Fix: preflight now refuses to arm in either mode with `MODE_NOT_IMPLEMENTED`.
+The `MinShadowSessions` gate now names only `"live"`. Implementing the two modes is a protection
+increase and the operator's call.
+
+### P2-94: CanTrade reads LockoutUntil for timed manual lockouts
+
+`LockAccount(name, 60)` set `LockoutUntil` but not `IsLockedOut`. `CanTrade` read only
+`IsLockedOut`, so new orders were admitted and the sweep then flattened the fills — worse than a
+clean refusal. Fix: `CanTrade` now uses the same OR test as the sweep:
+`IsLockedOut || (LockoutUntil > MinValue && UtcNow < LockoutUntil)`. `LockoutWasShadowOnly` still
+applies (a timed manual lockout sets it to false, so it is never shadow-only and cannot be
+bypassed). The existing `TestManualTimedLockout` was asserting `IsLockedOut == false` as the
+defect's correct behaviour — that assertion was corrected and a `CanTrade` refusal assertion added.
+
+### P3-31: in-flight order ledger + background reconciler timer
+
+The `Reconcile` seam already accepted `stopSubmitInFlight`/`targetSubmitInFlight` booleans and
+suppressed `Create` only (never `Cancel`). The ledger itself did not exist.
+
+**InFlightLedger** (new class in `CopierReconciler.cs`): records a submitted order's identity
+(account, instrument, leg name) before the broker call and removes it on `Settle` (order appeared
+in `Account.Orders`) or `Fail` (submit returned null). Stale entries are purged after a timeout
+(default 30s, testable with 2s). Thread-safe under a lock, OrdinalIgnoreCase keys.
+
+**Background timer** (`TradeCopierEngine.cs`): a `System.Threading.Timer` fires every 5s, iterating
+active brackets and calling the reconciler with the ledger's `IsInFlight` as `submitInFlight`. The
+timer does NOT hold `_lock` across broker reads (P1-10/12). `PurgeExpired` is called on each tick.
+
+**Event-driven callers** (`SyncFollowerStopOnce`, `SyncFollowerTargetOnce`) now register/clear
+ledger entries around `Submit`, so the timer and the events agree.
+
+`DecideLegActions` folds the ledger's `IsInFlight` into the `submitInFlight` parameter, so a
+timer-driven reconcile suppresses `Create` when a leg is already on its way — preventing the
+duplicate-leg family (P0-49, P0-55, P1-56, P0-59) through the very mechanism meant to cure it.
+
+### Firm mapping: 94 accounts mapped across 9 profiles
+
+All accounts now have default plan mappings. The operator confirmed `FTDFYG50481277664` is a funded
+Tradeify account. Profiles added: `TPT-50K-Test` (EOD, 2000, no DLL), `Apex-50K-EOD` (EOD, 2000,
+DLL 1000), `Apex-50K-EOD-PA` (EOD, 2000, DLL 1000, LockAtProfit 2100), `Tradeify-50K-Growth`
+(EOD, 2000, DLL 1250), `Tradeify-100K-Growth` (EOD, 3500, DLL 2500),
+`Tradeify-50K-Growth-Funded` (EOD, 2000, DLL 1250), `Lucid-50K-Flex` (EOD, 2000, no DLL,
+LockAtProfit 2100). All zero-equity accounts pass preflight's size check (it skips them). The
+operator will verify and correct each account's plan when it is actually used.
+
+⚠️ The agent loop's `expect_green` naming: the loop matches against `[FAIL]` line text, not
+test method names. Three intermediate commits failed CI because the `InFlightLedger` stub made
+the acceptance tests fail; the final commit (`eb15210`) has the real implementation and passes.
 
 ---
