@@ -25,8 +25,10 @@ case that motivated it*, and the answer turned out to be a symbol-conversion/siz
 `P0-67` trail test and fixed in the same change: two `Change()` calls landing on one stop order in a
 single sweep, which per `P0-61` reverts the order.
 
-Highest open defects are now **`P?-64`/`P?-65`** — the copier UI writes to a file nothing reads, and
-its save sites destroy the ratio matrix.
+✅ **`P?-64`/`P?-65` are CLOSED** (handover §5.21, branch `feat/ui-config-single-owner`, unmerged):
+the copier UI wrote to a file nothing read, and its save sites destroyed the ratio matrix. The
+config path now has one owner in core and the window dispatches requests. Highest open is now
+**`P1-77`** — the prop-firm Consistency Rule Shield is enabled by default and evaluated nowhere.
 
 **For "what is left?" read the handover's
 [§5, THE OPEN BACKLOG](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-13),
@@ -59,11 +61,11 @@ but not as an open item.)
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79` | 38 | **4** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, `P1-77` (the consistency cap is dead config) and **`P1-79`** — a released quarantine keeps its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79` | 38 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78` | 11 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
-| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
-| | | **79** | **17** | **62 closed or superseded** |
+| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. ⚠️ Branch `feat/ui-config-single-owner`, **unmerged**. |
+| | | **79** | **14** | **65 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
