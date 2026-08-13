@@ -156,8 +156,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class CopierRelationship
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string LeaderAccountName { get; set; } = "Sim101";
-        public string FollowerAccountName { get; set; } = "SimCopy2";
+        public string LeaderAccountName { get; set; } = "";
+        public string FollowerAccountName { get; set; } = "";
         public bool IsEnabled { get; set; } = true;
         public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
         public CopierExecutionMode Mode { get; set; } = CopierExecutionMode.Executions;
@@ -274,8 +274,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class CopierGroup
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string GroupName { get; set; } = "DefaultGroup";
-        public string LeaderAccountName { get; set; } = "Sim101";
+        public string GroupName { get; set; } = "";
+        public string LeaderAccountName { get; set; } = "";
         public bool IsEnabled { get; set; } = true;
         public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
         public CopierExecutionMode Mode { get; set; } = CopierExecutionMode.Executions;
@@ -1629,7 +1629,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!normalized.ContainsKey("LeaderAccountName"))
                     normalized["LeaderAccountName"] = isFlatLegacy ? key : (key.Contains("_") ? key.Split('_')[0] : key);
                 if (!normalized.ContainsKey("FollowerAccountName"))
-                    normalized["FollowerAccountName"] = isFlatLegacy ? "SimCopy2" : (key.Contains("_") ? key.Split('_')[1] : "SimCopy2");
+                {
+                    if (isFlatLegacy || !key.Contains("_"))
+                    {
+                        Console.WriteLine($"[LoadFromDisk] Skipping invalid relationship '{key}': could not derive FollowerAccountName from key.");
+                        rel = null;
+                        return false;
+                    }
+                    normalized["FollowerAccountName"] = key.Split('_')[1];
+                }
 
                 JsonConvert.PopulateObject(normalized.ToString(), rel);
                 rel.PerTickerRatios = EnsureOrdinalIgnoreCase(rel.PerTickerRatios);
@@ -1659,7 +1667,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!normalized.ContainsKey("GroupName"))
                     normalized["GroupName"] = key;
                 if (!normalized.ContainsKey("LeaderAccountName"))
-                    normalized["LeaderAccountName"] = "Sim101";
+                {
+                    Console.WriteLine($"[LoadFromDisk] Skipping invalid group '{key}': could not derive LeaderAccountName from key.");
+                    grp = null;
+                    return false;
+                }
 
                 JsonConvert.PopulateObject(normalized.ToString(), grp);
                 grp.PerTickerRatios = EnsureOrdinalIgnoreCase(grp.PerTickerRatios);
@@ -1889,16 +1901,37 @@ namespace NinjaTrader.NinjaScript.AddOns
                 refusalReason = "the request was empty, so there was nothing to apply.";
                 return null;
             }
-            string groupName = ReqStr(req, "groupName") ?? ReqStr(req, "GroupName") ?? "DefaultGroup";
+            string groupName = ReqStr(req, "groupName") ?? ReqStr(req, "GroupName");
+
+            if (string.IsNullOrWhiteSpace(groupName))
+            {
+                refusalReason = "refused to apply group request: the group name was missing. A group request must name the group it applies to.";
+                CopierLog(string.Empty, "MISSING_GROUP_NAME_REFUSED", refusalReason);
+                return null;
+            }
+
+            string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName");
 
             CopierGroup grp;
+            bool isNew;
             lock (_lock)
             {
                 var existing = _groups.FirstOrDefault(g =>
                     g.GroupName.Equals(groupName, StringComparison.OrdinalIgnoreCase));
-                grp = existing != null
-                    ? CloneConfig(existing)
-                    : new CopierGroup { GroupName = groupName, LeaderAccountName = "Sim101" };
+                isNew = existing == null;
+                grp = isNew
+                    ? new CopierGroup { GroupName = groupName, LeaderAccountName = leader ?? "" }
+                    : CloneConfig(existing);
+            }
+
+            if (isNew && string.IsNullOrWhiteSpace(leader))
+            {
+                refusalReason = string.Format(
+                    "refused to create group '{0}': the leader account was missing. A new group must name the "
+                    + "leader account that its followers will copy.",
+                    groupName);
+                CopierLog(groupName, "MISSING_GROUP_LEADER_REFUSED", refusalReason);
+                return null;
             }
 
             var normalized = NormalizeRequest(req, typeof(CopierGroup));
@@ -1910,9 +1943,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             ClearCollectionsNamedIn(normalized, grp);
             JsonConvert.PopulateObject(normalized.ToString(), grp);
 
-            // No need to re-assert GroupName: the lookup key and the initialiser
-            // default are the same string, so an assignment here is inert.
-            // (A mutation removing it survived the whole suite -- so it goes.)
+            // GroupName was established when the group was cloned or created, so an
+            // explicit re-assertion here is unnecessary.
             //
             // The comparer re-application is NOT inert, though it looks it:
             // PopulateObject reuses the initialiser's dictionary instance, so the
@@ -1972,8 +2004,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 refusalReason = "the request was empty, so there was nothing to apply.";
                 return null;
             }
-            string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName") ?? "Sim101";
-            string follower = ReqStr(req, "followerAccount") ?? ReqStr(req, "FollowerAccountName") ?? "SimCopy2";
+            string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName");
+            string follower = ReqStr(req, "followerAccount") ?? ReqStr(req, "FollowerAccountName");
+
+            if (string.IsNullOrWhiteSpace(leader) || string.IsNullOrWhiteSpace(follower))
+            {
+                string missing;
+                if (string.IsNullOrWhiteSpace(leader) && string.IsNullOrWhiteSpace(follower))
+                    missing = "leader account and the follower account were";
+                else if (string.IsNullOrWhiteSpace(leader))
+                    missing = "leader account was";
+                else
+                    missing = "follower account was";
+
+                refusalReason = string.Format(
+                    "refused to apply relationship request: the {0} missing. A relationship applies to exactly "
+                    + "one leader account and one follower account, so both must be named.",
+                    missing);
+                string logAccount = !string.IsNullOrWhiteSpace(follower) ? follower
+                    : !string.IsNullOrWhiteSpace(leader) ? leader
+                    : string.Empty;
+                CopierLog(logAccount, "MISSING_ACCOUNT_REFUSED", refusalReason);
+                return null;
+            }
 
             // P1-76. Refuse before touching anything: a follower already reserved by a group
             // cannot also have a direct relationship. Returning null rather than throwing
