@@ -64,7 +64,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         public int NewsEventCount
         {
-            get { return -1; /* UI4 stub */ }
+            get
+            {
+                lock (_lock)
+                {
+                    return _newsEvents.Count;
+                }
+            }
         }
 
         public void AddTestNewsEvent(EconomicNewsEvent ev)

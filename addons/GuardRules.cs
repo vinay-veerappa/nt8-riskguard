@@ -487,9 +487,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardNonRule { ConfigPath = "PropFirm.NewsBufferMinutesAfter", Reason = "the window the news shield uses; inert for the same reason it is" },
         };
 
-        public static IList<GuardRuleDefinition> Rules { get { return _rules; } }
+        public static IList<GuardRuleDefinition> Rules { get { return _rules.AsReadOnly(); } }
 
-        public static IList<GuardNonRule> NonRules { get { return _nonRules; } }
+        public static IList<GuardNonRule> NonRules { get { return _nonRules.AsReadOnly(); } }
 
         /// <summary>
         /// Turns one definition plus one reading into a state. The whole vocabulary lives here
@@ -522,7 +522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         public static bool CanAct(string mode, bool isArmed)
         {
-            return false;   // UI4 stub
+            return mode == "live" && isArmed;
         }
 
         /// <summary>
@@ -540,7 +540,125 @@ namespace NinjaTrader.NinjaScript.AddOns
             IList<RiskGuardAddOn.AccountStateSnapshot> accounts,
             int newsEventCount)
         {
-            return null;   // UI4 stub
+            var snapshot = new GuardSnapshot();
+            snapshot.TakenUtc = DateTime.UtcNow;
+            snapshot.Mode = mode;
+            snapshot.IsArmed = isArmed;
+            snapshot.Accounts = new List<GuardAccountRules>();
+            snapshot.UnevaluatedRules = new List<GuardRuleRow>();
+
+            bool canAct = CanAct(mode, isArmed);
+
+            // A null account list is the SAME situation as an empty one, and it must not throw.
+            // The reason is the reason UnevaluatedRules exists: an exception escaping here blanks
+            // the inventory, and a blank page reads as calm. `GetAccountSnapshots()` never returns
+            // null today, so this is the one caller-shaped hazard rather than a live one -- it is
+            // guarded because the cost is a line and the failure is silent.
+            if (accounts == null) accounts = new List<RiskGuardAddOn.AccountStateSnapshot>();
+
+            foreach (var account in accounts)
+            {
+                var accountRules = new GuardAccountRules();
+                accountRules.AccountName = account.AccountName;
+                accountRules.IsExcluded = account.IsExcluded;
+                accountRules.IsLockedOut = account.IsLockedOut;
+                accountRules.Rules = new List<GuardRuleRow>();
+                snapshot.Accounts.Add(accountRules);
+            }
+
+            foreach (var def in Rules)
+            {
+                if (def == null)
+                    continue;
+
+                if (def.Evaluator == null)
+                {
+                    var unevaluatedRow = new GuardRuleRow();
+                    unevaluatedRow.Name = def.Name;
+                    unevaluatedRow.ConfigPath = def.ConfigPath;
+                    unevaluatedRow.Source = def.Source;
+                    unevaluatedRow.Scope = def.Scope;
+                    unevaluatedRow.State = GuardRuleState.ConfiguredNotEvaluated;
+                    unevaluatedRow.CurrentValue = null;
+                    unevaluatedRow.Limit = null;
+                    unevaluatedRow.EvidenceCount = 0;
+                    unevaluatedRow.Note = def.UnevaluatedReason;
+                    snapshot.UnevaluatedRules.Add(unevaluatedRow);
+
+                    for (int i = 0; i < accounts.Count; i++)
+                    {
+                        var accountRules = snapshot.Accounts[i];
+                        var row = new GuardRuleRow();
+                        row.Name = def.Name;
+                        row.ConfigPath = def.ConfigPath;
+                        row.Source = def.Source;
+                        row.Scope = def.Scope;
+                        row.State = GuardRuleState.ConfiguredNotEvaluated;
+                        row.CurrentValue = null;
+                        row.Limit = null;
+                        row.EvidenceCount = 0;
+                        row.Note = def.UnevaluatedReason;
+                        accountRules.Rules.Add(row);
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < accounts.Count; i++)
+                    {
+                        var account = accounts[i];
+                        var accountRules = snapshot.Accounts[i];
+                        GuardRuleReading reading = null;
+                        string failureNote = null;
+
+                        try
+                        {
+                            var context = new GuardRuleContext();
+                            context.AccountName = account.AccountName;
+                            context.Config = config;
+                            context.PropConfig = propConfig;
+                            context.Account = account;
+                            context.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot>(accounts);
+                            context.NewsEventCount = newsEventCount;
+                            reading = def.Evaluator(context);
+                        }
+                        catch (Exception ex)
+                        {
+                            failureNote = ex.GetType().Name + ": " + ex.Message;
+                        }
+
+                        var row = new GuardRuleRow();
+                        row.Name = def.Name;
+                        row.ConfigPath = def.ConfigPath;
+                        row.Source = def.Source;
+                        row.Scope = def.Scope;
+
+                        if (reading != null)
+                        {
+                            row.CurrentValue = reading.CurrentValue;
+                            row.Limit = reading.Limit;
+                            row.EvidenceCount = reading.EvidenceCount;
+                            row.Note = reading.Note;
+                        }
+                        else
+                        {
+                            row.CurrentValue = null;
+                            row.Limit = null;
+                            row.EvidenceCount = 0;
+                            // A RED ROW MUST SAY WHY, and here it always can: `failureNote` is
+                            // set whenever the evaluator threw, and an evaluator MAY NOT return
+                            // null -- that is a contract a test enforces over every rule, rather
+                            // than a fallback here. A third `??` branch was written first and a
+                            // mutant deleting it survived, because nothing could reach it.
+                            row.Note = failureNote ?? def.UnevaluatedReason;
+                        }
+
+                        row.State = DeriveState(def, reading, canAct, account.IsExcluded);
+                        accountRules.Rules.Add(row);
+                    }
+                }
+            }
+
+            return snapshot;
         }
     }
 }

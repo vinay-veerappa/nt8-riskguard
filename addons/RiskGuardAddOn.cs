@@ -203,7 +203,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         public GuardSnapshot BuildGuardSnapshot()
         {
-            return null;   // UI4 stub
+            string mode;
+            bool isArmed;
+            RiskConfig config;
+            lock (_stateLock)
+            {
+                mode = _mode;
+                isArmed = _isArmed;
+                config = _config;
+            }
+
+            return GuardRuleRegistry.BuildSnapshot(
+                config,
+                PropFirmProtectionSuite.Instance.Config,
+                mode,
+                isArmed,
+                GetAccountSnapshots(),
+                PropFirmProtectionSuite.Instance.NewsEventCount);
         }
         private string _logDir;
         private string _logFile;
