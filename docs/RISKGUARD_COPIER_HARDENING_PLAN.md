@@ -2745,6 +2745,26 @@ applies to all real order submission in `RiskGuardAddOn.ExecuteAction`. The 4,23
 4. Add a GitHub Actions job (`dotnet run --project tests/RiskGuardTests.csproj`)
    with a non-zero exit on failure — the harness currently has to be run by hand.
 
+**A consequence that was not written down until 2026-08-13, and that costs something every
+session: the agent-loop cannot be used on `nt8-mcp-bridge` at all.** The loop's ladder is held
+up by two gates — a build and a test run — and in that repo both are blind to the file being
+edited. `tests/BridgeTests.csproj` sets `EnableDefaultCompileItems=false` and compiles exactly
+one file, `BridgeSourceTests.cs`; `addons/McpBridgeAddOn.cs` is not in it. So a loop run there
+would compile a harness that excludes the patch, run source-text assertions, and report green
+on code that does not compile. That is worse than not running it — it is a gate that proves
+nothing, and this repo has now caught nine of those.
+
+There is also no profile there (`agent/nt8_riskguard.py` is core-only). **One was deliberately
+NOT written on 2026-08-13**: a profile whose build gate cannot see the patch is a trap, because
+the next person to find it will trust its green. Same rule as everywhere else here — a thing
+that reads as protection it does not provide is the defect, not the absence.
+
+The unblock is step 1 of `tests/README.md`'s ordered remedy, and it lives **in this repo**: move
+the NT8 stub block out of `tests/RiskGuardAddOnTests.cs` into `tests/TestingStubs.cs`. Mechanical,
+same compilation unit, and fully gated here by 1147 executable tests and 13 batteries. 16 of the
+19 types the bridge cannot resolve are already stubbed in that block; they just cannot be reached
+from another repo without dragging in its `Main()`.
+
 ### P2-28. Three divergent copies of the addon sources + committed build output — ✅ **closed 2026-08-07**
 - `scripts/ninjatrader/addons/` — canonical (referenced by `tests/RiskGuardTests.csproj`)
 - ~~`scripts/strategies/nt8/addons_DONOTUSE/`~~ — **deleted**. Nine tracked files, zero code
