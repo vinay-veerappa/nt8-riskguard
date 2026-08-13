@@ -2160,7 +2160,7 @@ it — it changes order routing, and this repo has no executable tests to catch 
 
 ---
 
-### P1-91. Four MCP tool schemas still advertise the account guess `P1-90` removed — OPEN
+### P1-91. MCP tool schemas supplied an account, and an action, the caller never sent — CLOSED 2026-08-13
 
 *(opened 2026-08-13 by `P1-90`'s live validation, in the third repo. Found by reading the tool
 schema before probing with it, which is the only reason it was noticed at all.)*
@@ -2195,7 +2195,64 @@ the engine does. Deliberately not attempted in the session that found it: it is 
 MCP server must be restarted to reload tool schemas, and a restart drops the live tool connections
 that were being used to validate `P1-90`.
 
-**Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/nt-mcp-server.js:89`, `:124`, `:588`, `:672`.
+> ✅ **FIXED 2026-08-13 (session 31), through the agent-loop, and it grew on contact.**
+> Six defaults deleted and seven `required` arrays corrected, in
+> `mcp/ninjatrader-mcp/lib/tools.js`. Suite 33 → **40/0** in a repo that had no
+> executable coverage of its schemas at all.
+>
+> ⚠️ **It was NOT four defaults. It was six.** The acceptance test was written against the defect
+> *class* rather than the four filed instances, and running it found two more — on `action`:
+>
+> | Tool | Default | Enum includes |
+> |---|---|---|
+> | `nt_alert` | `webhook` | **`flatten`** |
+> | `nt_multi_account_orchestrator` | `sync_hedge` | **`group_flatten`** |
+>
+> `sync_hedge` adjusts positions **across accounts**. An omitted `action` doing that is `P1-90`'s
+> class exactly: something consequential happening that the caller never named.
+>
+> ⚠️ **And the first version of that test was WRONG, in the dangerous direction.** It forbade any
+> `action` default, which would have made the implementer delete two **correct** ones —
+> `nt_prop_limits` (`get`) and `nt_trade_journal` (`list`) — to go green. Both default to the READ,
+> which is fail-closed. The rule is *which way the default falls*, not whether one exists: a
+> defaulted `action` must itself be a read. **That is "a too-broad test gets the CODE broken to
+> satisfy it", caught before it could happen only because the test was run and its output read
+> rather than its verdict.**
+>
+> ### ⚠️ What this fix does NOT do — measured, and it is not what the ID implies
+>
+> The MCP server **never reads `.default`, never reads `inputSchema`, and does not validate
+> `required` at all.** So:
+>
+> * Deleting the defaults **is** a real behavioural change, for any client that materialises schema
+>   defaults. That was the whole risk: an injected `Sim101` is a real connected account, so the addon
+>   resolves it happily and `P1-90`'s refusal is never reached.
+> * Adding `required` adds **no server-side gate here**. It makes the contract truthful and lets a
+>   validating client fail fast. **The enforcement remains the addon's refusal** (`P1-90`,
+>   live-validated).
+>
+> Do not read this as "the server now rejects an order with no account". The server does not reject
+> it; the addon does.
+>
+> ⚠️ **NOT IN EFFECT UNTIL THE MCP SERVER IS RESTARTED.** Tool schemas are read at startup.
+>
+> **Three obstacles had to be cleared before the loop could take this at all**, and each is recorded
+> where the next session will hit it:
+> 1. `python-tvdownloadohlc` **cannot gate a `.js` file** — `py_compile` errors on it and its
+>    `test_cmd` is two Python suites that pass whatever the patch does. A gate that cannot fail.
+>    New profile: `agent/js_ninjatrader_mcp.py`, **inside** that repo.
+> 2. `ninjatrader-mcp` is a **submodule**, and a worktree of the parent does not check submodules
+>    out — so a parent-side profile resolves during `--list` and then finds nothing to patch.
+> 3. ⚠️ **The loop cannot parse Node's test output**, and `Profile.test_runner_regex` — which looks
+>    like the configuration point for exactly that — is **dead: declared at
+>    `agent_loop/profiles.py:78` and read by nothing in the package.** That is `P1-83`'s class in the
+>    tool itself. Worked around with `agent/loop_test_reporter.mjs`, emitting the NT8 shape because
+>    its `[FAIL]` lines carry test NAMES and `expect_green` is matched against them — without those,
+>    the test-first gate is vacuous. `agent/verify_reporter.py` proves it by feeding the reporter's
+>    real output through the loop's real parser.
+
+**Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/lib/tools.js` (the schemas were at
+`nt-mcp-server.js:89`, `:124`, `:588`, `:672` before the extraction).
 
 ---
 

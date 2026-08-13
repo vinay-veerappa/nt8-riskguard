@@ -106,8 +106,8 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1188 passed, 0 failed** (all **401** declared methods invoked); **bridge 50 passed, 0 failed** (was 23 — `P1-90` brought executable tests to that repo) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
-| **Defects** | **93 IDs — 78 closed, 15 open. The whole `P0` band is CLOSED.** Re-derived after session 30: **90** banded + **3** `P?-`. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Highest open** | **`P1-91`** — four MCP tool schemas still advertise `default: 'Sim101'`, **two of them order tools**. The engine refuses now; a client that materialises schema defaults would inject the guess and never reach the refusal. In **tvDownloadOHLC**, a third repo (§5.26) | §5.6 item 0 |
+| **Defects** | **93 IDs — 79 closed, 14 open. The whole `P0` band is CLOSED.** Re-derived after session 30: **90** banded + **3** `P?-`. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Highest open** | **`P1-57`** — we would mirror another copier's mirror; the "not ours" test is a name substring. Not naked-risk, which is the point: ✅ **the `P0` band and every naked-risk item are closed.** ⚠️ Judge the next item by §5.6, not by band letter — `P1-90` was `P0` on consequence | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **19 tags**, `v1.0.0`…**`v1.12.2`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.12.2` core + `P1-90` bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and now `BridgeAccountResolver.cs` too | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.12.2`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the session-30 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -2993,8 +2993,8 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 | Numbered entries in the plan | **90** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
 | **Total IDs** | **93** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23), 1 opened by `P1-90`'s LIVE VALIDATION (`P1-91`, §5.26) |
-| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
-| **Closed or superseded** | **78** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16; **`P1-90` in §5.26, live-validated** |
+| **Open** | **14** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
+| **Closed or superseded** | **79** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16; **`P1-90` in §5.26, live-validated** |
 
 ⚠️ **Session 29 added nine IDs** (`P1-82`…`P1-90`) and closed eight. ✅ **Session 30 closed the
 ninth, `P1-90`, and live-validated it** (§5.26) — six sites, not the three that were filed. It
@@ -3154,14 +3154,11 @@ it is the previous ordering with the finished items struck through.
 > **`P1-90` is fixed, deployed and live-validated** — §5.26. The next item is **`P1-91`**, which it
 > opened.
 
-0. ⚠️ **`P1-91` — four MCP tool schemas still advertise `default: 'Sim101'`, two of them ORDER tools**
-   (`nt_place_oco_order`, `nt_place_atm_order`, `nt_compliance_report`, `nt_deploy_strategy`, in
-   `tvDownloadOHLC/mcp/ninjatrader-mcp/nt-mcp-server.js`). Delete the defaults and mark `account`
-   required. Small, and it **partially undoes `P1-90` for any MCP client that materialises schema
-   defaults** — the injected name resolves, so the refusal is never reached. Measured: today's client
-   does not materialise them, which is a property of the client and not of the contract (`P1-75`'s
-   shape). Needs an MCP server restart, which drops live tool connections — do it when you are not
-   mid-validation.
+0. ~~**`P1-91` — MCP tool schemas advertise an account the addon now refuses.**~~
+   ✅ **DONE 2026-08-13 (§5.27), through the agent-loop.** It was **six** defaults, not four: the
+   class-level test found two more on `action`, one of which defaulted to a cross-account
+   `sync_hedge`. ⚠️ **Restart the MCP server** — schemas are read at startup, so a running client
+   still advertises the old ones until then.
 
 0. ~~**`P1-90` — an order naming an unresolvable account is placed on an arbitrary one.**~~
    ✅ **DONE and LIVE-VALIDATED 2026-08-13 — §5.26.** All **six** sites refuse, not just the three
@@ -5178,5 +5175,138 @@ document whose job is to say what is true.**
 reads defaults. Then §5.6's ordering stands unchanged: the UI **write** half, then `P3-31`'s ledger →
 timer → the RiskGuard-side audit. `P2-27` now has a demonstrated cheap step (extract, then execute)
 and it should be spent on `TradeCopierWindow.cs` and the rest of `McpBridgeAddOn.cs` the same way.
+
+---
+
+## 5.27 Session 31 — 2026-08-13: `P1-91` through the loop, and three things that had to be built before it could run
+
+**`P1-91` closed.** `ninjatrader-mcp` suite **33 → 40/0**, in a repo that had no executable coverage
+of its tool schemas at all. Parent pin bumped. ⚠️ **Not in effect until the MCP server restarts** —
+tool schemas are read at startup.
+
+The fix itself is six deleted schema defaults and seven corrected `required` arrays. Everything worth
+reading here is what surrounded it.
+
+### The loop could not take the ticket, for three separate reasons
+
+Each was found by trying, not by reading, and each is now recorded where the next session will hit it.
+
+1. **`python-tvdownloadohlc` cannot gate a `.js` file.** Its `build_cmd` is `py_compile`, which errors
+   on JavaScript, and its `test_cmd` is two **Python** suites that pass no matter what a patch does to
+   the MCP server. Pointing it there would have produced **a gate that cannot fail** — which that
+   profile's own comments warn about, at that exact field. New profile:
+   `agent/js_ninjatrader_mcp.py`.
+2. **`ninjatrader-mcp` is a git submodule.** The loop patches inside a worktree, and **a worktree of
+   the parent does not check submodules out** — so a parent-side profile resolves cleanly during
+   `--list`, against the live tree, and then finds nothing to patch. The profile and tickets had to
+   live **inside** that repo, which is the arrangement `nt8-riskguard` already uses.
+3. ⚠️ **The loop cannot parse Node's test output**, and the field that looks like the fix is dead.
+   `agent_loop.gates.parse_tests` understands two formats: the NT8 suite's (`[FAIL] msg` plus
+   `RESULTS: Passed = N, Failed = M`) and pytest's. Node prints `ℹ pass 37` / `ℹ fail 3`. The first
+   run died at baseline with *"produced no parseable result summary"* **before reaching a model.**
+   **`Profile.test_runner_regex` is declared at `agent_loop/profiles.py:78` and read by nothing in
+   the package** — `P1-83`'s defect class, in the tool.
+
+> `agent/loop_test_reporter.mjs` emits the NT8 shape. **The NT8 shape rather than pytest's for a
+> specific reason: its `[FAIL]` lines carry the failing test's NAME, and a ticket's `expect_green` is
+> matched against those lines.** Without per-failure names the test-first gate cannot tell which test
+> went green, and is vacuous — see [[agent-loop-expect-green-semantics]].
+>
+> It is not trusted by eye. `agent/verify_reporter.py` feeds the reporter's real output through the
+> loop's **real parser** and asserts on what comes back — `ran=True`, the counts, the extracted
+> failure names, and that the exit code tracks the result. It also refuses the case where the reporter
+> finds no test files and would hand the loop **a green baseline for a suite that never ran**.
+
+### ⚠️ The acceptance test found two more defects — and its first version was WRONG
+
+The test was written against the defect *class* — "a schema default supplies a consequential argument
+the caller never sent" — rather than against `P1-91`'s four filed instances. Running it found **six**,
+not four. The two new ones are on `action`:
+
+| Tool | Default | Enum includes |
+|---|---|---|
+| `nt_alert` | `webhook` | **`flatten`** |
+| `nt_multi_account_orchestrator` | `sync_hedge` | **`group_flatten`** |
+
+`sync_hedge` adjusts positions **across accounts**. An omitted `action` doing that is `P1-90`'s class
+exactly.
+
+**And the first draft of that test would have made things worse.** It forbade any `default` on
+`action`. There are four, and **two are correct**: `nt_prop_limits` defaults to `get` and
+`nt_trade_journal` to `list` — both the READ, which is the fail-closed direction. To go green, the
+implementer would have had to **delete two safe defaults and make two working tools worse.**
+
+> **The rule is which way the default falls, not whether one exists: a defaulted `action` must itself
+> be a read.** That keeps the two correct ones and still catches the two that matter.
+>
+> This is [[mutation-testing-beats-review]]'s "a too-broad test gets the CODE broken to satisfy it",
+> and it was caught only because the test's **output** was read rather than its verdict. A red test
+> that is red for the wrong reason looks exactly like a red test.
+
+### ⚠️ What `P1-91` does NOT do, measured — and it is not what the ID implies
+
+The MCP server **never reads `.default`, never reads `inputSchema`, and does not validate `required`
+at all.** Both halves of the fix therefore do different amounts of work:
+
+* **Deleting the defaults is a real behavioural change**, for any MCP client that materialises schema
+  defaults into a request. That was the risk: an injected `Sim101` is a **real connected account**, so
+  the addon resolves it happily and `P1-90`'s refusal is never reached.
+* **Adding `required` adds no server-side gate here.** It makes the contract truthful and lets a
+  validating client fail fast. **The enforcement remains the addon's refusal** — `P1-90`,
+  live-validated.
+
+Do not read the commit as *"the server now rejects an order with no account"*. The server does not
+reject it; the addon does. Saying which one enforces a rule is the whole content of
+[[configured-evaluated-enforcing]].
+
+### The loop went green in ONE round, which is when to trust it least
+
+Round 1, `kimi-k2.7-code`, panel APPROVE/APPROVE, all three acceptance tests green, no regressions.
+Per §5.21 that is the moment for more scrutiny, not less, so the patch was read line by line against
+the spec before anything was applied, and:
+
+* **the applied diff was confirmed byte-identical to the candidate that was reviewed** — the loop
+  does not ship, and `--resume-raw … --apply` is a fresh run, not a promote;
+* the two safe `action` defaults were confirmed **absent from the diff**;
+* the `required` arrays were confirmed **appended to, not rewritten** — dropping `idempotencyKey`
+  from an order tool would admit duplicate orders, a worse defect than the one being fixed;
+* the real server was driven over **stdio JSON-RPC** afterwards: 52 tools, zero account defaults, five
+  tools requiring an account.
+
+**Then the guard test was mutation-checked**, because it is the one assertion whose failure had never
+been observed: making `nt_orders` require an account **failed it correctly**, and the tree was
+restored. A guard that has never been seen to fail is not known to be a guard —
+[[mutation-anchors-go-stale]].
+
+### One prerequisite worth reusing
+
+`const TOOLS` was extracted from `nt-mcp-server.js` into `lib/tools.js` so that tests could assert on
+the **real schema objects** instead of grepping source text. That is the third time this move has
+paid: `P1-90`'s account resolver, and `lib/copier-config-request.js` before it — whose own header says
+it exists because *"importing nt-mcp-server.js starts its stdin readline loop, so a test of a function
+defined there would hang."*
+
+**The pattern: extract what names no platform type and has no side effects, then execute it.** It is
+`P2-27`'s cheapest step and it now has three instances. Verified the extraction changed nothing by
+driving `tools/list` over real stdio: 52 tools, `nt_place_order` present.
+
+### Next
+
+`P1-91` was the last item that any band letter called urgent, and **the `P0` band and every
+naked-risk item are closed.** What remains is §5.6's ordering: the UI **write** half (goal 1 of the
+two this UI exists for is still mostly untouched), then `P3-31`'s ledger → timer → the RiskGuard-side
+audit, then `P1-57`, `P1-13` and the `P2` band. `F-9` (the firm mapping) is still the largest
+config item, and it is the mechanism that replaces guessing at every dollar-denominated default.
+
+### One housekeeping note
+
+The first loop run in `ninjatrader-mcp` **committed 10 per-run artifacts** — prompts, raw model
+output, both reviewers' text, the candidate patch. That repo had no `logs/agent_loop/*` block; it
+now carries the same one as this repo and tvDownloadOHLC, ledger exceptions included. **All three
+repos agree now**, and the `/*`-not-`/` reason is written in each: git never descends into an
+excluded directory, so a negation beneath one is silently impossible.
+
+⚠️ **Restart the MCP server** before assuming `P1-91` is live, and re-read §0 rather than this section
+for state — this one will be stale the moment the next item lands.
 
 ---
