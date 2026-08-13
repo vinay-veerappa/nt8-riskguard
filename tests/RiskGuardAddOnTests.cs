@@ -84,6 +84,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestLockoutEnforcementSubsequentSweepWithNewPosition();
             TestStopGuardAutoStop();
             TestStopGuardFlatten();
+            TestP187_AnUnrecognisedStopActionStillProtectsThePosition();
+            TestP187_AnUnrecognisedStopActionFailsPreflight();
+            TestP187_NothingAdvertisesAnActionTheGuardCannotPerform();
             TestStopGuardNoActionWhenStopPresent();
             TestStopGuardTransientStateValidation();
             TestStopGuardPartiallyFilledValidation();
@@ -8392,6 +8395,115 @@ namespace NinjaTrader.NinjaScript.AddOns
             var actions = addon.EvaluateGraceExpiry(account, mnq.FullName);
             Assert(actions.Any(a => a.RuleId == "MISSING_STOP_FLATTEN"),
                 "MISSING_STOP_FLATTEN action generated when OnMissing=Flatten and no stop after grace period.");
+        }
+
+        private static void TestP187_AnUnrecognisedStopActionStillProtectsThePosition()
+        {
+            Console.WriteLine("\n[TEST] P1-87: an unrecognised OnMissing still protects the position");
+
+            // FOUND BY A MUTANT SURVIVING. mutate_p184 changed OnMissing from "Flatten" to
+            // "AutoStop" and nothing in 1180 tests noticed, which sent me to look at how the
+            // action is dispatched. It is compared against two exact string literals with no
+            // else branch -- so a lower-case "flatten", a typo, or the "WarnOnly" the
+            // declaration's own comment advertises matches nothing and the stop guard emits NO
+            // ACTION AT ALL. A position with no stop, past its grace period, and the guard
+            // simply returns.
+            //
+            // There is no validation anywhere: RunPreflight checks the mode and has never
+            // checked this. So the failure is silent at startup and silent at the moment it
+            // matters, and the config file still reads as though the guard is watching.
+            //
+            // FAIL SAFE, NOT SILENT. An unrecognised action falls back to Flatten -- the
+            // documented default, and the one that is always a known quantity. Substituting
+            // silently would be its own lie, which is what the preflight half below is for.
+            foreach (var spelling in new[] { "flatten", "FLATTEN", "WarnOnly", "Flaten", "" })
+            {
+                var config = new RiskConfig();
+                config.StopGuard.OnMissing = spelling;
+                config.StopGuard.StopAttachSeconds = 0;
+
+                var account = new Account { Name = "P187Acc" };
+                var mnq = new Instrument("MNQ");
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigForTest(config);
+                addon.TestClearFsms();
+                account.Positions.Add(new Position
+                {
+                    Instrument = mnq, MarketPosition = MarketPosition.Long,
+                    Quantity = 2, AveragePrice = 18000
+                });
+                addon.TestFsmOnPosition(account, mnq.FullName, MarketPosition.Long, 2);
+
+                var actions = addon.EvaluateGraceExpiry(account, mnq.FullName);
+                Assert(actions.Any(a => a.ActionType == GuardActionType.FlattenPosition
+                                        || a.ActionType == GuardActionType.PlaceStopOrder),
+                    "OnMissing = '" + spelling + "' still produces a protective action rather "
+                    + "than silence");
+            }
+        }
+
+        private static void TestP187_AnUnrecognisedStopActionFailsPreflight()
+        {
+            Console.WriteLine("\n[TEST] P1-87: preflight refuses a stop action the guard cannot perform");
+
+            // The other half. Falling back to Flatten keeps the position safe but leaves the
+            // operator believing their configured action is in force, which is the same class
+            // of lie as every other defect in this session. Preflight is where config that
+            // cannot work is supposed to be caught -- it already refuses an unrecognised MODE
+            // -- and it has never looked at this.
+            //
+            // Deliberately asserted in SHADOW mode with one connected account and FirmMirror
+            // off, so every other preflight check passes and this is the only thing that can
+            // fail. PreflightResult.Fail overwrites, so a second failure would hide this one.
+            var previousAccounts = Account.All;
+            try
+            {
+                Account.All = new List<Account> { new Account { Name = "P187Pre" } };
+
+                var good = new RiskConfig();
+                good.StopGuard.OnMissing = "Flatten";
+                var okAddon = new RiskGuardAddOn();
+                okAddon.SetConfigForTest(good);
+                var okResult = okAddon.RunPreflight();
+                Assert(okResult.Passed, string.Format(
+                    "a recognised action passes preflight (got {0}: {1})",
+                    okResult.FailureCode, okResult.FailureMessage));
+
+                var bad = new RiskConfig();
+                bad.StopGuard.OnMissing = "WarnOnly";
+                var badAddon = new RiskGuardAddOn();
+                badAddon.SetConfigForTest(bad);
+                var badResult = badAddon.RunPreflight();
+
+                Assert(!badResult.Passed,
+                    "an action the guard does not implement fails preflight");
+                Assert(badResult.FailureMessage != null
+                       && badResult.FailureMessage.IndexOf("WarnOnly", StringComparison.Ordinal) >= 0,
+                    "and the message names the value it could not perform, so the operator knows "
+                    + "what to change");
+            }
+            finally
+            {
+                Account.All = previousAccounts;
+            }
+        }
+
+        private static void TestP187_NothingAdvertisesAnActionTheGuardCannotPerform()
+        {
+            Console.WriteLine("\n[TEST] P1-87: no comment advertises a stop action that is not implemented");
+
+            // "WarnOnly" is listed on the declaration as though it were a supported choice. It
+            // produces neither an action nor a warning -- it is P1-77's shape written in a
+            // comment instead of a config file, on the guard's most consequential setting.
+            //
+            // Either implement it or stop offering it. This asserts the second, because adding
+            // a third action is a feature and this is a defect.
+            var path = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(P184ThisFile()), "..", "addons", "RiskGuardAddOn.cs"));
+            var text = File.Exists(path) ? File.ReadAllText(path) : null;
+
+            Assert(text != null && !text.Contains("WarnOnly"),
+                "nothing in the guard mentions WarnOnly, an action it has never implemented");
         }
 
         private static void TestStopGuardNoActionWhenStopPresent()
