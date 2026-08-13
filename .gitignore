@@ -27,3 +27,4 @@ logs/agent_loop/*
 # silently reset that history on a fresh clone.
 !logs/agent_loop/ledger.jsonl
 !logs/agent_loop/learning_feedback.jsonl
+*.log
