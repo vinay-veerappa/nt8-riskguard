@@ -115,9 +115,9 @@ MUTANTS = [
     ("the consistency cap gets a DO-NOTHING evaluator, which is exactly the instinct the\n"
      "     header of this file warns against: it converts an honest red row into a green\n"
      "     one without enforcing anything",
-     '                UnevaluatedReason = "NO CODE READS THIS. It is switched ON by default and has "',
+     '                UnevaluatedReason = "NO CODE READS THIS. It has never capped anything -- the "',
      '                Evaluator = c => R(null, null, 1),\n'
-     '                UnevaluatedReason = "P1-77. EnableConsistencyCap defaults to TRUE and appears at "'),
+     '                UnevaluatedReason = "P1-77. EnableConsistencyCap appears at "'),
 
     # ---- the completeness gate itself ----
     ("a rule is DELETED from the registry, leaving its config field classified by nothing.\n"
