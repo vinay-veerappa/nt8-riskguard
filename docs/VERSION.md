@@ -2,20 +2,24 @@
 
 > ## ⚠️ There are THREE version identifiers for this addon, and only one is authoritative
 >
-> **Re-measured 2026-08-13 after session 29.** Every value below was read off the repo and the live
-> box, and the two disagree *right now* — see the warning under the table.
+> **Re-measured 2026-08-13 after session 30.** Every value below was read off the repo and the live
+> box. They agree today; they have not always, and the block under the table is why.
 >
 > | Identifier | Value | Authoritative? |
 > |---|---|---|
-> | **Git tag on `main`** | **`v1.12.1`** (18 tags, `v1.0.0`…`v1.12.1`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
-> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ⚠️ **`1.10.0`** — two minor versions behind | ❌ No. Reported over `GET /api/riskguard/version`, and **hand-maintained, so it drifts.** |
+> | **Git tag on `main`** | **`v1.12.2`** (19 tags, `v1.0.0`…`v1.12.2`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
+> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ✅ **`1.12.2`** — agrees, as of session 30 | ❌ **Still not authoritative.** Reported over `GET /api/riskguard/version`, **hand-maintained, and it has drifted twice.** Agreement today is a fact, not a guarantee. |
 > | The `v1.7.0-ui-audit` scheme this file used to lead with | — | ❌ No. A pre-hardening release-notes scheme, abandoned mid-2026-07 and unrelated to the tags. Note the collision: there is now a real `v1.7.0` tag that has nothing to do with it. |
 >
-> ⚠️ **THE DRIFT IS LIVE, AND CI HAS BEEN SAYING SO FOR 7 RUNS.** The deployed code is `v1.12.1`
-> (verified by content hash, `sync_nt8.py --verify` → ALL IN SYNC, 8 files) and the running addon
-> answers **`1.10.0`**. `tools/check_version_matches_tag.py` — added by `c92605e` for exactly this
-> failure — fails the build, and two tags shipped over it anyway. **Bump the constant in the same
-> commit as the tag, as the gate asks.**
+> ✅ **RESOLVED in `v1.12.2` (session 30), and the history is the point.** The constant had drifted to
+> `1.10.0` while `v1.12.1` was deployed, so the running addon answered the wrong version for three
+> sessions. `tools/check_version_matches_tag.py` — added by `c92605e` for exactly this failure —
+> **failed 7 consecutive CI runs and `v1.11.0`, `v1.12.0` and `v1.12.1` shipped over it anyway.**
+> A gate nobody reads is a comment.
+>
+> ⚠️ **Bump the constant in the SAME commit as the tag.** The gate compares against the newest tag
+> reachable from HEAD, so it is **red by design** between a bump and its tag — which is the ordering
+> trap that produced the original drift in the first place.
 >
 > **Trust the git tag and the file hashes.** `python tools/sync_nt8.py --verify` compares content;
 > a version string compares nothing. First recorded as a trap on 2026-08-13 after all three
@@ -32,10 +36,10 @@
 These are the real versions. The repo was created by the 2026-08-12 split; everything before it is
 under "Pre-split history" below.
 
-### ⚠️ `v1.0.3` … `v1.12.1` — derived, not written up
+### ⚠️ `v1.0.3` … `v1.12.2` — derived, not written up
 
-**This file's prose notes stop at `v1.0.2` and fifteen tags shipped after it.** Rather than
-back-fill fifteen sections from memory — which is how the identifier table above came to name a tag
+**This file's prose notes stop at `v1.0.2` and sixteen tags shipped after it.** Rather than
+back-fill sixteen sections from memory — which is how the identifier table above came to name a tag
 that was 11 releases old — the table below is **derived from `git`**: date, subject, and whether the
 release touched `addons/` at all. The narrative for each lives in the handover section named in the
 last column, which is where it was actually written down.
@@ -49,7 +53,8 @@ done
 
 | Tag | Date | Touched `addons/`? | What it carried | Written up in |
 |---|---|---|---|---|
-| **`v1.12.1`** | 2026-08-13 | in-range: **`GuardRules.cs`** | Re-pointed the `ui3` mutation anchor a `GuardRules` comment edit had broken — **a stale anchor scores a SURVIVOR, silently** | §5.25 |
+| **`v1.12.2`** | 2026-08-13 | 1 (`RiskGuardAddOn.cs`) | **The version constant, which had drifted to `1.10.0` and kept CI red for 7 runs across three sessions.** The live box had been answering the wrong version to `GET /api/riskguard/version`. Docs re-derived in the same pass | §5.26 |
+| `v1.12.1` | 2026-08-13 | in-range: **`GuardRules.cs`** | Re-pointed the `ui3` mutation anchor a `GuardRules` comment edit had broken — **a stale anchor scores a SURVIVOR, silently** | §5.25 |
 | `v1.12.0` | 2026-08-13 | — | agent-loop ledger + learning feedback from the config-defaults session | §5.25 |
 | `v1.11.0` | 2026-08-12 | — | `CONFIG_DEFAULTS.md` — the defaults defined from a trader's frame, plus a battery fix | §5.25 |
 | `v1.10.0` | 2026-08-12 | 3 | `UI7` — a refused write carries its reason, instead of arriving as a `NullReferenceException` | §5.24 |
@@ -70,7 +75,7 @@ the **range** `v1.12.0..v1.12.1` does (`GuardRules.cs`). That distinction is the
 `nt8-mcp-bridge`'s stale-pin guard compares a *range* against `addons/` rather than a single commit —
 a pin that looks like it trails only docs can still revert live code.
 
-### `v1.0.2` — 2026-08-12 · ~~deployed, live in NT8~~ superseded by `v1.12.1`
+### `v1.0.2` — 2026-08-12 · ~~deployed, live in NT8~~ superseded by `v1.12.2`
 
 Two defects from the hardening backlog, both driven test-first through the agent loop.
 

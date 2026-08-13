@@ -2091,10 +2091,44 @@ leader". What was wrong was ignoring a follower the caller *did* name.
 
 ---
 
-### P1-90. An unresolvable account name routes an order to an arbitrary account — OPEN
+### P1-90. An unresolvable account name routes an order to an arbitrary account — CLOSED 2026-08-13, LIVE-VALIDATED
 
 *(found while closing `P1-88`, by grepping the bridge for the guess `P1-85` had just removed from
-the engine. **This is the most serious item currently open in either repo.**)*
+the engine. Was the most serious item open in either repo for one day.)*
+
+> ✅ **FIXED, DEPLOYED AND VALIDATED ON THE LIVE BOX** — session 30, handover §5.26. All **six**
+> sites refuse. The measured proof, on the deployed build:
+>
+> ```
+> nt_place_order account="NoSuchAccount_P190"
+>   -> "No account named 'NoSuchAccount_P190' (matched case-insensitively) among the 96
+>       available. Refusing to place an order rather than choosing a different account."
+> nt_place_order account="sim101"       (lower case, valid)
+>   -> reaches the symbol check -> "instrument not found" -- so it refuses the unresolvable
+>      without over-refusing the resolvable, and case-insensitive matching is preserved
+> nt_compliance_report  (account omitted)
+>   -> "This request must name an account: no `account` field was supplied."
+> ```
+>
+> **The resolution moved OUT of `McpBridgeAddOn.cs`** into `addons/BridgeAccountResolver.cs`, which
+> names no NinjaTrader type — so `BridgeTests.csproj` compiles and **executes** it. That is the
+> first bridge production source this project tests rather than greps, and it is `P2-27`'s cheapest
+> available step. Suite 23 → **50**.
+>
+> Gates, both made to fail on purpose before being trusted: **`mutation/mutate_p190.py`** — the
+> bridge repo's **first** mutation battery, 11 mutants / 0 survivors (7 kill on executed behaviour,
+> 4 on source assertions, and the split is labelled) — and **`tools/check_bridge_parses.py`**,
+> ported from `check_window_parses.py`, which catches a syntax error in bridge code *before* it
+> reaches the live NT8 folder.
+>
+> ⚠️ **One mutant SURVIVED the first draft of the tests**: narrowing the emptiness test to a null
+> check, so `"   "` was reported *not found* rather than *missing*. It still refused, so every
+> "was it refused?" assertion held. The assertion that the two reasons are distinguishable was added
+> because of it — `P1-85`'s lesson (missing and blank are different inputs) arriving a second time.
+>
+> ⚠️ **`P1-91` was opened by this fix**: four MCP tool schemas still advertise
+> `default: 'Sim101'`, two of them **order** tools. See that entry — the engine refuses, and the
+> wrapper still tells callers the guess exists.
 
 Three order paths in `McpBridgeAddOn.cs` (`:2386`, `:2453`, `:4422`) resolve the account as:
 
@@ -2121,7 +2155,47 @@ should be reviewed with it.
 has no safe interpretation. Deliberately **not** attempted at the end of the session that found
 it — it changes order routing, and this repo has no executable tests to catch a mistake (`P2-27`).
 
-**Where**: `nt8-mcp-bridge`, `addons/McpBridgeAddOn.cs`.
+**Where**: `nt8-mcp-bridge`, `addons/McpBridgeAddOn.cs` — and the fix, in
+`addons/BridgeAccountResolver.cs`.
+
+---
+
+### P1-91. Four MCP tool schemas still advertise the account guess `P1-90` removed — OPEN
+
+*(opened 2026-08-13 by `P1-90`'s live validation, in the third repo. Found by reading the tool
+schema before probing with it, which is the only reason it was noticed at all.)*
+
+`tvDownloadOHLC/mcp/ninjatrader-mcp/nt-mcp-server.js` declares `default: 'Sim101'` on the `account`
+property of four tools — **two of them order tools**:
+
+| Line | Tool |
+|---|---|
+| `:89` | **`nt_place_oco_order`** |
+| `:124` | **`nt_place_atm_order`** |
+| `:588` | `nt_compliance_report` |
+| `:672` | `nt_deploy_strategy` |
+
+**Two distinct problems, and the second is the one that matters.**
+
+1. The schema now **misdescribes the deployed behaviour**. It tells a caller — human or agent —
+   that omitting `account` targets `Sim101`. Since `P1-90` the bridge refuses. An agent reading the
+   contract will write a request the box rejects.
+2. ⚠️ **Latent, and it would restore `P1-90` at the wrapper layer.** MCP clients are permitted to
+   materialise schema defaults into the request. Any client that does would inject
+   `account: "Sim101"` into an **order** call, and the bridge — correctly receiving a named,
+   resolvable account — would place the order on `Sim101`. The refusal would never be reached.
+
+> **Measured, so this is not filed on suspicion:** with `nt_compliance_report` and no `account`, the
+> bridge received **no account field** and refused. So *this* client does not materialise defaults.
+> That is a property of the client in use today, not of the contract — which is exactly the shape of
+> `P1-75` (a schema `default:` that became a write because the receiver merged it) and `P1-73`.
+
+**The fix is to delete the four defaults** and mark `account` required, so the contract says what
+the engine does. Deliberately not attempted in the session that found it: it is a third repo, the
+MCP server must be restarted to reload tool schemas, and a restart drops the live tool connections
+that were being used to validate `P1-90`.
+
+**Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/nt-mcp-server.js:89`, `:124`, `:588`, `:672`.
 
 ---
 

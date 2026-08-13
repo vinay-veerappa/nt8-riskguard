@@ -105,34 +105,34 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **1188 passed, 0 failed** — measured. All **401** declared test methods invoked | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **92 IDs — 76 closed, 16 open. The whole `P0` band is CLOSED.** Re-derived for this pass: **89** banded + **3** `P?-`. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Highest open** | ⚠️ **`P1-90`** — an order naming an unresolvable account is **placed on an arbitrary one**. In **`nt8-mcp-bridge`**, not here. `P1` understates it; on consequence it is `P0` (§5.25) | §5.6 item 0 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`. `git describe` = **`v1.12.1-1-gcdee906`** — one docs-only commit past the tag. **18 tags**, `v1.0.0`…`v1.12.1` | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.12.1` core is live in NT8** — measured **ALL IN SYNC, 8 files identical, 0 orphans**. `McpBridgeAddOn.cs` is listed as *unmanaged* here, which is correct: the bridge repo deploys it | `python tools/sync_nt8.py --verify` |
-| **Guard** | `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured 12:27 UTC | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Suite** | **core 1188 passed, 0 failed** (all **401** declared methods invoked); **bridge 50 passed, 0 failed** (was 23 — `P1-90` brought executable tests to that repo) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
+| **Defects** | **93 IDs — 78 closed, 15 open. The whole `P0` band is CLOSED.** Re-derived after session 30: **90** banded + **3** `P?-`. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
+| **Highest open** | **`P1-91`** — four MCP tool schemas still advertise `default: 'Sim101'`, **two of them order tools**. The engine refuses now; a client that materialises schema defaults would inject the guess and never reach the refusal. In **tvDownloadOHLC**, a third repo (§5.26) | §5.6 item 0 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **19 tags**, `v1.0.0`…**`v1.12.2`** | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.12.2` core + `P1-90` bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and now `BridgeAccountResolver.cs` too | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.12.2`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the session-30 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **18 batteries** + `check_anchors.py`. **205 anchors / 0 broken — measured.** ⚠️ The batteries themselves were **not** re-run for this pass (~205 mutants × a suite run each); session 29 reports 0 survivors. **The anchors are the cheap thing that actually goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | 0 errors, net48 — **session 29's figure, not re-run here.** Deliberate: `nt_compile` reloads every addon on a box whose guard is armed. The loaded assembly is evidenced instead by `guarding: true` **plus** content parity above | `nt_compile`, and read `errorCount` |
-| **CI** | ⚠️ **RED in `nt8-riskguard` — 7 consecutive runs**, since 04:16 UTC, spanning sessions 27–29. **One gate, and it is right**: see the block below. `nt8-mcp-bridge` is green | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| ⚠️ **Bridge pin** | **STALE and it is a real revert this time.** The bridge vendors `v1.12.0`, **3 commits behind**, and that range touches `addons/GuardRules.cs`. `deploy.py --verify` WARNs; a real deploy **exits 2**. **Bump the pin before deploying the bridge** | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Mutation** | **19 batteries** — 18 here + **`nt8-mcp-bridge/mutation/mutate_p190.py`**, the first in that repo (11 mutants / 0 survivors). **205 anchors / 0 broken — measured.** ⚠️ The core batteries were **not** re-run for this pass (~205 mutants × a suite run each); session 29 reports 0 survivors. **The anchors are the cheap thing that actually goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | **0 errors, net48 — measured twice in session 30**, after the `v1.12.2` core sync and again after the bridge deploy. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **CI** | `nt8-mcp-bridge` **green**. `nt8-riskguard` was **RED for 7 consecutive runs** across sessions 27–29 on one correct gate, and that is fixed in `v1.12.2` — see the block below, because the lesson outlives the fix | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
+| **Bridge pin** | ✅ **`v1.12.2`, matches core `main`.** It was stale at `v1.12.0` against a `v1.12.1` core in session 30, and the range **touched `addons/GuardRules.cs`** — a real revert, refused by `deploy.py` (exit 2) | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
-> ⚠️ **CI IS RED, THE GATE IS CORRECT, AND THREE SESSIONS SHIPPED ON TOP OF IT.**
-> `tools/check_version_matches_tag.py` reports: constant **`1.10.0`** (`addons/RiskGuardAddOn.cs:39`)
-> vs newest reachable tag **`v1.12.1`**. So `GET /api/riskguard/version` on the live box answers
-> **`1.10.0`** for code that is `v1.12.1` — measured today, and that endpoint is how an operator finds
-> out what is guarding a funded account.
+> ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
+> `tools/check_version_matches_tag.py` reported constant `1.10.0` vs tag `v1.12.1` and **failed 7
+> consecutive CI runs across three sessions while `v1.11.0`, `v1.12.0` and `v1.12.1` shipped over
+> it.** The live box answered `1.10.0` to `GET /api/riskguard/version` — the endpoint an operator uses
+> to ask what is guarding a funded account. The gate had been added by `c92605e`, titled *"the addon
+> reported 1.1.0 while v1.2.0 was deployed — and now a gate says so"*: **built for exactly this
+> failure, and then ignored.**
 >
-> The gate was added by commit `c92605e`, *"the addon reported 1.1.0 while v1.2.0 was deployed — and
-> now a gate says so"*. **It was built for exactly this, it fired, and two tags then shipped without
-> bumping the constant.** A gate nobody reads is a comment. The fix is one line —
-> `Version = "1.12.1"` — but it then needs `sync_nt8.py` **and** a recompile, so it is an action on a
-> live box rather than a docs edit; it is item 0 of §5.6's pre-work.
+> ⚠️ **`gh run list` before anything else.** A red pipeline invalidates every state claim downstream
+> of it, and §0 asserted CI was green and *"watched fail on purpose"* the whole time.
 >
-> **The durable rule stands and now has a second body of evidence: trust the git tag and the file
-> hashes, never a version string.** `sync_nt8.py --verify` compares content; a version string compares
-> nothing. `docs/VERSION.md` says which identifier wins, and it was itself 11 tags stale until this
-> pass.
+> **The durable rule, now with a second body of evidence: trust the git tag and the file hashes,
+> never a version string.** `sync_nt8.py --verify` compares content; a version string compares
+> nothing. And bump the constant **in the same commit as the tag** — the gate is red by design in
+> between, which is the ordering trap that produced the original drift.
 
 ### What is deployed but NOT validated live
 
@@ -2985,20 +2985,25 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 89, re-run 2026-08-13 (session 29)
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 90, re-run 2026-08-13 (session 30)
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **89** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **90** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **92** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23) |
-| **Open** | **16** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
-| **Closed or superseded** | **76** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
+| **Total IDs** | **93** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23), 1 opened by `P1-90`'s LIVE VALIDATION (`P1-91`, §5.26) |
+| **Open** | **15** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
+| **Closed or superseded** | **78** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16; **`P1-90` in §5.26, live-validated** |
 
-⚠️ **Session 29 added nine IDs** (`P1-82`…`P1-90`) and closed eight of them. `P1-90` is the only
-one still open, and it is in `nt8-mcp-bridge` rather than here — see §5.25. **Its `P1` letter
-understates it**: an order naming an account that does not resolve is placed on an arbitrary one.
+⚠️ **Session 29 added nine IDs** (`P1-82`…`P1-90`) and closed eight. ✅ **Session 30 closed the
+ninth, `P1-90`, and live-validated it** (§5.26) — six sites, not the three that were filed. It
+**opened `P1-91`** in a third repo: four MCP tool schemas still advertise the `Sim101` guess, two of
+them order tools.
+
+> ⚠️ **The counts above and in §0 were re-derived on 2026-08-13 after session 30. They were 11 tags
+> stale before that** — §0 said 78 IDs while the entries said 92 — because ten consecutive sessions
+> appended a record and none returned to the header. **Re-run the `grep`; do not trust the table.**
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -3020,7 +3025,8 @@ were triaged.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| **`P1-90`** ⚠️ | **An order naming an account that does not resolve is PLACED ON AN ARBITRARY ONE** — the chain is *named account → `"Sim101"` → ANY non-Backtest account → ANY account at all* | P1 | **NEW 2026-08-13 (§5.25), and the HIGHEST OPEN DEFECT. The band letter understates it** — `P1-85` was the same guess on a *config* path; this one opens the wrong position, so it belongs with `P0` on consequence. In **`nt8-mcp-bridge`**, `McpBridgeAddOn.cs:2386`, `:2453`, `:4422`; three more `"Sim101"` fallbacks at `:1848`, `:4166`, `:5621`. **The fix is refusal.** Not attempted in the session that found it: it changes order routing and that repo has no executable tests (`P2-27`) |
+| **`P1-91`** ⚠️ | **Four MCP tool schemas still advertise `default: 'Sim101'` — two of them ORDER tools** (`nt_place_oco_order`, `nt_place_atm_order`, `nt_compliance_report`, `nt_deploy_strategy`) | P1 | **NEW 2026-08-13 (§5.26), opened by `P1-90`'s live validation, and now the HIGHEST OPEN.** In **tvDownloadOHLC**, `mcp/ninjatrader-mcp/nt-mcp-server.js:89`, `:124`, `:588`, `:672`. The engine refuses an unresolvable account now; **a client that materialises schema defaults would inject `Sim101` into an order call and never reach the refusal**. Measured: today's client does not — a property of the client, not the contract (`P1-75`'s shape). **Fix: delete the defaults, mark `account` required.** Needs an MCP server restart |
+| ~~**`P1-90`**~~ ✅ | **An order naming an account that does not resolve was PLACED ON AN ARBITRARY ONE** — the chain was *named account → `"Sim101"` → ANY non-Backtest account → ANY account at all* | P1 | **FIXED, DEPLOYED AND LIVE-VALIDATED 2026-08-13 (§5.26)**, one day after it was filed. **Six** sites, not the three filed — and `HandleLockout` was the sharpest, feeding the guess to `UnlockAccount`, which REMOVES protection, with no existence check. Resolution moved to `addons/BridgeAccountResolver.cs`, which names no NT8 type and is therefore **executed** by tests (bridge suite 23→50) rather than grepped. First mutation battery in that repo: 11 mutants / 0 survivors. Opened `P1-91` |
 | ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13; was the highest open defect for one day.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
 | ~~**`P0-67`**~~ ✅ | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
 | ~~**`P1-69`**~~ ✅ | **The copier's latency/slippage metrics are computed and then discarded** — in-memory only, never persisted, no read path | P1 | **NEW 2026-08-13.** The half of `P?-66` that does *not* close. Fix with the `GET` on `/api/copier/config` (§5.3) or the metrics stay invisible however well they are measured |
@@ -3133,32 +3139,38 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 29).** ⚠️ **`P1-90` goes first and it is not close.** Everything below
 it is the previous ordering with the finished items struck through.
 
-> ### ⚠️ Two mechanical chores come before any of it, and the second one BLOCKS `P1-90`
+> ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
-> Both were found by re-measuring for the §0 pass, not by a review. Neither is a defect in the guard;
-> both are the repo lying about itself.
+> Kept rather than deleted, because the *order* they forced is the reusable part.
 >
-> **A. Bump `Version` to `1.12.1`** (`addons/RiskGuardAddOn.cs:39`, currently `1.10.0`). This is
-> **why CI has been red for 7 runs** — `tools/check_version_matches_tag.py` is correct and was written
-> for precisely this. It is one line, but the live box currently answers `1.10.0` to
-> `GET /api/riskguard/version` while running `v1.12.1`, so finishing it means `sync_nt8.py` **and** a
-> recompile. Do it in the same commit as the next tag, which is what the gate asks for.
+> **A. `Version` bumped to `1.12.2`** — CI is green again and the live box answers `1.12.2`. It had
+> been red for 7 runs on a correct gate; see §0's block, which keeps the lesson after the fix.
 >
-> **B. Bump the bridge's submodule pin to `v1.12.1`** (`nt8-mcp-bridge`, vendors `v1.12.0`).
-> ⚠️ **This is not cosmetic and not the usual harmless lag: the 3-commit range touches
-> `addons/GuardRules.cs`, so deploying the bridge today would overwrite the live, correct file with
-> the older one.** `deploy.py` refuses (exit 2) — which means **`P1-90` cannot be deployed until the
-> pin moves**, because the fix lands in the bridge and `deploy.py` ships bridge + vendored core
-> together. Bump the pin first, then fix `P1-90`, then deploy once.
+> **B. The bridge pin bumped to `v1.12.2`.** It had been at `v1.12.0` against a `v1.12.1` core with
+> `addons/GuardRules.cs` in the range, so deploying the bridge would have reverted a live core file.
+> `deploy.py` refused (exit 2), and that refusal **dictated the sequence**: bump pin → fix `P1-90` →
+> deploy once. Anything landing in the bridge inherits that ordering, so check the pin first.
+>
+> **`P1-90` is fixed, deployed and live-validated** — §5.26. The next item is **`P1-91`**, which it
+> opened.
 
-0. ⚠️ **`P1-90` — an order naming an unresolvable account is placed on an arbitrary one.**
-   `nt8-mcp-bridge`, three call sites, and the fix is the one `P1-85` already established: **refuse**.
-   An order that cannot say which account it is for has no safe interpretation. Do the three
-   account-resolution fallbacks (`:1848`, `:4166`, `:5621`) in the same pass, and decide
-   deliberately what each of those should do when the name does not resolve.
-   ⚠️ **Do `P2-27`'s remaining steps first or accept that this lands untested** — that repo compiles
-   only `BridgeSourceTests.cs`, so a source scan is the only gate available today, and this is order
-   routing. That is the trade to make consciously, not by default.
+0. ⚠️ **`P1-91` — four MCP tool schemas still advertise `default: 'Sim101'`, two of them ORDER tools**
+   (`nt_place_oco_order`, `nt_place_atm_order`, `nt_compliance_report`, `nt_deploy_strategy`, in
+   `tvDownloadOHLC/mcp/ninjatrader-mcp/nt-mcp-server.js`). Delete the defaults and mark `account`
+   required. Small, and it **partially undoes `P1-90` for any MCP client that materialises schema
+   defaults** — the injected name resolves, so the refusal is never reached. Measured: today's client
+   does not materialise them, which is a property of the client and not of the contract (`P1-75`'s
+   shape). Needs an MCP server restart, which drops live tool connections — do it when you are not
+   mid-validation.
+
+0. ~~**`P1-90` — an order naming an unresolvable account is placed on an arbitrary one.**~~
+   ✅ **DONE and LIVE-VALIDATED 2026-08-13 — §5.26.** All **six** sites refuse, not just the three
+   order paths; the other three were triaged individually and `HandleLockout` turned out to be the
+   sharpest of them (it fed the guess to `UnlockAccount`, which removes protection, with no existence
+   check at all). The `P2-27` trade named here was **avoided rather than accepted**: the resolution
+   moved into `addons/BridgeAccountResolver.cs`, which names no NT8 type and is therefore *executed*
+   by that repo's tests. That repo now has real behavioural coverage, its first mutation battery, and
+   a parse gate.
 
 Then the previous ordering:
 
@@ -5030,3 +5042,141 @@ what the box actually holds.**
 
 ---
 
+
+## 5.26 Session 30 — 2026-08-13: `P1-90` closed and live-validated, and two lies the repo was telling about itself
+
+**Core `v1.12.1` → `v1.12.2`; bridge `P1-90`.** Both deployed, `nt_compile` 0 errors, deploy parity
+verified from both repos (10 files). Core suite **1188/0**; bridge suite **23 → 50/0**.
+205 anchors / 0 broken.
+
+This session began as a documentation pass and found two live problems in the first ten minutes,
+which is the whole argument for re-measuring instead of reading.
+
+### The two things the repo was asserting falsely about itself
+
+**1. CI had been RED for 7 consecutive runs** — since 04:16 UTC, spanning sessions 27, 28 and 29 —
+while §0 said *"CI ✅ active in both repos … watched fail on purpose, not just pass."* One gate:
+`tools/check_version_matches_tag.py`, reporting constant `1.10.0` against tag `v1.12.1`. So
+`GET /api/riskguard/version` answered **`1.10.0`** on the live box for code that was `v1.12.1`.
+
+> **The gate was added by `c92605e`, titled *"the addon reported 1.1.0 while v1.2.0 was deployed —
+> and now a gate says so."* It was built for exactly this failure, it fired on schedule, and two
+> tags shipped over it.** A gate nobody reads is a comment. Fixed as `v1.12.2`; the live box now
+> answers `1.12.2`.
+
+**2. The bridge's submodule pin was stale in the way the guard exists to catch.** It vendored
+`v1.12.0` against a `v1.12.1` core, and the range **touched `addons/GuardRules.cs`** — so deploying
+the bridge would have written an older `GuardRules.cs` over the live one. `deploy.py` refused it
+(exit 2), correctly.
+
+> ⚠️ **A tag whose own commit touches no `addons/` file can still carry core code in its RANGE.**
+> `v1.12.1`'s tagged commit edits only `mutation/`; the change to `GuardRules.cs` is in an
+> intermediate commit. This is precisely why the guard compares a **range** against `addons/` rather
+> than a single commit, and why *"that tag was docs-only"* is never a safe reason to skip a pin bump.
+> Check it: `git diff --name-only <pin>..<main> -- addons/`.
+>
+> It also **blocked `P1-90`**, because the fix lands in the bridge and `deploy.py` ships bridge and
+> vendored core together. Order forced by that: bump pin → fix → deploy once.
+
+### §0 was 11 tags stale, and the reading order made that worse
+
+§0 claimed suite 1053, 78 defect IDs, `v1.2.0`, 6 batteries. §5.25 recorded 1188, 92, `v1.12.1`, 18.
+Every correct number was already in the file. Sessions 22–29 each appended a `§5.x` and none came
+back to the header, so the documented reading order — *"§0, then §5 from §5.6"* — handed a reader a
+**correct order of work and a wrong set of facts about what is deployed**.
+
+What was done about it, beyond correcting the numbers:
+
+* §0 now says **which rows were measured for the pass and which were carried forward**, and why
+  (`nt_compile` was deliberately not re-run: it reloads every addon on a box whose guard is armed).
+* **§5.1's duplicate figures were deleted rather than updated.** Current state lives in exactly one
+  place. A second copy of a number is a second thing to forget.
+* `VERSION.md`'s identifier table named **`v1.0.2`** as the authoritative tag — 11 releases stale, in
+  the one document whose entire subject is which version identifier to trust. Its release notes
+  stopped at `v1.0.2`; the missing fifteen are now a table **derived from `git`** with the script to
+  regenerate it, rather than fifteen sections written from memory.
+
+### `P1-90` — the fix, and where it had to live
+
+All **six** guessing sites refuse now. The three non-order sites were triaged individually rather
+than swept, because they were not the same defect:
+
+| Site | What it actually was |
+|---|---|
+| `PlaceOrder`, `PlaceOcoOrder`, `PlaceAtmOrder` | Guessed on **both** omission and typo, then placed. The `P0`-consequence three. |
+| `DeployStrategy` | Guessed only on **omission** (a typo was already refused below) — but it *enables* a strategy, which then places its own orders. |
+| `GetComplianceReport` | Same shape. A wrong compliance report is an answer an operator acts on: another account's drawdown against this one's limit, under a heading naming the account they asked about. |
+| **`HandleLockout`** | ⚠️ **The sharpest of the six.** It took the guessed name straight into `UnlockAccount`, which **removes protection**, with no existence check at all. Omitting the field unlocked `Sim101`; a **typo** returned `success:true, isLockedOut:false` for an account that does not exist — which reads as reassurance. |
+
+**The resolution moved OUT of `McpBridgeAddOn.cs`** into `addons/BridgeAccountResolver.cs`. The
+reason is the reason this repo keeps hitting walls: that file is 6013 lines and in **no test build**
+(`P2-27`), so anything inside it can be pinned only by source regex. The new file names **no
+NinjaTrader type** — it takes account names as strings — so `BridgeTests.csproj` compiles and
+**executes** it. That is the first bridge production source this project tests rather than greps,
+and it is `P2-27`'s cheapest available step. `tools/deploy.py` globs `addons/*.cs`, so it needed no
+registration to ship.
+
+### Live-validated, on the deployed build
+
+```
+nt_place_order account="NoSuchAccount_P190"  -> refused, naming the 96 available accounts
+nt_place_order account="sim101"              -> passes the account gate, stops at the symbol check
+nt_compliance_report (account omitted)       -> "no `account` field was supplied"
+```
+
+⚠️ **The probe was designed so it could not place an order even if the fix were broken.**
+`PlaceOrder` resolves the account **before** validating the symbol, so a bad account plus a
+deliberately invalid symbol is refused by one check or the other. The second line matters as much as
+the first: it proves the resolver does not **over**-refuse, and that case-insensitive matching
+survived.
+
+### Two new gates, and one mutant that survived the first draft
+
+* **`mutation/mutate_p190.py`** — the bridge repo's **first** mutation battery. 11 mutants, 0
+  survivors. Seven mutate the resolver and die to executed behaviour; four mutate the call sites and
+  can only die to source assertions. **The split is labelled in the file**, because the second half
+  proves less and the honest thing is to say which half is which.
+* **`tools/check_bridge_parses.py`** — ported from `check_window_parses.py`. A syntax error in any
+  addon `.cs` stops **every** addon loading, the risk guard included, and until now nothing here
+  could catch one before it was written to the live NT8 folder. **Verified by breaking the resolver
+  on purpose** and watching it report `CS1026`/`CS1513`.
+
+⚠️ **One mutant SURVIVED the first draft of the tests, and it is the one worth remembering.**
+Narrowing the emptiness check to `name == null` means `"   "` is reported **not found** instead of
+**missing** — it still refuses, so every *"was it refused?"* assertion held. `P1-85` recorded this
+exact lesson (missing and blank are different inputs) and it still had to be re-learned one layer
+out. The assertion that the two reasons are **distinguishable** was added because of the survivor.
+
+### 🆕 `P1-91` — opened by the validation, in the third repo
+
+Four MCP tool schemas still declare `default: 'Sim101'` on `account`, **two of them order tools**
+(`nt_place_oco_order`, `nt_place_atm_order`, plus `nt_compliance_report` and `nt_deploy_strategy`).
+Two problems: the contract now misdescribes the engine, and — the one that matters — **an MCP client
+that materialises schema defaults would inject `Sim101` into an order call and the refusal would
+never be reached.** Measured: the client in use today does *not* materialise them, which is a
+property of that client and not of the contract. Same shape as `P1-75`.
+
+Not attempted here: it needs an MCP server restart, which would have dropped the live tool
+connections being used to validate `P1-90`.
+
+### What this session says about the method
+
+Four findings, and **not one came from reading code with the intent of reviewing it**:
+
+1. CI red — from running `gh run list` before trusting a documented "green".
+2. The stale pin — from running `deploy.py --verify` rather than believing §5.1's *"bridge pin bumped
+   to match."*
+3. The surviving mutant — from mutating a fix that already had passing tests.
+4. `P1-91` — from **reading the tool schema before probing with it**.
+
+The first two cost about 90 seconds each. **Both were being asserted as fine, in writing, by the
+document whose job is to say what is true.**
+
+### Next
+
+`P1-91` first — it is small, and it partially undoes `P1-90` on two order paths for any client that
+reads defaults. Then §5.6's ordering stands unchanged: the UI **write** half, then `P3-31`'s ledger →
+timer → the RiskGuard-side audit. `P2-27` now has a demonstrated cheap step (extract, then execute)
+and it should be spent on `TradeCopierWindow.cs` and the rest of `McpBridgeAddOn.cs` the same way.
+
+---
