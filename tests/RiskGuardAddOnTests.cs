@@ -15910,13 +15910,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             // get success:true back, and have copied nothing.
             var engine = new TradeCopierEngine();
             var a = engine.ApplyGroupRequest(JObject.Parse(
-                @"{""groupName"":""Ga"",""followers"":[""F1"",""F2""]}"), false);
+                @"{""groupName"":""Ga"",""leaderAccount"":""GaLead"",""followers"":[""F1"",""F2""]}"), false);
             Assert(a != null && a.FollowerAccounts != null && a.FollowerAccounts.Count == 2, string.Format(
                 "the `followers` spelling arrived (got {0})",
                 a == null || a.FollowerAccounts == null ? -1 : a.FollowerAccounts.Count));
 
             var b = engine.ApplyGroupRequest(JObject.Parse(
-                @"{""groupName"":""Gb"",""followerAccounts"":[""F3""]}"), false);
+                @"{""groupName"":""Gb"",""leaderAccount"":""GbLead"",""followerAccounts"":[""F3""]}"), false);
             Assert(b != null && b.FollowerAccounts != null && b.FollowerAccounts.Count == 1,
                 "the `followerAccounts` spelling arrived");
 
@@ -16019,7 +16019,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var engine = new TradeCopierEngine();
             var merged = engine.ApplyGroupRequest(
-                JObject.Parse(@"{""groupName"":""Fresh"",""quantityRatio"":4.0}"), false);
+                JObject.Parse(@"{""groupName"":""Fresh"",""leaderAccount"":""FreshLead"",""quantityRatio"":4.0}"), false);
 
             Assert(merged != null && merged.GroupName == "Fresh", "the new group was created");
             Assert(merged != null && merged.QuantityRatio == 4.0, "its named field was applied");
