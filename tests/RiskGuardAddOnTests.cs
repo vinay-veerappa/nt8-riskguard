@@ -143,6 +143,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP292_AManualLockoutBitesInEveryMode();
             TestP292_TheAuthoritySurvivesASaveLoadRoundTrip();
             TestP292_AShadowLockoutIsRECORDED();
+            TestP293_PureAndOverrideWithFrictionFailPreflight();
+            TestP294_ATimedManualLockoutStopsNewOrders();
+            TestP295_FirmStartingBalanceUsesPlanAccountSizeNotHeuristic();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -10920,7 +10923,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             addon.LockAccount("Acc1", 15);
             
             Assert(state.LockoutUntil > DateTime.UtcNow, "LockoutUntil is in the future");
-            Assert(state.IsLockedOut == false, "IsLockedOut is false for timed lockout");
+            // P2-94: IsLockedOut stays false for a timed lockout (the flag is for indefinite/EOD
+            // lockouts), but CanTrade must still refuse -- reading only IsLockedOut was the defect.
+            Assert(state.IsLockedOut == false, "IsLockedOut is false for timed lockout (flag is for indefinite/EOD)");
+            Assert(!addon.CanTrade("Acc1", "MNQ 03-26", "Test"),
+                "P2-94: a timed manual lockout stops new orders even though IsLockedOut is false");
             
             // Lockout enforcement is now event-driven via PositionUpdate.
             // Fire a PositionUpdate to trigger EvaluateLockoutPhase.
@@ -18296,6 +18303,189 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "and is still OrdinalIgnoreCase");
             Assert(merged != null && merged.MaxSlippageTicks == 2.5,
                 "while unmentioned scalar fields are still preserved");
+        }
+
+        // ================================================================================
+        // P2-93: pure and override_with_friction pass preflight's enforcement gate but
+        // IsActingMode() returns true only for "live", so ProcessAction answers SHADOW (SKIPPED)
+        // for both. An operator waits out five shadow sessions to reach a mode that enforces
+        // nothing. Fail-closed: preflight must refuse to arm in either mode.
+        // ================================================================================
+        private static void TestP293_PureAndOverrideWithFrictionFailPreflight()
+        {
+            Console.WriteLine("\n[TEST] P2-93: pure and override_with_friction fail preflight (not implemented)");
+
+            foreach (var mode in new[] { "pure", "override_with_friction" })
+            {
+                var addon = new RiskGuardAddOn();
+                var config = new RiskConfig();
+                config.Mode = mode;
+                config.MinShadowSessions = 0; // clear the shadow-session gate to isolate this check
+                addon.SetConfigForTest(config);
+                addon.SetModeForTest(mode);
+                addon.SetArmedForTest(true);
+
+                // Need at least one connected non-excluded account for preflight
+                Account.All.Clear();
+                Account.All.Add(new Account { Name = "P293Acc" });
+
+                var result = addon.RunPreflight();
+                Assert(!result.Passed, string.Format(
+                    "preflight must FAIL in '{0}' mode -- IsActingMode() returns true only for 'live', " +
+                    "so ProcessAction would answer SHADOW (SKIPPED) for every breach", mode));
+                Assert(result.FailureCode != null && result.FailureCode.Contains("MODE_NOT_IMPLEMENTED"),
+                    string.Format("and the failure must name MODE_NOT_IMPLEMENTED so the operator knows why, in '{0}'", mode));
+            }
+
+            // And the paired negative: "live" and "shadow" must still pass (with MinShadowSessions cleared)
+            foreach (var mode in new[] { "live", "shadow" })
+            {
+                var addon = new RiskGuardAddOn();
+                var config = new RiskConfig();
+                config.Mode = mode;
+                config.MinShadowSessions = 0;
+                addon.SetConfigForTest(config);
+                addon.SetModeForTest(mode);
+
+                Account.All.Clear();
+                Account.All.Add(new Account { Name = "P293Acc" });
+
+                var result = addon.RunPreflight();
+                Assert(result.Passed, string.Format(
+                    "preflight must PASS in '{0}' mode -- only pure and override_with_friction are refused", mode));
+            }
+        }
+
+        // ================================================================================
+        // P2-94: a TIMED manual lockout (LockAccount(name, minutes)) sets LockoutUntil but not
+        // IsLockedOut. CanTrade read only IsLockedOut, so new orders were admitted and the sweep
+        // then flattened the fills -- worse than a clean refusal. CanTrade must use the same
+        // lockout test as the sweep: IsLockedOut || UtcNow < LockoutUntil.
+        // ================================================================================
+        private static void TestP294_ATimedManualLockoutStopsNewOrders()
+        {
+            Console.WriteLine("\n[TEST] P2-94: a timed manual lockout stops new orders (CanTrade reads LockoutUntil)");
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("live");
+            addon.SetArmedForTest(true);
+
+            var state = new AccountState("P294Acc");
+            addon.SetAccountStateForTest("P294Acc", state);
+
+            // Before lockout: can trade
+            Assert(addon.CanTrade("P294Acc", "MNQ 03-26", "P294"),
+                "precondition: account is tradable before lockout");
+
+            // Timed lockout for 60 minutes -- sets LockoutUntil but NOT IsLockedOut
+            addon.LockAccount("P294Acc", 60);
+            Assert(state.LockoutUntil > DateTime.UtcNow, "LockoutUntil is in the future");
+            Assert(state.IsLockedOut == false, "IsLockedOut is false for timed lockout (the defect's shape)");
+
+            // P2-94: CanTrade must refuse even though IsLockedOut is false
+            Assert(!addon.CanTrade("P294Acc", "MNQ 03-26", "P294"),
+                "P2-94: a timed manual lockout stops new orders -- CanTrade must read LockoutUntil, not just IsLockedOut");
+
+            // And an EOD lockout (minutes == -1) must still bite (sets IsLockedOut, not LockoutUntil)
+            addon.UnlockAccount("P294Acc");
+            addon.LockAccount("P294Acc", -1);
+            Assert(state.IsLockedOut == true, "EOD lock sets IsLockedOut");
+            Assert(!addon.CanTrade("P294Acc", "MNQ 03-26", "P294"),
+                "and an EOD manual lockout still stops new orders (regression guard)");
+
+            // After unlock: can trade again
+            addon.UnlockAccount("P294Acc");
+            Assert(addon.CanTrade("P294Acc", "MNQ 03-26", "P294"),
+                "after unlock the account is tradable again");
+        }
+
+        // ================================================================================
+        // P2-95: FirmStartingBalance is captured as balance - realized - unrealized, and
+        // realized is SESSION-scoped, so it is the session-start balance and not the plan's.
+        // On an account up $5,000 over its life it reads 55,000 instead of 50,000, so the
+        // trail-lock floor is wrong by lifetime profit. FirmProfile.AccountSize is the fix.
+        // ================================================================================
+        private static void TestP295_FirmStartingBalanceUsesPlanAccountSizeNotHeuristic()
+        {
+            Console.WriteLine("\n[TEST] P2-95: FirmStartingBalance uses plan AccountSize, not session-scoped heuristic");
+
+            // A mapped account with a plan that states AccountSize = 50000.
+            // The account has balance 55000, realized 5000 (lifetime profit), unrealized 0.
+            // The heuristic would capture 55000 - 5000 - 0 = 50000 -- which happens to be right
+            // ONLY because realized is session-scoped and this is the first session. On the next
+            // session, realized resets to 0, so the heuristic captures 55000, which is wrong by
+            // 5000. AccountSize is always 50000 regardless of session.
+            var fm = new FirmMirrorConfig();
+            fm.Enabled = true;
+            fm.TrailingDD = new FirmTrailingDDConfig
+            {
+                Enabled = true, Type = "intraday", IncludesUnrealized = true,
+                Amount = 2000.0, Buffer = 200.0, LockAtProfit = 2000.0
+            };
+            fm.FirmProfiles["TPT-50K-PRO"] = new FirmProfile
+            {
+                Name = "TPT-50K-PRO",
+                AccountSize = 50000.0,
+                TrailingDD = new FirmTrailingDDConfig
+                {
+                    Enabled = true, Type = "intraday", IncludesUnrealized = true,
+                    Amount = 2000.0, Buffer = 200.0, LockAtProfit = 2000.0
+                },
+                DailyLoss = new FirmDailyLossConfig { Enabled = false }
+            };
+            fm.AccountFirmMap["P295Acc"] = "TPT-50K-PRO";
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            config.FirmMirror = fm;
+            addon.SetConfigForTest(config);
+
+            var account = new Account { Name = "P295Acc" };
+            // Session 2: balance is 55000 (up 5000 lifetime), but realized is session-scoped
+            // so realized = 0 this session. The heuristic captures 55000 - 0 - 0 = 55000.
+            // AccountSize is 50000. The fix must use 50000.
+            account.Values[AccountItem.CashValue] = 55000.0;
+            account.Values[AccountItem.RealizedProfitLoss] = 0.0;
+            account.Values[AccountItem.UnrealizedProfitLoss] = 0.0;
+
+            var state = new AccountState("P295Acc");
+            state.FirmDailyDate = FirmDailyDateFor(FirmTestClockUtc, fm);
+
+            addon.EvaluateFirmMirror(account, state, FirmTestClockUtc);
+
+            Assert(state.FirmStartingBalance == 50000.0,
+                "P2-95: FirmStartingBalance must be the plan's AccountSize (50000), not the heuristic "
+                + "(55000) -- the heuristic is session-scoped and wrong by lifetime profit");
+
+            // And an UNMAPPED account (no plan, no AccountSize) must still use the heuristic
+            var fm2 = new FirmMirrorConfig();
+            fm2.Enabled = true;
+            fm2.TrailingDD = new FirmTrailingDDConfig
+            {
+                Enabled = true, Type = "intraday", IncludesUnrealized = true,
+                Amount = 2000.0, Buffer = 200.0, LockAtProfit = 0.0
+            };
+
+            var addon2 = new RiskGuardAddOn();
+            var config2 = new RiskConfig();
+            config2.FirmMirror = fm2;
+            addon2.SetConfigForTest(config2);
+
+            var account2 = new Account { Name = "P295Unmapped" };
+            account2.Values[AccountItem.CashValue] = 55000.0;
+            account2.Values[AccountItem.RealizedProfitLoss] = 0.0;
+            account2.Values[AccountItem.UnrealizedProfitLoss] = 0.0;
+
+            var state2 = new AccountState("P295Unmapped");
+            state2.FirmDailyDate = FirmDailyDateFor(FirmTestClockUtc, fm2);
+
+            addon2.EvaluateFirmMirror(account2, state2, FirmTestClockUtc);
+
+            Assert(state2.FirmStartingBalance == 55000.0,
+                "an unmapped account with no plan AccountSize falls back to the heuristic (55000) -- "
+                + "the fix only applies when the plan states a size");
         }
     }
 }

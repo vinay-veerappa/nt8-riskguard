@@ -556,6 +556,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardNonRule { ConfigPath = "FirmMirror.Enabled", Reason = "the master switch for the two firm rules above; reported through their Disabled state" },
             new GuardNonRule { ConfigPath = "FirmMirror.AccountFirmMap", Reason = "which firm an account belongs to; it is the EVIDENCE COUNT for both firm rules" },
             new GuardNonRule { ConfigPath = "FirmMirror.FirmProfiles", Reason = "the per-firm value tables the two firm rules resolve against" },
+            new GuardNonRule { ConfigPath = "FirmMirror.ResolvedAccountSize", Reason = "P2-95: transient carrier populated by ResolveEffectiveFirmConfig from FirmProfile.AccountSize; not serialized, not user-configured" },
             new GuardNonRule { ConfigPath = "FirmMirror.DailyResetHourUtc", Reason = "the session boundary the firm rules reset on" },
             new GuardNonRule { ConfigPath = "FirmMirror.DailyResetMinuteUtc", Reason = "the session boundary the firm rules reset on" },
             new GuardNonRule { ConfigPath = "FirmMirror.TrailingDD.Enabled", Reason = "reported through the firm trailing-drawdown rule's Disabled state" },

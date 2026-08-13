@@ -65,10 +65,11 @@ WHAT EACH GROUP IS DEFENDING:
     which `MinShadowSessions` gates arming on -- records nothing. `P1-71`'s class: an
     outcome that happens and leaves no readable trace.
 
-WHAT IS NOT MUTATED, and it is a real gap. `P2-94` is untouched: a TIMED manual
-lockout still does not stop new orders, because `CanTrade` never reads
-`LockoutUntil`. Mutating that would be mutating a defect that is still open, and it
-is filed rather than pinned.
+WHAT IS NOT MUTATED, and it was a real gap until P2-94 closed it: a TIMED manual
+lockout now stops new orders because CanTrade reads LockoutUntil as well as
+IsLockedOut. The two mutants above were re-anchored on the new condition when
+P2-94 widened the lockout test from `IsLockedOut` alone to
+`IsLockedOut || (LockoutUntil > MinValue && UtcNow < LockoutUntil)`.
 
 A crash counts as a kill (handover section 5.14).
 
@@ -86,14 +87,14 @@ GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 MUTANTS = [
     ("CanTrade stops consulting the authority -- the defect, restored. Every lockout bites in\n"
      "     every mode, so a shadow breach halts the copier and every strategy again",
-     'state.IsLockedOut && !state.LockoutWasShadowOnly)',
-     'state.IsLockedOut)'),
+     '&& !state.LockoutWasShadowOnly)',
+     ')'),
 
     ("THE WRONG FIX: CanTrade consults the CURRENT mode instead of the stored authority. Looks\n"
      "     equivalent; it is not. An operator locked out in live escapes by switching to shadow,\n"
      "     which is FR-30 / P1-4's bypass through a different setting",
-     'state.IsLockedOut && !state.LockoutWasShadowOnly)',
-     'state.IsLockedOut && IsActingMode())'),
+     '&& !state.LockoutWasShadowOnly)',
+     '&& IsActingMode())'),
 
     ("the authority sense is INVERTED in the helper: shadow breaches enforce and live breaches\n"
      "     do not. One character, maximally wrong",

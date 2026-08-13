@@ -117,7 +117,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // explicitly listed in LockoutBypassWhileDisarmedAccounts (e.g. personal/SIM accounts).
                 // This prevents a panic toggle-off from defeating a daily-loss/consecutive-loss lockout
                 // on prop-firm accounts.
-                if (_accountStates.TryGetValue(accountName, out var state) && state.IsLockedOut && !state.LockoutWasShadowOnly)
+                //
+                // P2-94: a TIMED manual lockout (LockAccount(name, minutes)) sets LockoutUntil but not
+                // IsLockedOut. CanTrade read only IsLockedOut, so new orders were admitted and the
+                // sweep then flattened the fills -- worse than a clean refusal. The lockout test is
+                // `IsLockedOut || UtcNow < LockoutUntil` (an OR, per P1-54), so CanTrade must use the
+                // same test. LockoutWasShadowOnly applies only to rule breaches, not to manual
+                // lockouts: LockAccount sets LockoutWasShadowOnly = false, so a timed manual lockout
+                // is never shadow-only and cannot be bypassed.
+                if (_accountStates.TryGetValue(accountName, out var state)
+                    && (state.IsLockedOut || (state.LockoutUntil > DateTime.MinValue && DateTime.UtcNow < state.LockoutUntil))
+                    && !state.LockoutWasShadowOnly)
                 {
                     bool bypassAllowed = !_isArmed
                         && _config.LockoutBypassWhileDisarmedAccounts != null
@@ -3439,7 +3449,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (onMissing != "AutoStop" && onMissing != "Flatten")
                 result.Fail("STOP_GUARD_ON_MISSING", $"Unrecognised StopGuard.OnMissing value '{onMissing}'");
             // (d) FR-29 soft gate: live enforcement modes require MinShadowSessions completed shadow sessions.
-            if ((_mode == "live" || _mode == "pure" || _mode == "override_with_friction")
+            // P2-93: only "live" is an acting mode (IsActingMode returns true only for "live"), so
+            // pure and override_with_friction pass this gate and then ProcessAction answers
+            // SHADOW (SKIPPED) for both -- an operator waits out five shadow sessions to reach a
+            // mode that enforces nothing. Fail-closed: stop recognising them here. Implementing
+            // them is a protection increase and the operator's call; until then preflight must
+            // not claim the gate was satisfied.
+            if (_mode == "live"
                 && _config.MinShadowSessions > 0
                 && _shadowSessionsCompleted < _config.MinShadowSessions)
             {
@@ -3449,6 +3465,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             // (e) FR-36: override friction minimums enforced.
             if (_mode == "override_with_friction" && _config.Override != null && _config.Override.WaitSeconds < 30)
                 result.Fail("OVERRIDE_FRICTION", "Override.WaitSeconds below FR-36 enforced minimum of 30s.");
+            // P2-93: pure and override_with_friction are recognised modes but IsActingMode()
+            // returns true only for "live", so ProcessAction answers SHADOW (SKIPPED) for both.
+            // An operator who passes the MinShadowSessions gate and arms in either mode gets
+            // observation-only enforcement with an acting-mode label. Fail-closed: refuse to
+            // arm until the mode is implemented. Use "live" or "shadow" until then.
+            if (_mode == "pure" || _mode == "override_with_friction")
+                result.Fail("MODE_NOT_IMPLEMENTED",
+                    $"Mode '{_mode}' is recognised but not implemented -- IsActingMode() returns true only for 'live', " +
+                    "so ProcessAction would answer SHADOW (SKIPPED) for every breach. Use 'live' or 'shadow' until this mode is wired.");
             // (f) FirmMirror validation (P2-8, F-9b): if enabled, every mapped account must exist on the platform,
             // its firm must exist in FirmProfiles, and each referenced firm profile must have non-zero amounts when its sub-rule is enabled.
             if (_config.FirmMirror != null && _config.FirmMirror.Enabled)
@@ -4696,7 +4721,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 DailyResetHourUtc = fm.DailyResetHourUtc,
                 DailyResetMinuteUtc = fm.DailyResetMinuteUtc,
                 AccountFirmMap = fm.AccountFirmMap,
-                FirmProfiles = fm.FirmProfiles
+                FirmProfiles = fm.FirmProfiles,
+                // P2-95: carry the plan's stated AccountSize so ComputeFirmMirror can use it
+                // as the starting balance instead of the session-scoped heuristic.
+                ResolvedAccountSize = profile.AccountSize
             };
         }
 
@@ -4786,8 +4814,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (st.FirmStartingBalance == 0.0)
             {
-                st.FirmStartingBalance = balance - realized - unrealized;
-                result.TraceLogs.Add($"Initial starting balance captured heuristically: {st.FirmStartingBalance}");
+                // P2-95: prefer the plan's stated AccountSize over the heuristic.
+                // The heuristic (balance - realized - unrealized) captures the SESSION-start
+                // balance because `realized` is session-scoped. On an account up $5,000 over
+                // its life it reads 55,000 instead of 50,000, so the trail-lock floor is wrong
+                // by lifetime profit — and the error GROWS as the account does. When the plan
+                // states an AccountSize, that is the plan's starting balance by definition.
+                if (fm.ResolvedAccountSize > 0.0)
+                {
+                    st.FirmStartingBalance = fm.ResolvedAccountSize;
+                    result.TraceLogs.Add($"Initial starting balance set from plan AccountSize: {st.FirmStartingBalance}");
+                }
+                else
+                {
+                    st.FirmStartingBalance = balance - realized - unrealized;
+                    result.TraceLogs.Add($"Initial starting balance captured heuristically: {st.FirmStartingBalance}");
+                }
                 stateChanged = true;
             }
 
@@ -5682,6 +5724,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public FirmDailyLossConfig DailyLoss { get; set; } = new FirmDailyLossConfig();
         public int DailyResetHourUtc { get; set; } = 22;
         public int DailyResetMinuteUtc { get; set; } = 0;
+        // P2-95: populated by ResolveEffectiveFirmConfig from the matched FirmProfile.
+        // Not serialized in config — it is a transient carrier so ComputeFirmMirror can
+        // use the plan's stated AccountSize as the starting balance instead of the
+        // heuristic (balance - realized - unrealized), which is session-scoped and wrong
+        // by the account's lifetime profit. JsonIgnore because it is never user-configured.
+        [JsonIgnore]
+        public double ResolvedAccountSize { get; set; } = 0.0;
         // Per-firm profiles: map account name -> firm name. The matching FirmProfile in FirmProfiles
         // supplies the firm-specific drawdown/daily-loss rules. Falls back to TrailingDD/DailyLoss above
         // when an account is not mapped or the firm name is not found.
