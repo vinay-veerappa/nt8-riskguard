@@ -11,6 +11,10 @@ using Newtonsoft.Json;
 // RiskGuardAddOnTests.cs under the same namespace.
 using NinjaTrader.Cbi;
 using NinjaTrader.Code;
+// UI2: ConfigFilePath is rooted in Globals.UserDataDir, which the test build stubs to
+// BaseDirectory/MockUserData -- so the acceptance tests round-trip through the real
+// property rather than through a path they were handed.
+using NinjaTrader.Core;
 #else
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -22,6 +26,132 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
     public enum CopierExecutionMode { Executions, Orders }
     public enum CopierSizingMode { QuantityRatio, FixedLot, NetLiquidationRatio, AvailableCashPercent, PerTickerMatrix }
+
+    /// <summary>
+    /// The operator surfaces' request builders. UI2 / `P?-65`.
+    ///
+    /// WHY THIS IS IN CORE AND NOT IN THE WINDOW. The design's one rule is that a surface
+    /// renders and dispatches: it never constructs a domain object. The window broke that
+    /// at two sites -- build a fresh `CopierRelationship`/`CopierGroup` from the eight
+    /// fields the Add form collects, `Upsert` it, save -- which WIPED `PerTickerRatios`,
+    /// `CustomSymbolMappings`, `MaxSlippageTicks`, `Mode`, `DailyLossLimit` and
+    /// `IsQuarantined`, because the form cannot see them and a fresh object carries
+    /// defaults. That is the fifth and sixth instance of one defect; slice 3b deleted the
+    /// third and fourth from the bridge.
+    ///
+    /// A request is a JObject, and `ApplyRelationshipRequest` merges it over what is
+    /// stored, so a field the form does not mention survives. But an untested builder has
+    /// its own failure mode, and it has already shipped once: `P1-74`'s `autoConversion`
+    /// argument was not a field on anything, so `NormalizeRequest` dropped it and the
+    /// argument had never done a thing. A MISSPELLED KEY IS SILENTLY IGNORED. That is why
+    /// the mapping is here, where a test can assert every field arrives, rather than
+    /// inline in a window the test build compiles away.
+    /// </summary>
+    public static class CopierRequests
+    {
+        /// <summary>Everything the window's "Add Relationship" form collects, and nothing else.</summary>
+        public static JObject Relationship(
+            string leaderAccount, string followerAccount, CopierSizingMode sizingMode,
+            double quantityRatio, int maxPositionSize, bool autoSymbolConversion,
+            bool stealthMode, bool armedForLive, bool isEnabled)
+        {
+            bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
+            int fixedLotSize = (int)Math.Round(quantityRatio);
+
+            return new JObject
+            {
+                { "leaderAccount", leaderAccount },
+                { "followerAccount", followerAccount },
+                { "sizingMode", sizingMode.ToString() },
+                { "quantityRatio", quantityRatio },
+                { "maxPositionSize", maxPositionSize },
+                { "autoSymbolConversion", autoSymbolConversion },
+                { "stealthMode", stealthMode },
+                { "armedForLive", armedForLive },
+                { "isEnabled", isEnabled },
+                { "fixedLotMode", fixedLotMode },
+                { "fixedLotSize", fixedLotSize }
+            };
+        }
+
+        /// <summary>Everything the window's "Add Group" form collects, and nothing else.</summary>
+        public static JObject Group(
+            string groupName, string leaderAccount, IEnumerable<string> followerAccounts,
+            CopierSizingMode sizingMode, double quantityRatio, int maxPositionSize,
+            bool autoSymbolConversion, bool stealthMode, bool armedForLive, bool isEnabled)
+        {
+            bool fixedLotMode = sizingMode == CopierSizingMode.FixedLot;
+            int fixedLotSize = (int)Math.Round(quantityRatio);
+
+            var followers = new JArray();
+            if (followerAccounts != null)
+            {
+                foreach (var follower in followerAccounts)
+                {
+                    followers.Add(follower);
+                }
+            }
+
+            return new JObject
+            {
+                { "groupName", groupName },
+                { "leaderAccount", leaderAccount },
+                { "followerAccounts", followers },
+                { "sizingMode", sizingMode.ToString() },
+                { "quantityRatio", quantityRatio },
+                { "maxPositionSize", maxPositionSize },
+                { "autoSymbolConversion", autoSymbolConversion },
+                { "stealthMode", stealthMode },
+                { "armedForLive", armedForLive },
+                { "isEnabled", isEnabled },
+                { "fixedLotMode", fixedLotMode },
+                { "fixedLotSize", fixedLotSize }
+            };
+        }
+
+        /// <summary>
+        /// The row buttons: enable/disable, and releasing a quarantine. These used to mutate
+        /// the STORED object in place and then Upsert it, so a write the engine went on to
+        /// refuse had already taken effect in memory.
+        /// </summary>
+        public static JObject RelationshipEdit(string leaderAccount, string followerAccount,
+                                               bool? isEnabled, bool? releaseQuarantine)
+        {
+            var req = new JObject
+            {
+                { "leaderAccount", leaderAccount },
+                { "followerAccount", followerAccount }
+            };
+
+            if (isEnabled.HasValue)
+            {
+                req["isEnabled"] = isEnabled.Value;
+            }
+
+            if (releaseQuarantine == true)
+            {
+                req["isQuarantined"] = false;
+            }
+
+            return req;
+        }
+
+        /// <summary>The group row's enable/disable button. Same defect, group half.</summary>
+        public static JObject GroupEdit(string groupName, bool? isEnabled)
+        {
+            var req = new JObject
+            {
+                { "groupName", groupName }
+            };
+
+            if (isEnabled.HasValue)
+            {
+                req["isEnabled"] = isEnabled.Value;
+            }
+
+            return req;
+        }
+    }
 
     public class CopierRelationship
     {
@@ -61,6 +191,84 @@ namespace NinjaTrader.NinjaScript.AddOns
         // P1-22: ticks of adverse slippage on an ENTRY copy that quarantine this relationship.
         // 0 disables the check. Signed so only slippage *against* the follower counts.
         public double MaxSlippageTicks { get; set; } = 0.0;
+    }
+
+    // ── UI1: the conformance read model ────────────────────────────────────────────
+    // docs/UI_REDESIGN_DESIGN.md SS2. The UI's job is not to display numbers, it is to
+    // answer "is each follower doing what I configured it to do". That is a comparison
+    // -- configured vs actual vs verdict -- so it is computed HERE, once, against the
+    // same enumeration and the same sizing function the copy path uses. A consumer that
+    // recomputes it is a second implementation of the rule and will drift from the first.
+
+    /// <summary>
+    /// One relationship's verdict. Ordered by SEVERITY, not alphabetically, because the
+    /// UI ranks by it: `Orphan` MUST outrank `Diverged`. An orphan is a live position on a
+    /// funded account that nothing is managing -- the worst state this system can report.
+    /// </summary>
+    public enum CopierConformance
+    {
+        Idle = 0,        // leader flat AND follower flat. A PASS, not a blank row.
+        Match = 1,       // actual == expected
+        Shadow = 2,      // IsEnabled true, ArmedForLive false: configured, will not act
+        Diverged = 3,    // both non-flat, quantity or side disagrees
+        Orphan = 4,      // leader FLAT, follower NOT. Ranks above Diverged, deliberately.
+        Quarantined = 5  // not copying at all, so agreement is meaningless
+    }
+
+    /// <summary>
+    /// A measurement AND the number of samples behind it. The pair is the point: these
+    /// metrics are SESSION-SCOPED and a recompile resets them, so a bare 0 cannot
+    /// distinguish "no fill observed yet" from "a fill was observed and was perfect".
+    /// That confusion was misdiagnosed as a broken measurement and cost two sessions as
+    /// `P?-66`. `Samples == 0` means NEVER MEASURED and the UI must render it as "--".
+    /// </summary>
+    public class CopierMetric
+    {
+        public double Value { get; set; }
+        public int Samples { get; set; }
+        public bool Measured { get { return Samples > 0; } }
+    }
+
+    /// <summary>
+    /// ONE ROW PER RELATIONSHIP **PER INSTRUMENT ROOT**, not one row per
+    /// relationship. Conformance is per instrument: a follower can mirror NQ
+    /// correctly while holding an unmanaged ES position, and a single aggregate
+    /// row cannot say which one diverged. `InstrumentFullName` is null only for
+    /// the placeholder row emitted when neither side holds anything.
+    /// </summary>
+    public class CopierSnapshotRow
+    {
+        public string RelationshipId { get; set; }
+        public string LeaderAccountName { get; set; }
+        public string FollowerAccountName { get; set; }
+        public string GroupName { get; set; }          // null for a DIRECT relationship
+        public string InstrumentFullName { get; set; }   // null when no instrument could be derived
+        public CopierSizingMode SizingMode { get; set; }
+        public double EffectiveRatio { get; set; }
+        public bool IsEnabled { get; set; }
+        public bool ArmedForLive { get; set; }
+        public bool IsQuarantined { get; set; }
+        public string QuarantineReason { get; set; }
+        public bool StealthMode { get; set; }
+
+        public MarketPosition LeaderSide { get; set; }
+        public int LeaderQuantity { get; set; }        // ABSOLUTE; side is carried separately
+        public MarketPosition ExpectedSide { get; set; }
+        public int ExpectedQuantity { get; set; }
+        public bool ExpectedIsClamped { get; set; }
+        public MarketPosition ActualSide { get; set; }
+        public int ActualQuantity { get; set; }
+
+        public CopierMetric Latency { get; set; }
+        public CopierMetric Slippage { get; set; }
+
+        public CopierConformance Verdict { get; set; }
+    }
+
+    public class CopierSnapshot
+    {
+        public List<CopierSnapshotRow> Rows { get; set; }
+        public DateTime TakenUtc { get; set; }
     }
 
     public class CopierGroup
@@ -263,6 +471,473 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (_lock)
             {
                 return new List<CopierRelationship>(_relationships);
+            }
+        }
+
+        /// <summary>
+        /// UI1 -- NOT IMPLEMENTED YET. Deliberately returns an EMPTY snapshot so the
+        /// eighteen conformance tests compile and FAIL rather than failing to build:
+        /// the agent-loop gate matches `expect_green` against the runner's failure
+        /// lines and refuses a ticket whose tests are not already red, and a broken
+        /// build is not a red test.
+        ///
+        /// The contract this must satisfy is agent/tickets_ui_snapshot.json (UI1).
+        /// Four points that are easy to get wrong and are each a defect this repo has
+        /// already paid for:
+        ///   1. Enumerate through the SAME path the copier acts on -- the group
+        ///      expansion plus `P1-76`'s direct-over-group precedence. A snapshot that
+        ///      enumerates differently can report Match while the engine copies
+        ///      something else, which is worse than no snapshot.
+        ///   2. Derive expected quantity by CALLING `CalculateFollowerQuantity`, never
+        ///      by reimplementing it. Note it opens `if (leaderQty <= 0) return 0`, so
+        ///      it takes an ABSOLUTE quantity -- pass a signed one for a short leader
+        ///      and it silently reports the follower should be flat.
+        ///   3. Every metric carries its sample count. A latency rejected by the sanity
+        ///      bound must NOT count as a sample; that path deliberately records no
+        ///      number, and counting it restores the exact lie `P?-66` was.
+        ///   4. THIS MUST NOT MUTATE. No `LoadFromDisk`, no config write, no counter
+        ///      reset. `P1-69` destroyed the measurements it was asked to report and
+        ///      `P1-75` DISARMED the prop-firm rules -- both were reads that mutated.
+        /// </summary>
+        public CopierSnapshot GetSnapshot()
+        {
+            List<CopierRelationship> relationshipsCopy;
+            List<CopierGroup> groupsCopy;
+            Dictionary<string, int> slippageCountsCopy;
+            Dictionary<string, int> latencyCountsCopy;
+            Dictionary<string, double> latencyValuesCopy;
+            Dictionary<string, double> slippageValuesCopy;
+
+            lock (_lock)
+            {
+                relationshipsCopy = new List<CopierRelationship>(_relationships);
+                groupsCopy = new List<CopierGroup>(_groups);
+                slippageCountsCopy = new Dictionary<string, int>(_slippageSampleCounts);
+                latencyCountsCopy = new Dictionary<string, int>(_latencySampleCounts);
+
+                latencyValuesCopy = new Dictionary<string, double>();
+                slippageValuesCopy = new Dictionary<string, double>();
+                foreach (var r in relationshipsCopy)
+                {
+                    latencyValuesCopy[r.Id] = r.LatencyMs;
+                    slippageValuesCopy[r.Id] = r.AvgSlippageTicks;
+                }
+                foreach (var g in groupsCopy)
+                {
+                    foreach (var gr in g.ToRelationships())
+                    {
+                        if (!latencyValuesCopy.ContainsKey(gr.Id))
+                            latencyValuesCopy[gr.Id] = gr.LatencyMs;
+                        if (!slippageValuesCopy.ContainsKey(gr.Id))
+                            slippageValuesCopy[gr.Id] = gr.AvgSlippageTicks;
+                    }
+                }
+            }
+
+            var leaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in relationshipsCopy)
+                leaders.Add(r.LeaderAccountName);
+            foreach (var g in groupsCopy)
+                leaders.Add(g.LeaderAccountName);
+
+            var activeRels = new List<CopierRelationship>();
+            var groupNameByRelId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var metricIdByRelId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var leader in leaders)
+            {
+                var active = GetActiveRelationshipsForLeaderFromCopies(leader, relationshipsCopy, groupsCopy, includeQuarantined: true);
+                foreach (var rel in active)
+                {
+                    string groupName = DeriveGroupName(rel, groupsCopy);
+                    string canonicalId = ResolveCanonicalRelationshipId(rel, relationshipsCopy);
+                    activeRels.Add(CloneRelationship(rel));
+                    groupNameByRelId[rel.Id] = groupName;
+                    metricIdByRelId[rel.Id] = canonicalId ?? rel.Id;
+                }
+            }
+
+            Account[] accounts = null;
+            try
+            {
+                accounts = Account.All != null ? Account.All.ToArray() : null;
+            }
+            catch (Exception ex)
+            {
+                CopierLog(null, "SNAPSHOT_ACCOUNT_READ_FAILED",
+                    string.Format("Failed to read Account.All for snapshot: {0}", ex.Message));
+            }
+
+            var positionsByAccount = new Dictionary<string, Position[]>(StringComparer.OrdinalIgnoreCase);
+            if (accounts != null)
+            {
+                foreach (var account in accounts)
+                {
+                    if (account == null || string.IsNullOrEmpty(account.Name))
+                        continue;
+                    Position[] positions = null;
+                    try
+                    {
+                        positions = account.Positions != null ? account.Positions.ToArray() : null;
+                    }
+                    catch (Exception ex)
+                    {
+                        CopierLog(account.Name, "SNAPSHOT_POSITION_READ_FAILED",
+                            string.Format("Failed to read positions for account {0}: {1}", account.Name, ex.Message));
+                    }
+                    positionsByAccount[account.Name] = positions ?? new Position[0];
+                }
+            }
+
+            var rows = new List<CopierSnapshotRow>();
+            foreach (var rel in activeRels)
+            {
+                string groupName;
+                groupNameByRelId.TryGetValue(rel.Id, out groupName);
+                string metricId;
+                metricIdByRelId.TryGetValue(rel.Id, out metricId);
+
+                double latencyValue;
+                latencyValuesCopy.TryGetValue(metricId, out latencyValue);
+                int latencySamples;
+                latencyCountsCopy.TryGetValue(metricId, out latencySamples);
+                double slippageValue;
+                slippageValuesCopy.TryGetValue(metricId, out slippageValue);
+                int slippageSamples;
+                slippageCountsCopy.TryGetValue(metricId, out slippageSamples);
+
+                rows.AddRange(BuildRowsForRelationship(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, positionsByAccount));
+            }
+
+            return new CopierSnapshot
+            {
+                Rows = rows,
+                TakenUtc = DateTime.UtcNow
+            };
+
+            List<CopierRelationship> GetActiveRelationshipsForLeaderFromCopies(string leader, List<CopierRelationship> relationships, List<CopierGroup> groups, bool includeQuarantined)
+            {
+                var result = new List<CopierRelationship>();
+                var directFollowers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var r in relationships)
+                {
+                    if (!string.Equals(r.LeaderAccountName, leader, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!includeQuarantined && r.IsQuarantined)
+                        continue;
+                    result.Add(r);
+                    directFollowers.Add(r.FollowerAccountName);
+                }
+
+                foreach (var g in groups)
+                {
+                    if (!string.Equals(g.LeaderAccountName, leader, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    foreach (var gr in g.ToRelationships())
+                    {
+                        if (!includeQuarantined && gr.IsQuarantined)
+                            continue;
+                        if (directFollowers.Contains(gr.FollowerAccountName))
+                            continue;
+                        result.Add(gr);
+                    }
+                }
+
+                return result;
+            }
+
+            string DeriveGroupName(CopierRelationship rel, List<CopierGroup> groups)
+            {
+                foreach (var g in groups)
+                {
+                    if (g.FollowerAccounts == null)
+                        continue;
+                    if (string.Equals(g.LeaderAccountName, rel.LeaderAccountName, StringComparison.OrdinalIgnoreCase)
+                        && g.FollowerAccounts.Any(f => string.Equals(f, rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase)))
+                        return g.GroupName;
+                }
+                return null;
+            }
+
+            string ResolveCanonicalRelationshipId(CopierRelationship rel, List<CopierRelationship> relationships)
+            {
+                var canonical = relationships.FirstOrDefault(r => r.Id == rel.Id);
+                if (canonical != null)
+                    return canonical.Id;
+                canonical = relationships.FirstOrDefault(r =>
+                    string.Equals(r.LeaderAccountName, rel.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.FollowerAccountName, rel.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                return canonical != null ? canonical.Id : null;
+            }
+
+            CopierRelationship CloneRelationship(CopierRelationship source)
+            {
+                return new CopierRelationship
+                {
+                    Id = source.Id,
+                    LeaderAccountName = source.LeaderAccountName,
+                    FollowerAccountName = source.FollowerAccountName,
+                    IsEnabled = source.IsEnabled,
+                    ArmedForLive = source.ArmedForLive,
+                    Mode = source.Mode,
+                    SizingMode = source.SizingMode,
+                    QuantityRatio = source.QuantityRatio,
+                    FixedLotMode = source.FixedLotMode,
+                    FixedLotSize = source.FixedLotSize,
+                    AutoSymbolConversion = source.AutoSymbolConversion,
+                    PerTickerRatios = source.PerTickerRatios != null
+                        ? new Dictionary<string, double>(source.PerTickerRatios, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase),
+                    CustomSymbolMappings = source.CustomSymbolMappings != null
+                        ? new Dictionary<string, string>(source.CustomSymbolMappings, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    StealthMode = source.StealthMode,
+                    MaxPositionSize = source.MaxPositionSize,
+                    DailyLossLimit = source.DailyLossLimit,
+                    IsQuarantined = source.IsQuarantined,
+                    QuarantineReason = source.QuarantineReason,
+                    LatencyMs = source.LatencyMs,
+                    AvgSlippageTicks = source.AvgSlippageTicks,
+                    MaxSlippageTicks = source.MaxSlippageTicks
+                };
+            }
+
+            List<CopierSnapshotRow> BuildRowsForRelationship(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Dictionary<string, Position[]> positionsByAccount)
+            {
+                var rows = new List<CopierSnapshotRow>();
+
+                Position[] leaderPositions;
+                positionsByAccount.TryGetValue(rel.LeaderAccountName, out leaderPositions);
+                if (leaderPositions == null)
+                    leaderPositions = new Position[0];
+
+                Position[] followerPositions;
+                positionsByAccount.TryGetValue(rel.FollowerAccountName, out followerPositions);
+                if (followerPositions == null)
+                    followerPositions = new Position[0];
+
+                var followerRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var fp in followerPositions)
+                {
+                    string root = GetRootFromPosition(fp);
+                    if (!string.IsNullOrEmpty(root))
+                        followerRoots.Add(root);
+                }
+
+                if (rel.CustomSymbolMappings != null && rel.CustomSymbolMappings.Count > 0)
+                {
+                    var mappedLeaderRoots = new HashSet<string>(rel.CustomSymbolMappings.Keys, StringComparer.OrdinalIgnoreCase);
+                    var mappedFollowerRoots = new HashSet<string>(rel.CustomSymbolMappings.Values, StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var kvp in rel.CustomSymbolMappings)
+                    {
+                        Position leaderPos = FindPositionByRoot(leaderPositions, kvp.Key);
+                        Position followerPos = FindPositionByRoot(followerPositions, kvp.Value);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, kvp.Key, kvp.Value));
+                    }
+
+                    foreach (var root in followerRoots)
+                    {
+                        if (mappedFollowerRoots.Contains(root))
+                            continue;
+                        Position leaderPos = FindPositionByRoot(leaderPositions, root);
+                        Position followerPos = FindPositionByRoot(followerPositions, root);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root));
+                    }
+
+                    foreach (var lp in leaderPositions)
+                    {
+                        string root = GetRootFromPosition(lp);
+                        if (string.IsNullOrEmpty(root))
+                            continue;
+                        if (mappedLeaderRoots.Contains(root))
+                            continue;
+                        if (followerRoots.Contains(root))
+                            continue;
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root));
+                    }
+                }
+                else
+                {
+                    foreach (var root in followerRoots)
+                    {
+                        Position leaderPos = FindPositionByRoot(leaderPositions, root);
+                        Position followerPos = FindPositionByRoot(followerPositions, root);
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, leaderPos, followerPos, root, root));
+                    }
+
+                    foreach (var lp in leaderPositions)
+                    {
+                        string root = GetRootFromPosition(lp);
+                        if (string.IsNullOrEmpty(root))
+                            continue;
+                        if (followerRoots.Contains(root))
+                            continue;
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, lp, null, root, root));
+                    }
+
+                    if (rows.Count == 0)
+                        rows.Add(BuildSnapshotRow(rel, groupName, latencyValue, latencySamples, slippageValue, slippageSamples, null, null, null, null));
+                }
+
+                return rows;
+            }
+
+            CopierSnapshotRow BuildSnapshotRow(CopierRelationship rel, string groupName, double latencyValue, int latencySamples, double slippageValue, int slippageSamples, Position leaderPos, Position followerPos, string leaderRoot, string followerRoot)
+            {
+                Instrument instrument = leaderPos != null ? leaderPos.Instrument : (followerPos != null ? followerPos.Instrument : null);
+                string rawSymbol = instrument != null ? instrument.FullName : leaderRoot;
+
+                MarketPosition leaderSide = leaderPos != null ? leaderPos.MarketPosition : MarketPosition.Flat;
+                int leaderQty = leaderPos != null ? Math.Abs(leaderPos.Quantity) : 0;
+
+                MarketPosition actualSide = followerPos != null ? followerPos.MarketPosition : MarketPosition.Flat;
+                int actualQty = followerPos != null ? Math.Abs(followerPos.Quantity) : 0;
+
+
+                bool expectedIsClamped;
+                int expectedQty;
+                MarketPosition expectedSide;
+
+                if (leaderQty > 0 && !string.IsNullOrEmpty(rawSymbol))
+                {
+                    bool rawClamped;
+                    int rawTarget = CalculateFollowerQuantity(rel, leaderQty, rawSymbol, 0, false, out rawClamped);
+
+                    bool isExit;
+                    if (actualSide == MarketPosition.Flat)
+                        isExit = false;
+                    else if (actualSide != leaderSide)
+                        isExit = true;
+                    else
+                        isExit = actualQty > rawTarget;
+
+                    expectedQty = CalculateFollowerQuantity(rel, leaderQty, rawSymbol, actualQty, isExit, out expectedIsClamped);
+                    expectedSide = expectedQty > 0 ? leaderSide : MarketPosition.Flat;
+                }
+                else
+                {
+                    expectedQty = 0;
+                    expectedSide = MarketPosition.Flat;
+                    expectedIsClamped = false;
+                }
+
+                string ratioRoot = !string.IsNullOrEmpty(leaderRoot) ? leaderRoot : GetRootFromInstrument(instrument);
+                double effectiveRatio = !string.IsNullOrEmpty(ratioRoot) ? ComputeEffectiveRatio(rel, ratioRoot) : 0.0;
+
+                CopierConformance verdict;
+                if (rel.IsQuarantined)
+                    verdict = CopierConformance.Quarantined;
+                else if (leaderSide == MarketPosition.Flat && actualSide != MarketPosition.Flat)
+                    verdict = CopierConformance.Orphan;
+                else if (rel.IsEnabled && !rel.ArmedForLive)
+                    verdict = CopierConformance.Shadow;
+                else
+                {
+                    MarketPosition effectiveExpectedSide = expectedSide;
+                    int effectiveExpectedQty = expectedQty;
+                    if (expectedIsClamped && expectedQty == 0)
+                    {
+                        effectiveExpectedSide = actualSide;
+                        effectiveExpectedQty = actualQty;
+                    }
+
+                    if (effectiveExpectedSide != actualSide || effectiveExpectedQty != actualQty)
+                        verdict = CopierConformance.Diverged;
+                    else if (leaderSide == MarketPosition.Flat && actualSide == MarketPosition.Flat)
+                        verdict = CopierConformance.Idle;
+                    else
+                        verdict = CopierConformance.Match;
+                }
+
+                return new CopierSnapshotRow
+                {
+                    RelationshipId = rel.Id,
+                    LeaderAccountName = rel.LeaderAccountName,
+                    FollowerAccountName = rel.FollowerAccountName,
+                    GroupName = groupName,
+                    InstrumentFullName = instrument != null ? instrument.FullName : null,
+                    SizingMode = rel.SizingMode,
+                    EffectiveRatio = effectiveRatio,
+                    IsEnabled = rel.IsEnabled,
+                    ArmedForLive = rel.ArmedForLive,
+                    IsQuarantined = rel.IsQuarantined,
+                    QuarantineReason = rel.QuarantineReason,
+                    StealthMode = rel.StealthMode,
+                    LeaderSide = leaderSide,
+                    LeaderQuantity = leaderQty,
+                    ExpectedSide = expectedSide,
+                    ExpectedQuantity = expectedQty,
+                    ExpectedIsClamped = expectedIsClamped,
+                    ActualSide = actualSide,
+                    ActualQuantity = actualQty,
+                    Latency = new CopierMetric { Value = latencyValue, Samples = latencySamples },
+                    Slippage = new CopierMetric { Value = slippageValue, Samples = slippageSamples },
+                    Verdict = verdict
+                };
+            }
+
+            string GetRootFromPosition(Position p)
+            {
+                if (p == null || p.Instrument == null || p.Instrument.MasterInstrument == null)
+                    return null;
+                return p.Instrument.MasterInstrument.Name;
+            }
+
+            string GetRootFromInstrument(Instrument instrument)
+            {
+                if (instrument == null || instrument.MasterInstrument == null)
+                    return null;
+                return instrument.MasterInstrument.Name;
+            }
+
+            Position FindPositionByRoot(Position[] positions, string root)
+            {
+                if (positions == null || string.IsNullOrEmpty(root))
+                    return null;
+                foreach (var p in positions)
+                {
+                    if (p == null)
+                        continue;
+                    string pRoot = GetRootFromPosition(p);
+                    if (string.Equals(pRoot, root, StringComparison.OrdinalIgnoreCase))
+                        return p;
+                }
+                return null;
+            }
+
+            double ComputeEffectiveRatio(CopierRelationship rel, string symbolRoot)
+            {
+                if (rel.SizingMode == CopierSizingMode.PerTickerMatrix)
+                {
+                    double ratio;
+                    if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out ratio)
+                        && !double.IsNaN(ratio) && !double.IsInfinity(ratio) && ratio > 0.0)
+                        return ratio;
+                    return 0.0;
+                }
+
+                if (rel.FixedLotMode || rel.SizingMode == CopierSizingMode.FixedLot)
+                    return 0.0;
+
+                if (rel.SizingMode == CopierSizingMode.NetLiquidationRatio || rel.SizingMode == CopierSizingMode.AvailableCashPercent)
+                    return 0.0;
+
+                double absRatio = Math.Abs(rel.QuantityRatio);
+                if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out double tickerRatio))
+                    absRatio = Math.Abs(tickerRatio);
+
+                double symbolMultiplier = 1.0;
+                if (rel.AutoSymbolConversion)
+                {
+                    if (symbolRoot == "NQ" || symbolRoot == "ES" || symbolRoot == "YM" || symbolRoot == "CL" || symbolRoot == "GC" || symbolRoot == "RTY")
+                        symbolMultiplier = 10.0;
+                    else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")
+                        symbolMultiplier = 0.1;
+                }
+
+                return absRatio * symbolMultiplier;
             }
         }
 
@@ -1288,6 +1963,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             ClearCollectionsNamedIn(normalized, rel);
             JsonConvert.PopulateObject(normalized.ToString(), rel);
 
+            // UI2: a reason without a quarantine is stale data; state this as a domain invariant.
+            if (!rel.IsQuarantined)
+                rel.QuarantineReason = null;
+
             // As in ApplyGroupRequest: the key re-assertions were inert (the
             // fallbacks are byte-identical to the initialiser defaults), the
             // comparer guard is not.
@@ -1315,6 +1994,42 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (armed && armingWasRequested && !confirmLive)
                 set(false);
+        }
+
+        /// <summary>
+        /// THE copier config file. One owner, in core, so that every surface -- the NT8
+        /// window, the bridge's six write sites, and the startup load -- names the same
+        /// file by naming this instead of a path.
+        ///
+        /// UI2 / `P?-64`. Before this existed the window wrote
+        /// `UserDataDir/CopierConfig.json` at seven call sites while the bridge and the
+        /// startup load read `UserDataDir/RiskGuard/copier_config.json`. Both files
+        /// existed on the operator's box with different contents, and every change made
+        /// in the window was silently discarded at the next NT8 restart. Nothing errored;
+        /// the config simply was not there any more.
+        /// </summary>
+        public static string ConfigFilePath
+        {
+            get { return Path.Combine(Globals.UserDataDir, "RiskGuard", "copier_config.json"); }
+        }
+
+        /// <summary>
+        /// Save to <see cref="ConfigFilePath"/>. This is the overload every surface should
+        /// call; the path-taking one stays for the tests, which need to write somewhere
+        /// disposable.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE ASYMMETRY IS DELIBERATE: there is a parameterless SAVE and there is
+        /// deliberately NO parameterless LOAD. A convenient `LoadFromDisk()` is exactly
+        /// the footgun `P1-69` fired -- the bridge's `get` action called it and threw away
+        /// the in-memory latency and slippage measurements it had been asked to report.
+        /// A save is safe to make easy. A load is not, so the two callers that legitimately
+        /// need one (startup, and an explicit operator reload) say
+        /// `LoadFromDisk(TradeCopierEngine.ConfigFilePath)` and are visible in a grep.
+        /// </remarks>
+        public void SaveToDisk()
+        {
+            SaveToDisk(ConfigFilePath);
         }
 
         public void SaveToDisk(string filePath)
@@ -3241,6 +3956,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// from the leader, and quarantines the relationship if an ENTRY slipped past
         /// `MaxSlippageTicks`.
         /// </summary>
+        private Dictionary<string, int> _latencySampleCounts = new Dictionary<string, int>();
+
         private void ObserveFollowerFill(Execution exec)
         {
             if (exec == null || exec.Order == null)
@@ -3256,6 +3973,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool pendingFound = false;
             lock (_lock)
             {
+                PruneMetricCountsLocked();
+
                 // Matched on the Order object, never on OrderId -- see OrderReferenceComparer.
                 pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
                 if (pendingFound)
@@ -3304,7 +4023,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Recording it would make the UI lie in a new direction.
             bool latencyAccepted = latencyMs >= 0 && latencyMs < 600000;
             if (latencyAccepted)
-                rel.LatencyMs = latencyMs;
+            {
+                lock (_lock)
+                {
+                    rel.LatencyMs = latencyMs;
+                    int n;
+                    _latencySampleCounts.TryGetValue(rel.Id, out n);
+                    n++;
+                    _latencySampleCounts[rel.Id] = n;
+                }
+            }
             else if (latencyMs < 0 || latencyMs >= 600000)
             {
                 CopierLog(rel.FollowerAccountName, "LATENCY_REJECTED",
@@ -3384,6 +4112,43 @@ namespace NinjaTrader.NinjaScript.AddOns
                     $"{rel.LeaderAccountName} -> {rel.FollowerAccountName} exit slipped {ticks:F1} "
                     + $"ticks (limit {rel.MaxSlippageTicks:F1}). Deliberately NOT quarantining: that "
                     + "would strand the follower in a position the leader has left.");
+            }
+        }
+
+        private void PruneMetricCountsLocked()
+        {
+            var validIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in _relationships)
+            {
+                if (r == null)
+                    continue;
+                validIds.Add(r.Id);
+            }
+
+            foreach (var g in _groups)
+            {
+                if (g == null || g.FollowerAccounts == null)
+                    continue;
+                foreach (var f in g.FollowerAccounts)
+                {
+                    if (string.IsNullOrWhiteSpace(f))
+                        continue;
+                    validIds.Add(string.Format("{0}_{1}", g.Id, f.Trim()));
+                }
+            }
+
+            var latencyKeys = new List<string>(_latencySampleCounts.Keys);
+            foreach (var k in latencyKeys)
+            {
+                if (!validIds.Contains(k))
+                    _latencySampleCounts.Remove(k);
+            }
+
+            var slippageKeys = new List<string>(_slippageSampleCounts.Keys);
+            foreach (var k in slippageKeys)
+            {
+                if (!validIds.Contains(k))
+                    _slippageSampleCounts.Remove(k);
             }
         }
 

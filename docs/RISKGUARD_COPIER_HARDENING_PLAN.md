@@ -25,8 +25,10 @@ case that motivated it*, and the answer turned out to be a symbol-conversion/siz
 `P0-67` trail test and fixed in the same change: two `Change()` calls landing on one stop order in a
 single sweep, which per `P0-61` reverts the order.
 
-Highest open defects are now **`P?-64`/`P?-65`** — the copier UI writes to a file nothing reads, and
-its save sites destroy the ratio matrix.
+✅ **`P?-64`/`P?-65` are CLOSED** (handover §5.21, branch `feat/ui-config-single-owner`, unmerged):
+the copier UI wrote to a file nothing read, and its save sites destroyed the ratio matrix. The
+config path now has one owner in core and the window dispatches requests. Highest open is now
+**`P1-77`** — the prop-firm Consistency Rule Shield is enabled by default and evaluated nowhere.
 
 **For "what is left?" read the handover's
 [§5, THE OPEN BACKLOG](RISKGUARD_HARDENING_HANDOVER.md#5-the-open-backlog--authoritative-as-of-2026-08-13),
@@ -43,27 +45,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**78 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**79 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 75 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 76 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 75 + 3 = 78. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+write-up yet. 76 + 3 = 79. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
 but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77` | 37 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror) and **`P1-13`'s threading half**. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79` | 38 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78` | 11 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
-| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **2** | Handover §5.2. ✅ **`P?-66` closed 2026-08-13** by the live validation — the measurement was never broken; its *reporting* is, and that is now `P1-69`. |
-| | | **78** | **16** | **62 closed or superseded** |
+| **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. ⚠️ Branch `feat/ui-config-single-owner`, **unmerged**. |
+| | | **79** | **14** | **65 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1613,6 +1615,54 @@ Same class as `P1-77` above and `P1-23`. Cheapest correct fix is deletion; if `I
 wanted, it belongs in the `:1706` check next to `BlockedInstruments`.
 
 **Where**: `addons/RiskGuardAddOn.cs:5435-5440`.
+
+---
+
+### P1-79. A quarantine can be released but its REASON cannot be cleared — OPEN
+
+*(found 2026-08-13 while writing the `UI2` ticket, not by a test and not by a live run. It is
+in the `P1` band rather than `P2` because the surviving text is displayed to the operator as a
+current fact about a live relationship.)*
+
+`NormalizeRequest` (`TradeCopierEngine.cs:1706`) deliberately **strips null-valued properties**
+before the merge:
+
+> *"An explicit null means 'not specified', not 'wipe it'. Json.NET's default `NullValueHandling`
+> would set the property to null, so `{"perTickerRatios": null}` — which is what a JS client sends
+> for an untouched field — would null out the ratio matrix and hand a `NullReferenceException` to
+> whatever sizes the next fill."*
+
+That reasoning is correct and must stay. Its consequence is that **no request can clear a string
+field**, and `QuarantineReason` is a string field.
+
+So `{"isQuarantined": false}` releases the quarantine and leaves `QuarantineReason` holding
+`"Margin / Order Rejection"`. `TradeCopierWindow.cs:812` renders that reason in red, prefixed
+`⚠️ QUARANTINED:` — but it renders it inside `if (rel.IsQuarantined)`, so **the window happens
+not to show it today**. That accident is the whole defect: the stale text is live in the object,
+in `copier_config.json`, and over `/api/copier/config`, and the only thing hiding it is one
+conditional in a file scheduled for replacement. The browser UI has no reason to guess that the
+reason field is only meaningful when a second field is true.
+
+This is `P1-23`'s and `P1-77`'s class — state that reads as a fact and is not one — reached from
+the merge path rather than from a dead config field.
+
+**Fix**: a domain invariant on `ApplyRelationshipRequest`, not a special case for one key. **A
+reason without a quarantine is stale data**, so when the merge leaves `IsQuarantined == false`,
+`QuarantineReason` is null. Stating it as an invariant means it also holds for the bridge's
+`quarantine` action and for anything added later; stating it as "if the request said
+`isQuarantined: false` then also clear the reason" would hold for exactly one caller.
+
+⚠️ **Do NOT fix it by making `NormalizeRequest` honour nulls.** That reinstates the ratio-matrix
+defect the strip exists to prevent, which is a live-money sizing failure, in exchange for a
+cosmetic one.
+
+**Where**: `addons/TradeCopierEngine.cs` — `ApplyRelationshipRequest` (:1796) is where the
+invariant goes; `NormalizeRequest` (:1706) is why the obvious fix does not work; the stale text
+surfaces at `TradeCopierWindow.cs:812`.
+
+**Status**: being fixed as spec section E of the `UI2` ticket
+(`agent/tickets_ui_config.json`), and pinned by `TestUi2_ARowEditNeverMutatesTheStoredObjectFirst`,
+which asserts `released.QuarantineReason == null`.
 
 ---
 

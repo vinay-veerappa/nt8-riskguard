@@ -1,0 +1,39 @@
+﻿
+=== UI1: Copier read model: a conformance snapshot, with measured-vs-unmeasured metrics
+  [protected] 1 region file(s) clear of verifier
+  [memory] 35 settled decisions (9 from prior runs)
+  [worktree] agentloop-UI1-22284 @ 8e446c22
+  [baseline] 1053 passed, 18 failed at 8e446c22; 18 expected failure(s)
+  [test-first] 18 acceptance test(s) red at baseline
+    region R1                       addons/TradeCopierEngine.cs lines 364-371
+    region R2                       addons/TradeCopierEngine.cs lines 3348-3492
+    region R3                       addons/TradeCopierEngine.cs lines 702-914
+    region R4                       addons/TradeCopierEngine.cs lines 102-128
+    region R5                       addons/TradeCopierEngine.cs lines 78-86
+    region R6                       addons/TradeCopierEngine.cs lines 95-100
+    region R7                       addons/TradeCopierEngine.cs lines 136-187
+  round 1: implement kimi-k2.7-code:cloud 199.0s in=9249 out=27662 think=94640c
+           [static] ok - 7 block(s) well-formed
+           [compile] ok - build succeeded
+           [test] ok - no regressions; 1071 passed, 0 failed, 18 expected failure(s) now green; all 18 acceptance test(s) green
+           [lock-scope] ok - no risk calls under _stateLock
+           [panel] REVISE  [glm-5.2=REVISE(7), deepseek-v4-flash=REJECT(12)]
+           [arbiter] REVISE (upheld=21 rejected=17 out-of-scope=0)  mistral-large-3:675b-cloud 36.0s in=12028 out=1485
+           [arbiter] 21 finding(s) upheld, 17 dropped
+  round 2: implement kimi-k2.7-code:cloud 305.7s in=20521 out=41213 think=145139c
+           [static] ok - 7 block(s) well-formed
+           [compile] FAIL - build FAILED
+           [compaction] 36270 -> 23756 tokens (pruned 12514)
+  round 3: implement kimi-k2.7-code:cloud 138.1s in=20208 out=22310 think=58175c
+           [static] ok - 7 block(s) well-formed
+           [compile] ok - build succeeded
+           [test] ok - no regressions; 1071 passed, 0 failed, 18 expected failure(s) now green; all 18 acceptance test(s) green
+           [lock-scope] ok - no risk calls under _stateLock
+           [panel] REVISE  [glm-5.2=REVISE(5), deepseek-v4-flash=UNPARSEABLE(0)]
+           panel INVALID - NOT a rejection. Unreachable: deepseek-v4-flash:cloud (returned 475 findings (cap 60); that is repetition, not review)
+           resume with --resume-raw logs\agent_loop\UI1\r3_impl_raw.txt
+  NOT APPLIED: verdict=PANEL_UNREACHABLE. Patch for review: logs\agent_loop\UI1\final.patch
+
+==== SUMMARY ====
+UI1   PANEL_UNREACHABLE      applied=False
+1 of 1 ticket(s) did not produce a promotable candidate

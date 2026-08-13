@@ -2896,16 +2896,16 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 75, re-run 2026-08-13
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 76, re-run 2026-08-13
 ```
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **75** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
+| Numbered entries in the plan | **76** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **78** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17) |
-| **Open** | **16** | §5.1 + `P?-64`, `P?-65`, **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. Ten closed 2026-08-13 |
-| **Closed or superseded** | **62** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
+| **Total IDs** | **79** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21) |
+| **Open** | **14** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ **`P?-64`, `P?-65` and `P1-79` closed in §5.21** — branch `feat/ui-config-single-owner`, unmerged. Thirteen closed 2026-08-13 |
+| **Closed or superseded** | **65** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16 |
 
 `P0-62` counts as **resolved-by-supersession**, not fixed: `P0-63` subsumed it (the call
 is a silent no-op for price *and* quantity, not a quantity-only refusal) and `P0-63` is
@@ -4257,3 +4257,185 @@ Making `McpBridgeAddOn.cs` executable in tests costs, measured: **330 compile er
 behind `F-16` for two reasons: `F-16` is far cheaper and targets a defect class with four known
 instances, and the 2026-08-13 UI decision keeps the bridge a **thin pipe** — routing and static
 bytes, with every decision in core — so this surface is not growing while it waits.
+
+---
+
+## 5.20 Session 23 — 2026-08-13: `UI1` shipped, and what six loop runs and a battery taught
+
+**`UI1` — the copier conformance snapshot — is GREEN.** Suite **1076/0**. Battery
+`mutation/mutate_ui1.py`: **12 mutants, 12 killed, 0 survivors**, wired into CI (**7 of 7**).
+Branch `feat/ui-core-snapshot`, not merged, not pushed. Design: [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md).
+
+### The headline: a green suite proved nothing, twice, in the same ticket
+
+Eighteen tests were written RED before the implementation and all eighteen turned green. The
+review panel then found **ten upheld defects in exactly that code**. Three were unreachable by
+any assertion, because **every one of the eighteen used ONE instrument, ONE relationship and a
+fresh engine** — the suite could not *represent* a second instrument, so no test over it could
+fail on one.
+
+After those were fixed, **21 green tests** were mutated and **two mutants survived**: `Math.Abs`
+on the leader quantity (no test used a **short leader** — a follower on the wrong side is a
+different case), and the clamped-to-zero reconciliation (the clamp test asserted the **flag**,
+never the **verdict**).
+
+> **Both misses have one shape, and it generalises beyond this ticket: asserting an intermediate
+> field proves the field is set and says nothing about whether anything downstream reads it
+> correctly.** Assert the decision, not the input to it.
+
+### 🆕 A mutant that SURVIVES is not automatically a test gap
+
+"Remove the `Math.Abs`" survived even after a short-leader test was added. It is **unkillable by
+construction**: `Position.Quantity` is the ABSOLUTE contract count in NT8 and in the stub, with
+direction in `MarketPosition`, so a short is `Quantity=2 / Short`, never `-2`.
+
+The tempting fix was to teach the stub to emit a negative quantity so the mutant would die.
+**That is worse than the gap.** A double that can express a failure the real system *cannot*
+manufactures evidence for a defect that does not exist — the mirror image of the double that
+could not express a real one, which is how six omitted `OrderState`s hid a live `P0` behind a
+green suite. The `Math.Abs` stays; the **mutant** was retired, with the reasoning recorded in the
+battery, and replaced by one that attacks what the test actually defends.
+
+### The defect that shipped in the first green implementation
+
+A leader position the follower did not mirror was emitted with a `NotApplicable` verdict. So
+**"the leader holds 4 NQ and the follower holds none" — the copier having failed to copy at all —
+reported as *not applicable***. The one divergence the snapshot exists to surface was the one
+state guaranteed not to be shown. `NotApplicable` became unreachable once fixed and was
+**deleted**: a verdict nothing can produce is worse than none, because it reads as considered.
+
+### 🆕 DECIDED: the snapshot's grain is per relationship **PER INSTRUMENT ROOT**
+
+The ticket said one row per relationship; the implementation emitted one per instrument. The
+operator kept the implementation's grain, and it is the better contract — a follower can mirror
+NQ correctly while holding an unmanaged ES position, and one aggregate row cannot say which
+diverged. Recorded on the DTO and in the ticket. ⚠️ **The test helper originally took the first
+row matching the account name**, which is how all 18 passed against code that counted an
+unrelated ES position as the NQ mirror: the assertions were sound, the **selection** was
+accidental.
+
+### Six loop runs, and five rough edges worth filing against `agent-loop`
+
+Only **one** run failed on the model's own reasoning. The rest were my ticket or the harness.
+
+| | What happened | The general form |
+|---|---|---|
+| 1 | `TICKET_REJECTED` — the loop will not run until `expect_green` is already RED, and `UI1` was additive so nothing could be | For additive work no red test can exist without scaffolding, so the loop **cannot be used for a new API at all** |
+| 2 | `TICKET_REJECTED` on ONE string — the ticket said *"after one latency is actually recorded"*, the test asserted *"after one measured fill"* | `--list` validates regions but **never checks `expect_green` against the test sources**; a substring scan would have caught it locally |
+| 3 | 4 rounds, `CS0101`/`CS0111` — regions pointed at `GetRelationships()` while the stub to replace was 2 lines below, outside every region | **`--list` says a region RESOLVES, not that it resolves to the right code.** It printed `OK` before both failed runs |
+| 4 | 17 of 18 green, stalled — the spec said enumerate via `GetActiveRelationshipsForLeader` (which excludes quarantined **by default**) *and* demanded a `QUARANTINED` verdict | The gate does not only check the code, **it proves the specification is satisfiable** |
+| 5 | 4 rounds of invented member names (`CopierGroup.Followers`, `.Name`, `Instrument.Name`) | **Regions are the editing window AND the model's entire view of the file.** A symbol named in `spec` that appears in no region is a malformed ticket |
+| 6 | `PANEL_UNREACHABLE`, twice | `deepseek-v4-flash` returned **475 findings against a cap of 60**, then **371**. Not a rejection — an infrastructure failure in one panel member |
+
+> **The one place the copy path and a read path genuinely want opposite defaults:
+> `includeQuarantined`.** The copier MUST exclude a quarantined follower — it must not copy to
+> it. The UI MUST include it, because the whole value of quarantine to an operator is seeing that
+> a follower stopped copying and why. A quarantined relationship silently absent from the display
+> is `P2-41`'s and `P?-64`'s shape.
+
+### Next
+
+`UI2` — `TradeCopierEngine` owns the config path, the bridge delegates, and `P?-64`/`P?-65`
+close. ⚠️ **Decided: the window is REWIRED, not deleted** — deleting it now leaves no GUI at all
+until the browser page lands. It is removed in the same landing that makes it redundant.
+
+## 5.21 Session 24 — 2026-08-13: `UI2` green, and a gate for code no gate could see
+
+**`P?-64` and `P?-65` are CLOSED**, and `P1-79` — opened during this session, by writing
+the ticket rather than by running anything — closed with them. Branch
+`feat/ui-config-single-owner`, **unmerged**. Suite **1093/0**, **eight** mutation batteries,
+0 survivors, CI wiring verified 8-of-8.
+
+### What landed
+
+* **`TradeCopierEngine.ConfigFilePath`** — one owner, in core, for
+  `UserDataDir/RiskGuard/copier_config.json`. `SaveToDisk()` delegates to it. **There is
+  deliberately no parameterless `LoadFromDisk()`**: a convenient load is the `P1-69` footgun,
+  where the bridge's `get` destroyed the measurements it was asked to report. The two
+  legitimate loaders say `LoadFromDisk(TradeCopierEngine.ConfigFilePath)` and show up in a grep.
+* **`CopierRequests`** — four request builders, in core rather than inline in the window,
+  because `NormalizeRequest` **drops an unrecognised key without an error**. That is `P1-74`,
+  where an advertised `autoConversion` argument was not a field on anything and had never done
+  a thing. A builder nobody can test is a builder nobody can trust.
+* **The window dispatches.** Seven path-naming saves became `SaveToDisk()`; both Add sites and
+  all three row buttons go through `Apply*Request`, check the null the engine can now return,
+  and mutate nothing in place.
+* **`P1-79`** — releasing a quarantine kept its reason. Fixed as an invariant
+  (*no quarantine, no reason*), not as a special case for one request key, so it holds for the
+  bridge's `quarantine` action too.
+
+### The loop got it right in ONE round, which is exactly when not to trust it
+
+All 12 acceptance tests went red→green in a single implement pass — the best result any ticket
+here has had. `UI1` had already shown what that is worth: 18 red-then-green tests there were
+followed by ten upheld review defects and then by 2 of 12 mutants surviving.
+
+**18 mutants, 17 killed on the first run.** The survivor is the useful part:
+
+> `GroupEdit` carrying `isEnabled` **even when the caller passed null** changed no test
+> outcome — because every call in the suite and in the window passes a value. So
+> *absent-means-unchanged*, which is the entire contract of a request builder, was asserted
+> for `RelationshipEdit` and **never** for `GroupEdit`.
+
+Resolved by writing the test, and the reasoning is recorded beside it: the nullable is not
+speculative surface (the builder is public and the browser UI will send partial group edits),
+so narrowing it to a plain `bool` would make it asymmetric with `RelationshipEdit` for no
+reason beyond today's single caller happening not to exercise it.
+
+⚠️ **The first draft of that test still let the mutant live.** It asserted the null edit
+*after* the disable, where the group is already disabled and `isEnabled ?? false` gives the
+same answer. **The null edit has to run against an ENABLED group.** That is `UI1`'s Rule 1
+wearing a different hat — *assert the state that can actually differ* — and it is the second
+time in two tickets that a test written to kill a specific mutant failed to.
+
+### The panel filed three BLOCKERs and all three were false
+
+Each claimed `ApplyArmingGate` disarms when `armingWasRequested == false`. The gate is
+`if (armed && armingWasRequested && !confirmLive)`, so the branch is unreachable by the path
+all three describe. Two `MAJOR`s were also false: they read the trailing `true` in
+`CopierRequests.Relationship(..., armed, true)` as `armedForLive` when it is `isEnabled`.
+Two `MINOR`s — stale `// STUB` comments — were correct.
+
+**But the invariant the blockers pointed at was pinned by nothing**, and it is a safety
+property: toggling a checkbox must never change whether a relationship can lose real money.
+It now has three tests and two mutants, including one that makes the imagined defect real.
+**A wrong finding aimed at an unpinned invariant is still worth the test** — which is a more
+useful rule than "the panel is unreliable", and both are true at once.
+
+⚠️ **What the panel missed, and a read of the diff caught: the patch had stripped every emoji
+from the row labels** (`⏸ Disable` → `Disable`, `⚠️ QUARANTINED` → `QUARANTINED`, `➔` → `->`).
+Out of scope — the ticket excluded restyling — and no gate in this repo would ever have
+noticed, because no test reads a label. All seven glyphs restored. **A model normalising
+non-ASCII is a silent scope change; diff the surface, not just the logic.**
+
+`PANEL_UNREACHABLE` again, third occurrence: `deepseek-v4-flash` returned **262 findings
+against a cap of 60**. Filed against `agent-loop` as `O67` earlier the same day, along with
+`O64`–`O66`.
+
+### `tools/check_window_parses.py` — the new gate, and the one that was abandoned
+
+`TradeCopierWindow.cs` is one 1100-line `#if !TESTING` block. **`dotnet build` compiles it to
+nothing**, so a stray brace in it passes every gate in this repo and is first reported by
+NinjaTrader — where a compile error in *any* addon `.cs` stops **every** addon loading,
+RiskGuard included. That is why `P1-72`…`P1-75` could only be compile-checked by deploying.
+
+The new check reports **CS1xxx only**: a *parser* check, not a compile, and it says so in its
+own output. **Watched failing on a deliberately removed semicolon before being wired into CI.**
+
+⚠️ **A fuller check was built first and abandoned on purpose.** Referencing NinjaTrader's real
+assemblies pulled in `NinjaTrader.Custom.dll` — which already contains a *compiled copy of
+these same sources* — so every type resolved twice and every error was an artefact of the
+harness. **A check whose failures are its own artefacts is worse than a narrower one that
+means exactly what it says.**
+
+### Next, and one ordering constraint that matters
+
+1. ⚠️ **The bridge change is BLOCKED on a merge and a tag.** `McpBridgeAddOn.cs:3765`'s
+   `CopierConfigFile` should become `TradeCopierEngine.ConfigFilePath`, but the bridge consumes
+   core as a **submodule pinned to a tag**, and `ConfigFilePath` exists only on this unmerged
+   branch. Changing the bridge first gives a bridge that does not compile. Merge core, tag it,
+   bump the pin, then edit the bridge.
+2. **NT8's own compile has NOT been run** on this window. The parse check is not a substitute.
+   It needs a deploy, and deploying unmerged code to the live guarded box is the operator's call.
+3. Then `UI3` — the read/write layer is done, so the next landing is the bridge routes and the
+   static page (`UI_REDESIGN_DESIGN.md` §10 items 3-4).
