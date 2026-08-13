@@ -1,0 +1,43 @@
+{
+  "_comment": "P1-84 -- the three default NUMBERS that disarm the system. From docs/CONFIG_DEFAULTS.md rules R4 and R5 and section 3.2. The red tests are the three TestP184_* methods in tests/RiskGuardAddOnTests.cs; they are written and RED. Tests are protected.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "Three defaults that make the guard easier to switch off than to live with",
+      "defect": "`P1-84`. Three numbers, one failure mode: **a default that fires on a normal day trains you to disarm the system**, and a guard that is off during the one session that mattered has provided exactly nothing.\n\n(1) R5, AND THE MOST LIKELY REASON THIS SYSTEM GETS SWITCHED OFF. `StopGuardConfig.StopAttachSeconds` defaults to `3` while `OnMissing` defaults to `\"Flatten\"`. Three seconds from fill to a working stop, or the guard flattens you. Enter manually, reach for the mouse to place the stop, get flattened -- on a day when nothing was wrong. The number is only reasonable for the `AutoStop` action, where an invented stop is recoverable; it is not reasonable when the penalty is being taken out of the trade.\n\n(2) R4, TWO NAMES FOR ONE CONCEPT CARRYING TWO NUMBERS. `CopierRelationship.MaxPositionSize` and `CopierGroup.MaxPositionSize` default to `100`; `SizingConfig.MaxContractsPerAccount` defaults to `10`. They cap the same quantity -- contracts held on a follower account -- and the LOWER always binds, so **the copier's cap has never stopped anything**. It is not a limit, it is decoration that reads like one, and two limits on one quantity is worse than one because you size against whichever file you happened to open. 100 MNQ is roughly $4.5M of notional; that is not a cap, it is the absence of one.\n\n(3) A PRECONDITION DISABLED BY ITS OWN DEFAULT. `RiskConfig.MinShadowSessions` defaults to `0`, and `RunPreflight`'s FR-29 gate reads `_config.MinShadowSessions > 0 && _shadowSessionsCompleted < _config.MinShadowSessions`. Zero does not mean \"no sessions required\" -- it means the precondition DOES NOT RUN. Live arming is gated on nothing at all, which is the same shape as `P1-82`: something that reads like a safeguard and is not one.",
+      "spec": "Three literals.\n\nA. `StopGuardConfig.StopAttachSeconds`: `3` becomes `15`. Long enough to place a stop by hand, short enough that an unstopped position does not survive a spike. Say on the declaration that the number is tied to `OnMissing = \"Flatten\"` -- if the action were `AutoStop` a much shorter deadline would be right.\n\nB. `MaxPositionSize` on BOTH `CopierRelationship` and `CopierGroup`: `100` becomes `10`. Both, or the group path keeps the old number and R4 is only half closed -- the shape this repo keeps finding. Say on the declarations that this deliberately agrees with `RiskConfig.Sizing.MaxContractsPerAccount`, that the lower of the two always binds, and that raising one without the other silently makes it dead again.\n\nC. `RiskConfig.MinShadowSessions`: `0` becomes `5`. Roughly a week of sessions watched without the guard wanting to intervene wrongly, before it can be pointed at live money. Say on the declaration that the preflight gate short-circuits at zero, so zero disables the gate rather than relaxing it.\n\nWHAT NOT TO DO:\n* Do NOT change `StopGuard.OnMissing`. `\"Flatten\"` is the right default and is documented as the most important one in the file: the alternative invents a stop at a guessed offset, and flat is always a known quantity.\n* Do NOT change `MaxContractsPerAccount` or `MaxContractsAggregate`. The guard's numbers are the ones being agreed WITH.\n* Do NOT change any dollar-denominated default (`PnLRules.DailyLossLimit`, `TrailingDrawdown`, `EvaluationTargetProfit`, the `FirmMirror` amounts). Those are R3 and they must come from the firm profile, not from a better guess. That is `F-9` and it is not this ticket.\n* Do NOT add validation, clamping or migration. Existing config files keep their stored values; only the default for a field that is absent changes.",
+      "context": "THE THREE TESTS ARE NOT CONSTANT CHECKS, and satisfying them by pinning a literal somewhere else will not work.\n\n* The copier-cap test asserts an INEQUALITY -- `MaxPositionSize <= MaxContractsPerAccount` -- so that raising the guard's cap for a bigger account cannot silently make the copier's dead again.\n* The stop-deadline test is CONDITIONAL on `OnMissing == \"Flatten\"`. Changing the action legitimately releases the floor; changing the action to dodge the test would fail nothing here but would break the StopGuard tests.\n* The shadow-session test also reads `addons/RiskGuardAddOn.cs` and asserts the `> 0` short-circuit is still there, because the value and the short-circuit are only a defect TOGETHER.\n\nFIXTURES ALREADY SET THESE VALUES. Around forty test fixtures assign `MaxPositionSize` explicitly, so the default change does not move them. One fixture asserts that a newly created group takes `MaxPositionSize == 100` from the initialiser; it is in a protected file and will be updated separately -- do not try to keep the old default to satisfy it.\n\nASCII only. C# 8.0 / .NET Framework 4.8 and a net8.0 test build.",
+      "expect_green": [
+        "is at or below the guard's MaxContractsPerAccount",
+        "a deadline enforced by flattening has to be long enough to place a stop by hand",
+        "so live arming is gated on nothing at all"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public class StopGuardConfig",
+          "note": "StopAttachSeconds 3 -> 15. Nothing else in this class changes -- OnMissing, MaxAutoStopAttempts and the offsets are all correct."
+        },
+        {
+          "id": "R2",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public class CopierRelationship",
+          "note": "MaxPositionSize 100 -> 10. Change nothing else in this DTO."
+        },
+        {
+          "id": "R3",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public class CopierGroup",
+          "note": "THE OTHER HALF. MaxPositionSize 100 -> 10 here too, or R4 is half closed."
+        },
+        {
+          "id": "R4",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public int MinShadowSessions { get; set; } = 0;",
+          "note": "0 -> 5. One literal; the preflight gate that consults it is not in scope and must not be touched."
+        }
+      ]
+    }
+  ]
+}

@@ -439,6 +439,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP186_TheNewsShieldIsRedOutOfTheBox();
             TestP182_AFlagThatCannotFireMustNotDefaultOn();
             TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag();
+            TestP184_TheCopierCapIsNotLooserThanTheGuardCap();
+            TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand();
+            TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault();
             TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
             TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing();
             TestUi4_TheCanActCopyAgreesWithTheGuardItself();
@@ -2594,6 +2597,90 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && parsed.EnablePeakEquityProtection == declared.EnablePeakEquityProtection,
                 "a config file that names none of the prop-firm switches gets the same defaults "
                 + "the properties declare");
+        }
+
+        private static void TestP184_TheCopierCapIsNotLooserThanTheGuardCap()
+        {
+            Console.WriteLine("\n[TEST] P1-84: the copier's position cap is not looser than the guard's");
+
+            // R4 from docs/CONFIG_DEFAULTS.md. Two names for one concept must carry one number.
+            //
+            // `CopierRelationship.MaxPositionSize` and `RiskConfig.Sizing.MaxContractsPerAccount`
+            // cap the same quantity -- contracts held on a follower account -- and the LOWER
+            // always binds. The copier ships at 100 and the guard at 10, so the copier's cap has
+            // never stopped anything. It is not a limit, it is decoration that reads like one,
+            // and two limits on one quantity is worse than one because you size against
+            // whichever file you happened to open.
+            //
+            // Asserted as an INEQUALITY rather than a literal on purpose. Raising the guard's cap
+            // for a bigger account must not silently make the copier's cap dead again, and
+            // pinning either number would have to be edited every time the other moved -- which
+            // is the maintenance shape that lets them drift apart in the first place.
+            int copierCap = new CopierRelationship().MaxPositionSize;
+            int guardCap = new RiskConfig().Sizing.MaxContractsPerAccount;
+
+            Assert(copierCap > 0 && guardCap > 0 && copierCap <= guardCap, string.Format(
+                "the copier's MaxPositionSize ({0}) is at or below the guard's "
+                + "MaxContractsPerAccount ({1}), so it can actually bind",
+                copierCap, guardCap));
+        }
+
+        private static void TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand()
+        {
+            Console.WriteLine("\n[TEST] P1-84: a stop-attach deadline whose penalty is Flatten leaves time to act");
+
+            // R5. A default that fires on a normal day trains you to disarm the system, and a
+            // guard that is off during the one session that mattered has provided nothing.
+            //
+            // `StopAttachSeconds` ships at 3 and `OnMissing` ships at "Flatten": three seconds
+            // from fill to a working stop, or you are flattened. Enter manually, reach for the
+            // mouse to place the stop, get flattened -- on a day when nothing was wrong.
+            //
+            // The condition is what makes this more than a constant. Three seconds is perfectly
+            // reasonable when the penalty is AutoStop, because an invented stop is recoverable
+            // and a missing one is not. It is only unreasonable when the penalty is being taken
+            // out of the trade. So the floor applies to the Flatten branch, and changing
+            // OnMissing legitimately releases it.
+            var cfg = new RiskConfig();
+            bool flattens = string.Equals(cfg.StopGuard.OnMissing, "Flatten", StringComparison.OrdinalIgnoreCase);
+            int seconds = cfg.StopGuard.StopAttachSeconds;
+
+            Assert(!flattens || seconds >= 15, string.Format(
+                "OnMissing defaults to '{0}' and StopAttachSeconds to {1}s -- a deadline enforced "
+                + "by flattening has to be long enough to place a stop by hand",
+                cfg.StopGuard.OnMissing, seconds));
+        }
+
+        private static void TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault()
+        {
+            Console.WriteLine("\n[TEST] P1-84: the FR-29 shadow-session precondition is not switched off by its own default");
+
+            // `MinShadowSessions` ships at 0, and RunPreflight's FR-29 gate reads
+            // `_config.MinShadowSessions > 0 && _shadowSessionsCompleted < _config.MinShadowSessions`
+            // -- so a default of zero does not mean "no sessions required", it means the
+            // precondition DOES NOT RUN. A gate that is disabled by its own default is the same
+            // shape as R2: something that reads like a safeguard and is not one.
+            //
+            // The short-circuit is checked from source alongside the value, because the two are
+            // only a defect TOGETHER. If the `> 0` guard is ever removed, zero becomes a real
+            // (if permissive) threshold and this test should be revisited rather than obeyed.
+            var addonSource = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(P184ThisFile()), "..", "addons", "RiskGuardAddOn.cs"));
+            string src = File.Exists(addonSource) ? File.ReadAllText(addonSource) : null;
+            bool shortCircuits = src != null && src.Contains("_config.MinShadowSessions > 0");
+
+            int required = new RiskConfig().MinShadowSessions;
+
+            Assert(shortCircuits && required > 0, string.Format(
+                "MinShadowSessions defaults to {0} while the preflight gate short-circuits at "
+                + "zero ({1}), so live arming is gated on nothing at all",
+                required, shortCircuits ? "still true" : "NO LONGER TRUE -- revisit this test"));
+        }
+
+        private static string P184ThisFile(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            return thisFile;
         }
 
         private static void TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited()
@@ -16268,7 +16355,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(merged != null && merged.GroupName == "Fresh", "the new group was created");
             Assert(merged != null && merged.QuantityRatio == 4.0, "its named field was applied");
-            Assert(merged != null && merged.MaxPositionSize == 100,
+            Assert(merged != null && merged.MaxPositionSize == new CopierGroup().MaxPositionSize
+                   && merged.MaxPositionSize > 0,
                 "its unnamed fields took the initialiser defaults, not zero");
             Assert(merged != null && merged.PerTickerRatios != null,
                 "its matrix is an empty dictionary rather than null");
