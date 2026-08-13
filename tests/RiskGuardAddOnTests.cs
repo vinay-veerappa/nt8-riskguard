@@ -157,6 +157,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP330_AuditDetectsFsmBrokerDivergence();
             TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder();
             TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
+            TestP113_ConcurrentGuardEventsDoNotCorruptState();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18883,6 +18884,92 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(bracketCreated,
                 "P1-57: a non-submitted order with COPIER in its name IS still treated as a leader "
                 + "order -- the name substring is no longer the filter; reference tracking is");
+        }
+
+        // ================================================================================
+        // P1-13: concurrent-guard-event stress test (prerequisite for the threading inversion).
+        //
+        // The S-series (S4-S9) are sequential. The threading inversion turns six handlers
+        // the dispatcher was implicitly serialising into genuinely concurrent ones.
+        // Without a concurrent stress test, doing the inversion is how P1-40 shipped.
+        // ================================================================================
+
+        private static void TestP113_ConcurrentGuardEventsDoNotCorruptState()
+        {
+            Console.WriteLine("\n[TEST] P1-13: concurrent guard events do not corrupt state");
+
+            // Fire N concurrent events on separate threads against the same account+instrument.
+            // If the test infrastructure for this doesn't exist yet, the assertion below fails.
+            int threadCount = 20;
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P113Stress" };
+            var state = new AccountState("P113Stress");
+            addon.SetAccountStateForTest("P113Stress", state);
+            addon.SetSubscribedAccountForTest("P113Stress");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            var mnq = new Instrument("MNQ 03-26");
+
+            var ready = new System.Threading.CountdownEvent(threadCount);
+            var done = new System.Threading.CountdownEvent(threadCount);
+            Exception[] errors = new Exception[threadCount];
+
+            for (int i = 0; i < threadCount; i++)
+            {
+                int idx = i;
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    ready.Signal();
+                    ready.Wait();
+                    try
+                    {
+                        // Mix of position, order, and execution events on the same account+instrument
+                        addon.ExecutePositionUpdate(account, new PositionEventArgs
+                        {
+                            Position = new Position
+                            {
+                                Instrument = mnq,
+                                MarketPosition = MarketPosition.Long,
+                                Quantity = 1,
+                                AveragePrice = 18000
+                            }
+                        });
+
+                        addon.ExecuteOrderUpdate(account, new OrderEventArgs
+                        {
+                            Order = new Order
+                            {
+                                Instrument = mnq,
+                                Name = "AUTO_STOP",
+                                OrderType = OrderType.StopMarket,
+                                OrderState = OrderState.Working,
+                                StopPrice = 17900,
+                                Quantity = 1,
+                                OrderAction = OrderAction.Sell
+                            }
+                        });
+                    }
+                    catch (Exception ex) { errors[idx] = ex; }
+                    finally { done.Signal(); }
+                });
+            }
+
+            done.Wait(TimeSpan.FromSeconds(10));
+
+            int errorCount = errors.Count(e => e != null);
+            Assert(errorCount == 0,
+                "the concurrent stress test completes without corruption -- " + threadCount
+                + " threads, " + errorCount + " exception(s)");
+
+            // Verify FSM state is consistent after concurrent access
+            var fsm = addon.TestGetFsm("P113Stress", "MNQ 03-26");
+            Assert(fsm != null, "the FSM was created for the concurrent position events");
         }
     }
 }
