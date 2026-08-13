@@ -53,6 +53,16 @@ jobs:
       - name: Every mutation battery is wired into this workflow
         run: python tools/check_ci_runs_every_battery.py
 
+      # P2-24's class, made mechanical. Safety machinery that is written and never called
+      # passes every other gate here -- it compiles, its own tests call it directly so the
+      # suite is green, and the config surface advertising it looks configured. Session 34
+      # produced three instances of it (StartAuditTimer, RunCopierPreflight,
+      # ReconcileFollowerPosition) in the same pass that CLOSED P2-24 by deleting a fourth.
+      # The worst of them shipped `AuditIntervalSeconds: 10` into the live config describing
+      # a ten-second audit that never ran.
+      - name: No dead safety machinery
+        run: python tools/check_no_dead_safety_machinery.py
+
       # TradeCopierWindow.cs is one 1100-line `#if !TESTING` block, so the Build and Test
       # steps below compile it to NOTHING -- a stray brace there passes every other gate
       # in this file and is first reported by NinjaTrader, where a compile error in ANY
@@ -259,6 +269,18 @@ jobs:
       # does not -- a reviewer skimming the diff sees an else and moves on.
       - name: Mutation battery P1-87
         run: python mutation/mutate_p187.py
+
+      # P3-30's guard audit, and specifically its instrument matching. The audit shipped
+      # keying its broker reads on Instrument.ToString() while every FSM in the addon is
+      # keyed on Instrument.FullName, so nothing it looked up ever matched -- and the
+      # consequence was not a missed finding but the opposite: a correctly protected
+      # account reporting NAKED_POSITION, ORPHAN_STOP and FSM_DIVERGENCE every 10 seconds.
+      # The three tests it shipped with are all POSITIVE-only and every one of them stays
+      # green under the defect, because a total matching failure emits every event. That is
+      # what this battery exists to stop recurring: mutant 1 is the shipped defect and is
+      # killed only by the negative "the audit is SILENT" test.
+      - name: Mutation battery P3-30
+        run: python mutation/mutate_p330.py
 
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on

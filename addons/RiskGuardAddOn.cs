@@ -403,6 +403,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // None of these need 1-second resolution; 5s is sufficient.
                 _safetyTimer = new Timer(OnSafetySweep, null, 5000, 5000);
 
+                // P3-30's audit is the CLOCK-driven complement to FsmWatchdog, which runs on
+                // events only -- so a divergence that arrives with no subsequent event is
+                // permanent without it. It shipped with nothing calling StartAuditTimer, so
+                // `AuditIntervalSeconds: 10` sat in the live config describing an audit that
+                // never ran: a configured protection that did not exist.
+                StartAuditTimer();
+
                 LogEvent("SYSTEM", "INITIALIZE", $"RiskGuard Add-On v{Version} initialized in {_mode} mode. Event monitoring started.");
                 // P1-47: the mode is resolved by now, so the arm default can follow it.
                 ApplyInitialArmState();
@@ -420,6 +427,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // Stop safety timer
                 _safetyTimer?.Dispose();
+                StopAuditTimer();
 
                 // Unsubscribe from connection events
                 Connection.ConnectionStatusUpdate -= OnConnectionStatusUpdate;
@@ -444,10 +452,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // -
-        // DEV/TESTING API
-        // -
-#if TESTING
+        // P3-30. NOT a dev/test hook: this is the production audit timer. It sat inside
+        // the `#if TESTING` block below, which is why `AuditIntervalSeconds: 10` could be
+        // live in the deployed config while the code honouring it did not exist in the
+        // net48 assembly at all. P1-47 is the same trap: a green net8.0 suite cannot see it,
+        // only nt_compile can.
         private void StartAuditTimer()
         {
             StopAuditTimer();
@@ -485,6 +494,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // -
+        // DEV/TESTING API
+        // -
+#if TESTING
         internal void SetConfigForTest(RiskConfig cfg)
         {
             _config = cfg;
@@ -3055,7 +3068,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                     var positionsByInstrument = new Dictionary<string, Position>();
                     foreach (Position pos in account.Positions)
                     {
-                        string instrument = pos.Instrument == null ? string.Empty : pos.Instrument.ToString();
+                        // A flat Position object is not a position. The FSM-seeding sweep
+                        // filters these for the same reason; without it a flat account
+                        // reports NAKED_POSITION on every tick of the audit timer.
+                        if (pos == null || pos.MarketPosition == MarketPosition.Flat || pos.Quantity <= 0)
+                            continue;
+                        // FullName, not ToString(): every FSM key in this addon is built from
+                        // Instrument.FullName, so ToString() here matched nothing and the audit
+                        // reported all three findings against a correctly protected account.
+                        string instrument = pos.Instrument == null ? string.Empty : pos.Instrument.FullName;
                         if (string.IsNullOrEmpty(instrument))
                             continue;
                         positionsByInstrument[instrument] = pos;
@@ -3075,7 +3096,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (!isStop)
                             continue;
 
-                        string instrument = order.Instrument.ToString();
+                        string instrument = order.Instrument.FullName;
                         if (string.IsNullOrEmpty(instrument))
                             continue;
 
@@ -3109,7 +3130,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                         bool hasPosition = positionsByInstrument.TryGetValue(instrument, out Position pos) && pos.Quantity != 0;
                         string fsmKey = accountName + "|" + instrument;
                         bool hasFsm = fsmSnapshot.ContainsKey(fsmKey);
-                        if (!hasPosition || !hasFsm)
+                        // P0-50's class is a stop left working on a FLAT account -- that is a new
+                        // position in the opposite direction the moment it triggers. A stop sitting
+                        // over a LIVE position is not an orphan whatever the FSM knows about it;
+                        // the untracked-position case is already reported as NAKED_POSITION above,
+                        // so keying this on !hasFsm double-reported it under a name that is wrong.
+                        if (!hasPosition)
                         {
                             LogEvent(accountName, "ORPHAN_STOP",
                                 $"{instrument}: workingStopCount={stopKv.Value}, hasPosition={hasPosition}, hasFsm={hasFsm}");

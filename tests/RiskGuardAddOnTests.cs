@@ -156,6 +156,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP330_AuditDetectsNakedPosition();
             TestP330_AuditDetectsOrphanStop();
             TestP330_AuditDetectsFsmBrokerDivergence();
+            TestP330_AuditIsSilentOnACorrectlyProtectedAccount();
+            TestP330_AuditIsSilentOnAFlatPositionObject();
+            TestP330_AuditReportsPartialCoverageAsNaked();
+            TestP330_AuditDoesNotCallAStopOverALivePositionAnOrphan();
             TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder();
             TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
             TestP113_ConcurrentGuardEventsDoNotCorruptState();
@@ -18731,6 +18735,262 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(events.Any(e => e.StartsWith("P330Div/FSM_DIVERGENCE", StringComparison.Ordinal)),
                 "the audit detects FSM/broker divergence -- FSM says Protected but no working stop exists at the broker");
+        }
+
+        /// <summary>
+        /// The three tests above are positive-only: each asserts that an event WAS emitted.
+        /// None of them can fail if the audit's instrument matching is broken, because a
+        /// total matching failure emits every event. This is the complement, and it is the
+        /// only one of the four that can detect that class: a correctly protected account
+        /// -- position, a working stop for it at the broker, and an FSM that says Protected
+        /// with full coverage -- must produce SILENCE.
+        /// </summary>
+        private static void TestP330_AuditIsSilentOnACorrectlyProtectedAccount()
+        {
+            Console.WriteLine("\n[TEST] P3-30: the audit is SILENT on a correctly protected account");
+
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Quiet" };
+            var state = new AccountState("P330Quiet");
+            addon.SetAccountStateForTest("P330Quiet", state);
+            addon.SetSubscribedAccountForTest("P330Quiet");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // The instrument name is the one the REST of the addon keys FSMs by:
+            // Instrument.FullName. Every production call site builds the key from
+            // FullName (see the SeedFsms sweep and ExecutePositionUpdate).
+            var mnq = new Instrument("MNQ 03-26");
+
+            account.Positions.Add(new Position
+            {
+                Instrument = mnq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 1,
+                AveragePrice = 18000
+            });
+
+            // The broker HAS the working stop that covers it.
+            var brokerStop = new Order
+            {
+                Instrument = mnq,
+                Name = "AUTO_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            };
+            account.Orders.Add(brokerStop);
+
+            var fsm = new PositionGuardFsm("P330Quiet", "MNQ 03-26");
+            fsm.State = GuardFsmState.Protected;
+            fsm.PositionQuantity = 1;
+            fsm.AddRecognizedStop(brokerStop);
+            addon.SetFsmForTest("P330Quiet", "MNQ 03-26", fsm);
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try
+            {
+                addon.RunAuditNow();
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            var naked = events.Where(e => e.Contains("NAKED_POSITION")).ToList();
+            var orphan = events.Where(e => e.Contains("ORPHAN_STOP")).ToList();
+            var divergence = events.Where(e => e.Contains("FSM_DIVERGENCE")).ToList();
+
+            Assert(naked.Count == 0,
+                "a fully covered position is not reported NAKED_POSITION -- got: "
+                + string.Join(" | ", naked));
+            Assert(orphan.Count == 0,
+                "a stop that covers a live position is not reported ORPHAN_STOP -- got: "
+                + string.Join(" | ", orphan));
+            Assert(divergence.Count == 0,
+                "a Protected FSM whose stop IS at the broker is not reported FSM_DIVERGENCE -- got: "
+                + string.Join(" | ", divergence));
+        }
+
+        /// <summary>
+        /// `account.Positions` can carry a Position that is flat. The FSM-seeding sweep has
+        /// always filtered those (MarketPosition.Flat || Quantity &lt;= 0); the audit did not,
+        /// so a flat account reported NAKED_POSITION on every tick of a 10-second timer.
+        /// </summary>
+        private static void TestP330_AuditIsSilentOnAFlatPositionObject()
+        {
+            Console.WriteLine("\n[TEST] P3-30: a FLAT Position object is not a naked position");
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Flat" };
+            addon.SetAccountStateForTest("P330Flat", new AccountState("P330Flat"));
+            addon.SetSubscribedAccountForTest("P330Flat");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // Flat, and no FSM tracking it -- which is correct, there is nothing to track.
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ 03-26"),
+                MarketPosition = MarketPosition.Flat,
+                Quantity = 0,
+                AveragePrice = 0
+            });
+
+            // And the OTHER half of the same filter, which the FSM-seeding sweep guards
+            // separately: a side that is not Flat carrying no contracts. Asserting only the
+            // MarketPosition shape leaves `Quantity <= 0` undefended, and a zero-quantity
+            // position reports a gap of zero -- an alarm that names no risk.
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("ES 03-26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 0,
+                AveragePrice = 5000
+            });
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try { addon.RunAuditNow(); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            var naked = events.Where(e => e.Contains("NAKED_POSITION")).ToList();
+            Assert(naked.Count == 0,
+                "a flat Position object is not reported NAKED_POSITION -- got: "
+                + string.Join(" | ", naked));
+        }
+
+        /// <summary>
+        /// The coverage comparison is one character wide and wrong in both directions if
+        /// inverted: a partially covered position is P0-55's exact shape and is the single
+        /// most important thing this audit exists to catch.
+        /// </summary>
+        private static void TestP330_AuditReportsPartialCoverageAsNaked()
+        {
+            Console.WriteLine("\n[TEST] P3-30: a PARTIALLY covered position is reported naked");
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330Partial" };
+            addon.SetAccountStateForTest("P330Partial", new AccountState("P330Partial"));
+            addon.SetSubscribedAccountForTest("P330Partial");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            var mnq = new Instrument("MNQ 03-26");
+
+            // Two contracts live...
+            account.Positions.Add(new Position
+            {
+                Instrument = mnq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 2,
+                AveragePrice = 18000
+            });
+
+            // ...and a stop for ONE of them at the broker.
+            var partialStop = new Order
+            {
+                Instrument = mnq,
+                Name = "AUTO_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            };
+            account.Orders.Add(partialStop);
+
+            var fsm = new PositionGuardFsm("P330Partial", "MNQ 03-26");
+            fsm.State = GuardFsmState.Protected;
+            fsm.PositionQuantity = 2;
+            fsm.AddRecognizedStop(partialStop);
+            addon.SetFsmForTest("P330Partial", "MNQ 03-26", fsm);
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try { addon.RunAuditNow(); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            var naked = events.Where(e => e.Contains("NAKED_POSITION")).ToList();
+            Assert(naked.Count == 1,
+                "a position covered 1-of-2 is reported NAKED_POSITION even though the FSM says "
+                + "Protected -- got " + naked.Count + ": " + string.Join(" | ", naked));
+            // The uncovered quantity is in the event's DETAIL string, which LogEventObserver
+            // deliberately does not carry (see its declaration: pinning message text breaks on
+            // every rewording). The count above is what kills an inverted comparison anyway.
+        }
+
+        /// <summary>
+        /// P0-50's class is a stop left WORKING on a FLAT account: it becomes a new position in
+        /// the opposite direction the moment it triggers. A stop sitting over a LIVE position is
+        /// not that, whatever the FSM knows about it -- and the untracked-position case is
+        /// already reported as NAKED_POSITION, so reporting it again under a name that means the
+        /// opposite of the situation is worse than not reporting it.
+        /// </summary>
+        private static void TestP330_AuditDoesNotCallAStopOverALivePositionAnOrphan()
+        {
+            Console.WriteLine("\n[TEST] P3-30: a stop over a LIVE position is not an orphan stop");
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetModeForTest("shadow");
+            addon.SetArmedForTest(true);
+
+            var account = new Account { Name = "P330NotOrphan" };
+            addon.SetAccountStateForTest("P330NotOrphan", new AccountState("P330NotOrphan"));
+            addon.SetSubscribedAccountForTest("P330NotOrphan");
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            var mnq = new Instrument("MNQ 03-26");
+
+            account.Positions.Add(new Position
+            {
+                Instrument = mnq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 1,
+                AveragePrice = 18000
+            });
+            account.Orders.Add(new Order
+            {
+                Instrument = mnq,
+                Name = "AUTO_STOP",
+                OrderType = OrderType.StopMarket,
+                OrderState = OrderState.Working,
+                StopPrice = 17900,
+                Quantity = 1,
+                OrderAction = OrderAction.Sell
+            });
+
+            // Deliberately NO FSM: the guard is not tracking this instrument.
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(acct + "/" + evt);
+            try { addon.RunAuditNow(); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            var orphan = events.Where(e => e.Contains("ORPHAN_STOP")).ToList();
+            var naked = events.Where(e => e.Contains("NAKED_POSITION")).ToList();
+
+            Assert(orphan.Count == 0,
+                "a stop covering a live position is NOT an orphan stop even with no FSM -- got: "
+                + string.Join(" | ", orphan));
+            Assert(naked.Count == 1,
+                "the untracked position is still reported, once, as NAKED_POSITION -- got "
+                + naked.Count + ": " + string.Join(" | ", naked));
         }
 
         // ================================================================================
