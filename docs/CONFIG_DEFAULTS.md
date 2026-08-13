@@ -213,6 +213,40 @@ and the field**, or implement it — but it must not stay as it is.
 All three are `P1-77`'s exact shape. The pattern that finds them is the one this repo already
 trusts: **ask what reads a field, not what sets it.**
 
+### 4a. Applied as `P1-83`, with a gate so the fourth one cannot get in
+
+All four are deleted — the three above plus `PropFirm.EnableAutoDayFiller`. `StealthMode` turned
+out to have **four** surfaces asserting it, not two: both window status lines, a "Stealth Tagging"
+checkbox on both Add forms, "Stealth Order Tagging" in the window title, and a `stealth` flag on
+the browser page in `nt8-mcp-bridge`. All gone.
+
+What makes this more than four deletions is the gate, and it is mechanical. It walks both copier
+DTOs by reflection and counts real uses in **the engine**, discounting the three things that make
+a dead field look alive: its own declaration, `X = something.X` clone and serializer lines, and
+the field-name string list. Run against the pre-fix tree it named exactly these three, with no
+false positives.
+
+⚠️ **Scoping it to the engine is the design, not a shortcut.** Widen the scan to include the
+window and `StealthMode` scores as READ — because the window printed `Stealth: ON` for it. That is
+the defect told louder, not an absolution from it. The engine is where copying decisions are made,
+so a field the engine never consults cannot change behaviour whatever a surface renders.
+
+And it is honest about its limit: it is a source-text check, so it **cannot** catch `P2-25`'s
+class — a field genuinely read, by a branch that can never be reached. The guard side needed a
+runtime registry for that, and the copier side would too. What this catches is the cheaper and far
+more common defect: the field nothing reads at all.
+
+**Two things worth knowing before deleting a dead field here.**
+
+1. **The dead fields were load-bearing in the tests.** Ten merge-preservation probes used them —
+   *"a field the request never mentions survives the merge"* — chosen precisely *because* nothing
+   read them. They now probe live fields, which is a better test: `IsQuarantined` is a field the
+   Add form genuinely cannot show.
+2. **The agent-loop cannot do this kind of change.** Deleting a symbol that a *protected* test
+   file references fails the loop's compile gate: the patch is correct and the build breaks
+   anyway, on a file the loop is not allowed to touch. Every other change in this document went
+   through the loop; this one had to be done by hand.
+
 ---
 
 ## 5. What "at defaults" means operationally
@@ -250,3 +284,59 @@ guards a funded account.
 
 Not filed as a defect ID yet — it needs a decision about what identity even means here (a
 per-client token? a source header the page sets?) before it can be specified.
+
+---
+
+## 7. What applying this document found
+
+Every delta above is applied. Five defects were opened along the way, and **four of the five were
+found by applying the fix rather than by writing it** — which is the point worth keeping.
+
+**`P1-82` (R2) — closed.** Four literals, not two: each default is stated once as a property
+initializer and once as the parser's final fallback, and the parser copy is what runs for every
+config file that predates the field. Fixing only the property would have been green in the suite
+and unchanged in production.
+
+**`P1-86` — closed, and opened by `P1-82` itself.** Defaulting the news shield off made the
+inventory report it `Disabled` instead of `INERT`. See §2/R2: the hardening plan predicted this in
+writing and was half right. The evaluator now asks whether it *can* fire before it asks whether it
+is switched on.
+
+**`P1-83` (§4) — closed.** Four dead fields deleted, and the gate that finds the fifth built. See
+§4a.
+
+**`P1-84` (R4/R5) — closed.** Three numbers. The tests are worth more than the numbers: an
+inequality between two files rather than a pinned cap, a deadline floor conditional on the
+consequence, and a value checked together with the source line that makes it a defect.
+
+**`P1-87` — closed, and found by a mutant SURVIVING.** Changing `StopGuard.OnMissing` from
+`"Flatten"` to `"AutoStop"` broke nothing across 1180 green tests. Nothing pinned the guard's most
+consequential default — and asking why led to the dispatch, which compares against two exact
+string literals with no `else`. A lower-case `"flatten"`, a typo, an empty string, or the
+`"WarnOnly"` the declaration itself advertised matched nothing, so the guard emitted **no action
+at all**: a position with no stop, past its grace period, and it simply returned. `RunPreflight`
+refuses an unrecognised guard *mode* and had never looked at this.
+
+### The one thing to take from this
+
+**Four of the five came from evidence, not from reading code.** Two came from mutation batteries
+(`P1-87`, and the blank-versus-missing hole in `P1-85`), one from applying a fix and checking what
+it did to the inventory (`P1-86`), one from the review panel (`P1-85`'s edit path). Only `P1-83`
+came from reading — and only because the question being asked was *"what reads this field?"*
+rather than *"what does this field do?"*.
+
+`mutation/check_anchors.py` was written during this work and immediately found two stale anchors,
+then nine more after the `P1-83` deletion. A battery whose find-string stops matching prints
+`[SKIP]` and scores that mutant a **survivor**, but only when the battery is run — and a battery
+only runs when the suite is green. Eleven mutants across five batteries were silently proving
+nothing. It runs first in CI now, costs a second, and works while the suite is red, which is
+exactly when a battery cannot tell you anything.
+
+### Still open, and named rather than left to be discovered
+
+* **`F-9`** — the firm mapping behind R3. Every dollar default is still a guess for one unstated
+  account size, and that is the largest remaining item in this document.
+* **§6's attribution gap** — the audit record answers *what changed* and cannot answer *who*.
+* **A copier field registry.** §4a's gate is a source scan and says so. The guard side has a
+  runtime registry that catches `INERT`; the copier side does not, so a copier field that is read
+  by a branch which can never fire would still get through.

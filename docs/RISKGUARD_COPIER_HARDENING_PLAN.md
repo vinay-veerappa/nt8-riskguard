@@ -61,11 +61,11 @@ but not as an open item.)
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-81` | 40 | **4** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`…`P1-87` | 46 | **4** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78`, `P2-82`, `P2-83` | 13 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, and ✅ **`P2-82` + `P2-83`, both closed by `UI4` on the day they were opened** — the registry was publicly mutable (a caller could invent a rule, which is `P1-77` inverted and fails *un*safe), and a snapshot with no accounts rendered as healthy. Neither was found by review; both came out of writing the producer's tests. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. **Merged and shipped as `v1.3.0`**, deployed to the box with `nt_compile` reporting 0 errors. |
-| | | **83** | **15** | **68 closed or superseded** |
+| | | **89** | **15** | **74 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1600,6 +1600,22 @@ deleted rather than implemented), **`P2-24`** (written-but-never-called safety m
 **Do not** "fix" this by defaulting `EnableConsistencyCap` to `false`. That keeps the lie and
 makes it quieter.
 
+> **Amended 2026-08-13 — the warning above was half right, and the half that was wrong is worth
+> knowing.** `P1-82` defaulted both this and the news shield to `false`, and it does **not** make
+> this one quieter: `CONFIGURED-not-EVALUATED` is derived from `Evaluator == null`, so the
+> inventory reports this rule red whatever its flag says. The defect is untouched and still open.
+> What the flag change removes is `prop_limits.json` *asserting* a 35% cap that has never capped
+> anything.
+>
+> ⚠️ The warning was exactly right about the **news shield**, whose evaluator short-circuited on
+> its own flag and so began reporting `Disabled` — "not a defect". That is `P1-86`, closed the
+> same day, and the rule it left behind is the one to carry forward: **`Disabled` means "this
+> would work if you turned it on"**. Before defaulting any enabling flag to `false`, check that
+> the rule behind it still reports its defect with the switch off.
+>
+> The two honest remedies below are unchanged. Turning the flag off is not one of them; it is
+> what you do *while* one of them is still outstanding.
+
 **Where**: `addons/PropFirmProtectionSuite.cs:46-47` (declared), `:178-179` (parsed), evaluated
 nowhere.
 
@@ -1823,6 +1839,212 @@ failure by another route.
 
 **Where**: `addons/GuardRules.cs`, `GuardSnapshot` and `GuardRuleRegistry.BuildSnapshot`.
 **Shipped in**: `v1.3.0` (as the defect, unrendered); closed on `feat/ui-snapshot-builder`.
+
+---
+
+### P1-82. Two switches defaulted ON while doing nothing — CLOSED 2026-08-13
+
+*(the R2 change from `CONFIG_DEFAULTS.md`, and the only one of this batch found by reading rather
+than by evidence.)*
+
+`PropFirm.EnableNewsShield` (`INERT`, `P2-25`) and `PropFirm.EnableConsistencyCap`
+(`CONFIGURED-not-EVALUATED`, `P1-77`) were the **only two flags in the system that defaulted
+`true` while the rules behind them could not fire**. `prop_limits.json` therefore read as
+protection that did not exist — you open it, you see `"EnableNewsShield": true`, and you size a
+position accordingly.
+
+**Fixed** by defaulting both to `false`. This does **not** fix either rule; both stay open and the
+inventory still reports them red. What changes is that the config stops asserting them.
+
+⚠️ **It was four literals, not two.** Each default is stated once as a property initializer and
+once as the final fallback in `ParseConfig`, and the parser copy is what runs for any config file
+that predates the field — which is every config file on this box. Fixing only the property would
+have been green in the suite and unchanged in production. Mutants 3 and 4 of `mutate_p182.py`
+exist to prove that, and the class gate cannot catch them because it builds its config with `new`.
+
+⚠️ **Three UI3 tests broke, and that was the interesting part.** They demonstrated `INERT` using a
+*default* config — their evidence that the state exists at all depended on the news shield
+defaulting on. They now turn the switch on explicitly, which is what they always meant: `INERT` is
+the state an operator lands in when they enable the shield and it still cannot fire.
+
+**Where**: `addons/PropFirmProtectionSuite.cs:33`, `:46`, and the two `ParseConfig` fallbacks.
+**Gate**: `mutation/mutate_p182.py` — 8 mutants, including two controls that default the two
+genuinely-enforcing switches OFF, so R2 cannot be satisfied by removing real protection.
+
+---
+
+### P1-86. Switching off a broken rule hid that it was broken — CLOSED 2026-08-13
+
+*(opened by `P1-82`, and predicted in writing by this document's own `P1-77` entry.)*
+
+The `P1-77` entry says: *do not "fix" a dead flag by defaulting it to false, that keeps the lie and
+makes it quieter.* Half of that objection is dead and half was exactly right.
+
+* It does **not** hold for the consistency cap. `CONFIGURED-not-EVALUATED` is derived from
+  `Evaluator == null`, so that row stays red whatever the flag says.
+* It held precisely for the news shield. Its evaluator opened with
+  `!c.PropConfig.EnableNewsShield ? Off(...)`, and `Off(...)` sets `DisabledByConfig`, which
+  `DeriveState` turns into **`Disabled`** — a state this codebase documents as *"switched off by
+  the operator. Not a defect; shown so it is not mistaken for one."* So `P1-82` converted `P2-25`
+  from a defect into a preference, on a default box, silently.
+
+**Fixed** by making the evaluator ask whether it *can* fire before it asks whether it is switched
+on: zero events loaded reports `INERT` with its `P2-25` note regardless of the flag, and `Off(...)`
+is reached only when there is at least one event — the only situation in which "switched off" is
+something the operator could reverse.
+
+**The general rule, now stated on the evaluator**: `Disabled` means *"this would work if you turned
+it on"*. A rule with nothing to evaluate does not qualify, however its switch is set.
+
+⚠️ **`DeriveState` is deliberately NOT changed.** Moving the evidence check above the
+`DisabledByConfig` check there is the shorter diff and a real defect: the two `FirmMirror` rules,
+the window gate and the two working prop rules all short-circuit to `Off(...)` *without* gathering
+evidence when switched off, so all five would start reporting `INERT` and the inventory would call
+deliberately-disabled rules defects.
+
+**Where**: `addons/GuardRules.cs`, the `PropFirm.EnableNewsShield` rule.
+**Gate**: 4 mutants in `mutation/mutate_p182.py`, plus a class test that walks every rule keyed by
+a bool and fails any that is `INERT` when on and `Disabled` when off.
+
+---
+
+### P1-83. Four config fields stored, settable, and read by nothing — CLOSED 2026-08-13
+
+*(found while writing `CONFIG_DEFAULTS.md`, by asking what READS each field rather than what sets
+it. `P1-77`'s shape, four more times.)*
+
+`CopierRelationship`/`CopierGroup.StealthMode`, the copier's own `DailyLossLimit`, the entire
+`CopierExecutionMode` enum, and `PropFirm.EnableAutoDayFiller`. All persisted, all settable,
+branched on nowhere.
+
+**`StealthMode` was the worst of them and not by a little.** `P1-77` and `P1-81` are silent; this
+one had **four surfaces asserting it**: both window status lines printing `Stealth: ON`, a "Stealth
+Tagging" checkbox on both Add forms, "Stealth Order Tagging" in the window title, and a `stealth`
+flag on the browser page in `nt8-mcp-bridge` — for a feature with no implementation anywhere.
+
+**Fixed** by deleting all four, plus the gate that finds the fifth: a class test that walks both
+copier DTOs by reflection and counts real uses in **the engine**, discounting a field's own
+declaration, `X = something.X` clone/serializer lines, and the field-name string list. Run against
+the pre-fix tree it named exactly these three with no false positives.
+
+⚠️ **Scoping the gate to the engine is the design, not a shortcut.** Widen it to the window and
+`StealthMode` scores as READ — which is the defect told louder, not an absolution from it. And it
+is honest about its limit: it is source text, so it cannot catch `P2-25`'s class (a field genuinely
+read by a branch that can never be reached). The guard side needed a runtime registry for that;
+the copier side still has none, which is recorded as open.
+
+⚠️ **The dead fields were load-bearing in the tests.** Ten merge-preservation probes used them —
+*"a field the request never mentions survives the merge"* — chosen precisely *because* nothing read
+them. They now probe live fields.
+
+⚠️ **The agent-loop cannot make this kind of change**, and the reason is structural: deleting a
+symbol that a *protected* test file references fails its compile gate, so the patch is correct and
+the build breaks anyway on a file the loop may not touch. Every other change in this batch went
+through the loop.
+
+**Where**: `addons/TradeCopierEngine.cs`, `TradeCopierWindow.cs`, `GuardRules.cs`,
+`PropFirmProtectionSuite.cs`, and `nt8-mcp-bridge`'s `ui/index.html`.
+**Gate**: `mutation/mutate_p183.py` — 6 mutants; mutant 4 reintroduces a field WITH a fake read,
+which is the cheapest way to satisfy any "is it referenced?" check.
+
+---
+
+### P1-84. Three defaults that made the guard easier to switch off than to live with — CLOSED 2026-08-13
+
+*(R4 and R5 from `CONFIG_DEFAULTS.md`.)*
+
+* `StopGuard.StopAttachSeconds = 3` with `OnMissing = "Flatten"`: three seconds from fill to a
+  working stop, or you are flattened. Enter manually, reach for the mouse, get flattened on a day
+  when nothing was wrong. **→ 15.**
+* `MaxPositionSize = 100` on both copier DTOs against the guard's `MaxContractsPerAccount = 10`.
+  Same quantity, and the lower always binds, so the copier's cap **had never stopped anything**.
+  **→ 10.**
+* `MinShadowSessions = 0`, while `RunPreflight`'s FR-29 gate reads `MinShadowSessions > 0 && ...`
+  — so zero does not relax the precondition, it **switches it off**. **→ 5.**
+
+The tests matter more than the numbers: an *inequality* between two files rather than a pinned
+cap, a deadline floor *conditional* on `OnMissing`, and a value asserted together with the source
+line that makes it a defect.
+
+⚠️ The loop's implementer turned the deadline into a property computed from `OnMissing`, and the
+reviewers were right to refuse it: a recomputing getter lets a config reload move a deadline while
+a grace timer is already running, and reads `OnMissing` off one thread while another writes it.
+The ticket invited that by saying the number was "tied to" `OnMissing` when it meant a comment.
+
+**Where**: `addons/RiskGuardAddOn.cs` (`StopGuardConfig`, `MinShadowSessions`),
+`addons/TradeCopierEngine.cs` (both DTOs).
+**Gate**: `mutation/mutate_p184.py` — 8 mutants; mutant 6 raises the copier cap to ONE above the
+guard's, which is what proves the assertion is an inequality and not a pinned 10.
+
+---
+
+### P1-85. The copier invented an account when a request omitted one — CLOSED 2026-08-13
+
+*(found while writing `CONFIG_DEFAULTS.md` §3.1.)*
+
+`TradeCopierEngine` guessed an identity in **four** places on the write path and twice more on the
+load path: leader → `"Sim101"`, follower → `"SimCopy2"`, group name → `"DefaultGroup"`, and a new
+group's leader → `"Sim101"`.
+
+⚠️ **Those two account names are real, connected accounts on this box.** A truncated or malformed
+write did not fail — it succeeded, against accounts nobody selected. `"DefaultGroup"` was worse
+than a stray create: groups are looked up BY name, so an unnamed write silently **edited** whatever
+was stored there.
+
+**Fixed** across three slices. A request that cannot say what it applies to is refused with a
+reason, logged through `CopierLog`. On the load path an entry whose key cannot supply the missing
+name is skipped and **reported through the guard log** rather than `Console.WriteLine` — a
+malformed entry silently dropped at startup is `P?-64`'s shape, and refusing to guess must not buy
+that back. The DTO defaults became `""`: empty reads as unset, where `"Sim101"` read as configured.
+
+⚠️ **Two of ten mutants survived the first battery run**, and both were findings:
+
+* Swapping `IsNullOrWhiteSpace` for a null check on the relationship accounts left the suite green.
+  The behaviour was already right; there was no *evidence* of it, because every test OMITS the
+  account and **omitted and blank are different inputs reaching the same field**. The ticket had
+  even said "it already refuses blanks", which was true and not the point.
+* The blank-leader rule was stated **twice** — once on the raw request before the merge, once on
+  the merged object — so narrowing either one left the suite green. A rule stated twice cannot be
+  tested, because neither statement is load-bearing; it is why a genuine review finding had no way
+  to fail. Reduced to one unconditional post-merge check: **no group with a blank leader is ever
+  stored, by any route.**
+
+**Where**: `addons/TradeCopierEngine.cs` — both Apply methods, both `TryParse` methods, both DTOs.
+**Gate**: `mutation/mutate_p185.py` — 10 mutants.
+
+---
+
+### P1-87. An unrecognised stop action silently disabled the stop guard — CLOSED 2026-08-13
+
+*(found because a mutant SURVIVED, not by review.)*
+
+`EvaluateGraceExpiry` dispatched on `StopGuard.OnMissing` with two exact string comparisons and no
+`else`. A lower-case `"flatten"`, a typo, an empty string, or the `"WarnOnly"` that the declaration
+itself advertised matched nothing, so the method emitted **no action at all** — a position with no
+stop, past its grace period, and the guard simply returned. `RunPreflight` refuses an unrecognised
+guard *mode* and had never looked at this, so the failure was silent at startup and silent at the
+moment it mattered.
+
+⚠️ **The suite was defending the defect, not merely silent about it.**
+`TestStopGuardWarnOnlyProducesNoAction` asserted *"No action generated when OnMissing is
+WarnOnly"* — the defect, written down as expected behaviour. Deleted.
+
+**How it was found**: `mutate_p184.py`'s mutant 3 changed `OnMissing` from `"Flatten"` to
+`"AutoStop"` and **all 1180 tests stayed green**. Nothing pinned the guard's most consequential
+default, and asking why led here.
+
+**Fixed**: the unrecognised case and `Flatten` are one branch producing one action under one RuleId
+(the log is grepped by RuleId); `RunPreflight` refuses an unrecognised value and names it; and
+`WarnOnly` is gone from the declaration comment and from the settings dropdown that offered it.
+
+⚠️ Two loop rounds failed to compile on a **region boundary** rather than on anything the
+implementer wrote — R1 covered only the `if` half of the if/else-if chain, so every patch left a
+dangling `else`.
+
+**Where**: `addons/RiskGuardAddOn.cs` — `EvaluateGraceExpiry`, `RunPreflight`, `StopGuardConfig`,
+and the settings window's `_onMissingCombo`.
+**Gate**: `mutation/mutate_p187.py` — 6 mutants; mutant 2 keeps the `else` and makes it do nothing,
+so the shape of the fix survives and the behaviour does not.
 
 ---
 
