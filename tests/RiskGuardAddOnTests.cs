@@ -10294,6 +10294,35 @@ namespace NinjaTrader.NinjaScript.AddOns
             // mapping must refuse. This is what stops (2) from being a hole big enough to swallow
             // the whole check.
             var r3 = F9bPreflight(expired, F9bAccount("Sim101", 99482.0));
+            // (4) A NaN equity must not REFUSE TO ARM, and must not throw.
+            //
+            // ⚠️ READ THIS BEFORE TRUSTING THIS ASSERTION. `account.Get` can return NaN before a
+            // provider has synced, and the review panel raised it: every comparison against NaN is
+            // false, so `equity <= 0` does not skip it and `difference > 0.40` does not fail it --
+            // a NaN slides through BOTH guards. The production code was changed to `!(equity > 0)`,
+            // which skips NaN in the same operator instead of needing a second branch, and is more
+            // robust to a later edit of the failure comparison.
+            //
+            // BUT THIS ASSERTION CANNOT SEE THAT CHANGE, and saying so is the point. Both forms
+            // arrive at "preflight passed" for a NaN -- one by deliberate skip, one by falling
+            // through two false comparisons -- so the boolean outcome is IDENTICAL and a test
+            // asserting it would pass either way. Written as a claim about the skip it would be a
+            // gate that cannot fail, which is the defect this file exists to catch.
+            //
+            // What it DOES pin, and this is a real property worth having: a NaN equity must not
+            // make preflight FAIL. A plausible "defensive" implementation --
+            // `if (double.IsNaN(equity)) result.Fail(...)` -- would leave the guard DISARMED because
+            // one account had not synced yet, which is the 89-zero-accounts failure mode wearing a
+            // different hat. It also pins that the arithmetic does not throw.
+            var nanCfg = F9bConfig("Sim-ORB", "Apex-100K", 100000.0);
+            var nanAcct = F9bAccount("Sim-ORB", 0.0);
+            nanAcct.Values[AccountItem.CashValue] = double.NaN;
+            var r4 = F9bPreflight(nanCfg, nanAcct);
+            Console.WriteLine(string.Format("        NaN equity: passed={0} {1} {2}", r4.Passed, r4.Code, r4.Message));
+            Assert(r4.Passed,
+                "an account whose equity reads NaN does not refuse to arm -- an unsynced account "
+                + "must not disarm the guard for every other account");
+
             Console.WriteLine("        absent account: " + (r3.Message ?? "<null>"));
             Assert(!r3.Passed
                    && r3.Message != null

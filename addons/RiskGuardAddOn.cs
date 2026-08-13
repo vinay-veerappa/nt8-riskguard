@@ -3473,6 +3473,61 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
+                // F-9b (2/2): mapped account equity must match the plan's AccountSize within 40% magnitude.
+                if (result.Passed && fm.AccountFirmMap != null && fm.FirmProfiles != null)
+                {
+                    var accountByName = new Dictionary<string, Account>(StringComparer.OrdinalIgnoreCase);
+                    foreach (Account a in Account.All)
+                    {
+                        if (a != null && !string.IsNullOrEmpty(a.Name))
+                            accountByName[a.Name] = a;
+                    }
+
+                    foreach (var kvp in fm.AccountFirmMap)
+                    {
+                        if (string.IsNullOrEmpty(kvp.Value))
+                            continue;
+
+                        if (!fm.FirmProfiles.TryGetValue(kvp.Value, out var profile) || profile == null)
+                            continue;
+
+                        double accountSize = (double)profile.AccountSize;
+                        if (accountSize <= 0)
+                            continue;
+
+                        if (!accountByName.TryGetValue(kvp.Key, out var account))
+                            continue;
+
+                        double cashValue = account.Get(AccountItem.CashValue, Currency.UsDollar);
+                        double unrealized = account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                        double equity = cashValue + unrealized;
+
+                        // 89 of the 96 accounts on this box report zero equity -- expired or
+                        // unconnected prop accounts the connection still lists -- so an unreadable
+                        // equity must be SKIPPED, not failed: refusing over those would mean the
+                        // guard never arms here again. The existence check above still applies to
+                        // them, which is what stops this exemption swallowing the whole gate.
+                        //
+                        // ⚠️ WRITTEN AS `!(equity > 0)`, NOT `equity <= 0`, AND THAT IS THE POINT.
+                        // Every comparison against NaN is false, so `NaN <= 0` does not skip and
+                        // `NaN > 0.40` does not fail -- a NaN equity would slide through BOTH
+                        // guards and the check would silently PASS. Fail-open in a validator is the
+                        // one direction that matters, and `account.Get` can return NaN before a
+                        // provider has synced. Inverting the comparison handles NaN in the same
+                        // operator rather than needing a second branch. Raised by the review panel;
+                        // it upheld two findings on this patch and this was the one that held.
+                        if (!(equity > 0.0))
+                            continue;
+
+                        double relativeDifference = Math.Abs(equity - accountSize) / accountSize;
+                        if (relativeDifference > 0.40)
+                        {
+                            result.Fail("FIRM_MIRROR", $"Plan '{kvp.Value}' AccountSize {accountSize} does not match account '{kvp.Key}' observed equity {equity}; relative difference exceeds 40%.");
+                            break;
+                        }
+                    }
+                }
+
                 // P2-8: every mapped firm must exist in FirmProfiles.
                 if (result.Passed && fm.AccountFirmMap != null)
                 {

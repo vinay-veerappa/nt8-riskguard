@@ -204,6 +204,31 @@ a firm's name.
 
 ---
 
+## 7a. What `F-9b`'s size check does NOT catch — and it is the error this document found
+
+`F-9b` adds a preflight refusal when a mapped account's observed equity disagrees with its plan's
+stated `AccountSize`. That catches **account ↔ plan** mismatches: a 50k account mapped to a 100k plan.
+
+⚠️ **It cannot catch a plan ↔ firm-table mismatch, which is exactly the error this research found.**
+The deployed `Apex-100K` profile would pass the size check with flying colours — `AccountSize = 100000`
+against `Sim-ORB`'s 100,170 is a 0.17% difference — while its trailing amount is **2000 where Apex
+publishes 3000**. Both figures are plausible fractions of a 100k account (2% and 3%), so no ratio or
+magnitude heuristic distinguishes them. Nothing inside the guard can: **only the firm's published
+table can say whether a plan's amounts are that plan's amounts**, and that table is this document.
+
+So the chain of checks and who owns each link:
+
+| Claim | Checked by | Owner |
+|---|---|---|
+| the mapped account exists | `F-9b` T1, preflight refusal | machine |
+| the account is the size its plan says | `F-9b` T2, preflight refusal | machine |
+| the plan's amounts are that plan's real amounts | **nothing** | this document + one human pass |
+| the plan's drawdown TYPE matches the firm's | **nothing** | this document + one human pass |
+
+The last two are why the operator's correction pass is a required step and not a courtesy.
+
+---
+
 ## 8. What is needed from the operator before any of this is deployed
 
 The research supplies the numbers **per plan**. It cannot supply which plan each account is on, and
