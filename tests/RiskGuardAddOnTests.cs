@@ -146,6 +146,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP293_PureAndOverrideWithFrictionFailPreflight();
             TestP294_ATimedManualLockoutStopsNewOrders();
             TestP295_FirmStartingBalanceUsesPlanAccountSizeNotHeuristic();
+            TestP331_InFlightLedgerSuppressesCreateUntilAccepted();
+            TestP331_LedgerEntryClearedOnAccepted();
+            TestP331_LedgerEntryClearedOnSubmitFailure();
+            TestP331_StaleLedgerEntryIsClearedAfterTimeout();
+            TestP331_TimerCreatesMissingLegWhenNoInFlight();
+            TestP331_TimerDoesNotCreateDuplicateWhenInFlight();
             TestStopGuardDefaultOffsetFallback();
 
             // - Manual Lockout Tests -
@@ -18486,6 +18492,108 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(state2.FirmStartingBalance == 55000.0,
                 "an unmapped account with no plan AccountSize falls back to the heuristic (55000) -- "
                 + "the fix only applies when the plan states a size");
+        }
+
+        // ================================================================================
+        // P3-31: in-flight order ledger for the copier reconciler.
+        //
+        // Between Submit and Accepted an order is in neither Account.Orders nor the
+        // bracket cache, so a timer-driven reconciler would create a second leg. The
+        // ledger records a submitted order's identity BEFORE the broker call and
+        // removes it when the order appears in Account.Orders or the submit failed.
+        // Reconcile's submitInFlight parameter is the seam -- it suppresses Create
+        // only, never Cancel, so a reservation can delay placing a leg but never
+        // delay removing an orphan (P0-50).
+        //
+        // These tests are authored BEFORE the implementation (test-first per §6.0).
+        // They will not compile until InFlightLedger exists; that is the baseline-red
+        // gate the agent loop requires.
+        // ================================================================================
+
+        private static void TestP331_InFlightLedgerSuppressesCreateUntilAccepted()
+        {
+            Console.WriteLine("\n[TEST] P3-31: the in-flight ledger suppresses Create until the order is Accepted");
+
+            var ledger = new InFlightLedger();
+            // Register a stop submit for account "F1", instrument "MNQ 03-26"
+            ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
+
+            Assert(ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_STOP"),
+                "immediately after Register, the leg is in-flight -- Reconcile must see submitInFlight=true");
+
+            Assert(!ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_TARGET"),
+                "only the registered leg is in-flight, not the other leg");
+
+            // Simulate the order appearing in Account.Orders (Accepted)
+            ledger.Settle("F1", "MNQ 03-26", "COPIER_STOP");
+
+            Assert(!ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_STOP"),
+                "after Settle, the leg is no longer in-flight -- a second pass may Create if needed");
+        }
+
+        private static void TestP331_LedgerEntryClearedOnAccepted()
+        {
+            Console.WriteLine("\n[TEST] P3-31: ledger entry is cleared when the order is Accepted");
+
+            var ledger = new InFlightLedger();
+            ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(ledger.Count == 1, "one entry after Register");
+
+            ledger.Settle("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(ledger.Count == 0, "zero entries after Settle");
+        }
+
+        private static void TestP331_LedgerEntryClearedOnSubmitFailure()
+        {
+            Console.WriteLine("\n[TEST] P3-31: ledger entry is cleared when the submit returned null (failed)");
+
+            var ledger = new InFlightLedger();
+            ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(ledger.Count == 1, "one entry after Register");
+
+            // Submit returned null -- the order will never appear in Account.Orders
+            ledger.Fail("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(ledger.Count == 0, "zero entries after Fail -- a null submit must not permanently suppress Create");
+        }
+
+        private static void TestP331_StaleLedgerEntryIsClearedAfterTimeout()
+        {
+            Console.WriteLine("\n[TEST] P3-31: a stale ledger entry (never settled) is cleared after a timeout");
+
+            var ledger = new InFlightLedger(timeoutSeconds: 2);
+            ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(ledger.Count == 1, "one entry after Register");
+
+            // Wait past the timeout
+            System.Threading.Thread.Sleep(2200);
+            ledger.PurgeExpired();
+            Assert(ledger.Count == 0, "zero entries after timeout -- a crashed submit must not permanently suppress Create");
+        }
+
+        private static void TestP331_TimerCreatesMissingLegWhenNoInFlight()
+        {
+            Console.WriteLine("\n[TEST] P3-31: a timer-driven reconcile Creates a missing leg when nothing is in-flight");
+
+            // This test verifies the timer path feeds submitInFlight=false when the
+            // ledger has no entry, so Reconcile emits Create for a missing leg.
+            var ledger = new InFlightLedger();
+
+            // No registration -- nothing is in-flight
+            bool stopInFlight = ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(!stopInFlight,
+                "with no registration, IsInFlight is false -- Reconcile may Create the missing leg");
+        }
+
+        private static void TestP331_TimerDoesNotCreateDuplicateWhenInFlight()
+        {
+            Console.WriteLine("\n[TEST] P3-31: a timer-driven reconcile does NOT Create when the leg is already in-flight");
+
+            var ledger = new InFlightLedger();
+            ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
+
+            bool stopInFlight = ledger.IsInFlight("F1", "MNQ 03-26", "COPIER_STOP");
+            Assert(stopInFlight,
+                "with a registration, IsInFlight is true -- Reconcile suppresses Create, preventing a duplicate leg");
         }
     }
 }

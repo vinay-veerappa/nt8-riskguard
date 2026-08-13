@@ -1,0 +1,21 @@
+{
+  "T1": {
+    "title": "P3-31: in-flight order ledger for the copier reconciler",
+    "defect": "Between Submit and Accepted an order is in neither Account.Orders nor the bracket cache, so a timer-driven reconciler (which does not exist yet) would create a second leg — reproducing the duplicate-leg family (P0-49, P0-55, P1-56, P0-59) through the very mechanism meant to cure it. The event-driven callers pass submitInFlight=false because the bracket's StopInFlight/TargetInFlight reservation already serialises them and the submitted leg is recorded in bracket.WorkingStop before a second pass can run. A background timer is what needs a real ledger. The Reconcile seam already accepts stopSubmitInFlight/targetSubmitInFlight booleans and suppresses Create only (never Cancel). The ledger itself does not exist.\n\nWHAT TO BUILD:\n1. An InFlightLedger class (in CopierReconciler.cs or a new file) that records a submitted order's identity (account name, instrument, leg name, submit timestamp) BEFORE the broker call and removes it when the order appears in Account.Orders (Accepted) or the submit failed (null return). Thread-safe under _lock. Timeout: a stale entry (e.g. > 30s with no settlement) is cleared so a crashed submit does not permanently suppress Create.\n2. A BackgroundTimer (or timer-driven loop) inside TradeCopierEngine that calls ReconcileFollowerPosition on a clock (e.g. every 5s), feeding the ledger's in-flight count as submitInFlight per leg. The timer must NOT hold _lock across broker reads.\n3. Wire the existing event-driven callers to also register/clear ledger entries, so the timer and the events agree.\n\nCONSTRAINTS:\n- Do NOT confuse bracket.StopInFlight with the ledger's in-flight set. The bracket flags are mutual exclusion between two syncs; the ledger is 'an order has been submitted and has not appeared in Account.Orders yet'. Feeding the bracket flag into Reconcile placed no stop at all (handover §4a).\n- A timer without the ledger reproduces the duplicate-leg family. The ledger comes BEFORE the timer.\n- Reconcile suppresses Create only, never Cancel — a reservation can delay placing a leg but never delay removing an orphan (P0-50).\n- The timer must not hold _lock across broker calls (P1-10/12).\n- Two guards in CopierReconciler.cs are unreachable and labelled as such; one mutation SURVIVED and is kept deliberately. Read §4u before simplifying anything.\n\nSCOPE: This ticket is the LEDGER + the TIMER. The RiskGuard-side audit (P3-30's remaining half) is a separate ticket.",
+    "region": {
+      "kind": "line",
+      "files": ["addons/CopierReconciler.cs", "addons/TradeCopierEngine.cs"],
+      "start_lines": [1, 1],
+      "end_lines": [608, 4776]
+    },
+    "expect_green": [
+      "TestP331_InFlightLedgerSuppressesCreateUntilAccepted",
+      "TestP331_LedgerEntryClearedOnAccepted",
+      "TestP331_LedgerEntryClearedOnSubmitFailure",
+      "TestP331_StaleLedgerEntryIsClearedAfterTimeout",
+      "TestP331_TimerCreatesMissingLegWhenNoInFlight",
+      "TestP331_TimerDoesNotCreateDuplicateWhenInFlight"
+    ],
+    "max_rounds": 6
+  }
+}
