@@ -5490,3 +5490,164 @@ a shadow-mode firm breach halt a bot.
 lands.
 
 ---
+
+## 5.29 Session 33 record — 2026-08-13: two tracks — the firm mapping, and the defects it exposed
+
+Run as two tracks on purpose, at the operator's instruction: extend the firm mapping *while* fixing
+the defects, rather than queueing one behind the other. The tracks turned out to be coupled in a way
+that decided the order — see *"why the funded account is still unmapped"* below.
+
+### Landed
+
+| | |
+|---|---|
+| **`P2-92` (1/2)** | ✅ `AccountState.LockoutWasShadowOnly` + `MarkRuleLockout` + `CanTrade` reads the authority + persistence. Suite **1213 → 1216** |
+| **`F-9b`** | Acceptance tests + `FirmProfile.AccountSize`. Implementation in flight |
+| **`P2-93`** | 🆕 `pure` and `override_with_friction` pass preflight's *enforcement* gate and then act on nothing |
+| **`P2-94`** | 🆕 A **timed** manual lockout does not stop new orders — `CanTrade` never reads `LockoutUntil` |
+| **`CONFIG_DEFAULTS` R3b** | Why the map cannot be completed from measurement, measured rather than assumed |
+
+Counts re-derived: **96 IDs** (93 banded + 3 `P?-`), **19 open**.
+
+### `P2-92`: the fix is not the one it looks like
+
+`ProcessAction` gates *execution* on mode, so a shadow breach flattens nothing. But ten rule paths set
+`IsLockedOut` **before** dispatch, outside any mode check, and `CanTrade` reads that flag **above** its
+own `if (!_isArmed) return true;` hatch. So in `shadow`: nothing is flattened **and the account stops
+being allowed to trade** — the copier and every strategy consult `CanTrade`, and its refusal paths log
+to `Output.Process` only (`P1-71`), so nothing readable says why a bot stood down.
+
+**The obvious fix is wrong.** Making `CanTrade` consult the mode would mean the current mode at READ
+time overrides the mode at BREACH time — so an operator locked out in `live` could escape by switching
+to `shadow`. That is `FR-30` / judge-loop `P1-4`'s concern through a different setting, and
+`LockoutBypassWhileDisarmedAccounts` cannot mitigate it because the guard is *armed*. What was missing
+is the **authority** a lockout was imposed under, so that is what gets recorded.
+
+⚠️ **The field is named for the shadow case deliberately: `LockoutWasShadowOnly`.** An absent `bool`
+deserialises `false`, which must read as *enforced*. `LockoutWasEnforced` would have every state file
+written before this change release its lockouts on upgrade. `P1-54` reasoned identically about
+`LockoutUntil`, and there is a test for the legacy file.
+
+⚠️ **AND THE SUITE WAS DEFENDING THE DEFECT.** Eight existing tests breach a rule in the DEFAULT mode
+— which is `shadow` — and assert `state.IsLockedOut`. That is `P1-87`'s shape. They were left alone,
+because the state model is not the defect: `IsLockedOut` meaning *"this account has breached"* is
+right, and the enforcement decision belongs to the consumer. **A fix that stopped writing the flag
+would have broken all eight and been indistinguishable, from the test output, from a fix that broke
+the guard.** That is the whole reason the authority went into a second field rather than into the
+first one's meaning.
+
+### What the panel was worth, precisely
+
+Hand-arbitrated, round 2 of 3. Round 1 failed to compile. **Round 2 passed every mechanical gate** —
+compile, full suite with no regressions, acceptance test green, lock-scope clean. Round 3 spent
+**294 s and 140,000 thinking characters** and failed to compile. Round 2 is what landed, applied by
+extracting its region blocks from `r2_impl_raw.txt`.
+
+Three of the arbiter's four upheld findings **do not hold**: all three argue that shadow mode failing
+to flatten a breached position is a defect *of this patch*, when it is the definition of the mode and
+is unchanged by it — the exposure after the patch is identical to the exposure before it, minus an
+unintended side effect. The arbiter's rationale then recommended *"suppress `IsLockedOut` entirely in
+shadow mode"*, which is the fix the ticket explicitly rules out and which breaks those eight tests.
+**That is the second recorded instance of this arbiter upholding findings that do not hold** (§5.28
+has the first; §5.x has it upholding 0 of 66 across four `SHIP` rulings).
+
+The fourth finding **is real**, and round 2 had already handled it: an account that breached in shadow
+carries the flag with shadow authority, so a manual lockout that only sets `IsLockedOut` — already
+true — leaves the stale authority standing and is **silently ignored**. There is now a test. And
+following that one finding into the adjacent code found **`P2-94`**.
+
+> **The lesson is not "the panel is useless".** It is: read every finding against the code, act on the
+> ones that hold, and follow them into the neighbourhood. One correct finding out of four paid for the
+> round, because it led somewhere.
+
+### A test-design lesson that cost a whole loop run
+
+The source gate's assertion message embedded its counts and the offending line numbers:
+
+```
+all 0 rule-breach lockout sites record whether the guard could act (10 do not: line 1482 ...)
+```
+
+`agent-loop` matches an `expect_green` string **anywhere inside** a failure line, so volatile trailing
+detail is harmless *there* — memory records that as the feature which lets an assertion carry
+`(got 3, expected 4)`. But the loop **also diffs the whole set of failure lines** against the baseline
+to find regressions. When `T1` fixed two of the ten sites the message changed, so the loop scored the
+old line **NEWLY PASSING** and the new line a **REGRESSION**, on a test that had merely moved from
+0/10 to 2/10. It could never converge, and the run was killed.
+
+> **A failure message is an IDENTIFIER for baseline diffing and a DESCRIPTION for a human. When those
+> conflict, the identifier wins and the description moves to stdout.** Nine assertions across the
+> `F-9` / `F-9b` / `P2-92` blocks were rewritten that way.
+
+Two other self-inflicted costs on the same ticket, both worth avoiding by habit:
+
+* **A 13-region ticket over a 6,000-line file.** Split into `T1` (the mechanism) + `T2` (route the
+  remaining eight sites). `F-9`'s single 241-line region and this ticket's first attempt both churned.
+* **A write to a class the ticket gave no region for.** Two rounds failed to compile writing
+  `AccountPersistedData.LockoutWasShadowOnly` — `AccountState` and `AccountPersistedData` are
+  different classes and **both** have a `FirmStartingBalance` and a `LockoutUntil`. My ticket's defect,
+  not the model's, and `--list` cannot catch it because the region it needed simply was not there.
+
+### The mapping track: why it cannot be finished by measuring
+
+Measured with `nt_accounts`, because *"map the rest of the accounts"* looked like typing and is not.
+
+**Only 6 of the 96 accounts report any equity** — the five Sim accounts and `TAKEPROFITPRO524207503`.
+The other ~89 return `cashValue: 0, netLiquidation: 0`: expired or unconnected prop accounts the
+connection still lists. **The platform does not know their size**, and no field in the payload carries
+one (`name / provider / denomination / cashValue / netLiquidation / realizedPnL / unrealizedPnL /
+buyingPower`).
+
+The prefixes do name the firm — `TAKEPROFIT*`/`TAKEPROFITPRO*`, `APEX*`/`PAAPEX*` (`PA` = performance
+/funded), `TDYG*`/`TDFYG*`/`FTDFYG*` (Tradeify), `LFE*` (Lucid) — the same four firms as the recovered
+profiles. ⚠️ **The Tradeify numbers appear to embed the size** (`TDYG50…` ×5 vs `TDYG100…` ×1), which
+would map six accounts in one line. **It has not been acted on**: six samples and an inference, and R3
+exists precisely to stop a dollar limit being inferred. `provider` is `Provider31` for every real prop
+account and `Simulator` for every Sim one — worth knowing separately, since `P1-20` settled that sim
+accounts are identified by provider and never by a name prefix.
+
+**So completing the map needs a size stated per account.** That is not a tooling gap; it is
+information that exists only outside the platform.
+
+What *is* machine-checkable became `F-9b`: `FirmProfile.AccountSize` plus a preflight refusal on the
+two silent failures — a mapping naming an account that **does not exist** (`P1-90`'s class one layer
+out: there a name that did not resolve placed an order on an arbitrary account, here it removes
+protection from the right one), and a plan whose **stated size contradicts** the account's observed
+equity. Both refusals must name the offending value; a preflight failure means the guard does not arm,
+so a refusal that is not actionable is worse than none.
+
+⚠️ Three over-application guards, each a test, because the same mistake in both directions is treating
+*"I cannot check this"* as *"this is wrong"*: an **unstated** size (`0`) is checked for nothing; a
+**zero-equity** account is not size-checked (89 of 96 read zero — refusing over those means this box
+never arms again); but a zero-equity account **is** existence-checked, or that exemption swallows the
+gate.
+
+### Why the funded account is still unmapped, and what unblocks it
+
+`TAKEPROFITPRO524207503` — the live 50k TPT PRO, which traded during the session and closed
+`+$324.50` — remains **unmapped**, so its firm rules still read `Disabled`. Two reasons, in order:
+
+1. **`P2-92` gates it.** Mapping it arms a rule whose breach, until `P2-92` is fully landed, would set
+   an enforced-looking lockout and **stop the account trading** while flattening nothing. Its floor
+   under `TakeProfitTrader-50K` would be peak − 1,300. Mapping a funded account into that is not a
+   defensible order of operations, and it is why the two tracks are coupled rather than parallel.
+2. **The threshold is undated research.** The recovered `1500` is dated 2026-08-02 and states no
+   account size. Asserting a funded account's drawdown limit from undated research is exactly what R3
+   exists to prevent.
+
+It is one line in `AccountFirmMap` once `P2-92` (2/2) is deployed and the operator confirms the plan
+and its size.
+
+### In flight at the end of this record
+
+* **`P2-92` (2/2)** — routes the remaining eight lockout sites; its gate is the source scan, which is
+  the one test still red for that ticket.
+* **`F-9b`** — implementation; five assertions red.
+* **A mutation battery for `P2-92`** — not yet written. ⚠️ **`P2-92` is not finished without one**: the
+  interesting mutants are the ones that pass every existing test (invert the authority sense; gate
+  `LockAccount` too; let a shadow lockout persist as enforced) and this programme's own record says a
+  fix without a battery is a fix nobody has measured.
+
+⚠️ Re-read §0 rather than this section for state.
+
+---
