@@ -110,7 +110,7 @@ four tags behind until session 29 reconstructed them as §5.24.
 
 ## 0. Start here
 
-### Verified state — 2026-08-13, re-measured after session 29
+### Verified state — 2026-08-13, re-measured after session 33
 
 Every row below was **measured for this pass**, not carried forward, and the row says so when it was
 not. The command that checks it is in the last column.
@@ -124,17 +124,17 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1188 passed, 0 failed** (all **401** declared methods invoked); **bridge 50 passed, 0 failed** (was 23 — `P1-90` brought executable tests to that repo) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
+| **Suite** | **core 1232 passed, 0 failed**; **bridge 50 passed, 0 failed** — both run for this pass | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` — and the same for `nt8-mcp-bridge/tests/BridgeTests.csproj` |
 | **Defects** | **97 IDs — 80 closed, 18 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. Re-derived after session 33: **94** banded + **3** `P?-`. `P2-92` is CLOSED; `P2-93`, `P2-94` and `P2-95` are new and open. Derivation in §5.0, so you can check it instead of trusting it | the `grep` in §5.0 |
-| **Highest open** | **`P1-57`** — we would mirror another copier's mirror; the "not ours" test is a name substring. Not naked-risk, which is the point: ✅ **the `P0` band and every naked-risk item are closed.** ⚠️ Judge the next item by §5.6, not by band letter — `P1-90` was `P0` on consequence | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **19 tags**, `v1.0.0`…**`v1.12.2`** | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.12.2` core + `P1-90` bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and now `BridgeAccountResolver.cs` too | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.12.2`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the session-30 recompile | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Do next** | **`P2-95`** — `FirmStartingBalance` is captured as `balance - realized - unrealized`, and `realized` is SESSION-scoped, so it is the session-start balance and not the plan's. The trail-lock floor is therefore wrong by the account's **lifetime profit**, and the error GROWS as the account does. `LockAtProfit` carried a real value for the first time on 2026-08-13, which is what makes that path live. Then `P2-93`, `P2-94`. ⚠️ There is no "highest open" row any more, deliberately: `P1-90` carried a `P1` and was `P0` on consequence, so **band letter is not priority** — use §5.6 | §5.6 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **20 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-33 recompile. **The firm mapping is LIVE on six accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **20 batteries** — **19 here** (`mutate_f9.py` is new: 11 mutants / 0 survivors, RUN this session) + **`nt8-mcp-bridge/mutation/mutate_p190.py`**, the first in that repo. **216 anchors / 0 broken — measured.** ⚠️ The other core batteries were **not** re-run for this pass (~216 mutants × a suite run each); `mutate_ui3` WAS re-run, because F-9 broke one of its anchors and a re-anchored mutant is worth nothing until it is shown to kill. **The anchors are the cheap thing that actually goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured twice in session 30**, after the `v1.12.2` core sync and again after the bridge deploy. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
-| **CI** | `nt8-mcp-bridge` **green**. `nt8-riskguard` was **RED for 7 consecutive runs** across sessions 27–29 on one correct gate, and that is fixed in `v1.12.2` — see the block below, because the lesson outlives the fix | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| **Bridge pin** | ✅ **`v1.12.2`, matches core `main`.** It was stale at `v1.12.0` against a `v1.12.1` core in session 30, and the range **touched `addons/GuardRules.cs`** — a real revert, refused by `deploy.py` (exit 2) | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Mutation** | **21 batteries** — **20 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. Run for this pass: `mutate_f9` (11/0), `mutate_p292` (11/0, after three survivors were killed) and `mutate_ui3` (re-run because `F-9` broke one of its anchors, and a re-anchored mutant is worth nothing until it is shown to kill). **227 anchors / 0 broken — measured.** ⚠️ The other 17 were **not** re-run (~227 mutants × a suite run each). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **NT8 compile** | **0 errors, net48 — measured three times in session 33**, after each core sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **CI** | Last three `nt8-riskguard` runs before this pass: **green**. ⚠️ The `v1.13.0` run had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
+| **Bridge pin** | ✅ **`v1.13.0`, matches core `main`.** ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
@@ -165,8 +165,13 @@ This distinction is the one this document has most often blurred, so it gets its
 * **`P1-70`** — the settle-path confirmation is pinned by test, but no live trade has produced a
   `BRACKET_MODIFY_CONFIRMED` since the deploy.
 * **`T5`'s fail-closed gate** — needs an acting mode; `IsGuardProtecting` requires `mode == "live"`.
-* **The firm-mirror rules** — loaded but unmapped, so none can fire. This is `F-9`, and §5.6 names it
-  as the largest remaining config item: every dollar default is a guess until an account is mapped.
+* ~~**The firm-mirror rules** — loaded but unmapped~~ ✅ **VALIDATED LIVE 2026-08-13** (§5.28, §5.30).
+  Six accounts are mapped to two size-and-variant-keyed plans, and their rules read
+  `EvaluatedNotEnforcing` with the plan named in the row. Numbers come from the firms' published
+  tables ([FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md)), **not** from the config backup — the
+  recovered profiles carried no account size and two were deployed at the wrong one.
+  ⚠️ What is *still* unvalidated is a **breach**: no firm rule has fired, so the trailing maths and the
+  new `LockAtProfit` path have never run against real movement. And see `P2-95`.
 * **The UI's WRITE half** — the page can toggle a relationship and release a quarantine, and those two
   are validated; **nothing else on it can be changed** (§5.6 item 4).
 
@@ -269,8 +274,9 @@ python tools\sync_nt8.py --verify        # expect ALL IN SYNC (8 files)
 python tools\sync_nt8.py
 #   then nt_compile, and read errorCount
 
-# the structural checks (free, instant). RUN THESE FIRST -- one of them is red
-# right now and has been for 7 CI runs (see the CI row above).
+# the structural checks (free, instant). RUN THESE FIRST. All four pass as of
+# v1.13.0; one of them was red for 7 CI runs across three sessions while the docs
+# claimed green, which is why they lead this list rather than trail it.
 python tools\check_version_matches_tag.py     # the constant vs the newest tag
 python tools\check_direction.py               # no addon may name a bridge-owned type
 python tools\check_no_stray_copies.py         # no addon .cs outside addons/
@@ -287,11 +293,11 @@ python mutation\check_anchors.py         # expect 227 anchors / 0 broken
 # from a red baseline -- see §8, they were decorative until 2026-08-13. The newer
 # ones also score a CRASH (no result line) as a kill, which the oldest three do
 # not, because a mutant that crashes the runner read as a SURVIVOR (§5.14).
-#   guard/copier core: mutate_cm3, mutate_cm4, mutate_p0_63, mutate_p0_67,
-#                      mutate_p1_71, mutate_p1_76
-#   config defaults:   mutate_p182, mutate_p183, mutate_p184, mutate_p185,
-#                      mutate_p187
-#   the UI series:     mutate_ui1 .. mutate_ui7
+# DO NOT hand-maintain a list of them here -- the list that used to sit at this
+# spot named 18 while 20 existed. Ask the filesystem, and ask CI whether it runs
+# each one:
+ls mutation\mutate_*.py
+python tools\check_ci_runs_every_battery.py
 ls mutation\mutate_*.py                  # 18 files; do not hand-maintain the list
 
 # free: do all ticket regions still resolve? READ THE LINE RANGES -- a degenerate
@@ -845,6 +851,13 @@ that P1-39 is closed. The addon was **re-armed at 13:55:55 UTC** after both fixe
 that any recompile reloads the addon and disarms it again — `_isArmed` is deliberately never
 rehydrated (P1-37), so check the log before assuming the guard is watching.
 
+> ⚠️ **THAT LAST SENTENCE IS NO LONGER TRUE, measured 2026-08-13 (§5.30).** A recompile still reloads
+> the addon, but it now **re-arms**: the audit log shows `SHUTDOWN`/`INITIALIZE` followed by
+> `ARMED_ON_START`, and `GET /api/riskguard/version` answers `isArmed: true` immediately afterwards.
+> Almost certainly `P1-47`'s fix, which landed after this record was written. **Do not schedule a
+> manual re-arm on the strength of this paragraph — check the endpoint.** The advice to check rather
+> than assume survives; only the direction of the default changed.
+
 **What that session will and will not cover.** Stop-guard and PnL/giveback paths: covered. **Firm
 mirror: not covered at all** — `P1-42`, found while scoping this session. `ComputeFirmMirror`
 reads only the top-level `TrailingDD`/`DailyLoss`, both `Enabled: false` here, and never consults
@@ -1246,7 +1259,7 @@ paths are needed; neither alone is sufficient.
   item of `P0-9`. See §4a.
 - **`T5`'s fail-closed gate** still needs an acting mode; `IsGuardProtecting` requires
   `mode == "live"`.
-- **Firm-mirror rules** are loaded but unmapped, so none of them fire.
+- **Firm-mirror rules** are loaded but unmapped, so none of them fire. ⚠️ **True on 2026-08-07, false since 2026-08-13** — six accounts are mapped and their rules evaluate (§5.28, §5.30).
 
 ### A note on what "it didn't follow" meant
 
@@ -3037,14 +3050,19 @@ were triaged.
 > than deleted, because the digits are never reused.
 >
 > ⚠️ **The state figures that used to sit in this banner have been removed rather than updated.**
-> It said "suite 1003/0, five mutation batteries, core is tag `v1.1.0`, bridge pin bumped to match"
-> — every number wrong by session 29, and the pin claim wrong *today* (it vendors `v1.12.0` against a
-> `v1.12.1` core, and the range touches `addons/GuardRules.cs`). **Current state lives in exactly one
-> place, §0, and is derived there.** A second copy of a number is a second thing to forget.
+> It said "suite 1003/0, five mutation batteries, core is tag `v1.1.0`, bridge pin bumped to match" —
+> every number wrong within a few sessions, and the pin claim wrong twice since (it has gone stale in
+> session 30 *and* session 33, both times caught by `deploy.py` refusing). **Current state lives in
+> exactly one place, §0, and is derived there.** A second copy of a number is a second thing to
+> forget — which is the whole reason this banner no longer carries any.
 
 | ID | What | Band | Notes |
 |---|---|---|---|
-| **`P1-91`** ⚠️ | **Four MCP tool schemas still advertise `default: 'Sim101'` — two of them ORDER tools** (`nt_place_oco_order`, `nt_place_atm_order`, `nt_compliance_report`, `nt_deploy_strategy`) | P1 | **NEW 2026-08-13 (§5.26), opened by `P1-90`'s live validation, and now the HIGHEST OPEN.** In **tvDownloadOHLC**, `mcp/ninjatrader-mcp/nt-mcp-server.js:89`, `:124`, `:588`, `:672`. The engine refuses an unresolvable account now; **a client that materialises schema defaults would inject `Sim101` into an order call and never reach the refusal**. Measured: today's client does not — a property of the client, not the contract (`P1-75`'s shape). **Fix: delete the defaults, mark `account` required.** Needs an MCP server restart |
+| ~~**`P1-91`**~~ ✅ | **MCP tool schemas advertised an account, and an action, the caller never sent** | P1 | **FIXED 2026-08-13 (§5.27)** through the agent-loop. It was **six** defaults, not the four filed — the class-level test found two more on `action`, incl. `nt_alert` defaulting to `webhook` beside a `flatten` enum. In **tvDownloadOHLC**, now `mcp/ninjatrader-mcp/lib/tools.js` (extracted from `nt-mcp-server.js` so tests can import the real schema objects). ⚠️ **Only in effect once the MCP server RESTARTS** — schemas are read at startup. ⚠️ And measure rather than assume what it bought: that server **never reads `.default`, never reads `inputSchema`, and does not validate `required` at all**, so deleting a default is real for any client that materialises them while `required` adds **no server-side gate**. The enforcement stays the addon's refusal |
+| **`P2-95`** ⚠️ | **`FirmStartingBalance` is a session-start heuristic, so the trail-lock floor is wrong by the account's LIFETIME PROFIT** | P2 | **NEW 2026-08-13 (§5.30).** `ComputeFirmMirror` captures `balance - realized - unrealized`, and `realized` is session-scoped. On an account up $5,000 over its life it reads 55,000 instead of 50,000, so the guard flattens ~$5,000 early — and the error grows as the account does, which is R5's failure mode getting worse the better you do. `FirmProfile.AccountSize` is the fix and is why it exists. **Do this first**: `LockAtProfit` carried a real value for the first time the same day, so the path is live |
+| **`P2-94`** ⚠️ | **A TIMED manual lockout does not stop new orders** — `CanTrade` never reads `LockoutUntil` | P2 | **NEW 2026-08-13 (§5.30).** `LockAccount(name, 60)` sets only `LockoutUntil`; `CanTrade` reads only `IsLockedOut`; an existing test asserts that asymmetry. The sweep *does* read both, so it flattens the fills the guard just admitted — worse than a clean refusal. Same family as `P2-92`: one lockout, two consumers, disagreeing |
+| **`P2-93`** ⚠️ | **`pure` and `override_with_friction` pass preflight's ENFORCEMENT gate and then act on nothing** | P2 | **NEW 2026-08-13 (§5.30).** Four modes are recognised and the `MinShadowSessions` gate treats three as enforcement modes — but `IsActingMode()` returns true only for `live`, so `ProcessAction` answers `SHADOW (SKIPPED)` for both. An operator waits out five shadow sessions to reach a mode that enforces nothing. Fail-closed one-liner: stop recognising them. Implementing them is a protection *increase* and the operator's call |
+| ~~**`P2-92`**~~ ✅ | **`shadow` mode was not observation-only: a shadow breach stopped the account trading** | P2 | **FIXED 2026-08-13 (§5.29, §5.30).** `ProcessAction` gated execution on mode, but ten rule paths set `IsLockedOut` before dispatch and `CanTrade` read it **above** its own arming hatch — so nothing was flattened and the copier and every strategy stood down, with the reason logged to `Output.Process` only. Fixed by recording the AUTHORITY a lockout was imposed under. ⚠️ **Not** by making `CanTrade` consult the current mode: that would make a mode switch a lockout bypass. 11 mutants / 0 survivors |
 | ~~**`P1-90`**~~ ✅ | **An order naming an account that does not resolve was PLACED ON AN ARBITRARY ONE** — the chain was *named account → `"Sim101"` → ANY non-Backtest account → ANY account at all* | P1 | **FIXED, DEPLOYED AND LIVE-VALIDATED 2026-08-13 (§5.26)**, one day after it was filed. **Six** sites, not the three filed — and `HandleLockout` was the sharpest, feeding the guess to `UnlockAccount`, which REMOVES protection, with no existence check. Resolution moved to `addons/BridgeAccountResolver.cs`, which names no NT8 type and is therefore **executed** by tests (bridge suite 23→50) rather than grepped. First mutation battery in that repo: 11 mutants / 0 survivors. Opened `P1-91` |
 | ~~**`P0-68`**~~ ✅ | **`nt_change_order` reports `"status": "modified"` when the provider ignored the change** — the FOURTH `Account.Change()` site, in the bridge, with none of `P0-63`'s detection | P0 | **NEW 2026-08-13; was the highest open defect for one day.** Reproduced in isolation, twice (§5.13). Anything trailing a stop through MCP silently does not move, and **the unchanged price is already in the response body** next to the success claim. Cheapest possible fix: apply `P0-63`'s settle-then-verify, or at minimum stop claiming success |
 | ~~**`P0-67`**~~ ✅ | **`DynamicAtmManager` holds the THIRD `Account.Change()` call, and its cache records the price the broker refused** — so the trail latches at a stale value | P0 | Same root as `P0-63`, different call site; found by widening `P0-63`'s "Where" clause (§5.8). **Establish whether that path is live first** — the bridge drives it and tests none of it (`P2-27`). **Do this together with `P0-68`**: four sites, one root cause, and `P0-63` already contains the remedy |
@@ -3114,7 +3132,29 @@ That is the same failure as a stale submodule pin overwriting a newer live core,
 
 ## 5.4 ⚠️ Still open on the operator, not on engineering
 
-**Two questions remain that only the account holder can settle. Neither blocks work.**
+**Questions only the account holder can settle.** The `Account.Change()` one blocks nothing; the
+firm-plan ones each block a group of accounts from being mapped at all.
+
+0. **Which plan is each remaining account on?** — added 2026-08-13. This is the whole of what is left
+   of `F-9`, and it is **information, not code**: only **6 of the 96** accounts report any equity, and
+   no field in the platform payload carries a plan size, so it cannot be measured. Firm + size would
+   not be enough even if it could — every one of the four firms sells multiple rule sets at one size
+   (see [FIRM_PLANS_RESEARCH.md](FIRM_PLANS_RESEARCH.md)).
+   * **Which `APEX*` accounts are the exception to the realised DLL basis?** The operator confirmed
+     everything is realised *except some Apex accounts*, without naming them.
+   * **Are the `APEX*` evaluations the EOD or the intraday product?** They differ in whether a daily
+     loss limit exists **at all** — $1,500 on a 100K EOD, none on the intraday.
+   * **What does `FTDFYG`'s leading `F` denote, as distinct from `TDFYG`?** `TDYG` is Tradeify Growth
+     and the `F` marks funded, which leaves `FTDFYG` unexplained.
+   * **Which Lucid plan are the `LFE*` accounts on?** `LFE` is a Lucid evaluation; Flex has no DLL
+     anywhere, Pro's is a soft breach at 1,200/1,800/2,700 by size.
+   > ⚠️ And the boundary of what the machine can ever check: `F-9b` validates **account ↔ plan** size
+   > and **cannot** validate **plan ↔ firm table**. The `Apex-100K` profile that shipped on
+   > 2026-08-13 would have passed the size check easily while holding Apex's **50K** amount, because
+   > 2% and 3% of 100k are both plausible. Only the firm's published table distinguishes them, so
+   > that comparison is a scheduled human step, not a gate.
+
+**And the two that were already here:**
 
 1. **Is `Account.Change()` honoured on the funded accounts?** Every account validated on so far is
    `provider: Simulator`. The funded accounts are `Provider31` and were `Disconnected`. If `Change()`
@@ -3155,8 +3195,28 @@ and `P?-65` together and makes the redesign testable.
 
 ## 5.6 Order of work
 
-**Updated 2026-08-13 (session 29).** ⚠️ **`P1-90` goes first and it is not close.** Everything below
-it is the previous ordering with the finished items struck through.
+**Updated 2026-08-13 (session 33).** Finished items are struck through rather than deleted, because
+the *order* they forced is the reusable part.
+
+> ### Do next: `P2-95`, then `P2-93` and `P2-94`
+>
+> All three were filed in session 33 by reading code adjacent to a fix, and none is naked-risk.
+>
+> **`P2-95` first.** `FirmStartingBalance` is captured as `balance - realized - unrealized`, and
+> `realized` is SESSION-scoped, so it is the session-start balance and not the plan's. The trail-lock
+> floor is wrong by the account's **lifetime profit** and the error grows as the account does.
+> `FirmProfile.AccountSize` is the fix and is why it exists; the awkward part is migrating state that
+> already holds heuristic values. It is first because `LockAtProfit` carried a real value for the
+> first time on 2026-08-13, so the path is live now.
+>
+> **`P2-93`** — `pure` and `override_with_friction` pass preflight's *enforcement* gate (five shadow
+> sessions) and then act on nothing, because `IsActingMode()` names only `live`. The fail-closed
+> one-liner is to stop recognising them; implementing them is a protection increase and the
+> operator's call.
+>
+> **`P2-94`** — a **timed** manual lockout does not stop new orders: `CanTrade` reads only
+> `IsLockedOut` and `LockAccount(name, 60)` sets only `LockoutUntil`. The sweep then flattens the
+> fills, which is worse than a clean refusal.
 
 > ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
@@ -3213,13 +3273,18 @@ Then the previous ordering:
    **The ledger comes BEFORE the timer** — between `Submit` and `Accepted` an order is in neither
    `Account.Orders` nor the cache, so a timer alone creates the second leg.
 
-`P1-57`, `P1-13`, and the `P2` band are real but none is naked-risk; schedule them after the above.
+`P1-57`, `P1-13`, `P1-77` and the rest of the `P2` band are real but none is naked-risk; schedule them
+after the three at the top of this section.
 
 **Three items session 29 named rather than left to be rediscovered:**
 
-* **`F-9` — the firm mapping** (`FirmMirror.AccountFirmMap`). Every dollar-denominated default is
-  still a guess for one unstated account size; this is the mechanism that replaces guessing, and it
-  is the largest remaining item in [CONFIG_DEFAULTS.md](CONFIG_DEFAULTS.md).
+* ~~**`F-9` — the firm mapping**~~ ✅ **DONE and LIVE 2026-08-13 (§5.28, §5.30), with `F-9b`.** Six
+  accounts mapped; keys carry the **plan variant** as well as the size, because every one of the four
+  firms sells multiple rule sets at one size. Preflight now refuses a mapping naming an account that
+  does not exist, or a plan whose stated size contradicts the account.
+  ⚠️ **What remains is information, not code**: only 6 of the 96 accounts report any equity and no
+  platform field carries a plan size, so the other ~89 cannot be mapped until the operator states
+  which plan each is on. The open questions are listed at the end of §5.30.
 * **A copier field registry.** `P1-83`'s gate is a source scan and says so — it cannot catch
   `P2-25`'s class on the copier side (a field genuinely read, by a branch that can never fire). The
   guard side needed a runtime registry for exactly that.
@@ -5314,7 +5379,9 @@ driving `tools/list` over real stdio: 52 tools, `nt_place_order` present.
 `P1-91` was the last item that any band letter called urgent, and **the `P0` band and every
 naked-risk item are closed.** What remains is §5.6's ordering: the UI **write** half (goal 1 of the
 two this UI exists for is still mostly untouched), then `P3-31`'s ledger → timer → the RiskGuard-side
-audit, then `P1-57`, `P1-13` and the `P2` band. `F-9` (the firm mapping) is still the largest
+audit, then `P1-57`, `P1-13` and the `P2` band. ⚠️ **Superseded by §5.30**: `F-9` and `F-9b` are
+done and live, and the next item is `P2-95`. Kept because the ordering argument still holds.
+`F-9` (the firm mapping) was, at the time of writing, the largest
 config item, and it is the mechanism that replaces guessing at every dollar-denominated default.
 
 ### One housekeeping note
