@@ -45,27 +45,27 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**79 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
+**80 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
 trusting it:
 
 ```bash
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 76 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 77 entries here
 ```
 
 The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
 yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 76 + 3 = 79. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
+write-up yet. 77 + 3 = 80. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
 but not as an open item.)
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|
 | **P0** — naked-risk / wrong-size | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, `P0-68` | 22 | **0** | ✅ **The whole P0 band is closed.** `P0-67` and `P0-68` were the third and fourth `Account.Change()` sites and were fixed together on 2026-08-13 (§5.14); `P0-68` is live-validated. `P0-62` is **superseded** by `P0-63`. `P0-9` has both legs closed and live-validated. |
-| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79` | 38 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
+| **P1** — real bugs, not yet live-risk | `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, `P1-69`…`P1-77`, `P1-79`, `P1-80` | 39 | **3** | ✅ `P1-69`…`P1-71` closed 2026-08-13 (§5.14); `P1-72`…`P1-75` closed the same day (§5.16) — all four found by widening the MCP wrapper, none by a review. `P1-75` is **latent, not historical**: it never fired only because `prop_limits.json` does not exist on this box, and the first prop-limits write creates it. Still open: **`P1-57`** (we would mirror another copier's mirror), **`P1-13`'s threading half**, and `P1-77` (the consistency cap is dead config). ✅ **`P1-79` CLOSED** in handover §5.21 — a released quarantine kept its REASON, because `NormalizeRequest` strips nulls so no request can clear a string field; fixed as an invariant on `ApplyRelationshipRequest`. |
 | **P2** — structural | `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P2-78` | 11 | **6** | Closed: `P2-28`, `P2-38`, `P2-41`, `P2-46`, `P2-58`. Open: `P2-24`, `P2-25`, `P2-26`, `P2-29`, and `P2-27` — **half done**. `OnExecution` is covered and CI is active; `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` are still excluded from the test build, which is why `P1-72`…`P1-75` could only be compile-checked by NT8 itself. |
 | **P3** — enhancements | `P3-30`…`P3-34` | 5 | **5** | All open. **`P3-30`'s copier half shipped and is live-validated**; the timer and the RiskGuard-side audit remain. `P3-31`'s seam in `Reconcile` exists, the ledger does not — and **the ledger is required before the timer**. `P3-32` may be **superseded by `P0-9`**; read it before scheduling it. |
 | **Untriaged band** | `P?-64`, `P?-65`, `P?-66` | 3 | **0** | Handover §5.2. ✅ **The whole untriaged band is CLOSED.** `P?-66` closed by the live validation — the measurement was never broken; its *reporting* was, and that became `P1-69`. **`P?-64` and `P?-65` closed in handover §5.21** (`UI2`): the config path has one owner in core and the window dispatches requests instead of building domain objects. ⚠️ Branch `feat/ui-config-single-owner`, **unmerged**. |
-| | | **79** | **14** | **65 closed or superseded** |
+| | | **80** | **14** | **66 closed or superseded** |
 
 > **Two closures were found by a live operator trade rather than by any test**, and that ratio is the
 > plan's real lesson: `P0-49`/`P0-50` (session 8), `P0-51`/`P1-52` (2026-08-09), `P0-59`/`P0-60`
@@ -1663,6 +1663,64 @@ surfaces at `TradeCopierWindow.cs:812`.
 **Status**: being fixed as spec section E of the `UI2` ticket
 (`agent/tickets_ui_config.json`), and pinned by `TestUi2_ARowEditNeverMutatesTheStoredObjectFirst`,
 which asserts `released.QuarantineReason == null`.
+
+---
+
+### P1-80. A risk-config write that reported success and applied nothing, ever — CLOSED 2026-08-13
+
+*(found by surveying the config files on the live box after `P?-64` closed, not by a test. The
+question that found it was "which files here does anything actually read?" — worth asking again
+elsewhere.)*
+
+**Three config-shaped files sat in `UserDataDir/RiskGuard/`. One was live.**
+
+| File | Read by | State |
+|---|---|---|
+| `config.json` | `RiskGuardAddOn.cs:333` | ✅ the real one |
+| `riskguard_config.json` | **nothing** | written by the bridge, never consumed |
+| `RiskConfig.json` | **nothing, in either repo** | zero references; `StopGuard.OnMissing: "AutoStop"` while the guard ran `"Flatten"` |
+
+`McpBridgeAddOn`'s `RiskGuardConfig` write path did this when the guard was not loaded:
+
+```csharp
+_riskGuardConfig[key] = req;
+File.WriteAllText(RiskGuardConfigFile, JsonConvert.SerializeObject(_riskGuardConfig));
+return new { success = true, status = "persisted_only", ... };
+```
+
+`_riskGuardConfig` was **declared, loaded from disk at startup, and written to. It was never
+read by anything.** So the configuration was not applied then, was not applied at the next
+startup, and would never be applied. The note said *"NOT applied to a live engine"* — true about
+that moment, and it reads as *"it will be picked up later"*. It would not.
+
+**Measured on the live box**: `riskguard_config.json` held `trailingDrawdown: 500,
+maxPositionCap: 5`, written 2026-07-30, while the live config ran `1500` and `10`. **A file
+stating a drawdown limit three times tighter than the one actually enforced.** Anyone — an
+operator, an agent, the browser UI — reading it would have concluded the account was far more
+protected than it was.
+
+This is `CONFIGURED and not EVALUATED`, the same state as `P1-77` (a prop rule enabled by default
+and evaluated nowhere) and `P2-78`, reached through a *write* path rather than a dead field.
+
+⚠️ **The tell was an asymmetry, and it is worth recognising elsewhere: the READ half of the same
+method already refused** (`{ error = "RiskGuardAddOn not loaded" }`) **while the WRITE half
+pretended to succeed.** When one direction of a pair refuses and the other does not, the
+permissive one is usually wrong.
+
+**Fix**: deletion, not wiring — `[[fix-the-class-not-the-instance]]`. The dictionary, the path
+constant and the startup load are gone, and the write now REFUSES exactly as the read does. Risk
+configuration with no engine to apply it to is an error, not a draft. Wiring the store up instead
+would have created a *second* source of truth for the guard's limits, which is the defect one
+layer up.
+
+Both dead files were deleted from the box. Nothing read them, and the operator confirmed config
+is disposable in the current phase.
+
+**Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs` — the fallback branch in `RiskGuardConfig`,
+`_riskGuardConfig` (:146), `RiskGuardConfigFile` (:4936) and the `LoadJsonStore` at :250.
+**Pinned by**: `TestP1_80_NoWritePathPersistsRiskConfigNothingReads` in
+`nt8-mcp-bridge/tests/BridgeSourceTests.cs` — source-text, because that file is still outside an
+executable harness (`P2-27`), with a positive clause so deleting the method cannot pass it.
 
 ---
 
