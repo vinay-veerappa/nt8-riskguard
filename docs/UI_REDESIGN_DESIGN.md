@@ -431,7 +431,22 @@ is reachable **only through the bridge**.
    of any account (`P2-83`) so a box with no accounts cannot render as healthy. 21 mutants, 0
    survivors.
 3. **Bridge routes** — static serving + a snapshot endpoint; SSE already exists.
+   **DONE.** `/api/riskguard/inventory` with `?view=summary` and `?account=NAME`, plus `/ui`.
+   ⚠️ **One auth exemption was introduced and it is stated in the code**: a browser cannot send
+   an `Authorization` header on a top-level navigation, so the **static assets only** are exempt —
+   an HTML file and its JavaScript, no account data. The page holds the token in `localStorage`
+   and sends it as a Bearer header on every `/api/` call, so the data path is unchanged. The
+   alternative — a token in the query string — would put it in browser history and every referrer.
 4. **The UI itself** — one static file, fleet + inspector + events.
+   **DONE for the guard half** (`ui/index.html` in `nt8-mcp-bridge`). Fleet of accounts sorted
+   worst-first, click to expand one account's rules, and the rules nothing evaluates reported once
+   at the top — including when there are no accounts at all (`P2-83`).
+   ⚠️ **The fleet view exists because of a measurement.** The first live read of the real box
+   returned **96 accounts × 25 rules = 2400 rows and 648 KB**, on a page that polls. The summary
+   brought the poll to **22 KB**. Reasoning about this would not have produced it; asking the
+   deployed system did.
+   **Still to do here**: the copier half (relationships, verdicts, latency/slippage with
+   `measured:`), and the NT8 Control Center menu item that launches the browser (§7.4).
 5. **`F-9`** firm mapping, which is what makes the risk half of the inspector tell the truth.
 6. Then §5.6 item 5 onward, unchanged: `P3-31` ledger → timer → RiskGuard-side audit.
 
