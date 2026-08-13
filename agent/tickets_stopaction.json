@@ -11,7 +11,7 @@
         "still produces a protective action rather than silence",
         "an action the guard does not implement fails preflight",
         "and the message names the value it could not perform",
-        "nothing in the guard mentions WarnOnly"
+        "no code in the guard offers WarnOnly"
       ],
       "regions": [
         {

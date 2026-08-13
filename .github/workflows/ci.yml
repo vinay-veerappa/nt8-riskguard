@@ -225,6 +225,15 @@ jobs:
       - name: Mutation battery P1-83
         run: python mutation/mutate_p183.py
 
+      # P1-87 -- an unrecognised StopGuard.OnMissing emitted NO ACTION for a position with no
+      # stop. Found by mutate_p184's OnMissing mutant SURVIVING 1180 green tests, and a test
+      # in that suite ASSERTED the defect as correct behaviour, so the suite was defending it
+      # rather than merely silent about it. Mutant 2 is the one to know: it keeps the else
+      # branch and makes it do nothing, so the shape of the fix survives and the behaviour
+      # does not -- a reviewer skimming the diff sees an else and moves on.
+      - name: Mutation battery P1-87
+        run: python mutation/mutate_p187.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be

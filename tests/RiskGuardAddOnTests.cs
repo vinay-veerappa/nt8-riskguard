@@ -117,7 +117,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestSweepPnLSyncSkipsConsecutiveLossForExcludedAccount();
             TestValidateInvariantReturnsFalseForUnknownAccount();
             TestStopGuardPartialStopGap();
-            TestStopGuardWarnOnlyProducesNoAction();
             TestSweepAutoSetsCooldownOnConsecutiveLosses();
             TestProcessActionForceLiveBypassesShadowMode();
             TestEdgeWindowGateInsideWindowNoBreach();
@@ -8498,12 +8497,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             //
             // Either implement it or stop offering it. This asserts the second, because adding
             // a third action is a feature and this is a defect.
+            // ⚠️ COMMENTS ARE STRIPPED FIRST, and the first version of this test did not do
+            // that -- it went red on the comment written beside the fix explaining what
+            // WarnOnly had been and why it went. A check that forbids DESCRIBING the defect it
+            // prevents is a check that gets the description deleted instead, which is how the
+            // reason for a fix gets lost. Same rule and same helper shape as Ui2WindowCode.
             var path = Path.GetFullPath(Path.Combine(
                 Path.GetDirectoryName(P184ThisFile()), "..", "addons", "RiskGuardAddOn.cs"));
-            var text = File.Exists(path) ? File.ReadAllText(path) : null;
+            var code = File.Exists(path)
+                ? string.Join("\n", File.ReadAllText(path).Split('\n')
+                    .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }))
+                : null;
 
-            Assert(text != null && !text.Contains("WarnOnly"),
-                "nothing in the guard mentions WarnOnly, an action it has never implemented");
+            Assert(code != null && !code.Contains("WarnOnly"),
+                "no code in the guard offers WarnOnly, an action it has never implemented");
         }
 
         private static void TestStopGuardNoActionWhenStopPresent()
@@ -9337,26 +9344,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 4. StopGuard OnMissing = "WarnOnly"
-        private static void TestStopGuardWarnOnlyProducesNoAction()
-        {
-            Console.WriteLine("\n[TEST] StopGuard WarnOnly Produces No Action");
-            var config = new RiskConfig();
-            config.StopGuard.StopAttachSeconds = 0;
-            config.StopGuard.OnMissing = "WarnOnly";
-
-            var account = new Account { Name = "TestAcc" };
-            var addon = new RiskGuardAddOn();
-            addon.SetConfigForTest(config);
-            addon.TestClearFsms();
-            var mnq = new Instrument("MNQ");
-
-            addon.TestFsmOnPosition(account, mnq.FullName, MarketPosition.Long, 1);
-            account.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18000 });
-
-            var actions = addon.EvaluateGraceExpiry(account, mnq.FullName);
-            Assert(!actions.Any(a => a.RuleId.StartsWith("MISSING_STOP_")), "No action generated when OnMissing is WarnOnly");
-        }
-
         // 5. Cooldown auto-set in sweep when consecutive losses breach limit
         private static void TestSweepAutoSetsCooldownOnConsecutiveLosses()
         {

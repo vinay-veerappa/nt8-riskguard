@@ -2889,8 +2889,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                         fsm.State = GuardFsmState.ProtectedPending;
                     }
                 }
-                else if (_config.StopGuard.OnMissing == "Flatten")
+                else
                 {
+                    // P1-87. This was `else if (OnMissing == "Flatten")`, so ANY other value --
+                    // a lower-case "flatten", a typo, an empty string, or the "WarnOnly" the
+                    // declaration itself used to advertise -- matched nothing and this method
+                    // returned NO ACTION: a position with no stop, past its grace period, and
+                    // the guard simply walked away. Nothing validated the value either.
+                    //
+                    // Flatten is the fallback because it is the documented default and the one
+                    // that is always a known quantity; the alternative invents a stop at a
+                    // guessed offset. Falling back silently would be its own lie, so
+                    // RunPreflight now REFUSES an unrecognised value and names it.
+                    //
+                    // Deliberately one branch rather than two: splitting "Flatten" from
+                    // "unrecognised" would put one outcome under two RuleIds, and the log is
+                    // grepped by RuleId.
+                    //
+                    // Found because a mutant flipping OnMissing to "AutoStop" survived 1180
+                    // green tests -- nothing pinned this at all.
                     actions.Add(new GuardAction
                     {
                         AccountName = account.Name,
@@ -3406,6 +3423,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // (c) mode recognised?
             if (_mode != "shadow" && _mode != "live" && _mode != "pure" && _mode != "override_with_friction")
                 result.Fail("MODE", $"Unrecognised mode '{_mode}'");
+            // (c2) stop-guard OnMissing action recognised? Applies in every mode.
+            string onMissing = _config.StopGuard?.OnMissing;
+            if (onMissing != "AutoStop" && onMissing != "Flatten")
+                result.Fail("STOP_GUARD_ON_MISSING", $"Unrecognised StopGuard.OnMissing value '{onMissing}'");
             // (d) FR-29 soft gate: live enforcement modes require MinShadowSessions completed shadow sessions.
             if ((_mode == "live" || _mode == "pure" || _mode == "override_with_friction")
                 && _config.MinShadowSessions > 0
@@ -5589,7 +5610,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class StopGuardConfig
     {
-        public string OnMissing { get; set; } = "Flatten"; // "AutoStop", "Flatten", "WarnOnly"
+        public string OnMissing { get; set; } = "Flatten"; // "AutoStop", "Flatten"
 
         // P1-84 / R5. Was 3, which is the single most likely reason this system gets switched
         // off: three seconds from fill to a working stop, and OnMissing above is "Flatten", so
@@ -5598,7 +5619,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // disarms the guard, and a guard that is off during the one session that mattered has
         // provided exactly nothing.
         //
-        // ⚠️ THE NUMBER IS ONLY RIGHT FOR "Flatten", and that pairing is deliberate. If OnMissing
+        // WARNING: THE NUMBER IS ONLY RIGHT FOR "Flatten", and that pairing is deliberate. If OnMissing
         // were "AutoStop" a much shorter deadline would be correct, because an invented stop is
         // recoverable and being taken out of the trade is not. It stays a plain default rather
         // than a value computed from OnMissing: a getter that recomputes would let a config
@@ -5871,7 +5892,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             _onMissingCombo = new ComboBox { Width = 100, Height = 22, Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)), Foreground = Brushes.White };
             _onMissingCombo.Items.Add("AutoStop");
             _onMissingCombo.Items.Add("Flatten");
-            _onMissingCombo.Items.Add("WarnOnly");
             missingRow.Children.Add(_onMissingCombo);
             panel.Children.Add(missingRow);
 
