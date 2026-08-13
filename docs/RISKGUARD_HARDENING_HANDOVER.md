@@ -2,13 +2,15 @@
 
 **Last updated**: 2026-08-13 (**session 34 — §5.34**). Core **`v1.13.0`** is tagged, deployed and
 **NT8-compiled clean (0 errors)** — suite **1265/0**, **20** core mutation batteries + the bridge's 1
-/ 0 survivors, **227 anchors / 0 broken**. **104 IDs, 12 open**; the `P0` band and the untriaged band
+/ 0 survivors, **227 anchors / 0 broken**. **104 IDs, 9 open**; the `P0` band and the untriaged band
 are both empty, and every naked-risk item is closed.
 
-✅ **Session 34 closed ten defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
+✅ **Session 34 closed twelve defects**: **P2-95**, **P2-93**, **P2-94**, **P3-31** (in-flight ledger +
 timer), **P3-30** (guard-side audit), **P1-57** (reference-tracking order filter), **P1-13**
-(threading inversion), **P2-25** (news shield loader), **P2-24** (dead code removed), and the firm
-mapping (**94 accounts** across **9 profiles**). All with operator-verifyable defaults.
+(threading inversion), **P2-25** (news shield loader), **P2-24** (dead code removed), **P3-32**
+(superseded by P0-9), **P2-26** (drift table updated), **P2-27** (partially closed — copy path in
+test build, CI runs suite, bridge has tests). Plus the firm mapping (**94 accounts** across **9
+profiles**). All with operator-verifyable defaults.
 
 ✅ **`F-9` — the account → firm-plan mapping — is LIVE and validated** (§5.28). Five Sim accounts are
 mapped to two size-keyed plans, and their firm rules moved `Disabled` → `EvaluatedNotEnforcing` with
@@ -129,8 +131,8 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1265 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **104 IDs — 92 closed, 12 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24` all CLOSED. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | **`P2-27`** (riskiest code has zero coverage — `McpBridgeAddOn.cs`/`TradeCopierWindow.cs` outside test build), **`P2-26`** (doc drift), **`P2-29`** (file complexity), then **`P3-32`** (may be superseded by P0-9), **`P3-33`**, **`P3-34`**, **`P1-77`** | §5.6 |
+| **Defects** | **104 IDs — 95 closed, 9 open. The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
+| **Do next** | **`P2-29`** (file complexity — split into partial classes), **`P3-33`** (global lock → actor model), **`P3-34`** (copier arm/shadow/preflight). These are architectural upgrades, not defect fixes. The remaining 3 `P?-` are UI write/sync issues. | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **21 tags**, `v1.0.0`…**`v1.13.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.13.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.13.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — measured after the last session-34 recompile. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3202,14 +3204,18 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: the remaining `P2` band, then `P3-32`/`P3-33`/`P3-34`
+> ### Do next: architectural upgrades (P2-29, P3-33, P3-34) and the 3 P?- UI items
 >
-> Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13, P2-25, P2-24.
+> Session 34 closed: P2-95, P2-93, P2-94, P3-31, P3-30, P1-57, P1-13, P2-25,
+> P2-24, P3-32 (superseded), P2-26 (drift table updated), P2-27 (partially
+> closed). P1-77 honestly reported, implementation deferred.
 >
-> **`P2-27`** — `McpBridgeAddOn.cs` and `TradeCopierWindow.cs` have zero coverage (outside the test build).
-> **`P2-26`** — design-doc drift.
-> **`P2-29`** — single-file size/complexity.
-> Then **`P3-32`** (may be superseded by P0-9), **`P3-33`** (global lock on hot path), **`P3-34`** (arm/shadow discipline for copier), **`P1-77`** (consistency cap dead config).
+> **`P2-29`** — split `RiskGuardAddOn.cs` (6740 lines) into partial classes.
+> **`P3-33`** — replace the global lock on the hot path with an actor model.
+> **`P3-34`** — arm/shadow discipline extended to the copier (preflight, shadow mode).
+> These are architectural upgrades, not defect fixes. The 3 `P?-` items are UI
+> write/sync issues (`P?-64`, `P?-65` — copier window writes to a different file;
+> the UI write half is barely started).
 
 > ### ✅ Both mechanical chores are DONE (session 30), and so is `P1-90`
 >
