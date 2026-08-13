@@ -9,17 +9,23 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 ENGINE = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 
 MUTANTS = [
+    # ⚠️ RE-POINTED 2026-08-13. P1-85 restructured this block: the guessed "Sim101"
+    # leader is gone and the branch is keyed on `isNew`, computed under the lock.
+    # `check_anchors.py` caught both stale anchors the same day. Before that tool
+    # existed, a stale anchor printed [SKIP] and scored a SURVIVOR -- but only the
+    # next time somebody happened to run THIS battery, which is how mutate_ui2's
+    # anchor stayed broken through a whole session.
     ("merge -> rebuild (group)",
-     "                grp = existing != null\n                    ? CloneConfig(existing)\n                    : new CopierGroup { GroupName = groupName, LeaderAccountName = \"Sim101\" };",
-     "                grp = new CopierGroup { GroupName = groupName, LeaderAccountName = \"Sim101\" };"),
+     "                    grp = isNew\n                        ? new CopierGroup { GroupName = groupName, LeaderAccountName = leader ?? \"\" }\n                        : CloneConfig(existing);",
+     "                    grp = new CopierGroup { GroupName = groupName, LeaderAccountName = leader ?? \"\" };"),
 
     ("merge -> rebuild (relationship)",
      "                rel = existing != null\n                    ? CloneConfig(existing)\n                    : new CopierRelationship();",
      "                rel = new CopierRelationship();"),
 
     ("clone removed: malformed request mutates stored group",
-     "                    ? CloneConfig(existing)\n                    : new CopierGroup { GroupName = groupName, LeaderAccountName = \"Sim101\" };",
-     "                    ? existing\n                    : new CopierGroup { GroupName = groupName, LeaderAccountName = \"Sim101\" };"),
+     "                        : CloneConfig(existing);",
+     "                        : existing;"),
 
     ("group matrix comparer not re-applied",
      "            grp.PerTickerRatios = EnsureOrdinalIgnoreCase(grp.PerTickerRatios);\n            grp.CustomSymbolMappings = EnsureOrdinalIgnoreCase(grp.CustomSymbolMappings);",

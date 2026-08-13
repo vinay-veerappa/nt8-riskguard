@@ -1632,7 +1632,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (isFlatLegacy || !key.Contains("_"))
                     {
-                        Console.WriteLine($"[LoadFromDisk] Skipping invalid relationship '{key}': could not derive FollowerAccountName from key.");
+                        CopierLog(key, "CONFIG_ENTRY_SKIPPED", string.Format(
+                            "[LoadFromDisk] Skipping invalid relationship '{0}': could not derive FollowerAccountName from key.",
+                            key));
                         rel = null;
                         return false;
                     }
@@ -1650,7 +1652,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LoadFromDisk] Skipping invalid relationship '{key}': {ex.Message}");
+                CopierLog(key, "CONFIG_ENTRY_SKIPPED", string.Format(
+                    "[LoadFromDisk] Skipping invalid relationship '{0}': {1}",
+                    key, ex.Message));
                 rel = null;
                 return false;
             }
@@ -1668,7 +1672,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     normalized["GroupName"] = key;
                 if (!normalized.ContainsKey("LeaderAccountName"))
                 {
-                    Console.WriteLine($"[LoadFromDisk] Skipping invalid group '{key}': could not derive LeaderAccountName from key.");
+                    CopierLog(key, "CONFIG_ENTRY_SKIPPED", string.Format(
+                        "[LoadFromDisk] Skipping invalid group '{0}': could not derive LeaderAccountName from key.",
+                        key));
                     grp = null;
                     return false;
                 }
@@ -1684,7 +1690,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LoadFromDisk] Skipping invalid group '{key}': {ex.Message}");
+                CopierLog(key, "CONFIG_ENTRY_SKIPPED", string.Format(
+                    "[LoadFromDisk] Skipping invalid group '{0}': {1}",
+                    key, ex.Message));
                 grp = null;
                 return false;
             }
@@ -1911,26 +1919,50 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
 
             string leader = ReqStr(req, "leaderAccount") ?? ReqStr(req, "LeaderAccountName");
+            bool leaderKeyPresent = req["leaderAccount"] != null || req["LeaderAccountName"] != null;
 
-            CopierGroup grp;
+            CopierGroup grp = null;
             bool isNew;
+            string refusalAccount = null;
+            string refusalEvent = null;
             lock (_lock)
             {
                 var existing = _groups.FirstOrDefault(g =>
                     g.GroupName.Equals(groupName, StringComparison.OrdinalIgnoreCase));
                 isNew = existing == null;
-                grp = isNew
-                    ? new CopierGroup { GroupName = groupName, LeaderAccountName = leader ?? "" }
-                    : CloneConfig(existing);
+
+                // P1-85: a leader explicitly present but blank/whitespace is refused on both
+                // create and edit paths. Omitting the leader on an edit is legitimate and keeps
+                // the stored value. These checks run under the lock before any clone or merge.
+                if (leaderKeyPresent && string.IsNullOrWhiteSpace(leader))
+                {
+                    refusalReason = string.Format(
+                        "refused to apply group '{0}': the leader account was blank. A group must have a non-empty "
+                        + "leader account; on an edit, omit the leader field to keep the stored leader.",
+                        groupName);
+                    refusalAccount = groupName;
+                    refusalEvent = "BLANK_GROUP_LEADER_REFUSED";
+                }
+                else if (isNew && string.IsNullOrWhiteSpace(leader))
+                {
+                    refusalReason = string.Format(
+                        "refused to create group '{0}': the leader account was missing. A new group must name the "
+                        + "leader account that its followers will copy.",
+                        groupName);
+                    refusalAccount = groupName;
+                    refusalEvent = "MISSING_GROUP_LEADER_REFUSED";
+                }
+                else
+                {
+                    grp = isNew
+                        ? new CopierGroup { GroupName = groupName, LeaderAccountName = leader ?? "" }
+                        : CloneConfig(existing);
+                }
             }
 
-            if (isNew && string.IsNullOrWhiteSpace(leader))
+            if (refusalReason != null)
             {
-                refusalReason = string.Format(
-                    "refused to create group '{0}': the leader account was missing. A new group must name the "
-                    + "leader account that its followers will copy.",
-                    groupName);
-                CopierLog(groupName, "MISSING_GROUP_LEADER_REFUSED", refusalReason);
+                CopierLog(refusalAccount, refusalEvent, refusalReason);
                 return null;
             }
 
@@ -1955,6 +1987,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             grp.CustomSymbolMappings = EnsureOrdinalIgnoreCase(grp.CustomSymbolMappings);
 
             ApplyArmingGate(grp.ArmedForLive, armingWasRequested, confirmLive, v => grp.ArmedForLive = v);
+
+            // Defensive re-check after the merge: PopulateObject may have received a blank
+            // leader through a property name or path the raw extraction above did not cover.
+            // `grp` is still the clone, so returning here leaves the stored group untouched.
+            bool leaderKeyInNormalized = normalized["leaderAccount"] != null || normalized["LeaderAccountName"] != null;
+            if (leaderKeyInNormalized && string.IsNullOrWhiteSpace(grp.LeaderAccountName))
+            {
+                refusalReason = string.Format(
+                    "refused to apply group '{0}': the leader account was blank. A group must have a non-empty "
+                    + "leader account; on an edit, omit the leader field to keep the stored leader.",
+                    grp.GroupName);
+                CopierLog(grp.GroupName, "BLANK_GROUP_LEADER_REFUSED", refusalReason);
+                return null;
+            }
 
             // P1-76. Checked HERE rather than at the top, because the merge above is what
             // decides the group's final leader and follower list -- a partial update that

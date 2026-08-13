@@ -1,0 +1,37 @@
+{
+  "_comment": "P1-85 follow-ups. Both were UPHELD by the review panel on the first landing (logs/agent_loop ledger, T1 arbiter findings #3 and #5/#6) and both are genuine. The red tests are TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo and TestP185_ASkippedConfigEntryReachesTheGuardLog; they are written and RED. Tests are protected.",
+  "tickets": [
+    {
+      "id": "T2",
+      "title": "A blank leader is refused on the edit path too, and a dropped config entry is reported where an operator will see it",
+      "defect": "Two review findings on the `P1-85` landing.\n\n(1) REFUSING TO OMIT IS NOT REFUSING TO BLANK. `ApplyGroupRequest` now refuses a request that does not name the leader, and correctly does not require an EDIT to restate it. But a request that names the leader as `\"\"` or `\"   \"` is neither of those: it is an explicit instruction to leave the group without one, and it reaches `JsonConvert.PopulateObject` with no refusal in the way. The result is exactly the state `P1-85` removes -- a stored group whose leader is blank -- through a different door.\n\nThe relationship path needs no equivalent and must not grow one: there the two account names ARE the lookup key, so a blank one is already refused before anything is looked up.\n\n(2) A DROPPED ENTRY IS REPORTED ONLY TO THE CONSOLE. Because `TryParseRelationship` and `TryParseGroup` no longer invent a missing name, a malformed entry is now SKIPPED at load. Both new skip branches -- and the `catch` blocks that were already there -- report through `Console.WriteLine`. NT8's output window is not the guard's log, this runs at startup with nobody watching, and \"operator config vanishing without an error\" is `P?-64`'s exact shape: it is what made the copier window's writes disappear for weeks. Refusing to guess must not buy that defect back at load time.",
+      "spec": "Both changes are in `addons/TradeCopierEngine.cs`.\n\nA. THE BLANK LEADER. In `ApplyGroupRequest`, after the group name is established, treat a leader that is PRESENT IN THE REQUEST but blank or whitespace as a refusal, on the edit branch as well as the create branch. Say so in the reason, and distinguish it from the omitted case: omitting the leader on an edit is legitimate and must stay legitimate. Log through `CopierLog` as the neighbouring refusals do. The stored group must be unchanged after a refused edit -- it already is, because the merge runs on a clone, but do not move the refusal after the merge.\n\nB. THE SKIPPED ENTRY. `CopierLog` is `private static` on this class, so both `TryParse*` methods can call it directly -- no new plumbing, no new parameter. Replace every `Console.WriteLine` in `TryParseRelationship` and `TryParseGroup` -- the two new skip branches AND the two pre-existing `catch` blocks -- with a `CopierLog` call. The message must name the config KEY that was dropped and say what was missing, because the operator's next question is which entry to fix. Use one event type for the whole class of \"an entry in the config file was not loaded\"; do not invent a separate one per branch.\n\n⚠️ The account argument to `CopierLog` is the first parameter and is used for routing. These entries have no derivable account -- that is why they were skipped -- so pass the config key, which is the only identifier that exists.\n\nWHAT NOT TO DO:\n* Do NOT add a blank-name refusal to `ApplyRelationshipRequest`; it already refuses blanks, and a second one would be a duplicated rule.\n* Do NOT make the load path throw or abort. One bad entry must not stop the others loading -- that would be a much larger config loss than the one being reported.\n* Do NOT change what gets skipped. The decision of WHICH entries are undecipherable is settled and separately tested; this ticket only changes where the report goes.\n* Do NOT touch `NormalizeRequest`, `ClearCollectionsNamedIn`, or the ordering around `PopulateObject`.",
+      "context": "THE LOG IS OBSERVABLE FROM TESTS. `CopierLog` calls `CopierLogObserver`, an internal static test seam, and `CaptureCopierLog(...)` in the suite wraps it. `TestP185_ASkippedConfigEntryReachesTheGuardLog` writes a config file with one undecipherable relationship and one undecipherable group, loads it, and asserts BOTH keys appear in the captured log. It also asserts both entries were still dropped, so satisfying it by loading them anyway will fail.\n\n`TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo` creates a group properly, then edits it with `\"\"` and with `\"   \"`, and finally asserts the STORED leader is untouched.\n\nBOTH DIRECTIONS ARE ALREADY PINNED ELSEWHERE. `TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot` asserts that an edit which does not mention the leader is still ACCEPTED, and `TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented` asserts that a key which supplies both names still parses. Neither may go red.\n\nASCII only. C# 8.0 / .NET Framework 4.8 and a net8.0 test build. `CopierLog` reaches another component, so it must not be called while holding `_lock`.",
+      "expect_green": [
+        "an edit naming the leader as",
+        "and the stored leader is untouched by the refused edits",
+        "and both skips reached the guard log naming the entry"
+      ],
+      "regions": [
+        {
+          "id": "R1",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "public CopierGroup ApplyGroupRequest(JObject req, bool confirmLive, out string refusalReason)",
+          "note": "THE BLANK LEADER. The leader is already read here for the create branch; the refusal has to cover the edit branch as well, without requiring an edit to restate a leader it did not mention."
+        },
+        {
+          "id": "R2",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal static bool TryParseRelationship(JObject source, string key, bool isFlatLegacy, out CopierRelationship rel)",
+          "note": "TWO Console.WriteLine calls: the new skip branch and the catch. Both become CopierLog, naming the key."
+        },
+        {
+          "id": "R3",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "internal static bool TryParseGroup(JObject source, string key, out CopierGroup grp)",
+          "note": "The same two calls for groups."
+        }
+      ]
+    }
+  ]
+}

@@ -100,6 +100,40 @@ MUTANTS = [
      '                    : R(null, null, c.NewsEventCount,',
      '                    : R(null, null, c.NewsEventCount + 1,'),
 
+    # ---- P1-86: turning the switch off must not downgrade the defect ----
+    (RULES,
+     "P1-86 RESTORED: the news shield asks whether it is switched ON before it asks whether\n"
+     "     it CAN fire. With P1-82's default that reports Disabled -- 'not a defect' -- for a\n"
+     "     rule that has never been able to fire. This is the exact pair the hardening plan\n"
+     "     warned about, and the two changes are only safe together",
+     '                Evaluator = c => c.PropConfig == null\n'
+     '                    ? Off("news shield disabled")\n'
+     '                    : c.NewsEventCount == 0',
+     '                Evaluator = c => c.PropConfig == null || !c.PropConfig.EnableNewsShield\n'
+     '                    ? Off("news shield disabled")\n'
+     '                    : c.NewsEventCount == 0'),
+
+    (RULES,
+     "the zero-event branch reports Off instead of a zero-evidence reading. Same downgrade,\n"
+     "     reached without touching the ordering -- Disabled either way",
+     '                        ? R(null, null, 0,\n'
+     '                            "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "',
+     '                        ? Off("no news events loaded")\n'
+     '                            .Also("NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "'),
+
+    (RULES,
+     "the INERT note stops naming P2-25. The row is still red and the operator still cannot\n"
+     "     find out WHY -- 'refused' without the culprit is the defect UI7 closed, told here",
+     '"stored in the config and nothing ever opens it. (P2-25)")',
+     '"stored in the config and nothing ever opens it.")'),
+
+    (RULES,
+     "the shield reports one event when it has none. It leaves the INERT band entirely and\n"
+     "     reads as Enforcing -- a rule lying about its evidence is what EvidenceCount exists\n"
+     "     to make impossible",
+     '                            : R(null, null, c.NewsEventCount, null)',
+     '                            : R(null, null, c.NewsEventCount + 1, null)'),
+
     (RULES,
      "BuildSnapshot stops reporting the rules nothing evaluates. The consistency cap never\n"
      "     reaches the scan, so the class gate narrows to an instance gate in silence",

@@ -470,6 +470,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP185_TheCopierEngineNamesNoAccountOfItsOwn();
             TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented();
             TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo();
+            TestP185_ABlankAccountIsRefusedLikeAMissingOne();
             TestP185_ASkippedConfigEntryReachesTheGuardLog();
 
             TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
@@ -3742,6 +3743,44 @@ namespace NinjaTrader.NinjaScript.AddOns
             var stored = engine.GetGroups().FirstOrDefault(g => g.GroupName == "P185Blank");
             Assert(stored != null && stored.LeaderAccountName == "P185Lead",
                 "and the stored leader is untouched by the refused edits");
+        }
+
+        private static void TestP185_ABlankAccountIsRefusedLikeAMissingOne()
+        {
+            Console.WriteLine("\n[TEST] P1-85: a relationship request naming a BLANK account is refused too");
+
+            // MUTANT 5 SURVIVED THE FIRST BATTERY RUN. Swapping `IsNullOrWhiteSpace` for a null
+            // check let `{"leaderAccount": ""}` straight through, and not one test noticed --
+            // because every test written for P1-85 OMITS the account, and omitted and blank are
+            // different inputs reaching the same field.
+            //
+            // The behaviour was already correct. What was missing was any evidence of it, which
+            // is the whole argument for the batteries: three green tests over one input do not
+            // cover a second input, however obviously related the two look.
+            //
+            // I had also written the opposite into the T2 ticket -- "do NOT add a blank-name
+            // refusal to ApplyRelationshipRequest; it already refuses blanks" -- which was true
+            // and was not the point. It refuses them by accident of which helper was reached for.
+            var engine = new TradeCopierEngine();
+
+            var blanks = new[]
+            {
+                @"{""leaderAccount"":"""",""followerAccount"":""P185F""}",
+                @"{""leaderAccount"":""   "",""followerAccount"":""P185F""}",
+                @"{""leaderAccount"":""P185L"",""followerAccount"":""""}",
+                @"{""leaderAccount"":""P185L"",""followerAccount"":""   ""}",
+            };
+
+            foreach (var body in blanks)
+            {
+                string reason;
+                var rel = engine.ApplyRelationshipRequest(JObject.Parse(body), false, out reason);
+                Assert(rel == null && !string.IsNullOrWhiteSpace(reason),
+                    "a blank account name is refused with a reason: " + body);
+            }
+
+            Assert(engine.GetRelationships().Count == 0,
+                "and no relationship was created against a blank account name");
         }
 
         private static void TestP185_ASkippedConfigEntryReachesTheGuardLog()
@@ -16171,6 +16210,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             engine.UpsertGroup(new CopierGroup
             {
                 GroupName = "NullMatrix",
+                LeaderAccountName = "NullMatrixLead",
                 PerTickerRatios = null,
                 CustomSymbolMappings = null
             });

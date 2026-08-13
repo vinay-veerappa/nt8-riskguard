@@ -76,6 +76,20 @@ jobs:
       # When you add a battery, add it HERE in the same commit. This has now been got
       # wrong twice (P0-63's, then session 20's two), each time leaving CI weaker than
       # the local gate while looking complete.
+
+      # ⚠️ RUN FIRST, and it takes a second. A battery whose find-string no longer matches
+      # prints [SKIP] and scores that mutant a SURVIVOR -- but only when the battery is
+      # RUN, and a battery only runs when the suite is green. So an anchor broken by an
+      # unrelated commit is invisible for as long as nobody notices. That has happened
+      # twice: mutate_ui2's anchor was broken by the UI7 commit and stayed broken through
+      # a whole session because only the battery that "looked touched" was re-run, and
+      # mutate_cm3's two were broken by P1-85 and caught by this check on the same day.
+      #
+      # It is a substring count, so it costs nothing and works even while the suite is red
+      # -- which is exactly when a mutation battery cannot tell you anything.
+      - name: Mutation anchors still match
+        run: python mutation/check_anchors.py
+
       - name: Mutation battery CM3
         run: python mutation/mutate_cm3.py
 
@@ -177,8 +191,18 @@ jobs:
       # because it builds its config with `new`. Two control mutants default the two
       # genuinely-enforcing switches OFF, so R2 cannot be satisfied by removing real
       # protection, and two more try to make the gate stop scanning rather than fail.
-      - name: Mutation battery P1-82
+      - name: Mutation battery P1-82 / P1-86
         run: python mutation/mutate_p182.py
+
+      # P1-85 -- the copier must not invent an account when a request omits one. Most of the
+      # interesting ways to get this wrong still LOOK like a refusal, which is what the
+      # battery is for: mutant 5 tests for null instead of blank (every test that OMITS an
+      # account still passes, because omitted and blank are different inputs -- the review
+      # panel found that one, not the suite), mutant 7 refuses without a reason, and mutant 8
+      # puts the load-path skip back on Console.WriteLine so config shrinks at startup with
+      # nothing in the guard log to say so.
+      - name: Mutation battery P1-85
+        run: python mutation/mutate_p185.py
 
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
