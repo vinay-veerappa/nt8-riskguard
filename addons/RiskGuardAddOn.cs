@@ -1581,8 +1581,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     });
                     if (!stateModel.IsLockedOut)
                     {
-                        stateModel.IsLockedOut = true;
-                        _stateDirty = true;
+                        MarkRuleLockout(stateModel, "NEWS_SHIELD_LOCKOUT");
                     }
                 }
 
@@ -1599,8 +1598,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     });
                     if (!stateModel.IsLockedOut)
                     {
-                        stateModel.IsLockedOut = true;
-                        _stateDirty = true;
+                        MarkRuleLockout(stateModel, "EVALUATION_TARGET_REACHED");
                     }
                 }
 
@@ -1690,7 +1688,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                             if (stateModel.RecentOrderIds.Count > maxPerSecond)
                             {
-                                stateModel.IsLockedOut = true;
+                                MarkRuleLockout(stateModel, "ORDER_FLOOD_LOCKOUT");
 
                                 // P1-45: pair the flag with a deadline. The lockout test is
                                 // `IsLockedOut || UtcNow < LockoutUntil` -- an OR -- and every
@@ -3253,7 +3251,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     if (pos.Quantity > limit)
                     {
-                        stateModel.IsLockedOut = true;
+                        MarkRuleLockout(stateModel, "MAX_SIZE_BREACH");
                         actions.Add(new GuardAction
                         {
                             AccountName = stateModel.AccountName,
@@ -3279,7 +3277,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    stateModel.IsLockedOut = true;
+                    MarkRuleLockout(stateModel, "MAX_TRADES_BREACH");
                     if (_config.Overtrading.LockoutMinutes > 0)
                     {
                         stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.LockoutMinutes);
@@ -3298,7 +3296,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    stateModel.IsLockedOut = true;
+                    MarkRuleLockout(stateModel, "CONSECUTIVE_LOSS_BREACH");
                     if (_config.Overtrading.LockoutMinutes > 0)
                     {
                         stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.LockoutMinutes);
@@ -4634,7 +4632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ActionType = GuardActionType.FlattenPosition,
                     RuleId = "FIRM_TRAILING_DD_BREACH"
                 });
-                if (!st.IsLockedOut) { st.IsLockedOut = true; _stateDirty = true; }
+                if (!st.IsLockedOut) MarkRuleLockout(st, "FIRM_TRAILING_DD_BREACH");
             }
 
             if (res.DailyLossBreached)
@@ -4659,7 +4657,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ActionType = GuardActionType.FlattenPosition,
                     RuleId = "FIRM_DAILY_LOSS_BREACH"
                 });
-                if (!st.IsLockedOut) { st.IsLockedOut = true; _stateDirty = true; }
+                if (!st.IsLockedOut) MarkRuleLockout(st, "FIRM_DAILY_LOSS_BREACH");
             }
 
             return actions;

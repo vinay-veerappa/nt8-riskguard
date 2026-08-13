@@ -205,6 +205,23 @@ answer. On naked-position risk, a model does not get the last word.""",
         "skip path added later is counted automatically. Corollary, and it is load-bearing: a "
         "NON-terminal event must NOT take a terminal prefix, or one relationship reports two "
         "outcomes while another drops in silence and the totals still look right (P1-71).",
+        # --- P2-92, 2026-08-13. The panel upheld this SEVEN times in one round, as seven
+        # restatements of one finding, and it is refuted on all three legs. Recorded here so the
+        # next round does not spend itself on it again.
+        "MarkRuleLockout acquiring _stateLock (via IsActingMode) is CORRECT and cannot deadlock. "
+        "Only one lock exists in this file, so there is no ordering cycle; _stateLock is RE-ENTRANT, "
+        "so acquiring it on a thread that already holds it cannot block; and NOTHING in the addon "
+        "ever waits on another thread while holding it -- there is no Join, Wait, WaitOne or .Result "
+        "anywhere (every `Join` in the file is string.Join). ProcessAction already calls "
+        "IsActingMode() from inside its own lock(_stateLock) block and has shipped that way. Do not "
+        "propose passing the mode in, caching it, or reading _mode unsynchronised (P2-92, closed "
+        "2026-08-13).",
+        "A shadow-mode breach flattening nothing is the DEFINITION of shadow mode, not a defect of "
+        "any patch that leaves it alone. Do not file 'the position is left unprotected while trading "
+        "is allowed' against P2-92's fix: the exposure after it is identical to the exposure before "
+        "it, minus a lockout that stopped the copier and every strategy while flattening nothing. "
+        "And do not propose suppressing IsLockedOut in shadow -- eight tests breach in the default "
+        "mode and assert that flag, and the state model is not the defect (P2-92).",
         "A read endpoint must not mutate. /api/copier/config's get action must NEVER call "
         "LoadFromDisk: it replaces the in-memory relationships that ObserveFollowerFill writes its "
         "measurements onto, so reading the config destroyed the thing being read. The metrics are "

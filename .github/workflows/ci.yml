@@ -195,6 +195,19 @@ jobs:
       - name: Mutation battery F9
         run: python mutation/mutate_f9.py
 
+      # P2-92 -- shadow mode must be observation-only. Eleven mutants, and the two worth naming
+      # are the ones that look like the fix. Mutant 2 makes CanTrade consult the CURRENT mode
+      # instead of the stored authority, which is only wrong because the mode at READ time is not
+      # the mode at BREACH time -- an operator locked out in live then escapes by switching to
+      # shadow, which is FR-30 / P1-4's bypass through a different setting. Mutants 4 and 5 are the
+      # same one-line edit in opposite directions, and 5 removes protection from a funded account.
+      # Mutants 6 and 10 fail CLOSED, so they survive on safety rather than on correctness and have
+      # to be killed deliberately: 6 loses the authority across a restart, 10 promotes a shadow
+      # observation into a phantom enforced lockout. Mutant 9 is the single finding the review panel
+      # got right out of four it upheld.
+      - name: Mutation battery P2-92
+        run: python mutation/mutate_p292.py
+
       # P1-82 -- a switch whose rule cannot fire must not default ON. The change is four
       # literals, which is precisely why it needs a battery: that is the size of diff that
       # gets half-applied, or reverted later by someone "restoring a sensible default".

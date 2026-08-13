@@ -1,0 +1,200 @@
+"""Mutation battery for P2-92 (`shadow` mode must be observation-only).
+
+`ProcessAction` gated EXECUTION on mode, so a shadow breach flattened nothing -- but
+ten rule paths set `IsLockedOut` before dispatch, outside any mode check, and
+`CanTrade` read that flag ABOVE its own `if (!_isArmed) return true;` hatch. So in
+shadow: nothing was flattened AND the account stopped being allowed to trade.
+`CanTrade` is the universal pre-trade gate, so that silently halted the copier and
+every strategy.
+
+The fix records the AUTHORITY a lockout was imposed under, in a second field, rather
+than changing what `IsLockedOut` means -- because eight existing tests breach a rule
+in the default mode (which is `shadow`) and assert the flag, and a fix that stopped
+writing it would have broken all eight and been indistinguishable, from the test
+output, from a fix that broke the guard.
+
+WHAT EACH GROUP IS DEFENDING:
+
+  * MUTANT 1 restores the defect: `CanTrade` stops consulting the authority. Every
+    lockout bites in every mode again.
+
+  * MUTANT 2 is the WRONG FIX, and it is the reason the authority is a stored field
+    instead of a mode check at read time. `CanTrade` consults the CURRENT mode
+    directly, which looks equivalent and is not: an operator locked out in `live` can
+    then escape by switching to `shadow`. That is FR-30 / judge-loop P1-4's concern
+    through a different setting, and `LockoutBypassWhileDisarmedAccounts` cannot
+    mitigate it because the guard is armed.
+
+  * MUTANT 3 inverts the authority sense in the helper. Shadow breaches enforce and
+    live breaches do not -- the maximally wrong outcome, and a single `!`.
+
+  * MUTANT 4 hardcodes the authority to "acting", which is what a merge conflict or a
+    hasty revert produces. Shadow lockouts bite again and nothing else changes.
+
+  * MUTANT 5 hardcodes it to "shadow only". Now a LIVE breach does not stop trading,
+    which is a protection REMOVAL on a funded account -- the direction that costs
+    money, from the same one-line edit as mutant 4.
+
+  * MUTANT 6 renames the persisted DTO field so it no longer round-trips. Nothing
+    fails at compile or in memory; the authority is simply lost across a restart, and
+    every restored lockout reads as enforced. That is the FAIL-CLOSED direction, so it
+    is the mutant most likely to survive -- it must be killed by the legacy-state-file
+    test's live counterpart, not by luck.
+
+  * MUTANT 7 gives the persisted DTO field an `= true` initializer, which inverts the
+    fail-closed default for every state file that predates the field: absence would
+    then read as "shadow only" and RELEASE the lockout. This is P1-54's lesson
+    (`LockoutUntil` must not be shortened by an upgrade) in the other direction.
+
+  * MUTANT 8 gates `LockAccount` on the mode too -- the cheapest way to satisfy a
+    naive reading of "gate every lockout site". A lockout the operator explicitly
+    asked for then evaporates in shadow.
+
+  * MUTANT 9 drops the explicit `LockoutWasShadowOnly = false` from `LockAccount`, so
+    a manual lockout on an account that already breached in shadow INHERITS the shadow
+    authority and is silently ignored. This is the one finding the review panel got
+    right, out of four it upheld.
+
+  * MUTANT 10 stops the rehydration path restoring the authority. Combined with the
+    field's default that is fail-closed, so it survives on safety -- and it means a
+    shadow observation is promoted to an enforced lockout by a restart, which is a
+    protection INCREASE nobody asked for and which will read as a phantom lockout.
+
+  * MUTANT 11 removes the `SHADOW_LOCKOUT` log line. Nothing breaks, and the shadow
+    session -- whose entire purpose is to collect what the guard WOULD have done, and
+    which `MinShadowSessions` gates arming on -- records nothing. `P1-71`'s class: an
+    outcome that happens and leaves no readable trace.
+
+WHAT IS NOT MUTATED, and it is a real gap. `P2-94` is untouched: a TIMED manual
+lockout still does not stop new orders, because `CanTrade` never reads
+`LockoutUntil`. Mutating that would be mutating a defect that is still open, and it
+is filed rather than pinned.
+
+A crash counts as a kill (handover section 5.14).
+
+Exits non-zero on any survivor, and exits 2 rather than running against a red
+baseline.
+"""
+import os
+import re
+import subprocess
+import sys
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
+
+MUTANTS = [
+    ("CanTrade stops consulting the authority -- the defect, restored. Every lockout bites in\n"
+     "     every mode, so a shadow breach halts the copier and every strategy again",
+     'state.IsLockedOut && !state.LockoutWasShadowOnly)',
+     'state.IsLockedOut)'),
+
+    ("THE WRONG FIX: CanTrade consults the CURRENT mode instead of the stored authority. Looks\n"
+     "     equivalent; it is not. An operator locked out in live escapes by switching to shadow,\n"
+     "     which is FR-30 / P1-4's bypass through a different setting",
+     'state.IsLockedOut && !state.LockoutWasShadowOnly)',
+     'state.IsLockedOut && IsActingMode())'),
+
+    ("the authority sense is INVERTED in the helper: shadow breaches enforce and live breaches\n"
+     "     do not. One character, maximally wrong",
+     'st.LockoutWasShadowOnly = !IsActingMode();',
+     'st.LockoutWasShadowOnly = IsActingMode();'),
+
+    ("the helper hardcodes 'acting' -- what a hasty revert or a bad merge produces. Shadow\n"
+     "     lockouts bite again and nothing else looks different",
+     'st.LockoutWasShadowOnly = !IsActingMode();',
+     'st.LockoutWasShadowOnly = false;'),
+
+    ("the helper hardcodes 'shadow only', so a LIVE breach no longer stops trading. Same size\n"
+     "     of edit as the mutant above, opposite direction, and this one removes protection from a\n"
+     "     funded account",
+     'st.LockoutWasShadowOnly = !IsActingMode();',
+     'st.LockoutWasShadowOnly = true;'),
+
+    ("the authority stops being WRITTEN to the persisted state. Nothing fails in memory; it is\n"
+     "     lost across every restart, and each restored lockout reads as enforced. That is the\n"
+     "     fail-closed direction, so this is the mutant most likely to survive on safety",
+     'LockoutWasShadowOnly = state.LockoutWasShadowOnly',
+     'LockoutWasShadowOnly = false'),
+
+    ("the persisted DTO field defaults to TRUE, inverting fail-closed for every state file that\n"
+     "     predates it: absence would read as 'shadow only' and RELEASE the lockout. P1-54's lesson\n"
+     "     in the other direction",
+     'public bool LockoutWasShadowOnly { get; set; }\n    }',
+     'public bool LockoutWasShadowOnly { get; set; } = true;\n    }'),
+
+    ("LockAccount is gated on the mode too -- the cheapest way to satisfy a naive reading of\n"
+     "     'gate every lockout site'. A lockout the operator explicitly asked for evaporates in\n"
+     "     shadow",
+     'state.LockoutWasShadowOnly = false;',
+     'state.LockoutWasShadowOnly = !IsActingMode();'),
+
+    ("LockAccount stops clearing the authority, so a manual lockout on an account that already\n"
+     "     breached in SHADOW inherits the shadow authority and is silently ignored. The one\n"
+     "     finding the review panel got right out of the four it upheld",
+     'state.LockoutWasShadowOnly = false;',
+     ''),
+
+    ("the rehydration path stops restoring the authority. Fail-closed, so it survives on safety,\n"
+     "     and it means a restart PROMOTES a shadow observation into an enforced lockout -- a\n"
+     "     phantom lockout with no breach behind it",
+     'state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;',
+     ''),
+
+    ("the SHADOW_LOCKOUT log line goes. Nothing breaks, and the shadow session -- whose whole\n"
+     "     purpose is to record what the guard WOULD have done, and which MinShadowSessions gates\n"
+     "     arming on -- records nothing. P1-71's class",
+     'LogEvent(st.AccountName, "SHADOW_LOCKOUT"',
+     'if (false) LogEvent(st.AccountName, "SHADOW_LOCKOUT"'),
+]
+
+
+def run():
+    build = subprocess.run(
+        ['dotnet', 'build', 'RiskGuardTests.csproj', '-v', 'q', '--nologo'],
+        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
+    if build.returncode != 0:
+        return 'BUILD FAILED'
+    res = subprocess.run(
+        ['dotnet', 'run', '--project', 'RiskGuardTests.csproj', '--no-build'],
+        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
+    m = re.search(r'Passed = \d+, Failed = \d+', res.stdout)
+    return m.group(0) if m else 'NO RESULT LINE'
+
+
+ORIGINAL = open(GUARD, encoding='utf-8').read()
+
+print('=== baseline ===')
+baseline = run()
+print(' ', baseline)
+
+m = re.search(r'Passed = (\d+), Failed = (\d+)', baseline)
+if not m:
+    print('\nREFUSING TO RUN: could not read a result line from the baseline.')
+    sys.exit(2)
+if int(m.group(2)) != 0:
+    print('\nREFUSING TO RUN: baseline is RED (%s failing). Every mutant would score KILLED '
+          'on pre-existing failures and this battery would prove nothing.' % m.group(2))
+    sys.exit(2)
+
+survivors = []
+for name, old, new in MUTANTS:
+    if ORIGINAL.count(old) != 1:
+        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINAL.count(old)))
+        survivors.append(name + ' (ANCHOR)')
+        continue
+    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL.replace(old, new))
+    res = run()
+    mm = re.search(r'Failed = (\d+)', res)
+    killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
+        or (mm is not None and int(mm.group(1)) > 0)
+    print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
+    if not killed:
+        survivors.append(name)
+    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+
+open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+print('\nrestored original;', run())
+print('\nSURVIVORS:', survivors if survivors else 'none')
+
+sys.exit(1 if survivors else 0)
