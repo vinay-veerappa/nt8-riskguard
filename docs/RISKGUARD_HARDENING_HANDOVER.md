@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 190 passed, 0 failed across 38 tests** (was 133/26 — `P1-105` added 12); **MCP wrapper 43 passed, 0 failed** — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **120 IDs — 106 closed, 14 open**, re-derived 2026-08-14 (session 41) from the plan's per-entry status tokens: **109** banded entries (**13 open**: `P1-102`, `P2-103`, `P2-108`, `P2-109`, `P3-110`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **Closing `P1-105` raised the open count**, because validating it opened `P2-109` and `P3-110` — the **fourth** session running in which proving a fix produced the next defect. That is the system working, not slipping | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-103`**, 🆕 **`P2-109`** (`nt_orders`' `account` filter is ignored — measured returning a **funded** account's order for a request naming `Sim101`), **`P2-108`**, 🆕 **`P3-110`**, then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
+| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-103`**, 🆕 **`P2-109`** (`nt_orders`' `account` filter is ignored — measured returning a **funded** account's order for a request naming `Sim101`), **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed session 41 with `BridgeClosePlan.cs` (`deploy.py --verify` **16 files, 0 orphans**), `nt_compile` `errorCount: 0`. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -7922,7 +7922,12 @@ that means less than it looks. `main` was merged into it and the pin is `v1.23.0
 2. **`P1-102`** (now larger than filed — see §5.47: nothing on the box can *impose* a lockout on an
    account holding a position, and `action: "lock"` silently answers `isLockedOut: false`).
 3. **`P2-103`**, then 🆕 **`P2-109`** (`nt_orders`' `account` filter is ignored), then
-   **`P2-108`**, then 🆕 **`P3-110`**, then the architectural **`P2-29`** / **`P3-33`**.
+   **`P2-108`**, then **`P3-110`** -- ⚠️ **narrowed to almost nothing by a live drive in the last
+   fifteen minutes of the same session**: a `StopMarket` and a `StopLimit` both rest in `Accepted`,
+   which the panic path already cancels, so the hazard as filed does not exist. What remains is an
+   ATM/strategy-managed stop and identifying what actually produces `TriggerPending`. **Do not add
+   the state on the strength of the source reading** -- that reading is what produced the entry, and
+   it was wrong -- then the architectural **`P2-29`** / **`P3-33`**.
 
 Weigh by §5.6's consequence rule, not by band letter.
 
@@ -8116,3 +8121,59 @@ running **every** battery after a change, not only the one you wrote.
 ⚠️ **And `gh run list` remains a five-second check that belongs immediately after every push, not
 at the start of the next session.** This is now the third recorded instance of red CI here; the
 difference is that this one was caught in minutes.
+
+---
+
+## 5.51 `P3-110` measured in the last 15 minutes of the session — and the entry was WRONG
+
+**Session 41, 2026-08-14 20:30–20:39Z, Sim101.** `P3-110` was filed hours earlier from *reading*
+`ActiveOrderStates` and reasoning about what `OrderState.TriggerPending` means: the panic flatten
+omits it, a protective stop rests there, therefore `nt_emergency_flatten` leaves stops behind that
+**open** a position when they trigger. It was the one open item that could not be answered offline,
+so it got the remaining market window.
+
+**It does not reproduce.**
+
+| step | measured |
+|---|---|
+| long 2 MNQ, then `StopMarket` Sell 2 @ 30050 | rests in **`Accepted`**, not `TriggerPending` |
+| `nt_emergency_flatten` (Sim101, 2min lockout) | `firstPassCancelled: 1`, `residualCancelled: 0`, `flattenOrdersSubmitted: 1`, `accountsStillOpen: []` |
+| orders afterwards | **none on Sim101** — the stop was cancelled |
+| `StopLimit` Sell 1, stop 30050 / limit 30040 | also **`Accepted`** |
+
+`Accepted` is already in the set, so both stop types are cancelled by the first pass. **The hazard
+as filed does not exist**, and what remains is much smaller: an ATM/strategy-managed stop was not
+driven, and **nothing has yet been shown to reach `TriggerPending` on this platform at all**.
+
+### Why this is the good outcome, not a wasted item
+
+**It was FILED, not fixed.** The tempting version of `P3-110` was a one-word addition to a set —
+five seconds of work, in the same commit as `P1-105`, on the most consequential path in the bridge.
+That would have shipped a change to the panic path **with no defect behind it**, and nothing would
+ever have contradicted it: the suite would stay green, the stub cannot model the state, and the
+entry would read as evidence for itself forever.
+
+This is [[check-the-exemplar-belongs-to-the-class]] applied **before** the fix rather than after.
+`P2-107` learned it the expensive way — a correct fix named after a rule that already had its own
+latch. Here one live drive cost fifteen minutes and killed the premise.
+
+**The rule: a defect derived from reading source, on a path a test double cannot model, is a
+HYPOTHESIS. Drive it before you fix it, and say which it is in the entry.**
+
+### Two other things the same drive re-validated for free
+
+* **`P0-104` holds live**: `residualCancelled: 0`. The same shape measured `1` before that fix — the
+  panic button cancelling **its own flatten order**, account still long 11, `success: true`.
+* **`P1-97` holds live**: a `sell` on a **flat** account came back as `action: "SellShort"`, so the
+  bridge still resolves direction from the position rather than echoing the caller's label.
+
+### And the ordering gate refused a status word I invented
+
+The entry was first re-headed `-- NARROWED 2026-08-14, ...`. `check_next_list_ids.py` does not
+recognise `NARROWED`, so the entry became **unreadable** to it and four ordering-list citations
+failed with *"names `P3-110`, which has no entry in the plan"*. That is the gate behaving correctly:
+it **fails on what it cannot parse** rather than skipping it — the property added to
+`check_anchors.py` earlier the same day, after that one printed `ok` on 18 anchors it never read.
+Re-headed `-- OPEN, but NARROWED by live measurement ...`, which states the status first and the
+nuance second. **If a status word is worth inventing, teach the gate; until then, lead with a token
+it knows.**

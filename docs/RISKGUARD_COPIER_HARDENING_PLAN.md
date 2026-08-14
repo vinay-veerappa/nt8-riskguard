@@ -3440,7 +3440,7 @@ passes under the defect.
 
 ---
 
-### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, found by reading 2026-08-14
+### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, but NARROWED by live measurement 2026-08-14: the hazard AS FILED does not reproduce, and only a small remainder stands
 
 **Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
 `activeStates` by `P1-105`).
@@ -3453,11 +3453,46 @@ is the ordinary state of a protective stop.
 flatten is an order that **OPENS a position** in the opposite direction when it triggers — precisely
 the hazard `P1-106` refuses OCO and ATM orders for.
 
-⚠️ **Not measured, and deliberately not fixed while closing `P1-105`.** Widening what the panic path
-cancels is a behaviour change on the most consequential path in the bridge, and it needs its own live
-validation with a real resting stop. It is filed rather than smuggled into an adjacent commit.
-⚠️ **The stub cannot answer this** — it omitted 6 of 16 `OrderState`s and hid a live `P0` behind a
-green suite (see `test-doubles-are-not-evidence`). Drive it on the box with a real stop.
+⚠️ **Filed rather than fixed, because the stub cannot answer it** — it omits 6 of 16 `OrderState`s
+and has hidden a live `P0` behind a green suite. Widening what the panic path cancels is a behaviour
+change on the most consequential path in the bridge, so it needed a real resting stop on a live feed.
+
+#### MEASURED 2026-08-14 20:30–20:39Z on Sim101 — and the hypothesis is WRONG
+
+Driven in the last fifteen minutes of the Friday session, which is why it was worth doing then: this
+is the one open item that **could not** be answered offline.
+
+| step | measured |
+|---|---|
+| long 2 MNQ, then `StopMarket` Sell 2 @ 30050 | order rests in **`Accepted`** — *not* `TriggerPending` |
+| `nt_emergency_flatten` on Sim101 | `firstPassCancelled: 1`, `residualCancelled: 0`, `flattenOrdersSubmitted: 1`, `accountsStillOpen: []` |
+| orders afterwards | **none on Sim101** — the protective stop was cancelled |
+| separately, `StopLimit` Sell 1 @ stop 30050 / limit 30040 | also rests in **`Accepted`** |
+
+**`Accepted` is already in `ActiveOrderStates`**, so both stop types are cancelled by the first pass
+and the hazard as filed does not exist. **A stop does not sit in `TriggerPending` on this feed.**
+
+**What remains open, and it is much smaller:** `TriggerPending` is still absent from the set, and two
+paths were *not* driven — an **ATM / strategy-managed** stop, and whatever order shape actually
+produces `TriggerPending` on this platform, which is still unidentified. Until someone names an order
+that reaches that state, there is no evidence a real order is ever missed. **Do not "fix" this by
+adding the state on the strength of the source reading alone** — that was the reasoning that produced
+this entry, and it was wrong.
+
+⚠️ **This is [[check-the-exemplar-belongs-to-the-class]] applied BEFORE the fix instead of after.**
+The entry was written from reading `ActiveOrderStates` and reasoning about what `TriggerPending`
+means. One live drive contradicted it. The filing discipline is what paid: had this been "smuggled
+into an adjacent commit" as a one-word addition to a set, it would have shipped a change to the panic
+path with no defect behind it, and nothing would ever have contradicted it.
+
+#### Two other things this drive re-validated for free
+
+* **`P0-104` holds live**: `residualCancelled: 0`. Before that fix the same shape measured
+  `residualCancelled: 1` — the panic button cancelling **its own flatten order** — with the account
+  still long 11 and `success: true`.
+* **`P1-97` holds live**: a `sell` submitted on a **flat** account came back as `action: "SellShort"`,
+  so the bridge is still resolving the direction from the position rather than echoing the caller's
+  label.
 
 ---
 
