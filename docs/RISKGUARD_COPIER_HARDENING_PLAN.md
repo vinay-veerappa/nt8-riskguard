@@ -3409,7 +3409,7 @@ reader), `F-9` (derive what you display from what actually happened), `P1-70`.
 
 ---
 
-### P2-109. `nt_orders`' `account` parameter is ignored — a read answers about an account you did not name — OPEN, found live 2026-08-14
+### P2-109. `nt_orders`' `account` parameter is ignored — a read answers about an account you did not name — CLOSED 2026-08-14 (session 41), live-validated
 
 **Where**: the bridge's orders route / `mcp/lib/tools.js`. Found while confirming `P1-105`'s cleanup.
 
@@ -3433,10 +3433,112 @@ remedy there was to pin the surface to the addon's own behaviour rather than re-
 flattening, or after, gets an answer about a funded account. Both `P1-105` and `P0-104` were
 diagnosed partly by reading order state.
 
-**Fix**: filter server-side, and refuse an unresolvable name via `BridgeAccountResolver` rather than
-ignoring it. Then a test that asserts the filtered and unfiltered answers **differ** when they should
-— the two calls above are the regression test, and note that a naive "filter returns a subset" test
-passes under the defect.
+#### It was not one ignored parameter — it was all THREE, and the failure is in a JOIN
+
+`nt_orders` advertises `account`, `limit` and `offset`, and implemented **none** of them. Every
+layer was individually correct:
+
+* `mcp/lib/tools.js` advertises all three;
+* `mcp/nt-mcp-server.js` builds the query string and **sends** all three;
+* `GetOrders()` was a clean, correct read of every account's orders;
+* and the line joining them was `case "/api/orders": return GetOrders();` — **taking nothing**,
+  sitting between two routes that were already passing `query[...]`.
+
+**Nothing you could review in isolation was wrong.** The contract between the halves was simply
+never connected — which is the argument for the two halves living in one repo, restated: a
+contract with its two sides in two commits cannot be reviewed as one thing. The description even
+promised "cursor pagination", so an agent paging with `offset` re-read page one forever.
+
+#### The fix
+
+* `case "/api/orders": return GetOrders(query["account"], query["limit"], query["offset"]);`
+* **`BridgeAccountScope`** (new) is now the ONE definition of "this request is about account X".
+  `BridgeClosePlan.MatchesAccount` delegates to it — the alternative was a second copy, which is
+  how `P1-90` reached six sites and `P1-100` ended with three readers of one flag. ⚠️ The move
+  broke two of `mutate_p1105.py`'s anchors; they were **repointed, not retired**.
+* **`BridgeOrderQuery`** (new) parses and clamps. `limit=abc` gives the default rather than
+  throwing — the `/api/bars` route on the next line still does `int.Parse(query["count"] ?? "100")`
+  and throws `FormatException` on a caller typo, because absent and unparseable were treated as one
+  input. `limit=0` clamps to 1 (an empty page and an empty book are indistinguishable to the
+  reader, which *is* this defect); a negative offset is 0, never an index from the end.
+* **`P1-90` on the read path**: a supplied name that does not resolve is now refused. Answering
+  "no orders" about an account that does not exist reads as reassurance, and on a read path
+  reassurance is the entire damage.
+* ⚠️ The response stays a **bare array** deliberately. The wrapper returns `res.data` straight
+  through and 43 wrapper tests plus every consumer expect a list; an envelope would be a silent
+  breaking change to every reader in order to carry metadata nobody consumes yet. Counts go to the
+  log; the envelope belongs with the wrapper change that would use it.
+
+#### Live validation 2026-08-14 20:55Z — the market was CLOSED and it did not need to be open
+
+The stale `Rejected` order on the funded account was sufficient, which is why this item was taken
+ahead of `P1-102` on a Friday evening:
+
+| call | before | after |
+|---|---|---|
+| `nt_orders(account="Sim101", limit=8)` | the **funded** account's order | **`[]`** |
+| `nt_orders(limit=6)` | the same payload, byte-identical | the funded account's order |
+| `nt_orders(account="Sim1O1")` | the same payload again | **refused**, naming the 96 accounts |
+| `nt_orders(account="TAKEPROFITPRO524207503")` | — | the order (**positive control**) |
+| `nt_orders(offset=1)` | — | `[]` — past the end, not wrapped |
+
+⚠️ **The regression test is that the two answers DIFFER.** A "the filter returns a subset"
+assertion **passes under the defect**, because every set is a subset of itself. And the positive
+control is what proves the filter is a filter rather than an outage — *for a detector, the negative
+test is the one that proves it works*, and a filter that returns nothing passes every "it excluded
+the wrong account" test ever written.
+
+#### What the battery caught, and it was the same lesson twice in one session
+
+**11/12 on the first run.** The survivor: deleting the account resolution's `if (...Refused) return`
+left the `ResolveOrRefuse` call in place, and the source gate — which asserted the resolver is
+**called** — still passed.
+
+⚠️ **That is the identical survivor `P1-105`'s battery produced hours earlier**, and I wrote the
+identical incomplete gate at the next site. *A gate that a value is COMPUTED is not a gate that it
+is USED*, learned at one call site and not carried to the next one written — this repo's own
+second-reader pattern with the author as the second reader.
+
+Fixed as a **sweep** rather than a third per-site assertion: `TestEveryResolverSiteACTSOnTheRefusal`
+extracts every `x = BridgeAccountResolver.ResolveOrRefuse(...)` from the source and requires that
+same `x` to be tested for `.Refused` **and returned on**. A ninth site is covered the moment it is
+written, without anyone remembering the test exists.
+
+⚠️ **And the exact-count gate from `§5.50` fired on its very first opportunity**: adding `GetOrders`
+made a **seventh** resolver site an **eighth**, the `== 7` assertion failed, and the number was
+raised deliberately. That is the speed bump working as designed, hours after `>= 6` was found
+leaking.
+
+Related: `P1-90` (the same guess, on write paths), `P1-72` (a parameter advertised and not
+implemented), `P1-91` (the schema half of the same contract).
+
+---
+
+### P3-111. `/api/bars` throws an unhandled `FormatException` on a caller's query typo — OPEN, found by reading 2026-08-14
+
+**Where**: `McpBridgeAddOn.cs`, the route table, one line below `/api/orders`:
+
+```csharp
+case "/api/bars":
+    return GetBars(query["symbol"], query["period"] ?? "Minute",
+        int.Parse(query["periodValue"] ?? "1"), int.Parse(query["count"] ?? "100"));
+```
+
+The `?? "1"` handles the parameter being **absent**. Nothing handles it being **present and
+unparseable**: `count=abc` reaches `int.Parse` and throws. **Absent and unparseable are different
+inputs, and only one of them was considered.**
+
+Noticed while writing `BridgeOrderQuery` for `P2-109`, which now does the same job for
+`/api/orders` with `int.TryParse` and clamping. Filed rather than fixed in that commit: it is a
+different endpoint, and a fix riding along in a commit whose subject is orders is a fix nobody
+reviews. **The remedy is to reuse `BridgeOrderQuery.ParseLimit`'s shape, not to write a third
+parser** — a query parameter is attacker-shaped by construction, being a string from outside.
+
+⚠️ Not measured. `nt_bars` is a read, so the consequence is a 500 rather than an action, which is
+why this is a `P3` — but it is reachable by a typo, and an exception page is not an answer.
+
+Related: `P2-109` (the same query string, the same class), `P1-91` (schema defaults on the same
+surface).
 
 ---
 
