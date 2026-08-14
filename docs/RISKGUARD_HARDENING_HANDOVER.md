@@ -1,12 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 35 — §5.33, §5.34, §5.35**). Core **`v1.18.0`** is tagged,
+**Last updated**: 2026-08-13 (**session 35 — §5.33…§5.36**). Core **`v1.18.0`** is tagged,
 deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **69/0**, MCP wrapper
-**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **105 IDs, 5
+**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **107 IDs, 7
 open**; the `P0` band and the untriaged band are both empty,
 and every naked-risk item is closed.
 
 ⚠️ **`P0-96`, found in this session's last hour and the sharpest thing in it**: NT8's `Position.Quantity` is **absolute** — the side is `MarketPosition` — and the copier read the **sign** of it in two places. So a leader **covering a short** sent the follower a `Sell`, which does not close a short, it **doubles** it. **1300 green tests passed under it**, because every long-side test does and there was no short-EXIT test. Found while reading adjacent code, not by the suite and not by any CI gate. **A convention the whole suite encodes is not a convention the code follows** — nothing compared the two.
+
+✅ **All three of this session's unproven features are now LIVE-VALIDATED** (§5.36), on sim accounts with the operator's authorisation: `P0-96` sent `BuyToCover 10` where it used to send `Sell 10` into a short; the guard audit fired 13 correct `NAKED_POSITION`s **and then stayed silent for 84 seconds once flat**; and shadow mode submitted nothing while naming the order it would have sent. ⚠️ **The same four minutes opened two new defects, both in seams between components**: **`P1-97`** — `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier reads every MCP-placed short ENTRY as an exit and every COVER as an entry (a wrong-direction copy, stopped in this run only by a rounding accident) — and **`P2-98`**, a partially filled copy measures only its first slice and blames the wrong cause for the rest.
 
 ⚠️ **Session 35's finding is the one to carry forward, because it invalidates a habit rather than a
 line of code**: `P3-30`'s guard audit shipped in session 34 with **1264 green tests**, and it
@@ -160,7 +162,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1311 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | ⚠️ **`P0-96` was found and fixed (§5.35): a leader covering a SHORT sent the follower a `Sell`, which DOUBLES a short rather than closing it — behind 1300 green tests.** Next: **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Do next** | ✅ `P0-96`, the guard audit and the copier's shadow mode are all **LIVE-VALIDATED** (§5.36). Next: **`P1-97`** — `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier reads every MCP-placed short ENTRY as an exit and every COVER as an entry; three lines in the bridge, and a wrong-direction copy behind it. Then **`P2-98`** (a partial fill measures only its first slice) and **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -190,6 +192,12 @@ not. The command that checks it is in the last column.
 ### What is deployed but NOT validated live
 
 This distinction is the one this document has most often blurred, so it gets its own block.
+
+> ✅ **THREE ITEMS GRADUATED OUT OF THIS BLOCK ON 2026-08-13 — see §5.36.** `P0-96` (the copier
+> covers a short instead of doubling it), **`P3-30`'s guard audit** (fires correctly AND stays
+> silent — 84 seconds flat with nothing logged, which is the half that could not be checked
+> before), and **`P3-34`'s copier shadow mode**. All three on the deployed box, on sim accounts,
+> with the guard armed in `shadow`.
 
 * **`P0-53`, `P1-54`, `P0-55`, `P1-56`** — unit + compile only.
 * **`P0-67`** — deployed since `v1.1.0`, unit + mutation only. **Nothing has driven
@@ -6328,3 +6336,115 @@ audit and the copier's shadow mode — all three are waiting on the same thing: 
 2. A **live short round trip** through the copier, which validates `P0-96`, the guard audit and
    the copier's shadow mode in one run.
 3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.
+
+## 5.36 Session 35 — THE LIVE VALIDATION: three unvalidated features proved, two new defects found
+
+The operator authorised sim-account testing. Everything below is **measured on the deployed box**,
+on `MNQ SEP26` / `NQ SEP26` at ~30185, Thursday 20:19–20:23 ET, guard in `shadow` and armed.
+
+Three things had been shipped-but-unproven for a whole session, all blocked on the same
+prerequisite: **a flat box cannot distinguish a working detector from an absent one.**
+
+### ✅ `P0-96` — validated, and the fix is the difference between flat and a doubled short
+
+Arranged the exact divergent case: leader `Sim101` **long 1 NQ**, follower `Sim-ORB` **short 10
+MNQ**, then the leader exits.
+
+```
+COPIER_COPY_SUBMITTED | MNQ SEP26 BuyToCover 10 submitted to 'Sim-ORB'
+                        mirroring leader 'Sim101' Sell 1@30185.25 (isExit=True).
+```
+
+`BuyToCover 10` covered the follower's short to **flat**. **Before the fix this same event sent
+`Sell 10`, taking `Sim-ORB` from short 10 to short 20** — the wrong direction, at double size,
+while the leader was closing.
+
+⚠️ **And the premise was confirmed on the platform, not just in the stubs**: `nt_positions`
+reported `marketPosition: "Short", quantity: 10` — **positive**. `Position.Quantity` is absolute
+in real NT8, exactly as the test suite has always modelled it and exactly as two production sites
+did not.
+
+### ✅ `P3-30`'s guard audit — validated in BOTH directions, which is the whole point
+
+* **It fires**: 13 `NAKED_POSITION` events across the run, each naming the right instrument and
+  the right gap — `NQ SEP26: position=1, ..., gap=1` and `MNQ SEP26: position=10, ..., gap=10`.
+  Every one was a genuinely unprotected position (bare market orders, no brackets). The correct
+  `FullName` in those lines **is** the `Instrument.ToString()` fix, observed in production.
+* **It is silent when it should be**: **zero** `ORPHAN_STOP`, **zero** `FSM_DIVERGENCE`, and once
+  the box went flat, **84 seconds — about 8 audit cycles — with nothing logged at all**.
+
+That second half could not be checked before today and is the half that matters: **the shipped
+version would have emitted all three findings, per instrument, every ten seconds, on a correctly
+protected account.** A detector that fires on everything is indistinguishable from a working one
+until you watch it stay quiet.
+
+### ✅ `P3-34`'s copier shadow mode — validated, and it earned its keep immediately
+
+```
+COPY_BLOCKED_COPIER_SHADOW | copier mode is 'shadow', so nothing was submitted.
+  WOULD have sent MNQ SEP26 Buy 10 to 'Sim-ORB', mirroring leader 'Sim101' Buy 1@30184.75
+```
+
+Nothing was submitted (confirmed against `nt_positions`), both relationships reported, and the
+line named the instrument, action **and quantity**. That last detail paid for itself in the same
+minute: it revealed the copy would be **10 MNQ** for 1 NQ — the `AutoSymbolConversion` ratio —
+*before* anything was risked. `set_mode` over the bridge round-tripped `live → shadow → live`
+with the relationships intact.
+
+---
+
+## 🆕 Two defects the live run found, and neither was reachable from a green suite
+
+### `P1-97` — the bridge cannot express a short, so the copier misreads every MCP-placed one
+
+`nt_place_order` maps `buy`/`sell` to `OrderAction.Buy`/`Sell` **unconditionally**
+(`McpBridgeAddOn.cs:2423`), never `SellShort` or `BuyToCover`. The copier classifies from that
+label (`leaderIsExiting = Sell || BuyToCover`). Measured, both halves:
+
+| Placed | Position after | Copier read it as |
+|---|---|---|
+| `sell 1` from **flat** — a short ENTRY | `Short 1` | **`isExit=True`** → `COPY_SKIPPED_NO_POSITION_TO_EXIT` |
+| `buy 1` from **short** — a COVER | flat | **`isExit=False`** → proceeded as an **entry** |
+
+So through the bridge the copier **cannot open a short**, and **a cover is copied as a new
+position in the opposite direction**. ⚠️ **It produced no wrong position in this run only by
+accident**: `MNQ → NQ` conversion rounded 1 contract below the minimum and it died on
+`COPY_SKIPPED_SUB_MINIMUM`. Nothing in the correctness path stopped it.
+
+The bridge already does this correctly at `:2797` (the close path picks by `MarketPosition`); the
+same three lines are missing at `:2423`. ⚠️ **Do not fix it by widening `leaderIsExiting`** — a
+label is the wrong source for that question.
+
+### `P2-98` — a partially filled copy measures only its first slice, and blames the wrong thing
+
+A 10-lot copy filled `1 + 9`. `_pendingCopies.Remove(exec.Order)` runs on the **first** fill, so
+every later slice misses:
+
+```
+COPIER_FILL_MEASURED     | latency=115.15 ms, slippage=2 ticks    <- the 1-lot slice
+COPIER_FILL_NOT_MEASURED | Pending-copy lookup missed ...         <- the 9-lot slice
+```
+
+The measured slippage describes **one contract** while nine carried the rest of the risk. And
+`FILL_NOT_MEASURED`'s text asserts *"OrderId is display-only and must never be used as the map
+key"* — **false here**: the entry was consumed, not mis-keyed. A routine partial fill emits an
+alarm pointing at a bug that does not exist, which is how an operator learns to ignore an event.
+
+---
+
+### What this session says about the method, again
+
+**Three features passed 1311 tests, 23 mutation batteries and a clean NT8 compile, and the two
+defects above were found in four minutes of driving the box.** Both live in the seam between two
+components — a label the bridge writes and the copier reads; a map entry one path inserts and
+another removes — and **neither component is wrong on its own**, which is the shape §5.16 already
+named and the shape no diff review catches.
+
+The other half is `P3-30`'s: **for a detector, the negative case is the expensive one to prove and
+the only one that shows it works.** It took an authorised live run to watch the audit stay quiet.
+
+### Next
+
+1. **`P1-97`** — three lines in the bridge, and it is the one with a wrong-direction order behind it.
+2. **`P2-98`** — keep the pending entry until the order is terminal; `P?-66`'s sampling rule applies.
+3. **`P2-27`** coverage for `ReconcileFollowerPosition`, still the last `KNOWN_DEAD` entry.

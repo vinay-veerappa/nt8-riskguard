@@ -2500,6 +2500,80 @@ no test here can reach it — when `P2-27` makes it testable, that is the first 
 
 ---
 
+### P1-97. `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier misreads every MCP-placed short — OPEN, found live 2026-08-13
+
+**Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs:2423` versus
+`TradeCopierEngine.OnExecution:4876`.
+
+```csharp
+// the bridge, for EVERY order, regardless of the account's current position:
+var orderAction = actionStr.Equals("buy", ...) ? OrderAction.Buy : OrderAction.Sell;
+
+// the copier, which classifies from that label:
+bool leaderIsExiting = leadAction == OrderAction.Sell || leadAction == OrderAction.BuyToCover;
+```
+
+**Measured on the live box**, both halves, on `Sim101`:
+
+| What was placed | NT8 position after | Copier read it as | Log |
+|---|---|---|---|
+| `sell 1 MNQ` from **flat** — a short ENTRY | `Short 1` | **`isExit=True`** | `COPY_SKIPPED_NO_POSITION_TO_EXIT` |
+| `buy 1 MNQ` from **short** — a COVER | flat | **`isExit=False`** | proceeded as an ENTRY into `CalculateFollowerQuantity` |
+
+So through the bridge the copier **cannot open a short at all**, and a **cover is copied as a
+new entry in the opposite direction**. The second is the dangerous one: the follower is sent a
+`Buy` while the leader is closing a short.
+
+⚠️ **It did not produce a wrong position in this run only by accident.** `AutoSymbolConversion`
+maps `MNQ → NQ`, and 1 MNQ scaled to NQ rounds below one contract, so it died on
+`COPY_SKIPPED_SUB_MINIMUM`. With an NQ leader, or any ratio ≥ 1 after conversion, the follower
+takes the position. Nothing in the correctness path stopped it.
+
+**Note the bridge already knows how to do this** — `McpBridgeAddOn.cs:2797`, the close path,
+picks `pos.MarketPosition == Long ? Sell : BuyToCover`. The same three lines are missing at 2423.
+
+**Fix**: choose the action from the account's current position at submit time, as the close path
+does. ⚠️ **Do NOT "fix" it by widening the copier's `leaderIsExiting` test** — a label is the
+wrong source for that question; the durable version derives exit-ness from the position DELTA.
+That is the larger change and it belongs with `P3-32`/`P3-31`, not with this one.
+
+---
+
+### P2-98. A partially filled copy measures only its FIRST slice, and blames the wrong thing for the rest — OPEN, found live 2026-08-13
+
+**Where**: `TradeCopierEngine.ObserveFollowerFill` (~`:4472`).
+
+```csharp
+pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
+if (pendingFound) _pendingCopies.Remove(exec.Order);      // <- on the FIRST fill
+```
+
+A partial fill delivers several executions for the **same `Order` object**, so every slice after
+the first misses the lookup. Measured live: a 10-lot copy filled `1 + 9`.
+
+```
+COPIER_FILL_MEASURED     | latency=115.15 ms, slippage=2 ticks     <- the 1-lot slice
+COPIER_FILL_NOT_MEASURED | Pending-copy lookup missed ...          <- the 9-lot slice
+```
+
+Two consequences, and the second is the worse one:
+
+1. **The metric describes the smallest slice.** Here the measured slippage came from 1 contract
+   and the 9 carrying the rest of the risk were unmeasured. `P?-66` was closed on the finding
+   that the numbers were right and unexposed; this is the numbers being *incomplete* and looking
+   whole.
+2. **`FILL_NOT_MEASURED` asserts a diagnosis that is FALSE here**: *"OrderId is display-only and
+   must never be used as the map key."* The lookup did not miss because of key misuse — it
+   missed because the entry was already consumed. A routine partial fill therefore emits an
+   alarm that sends the reader after a bug that is not there, which is how an operator learns to
+   ignore the event. Same family as the audit false positives in `P3-30`.
+
+**Fix**: keep the pending entry until the order is terminal, and accumulate across slices.
+⚠️ `P?-66`'s rule applies to the accumulation: a latency rejected by the sanity bound must **not**
+count as a sample, or the average silently becomes a lie again.
+
+---
+
 ## 2. P1 — Concurrency and invariant violations
 
 ### P1-10. The safety sweep holds `_stateLock` across broker calls — CLOSED 2026-08-07
