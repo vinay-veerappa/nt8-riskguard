@@ -2729,7 +2729,7 @@ repo that send more than one execution for one leader order. `mutation/mutate_p1
 
 ---
 
-### P1-100. A SHADOW-only lockout BLOCKS real orders, so shadow mode halts the account it is only supposed to observe — OPEN, found live 2026-08-14
+### P1-100. A SHADOW-only lockout BLOCKS real orders, so shadow mode halts the account it is only supposed to observe — ✅ CLOSED 2026-08-14 (session 38), v1.21.0
 
 **Where**: whatever `nt_place_order` / the bridge consults for "is this account locked out". `P2-92`
 made `CanTrade` read the **authority** a lockout was imposed under, so a shadow observation could not
@@ -2771,6 +2771,56 @@ the same state by another route. Find every reader of the lockout record before 
 single answer; a second call site that re-derives it is the defect. A test must assert a shadow
 lockout leaves `nt_place_order` WORKING — a positive-only test that a live lockout blocks passes under
 this defect.
+
+**FIXED in `v1.21.0`** (`RiskGuardAddOn.cs`). The reader was `IsAccountLocked`, which the bridge's
+`PlaceOrder`, `PlaceOcoOrder` and `PlaceAtmOrder` all consult (plus `GET /api/lockout`, so the status
+an operator reads came from the same place). It returned `state.IsLockedOut` raw. `CanTrade` was
+never wrong.
+
+**It was wrong in BOTH directions, and only one of them was filed.** `P2-92` (authority) and `P2-94`
+(deadline) had each taught `CanTrade` a clause; neither reached this reader. So:
+
+| | `CanTrade` | `IsAccountLocked` (before) |
+|---|---|---|
+| shadow-only rule breach | allows | **refuses** ← the filed defect |
+| TIMED manual lockout (`LockAccount(a, 60)`) | refuses | **allows** ← found while fixing it |
+
+The second row is `P2-94` verbatim, surviving at a second reader nine days after `P2-94` was closed —
+the operator asks for a 60-minute lockout, the bridge keeps placing orders, and the sweep flattens
+each resulting fill. Filing the defect that was *observed* would have fixed one row.
+
+Three things worth reusing:
+
+* **The fix is a predicate, not an edit.** `LockoutBinds(accountName[, state])` is now the only place
+  that answers "does a lockout bind here", and all three readers call it — `CanTrade`,
+  `IsAccountLocked`, and the entry-cancel block in `OnOrderUpdate`, which was a **third** reader
+  nobody had counted. A predicate with one caller is a convention; a predicate with every caller is
+  a guarantee.
+* **The relaxation is keyed on the LOCKOUT's authority, never on the current mode.** Reading `_mode`
+  here passes the headline case and makes a mode switch a lockout bypass — flip a live guard to
+  `shadow` and every real lockout evaporates. That is `mutate_p292.py`'s "THE WRONG FIX" mutant, and
+  it is the obvious implementation.
+* **The third reader's damage was a LOG LINE, not an order.** `DrainPendingCancels` already withholds
+  intervention cancels in shadow (`P0-51`), so nothing was cancelled — but the block still wrote
+  `ENTRY_CANCEL: Cancelled order N because account is locked out` into `interventions.jsonl`, the
+  file that has to stay readable after an incident. Same family as `P2-101`: a claim about an action
+  the current mode does not perform.
+
+⚠️ **The whole suite — 1355 tests — stayed green through the fix.** Every test that touched this set
+`state.IsLockedOut = true` directly, which is the single combination where all three readers agree.
+The tests that close it assert **both** readers at once, and one of them
+(`TheReportedGateAndTheEnforcedGateCannotDisagree`) drives all **48** combinations of flag × deadline
+× authority × armed × bypass-listed and asserts `CanTrade == !IsAccountLocked` — the instance tests
+would all still pass against a fourth reader added tomorrow; that one states the invariant.
+
+⚠️ **Extracting the predicate broke two of `mutate_p292.py`'s anchors**, which had matched text inside
+`CanTrade`. `check_anchors.py` caught it in the same commit. They were **repointed** at `LockoutBinds`
+rather than retired — the invariant did not change, only its address — and they are now strictly
+stronger, since one edit there regresses all three readers. `mutate_p1100.py` deliberately does **not**
+duplicate them.
+
+Suite **1424/0** (+69). Battery `mutation/mutate_p1100.py`, **4 mutants / 0 survivors**, wired into CI
+as the 26th. `mutate_p292.py` re-run: **11/0** against the repointed anchors.
 
 ---
 

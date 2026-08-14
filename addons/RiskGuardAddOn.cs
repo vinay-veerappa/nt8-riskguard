@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.20.0";
+        public const string Version = "1.21.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -109,31 +109,66 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        /// <summary>
+        /// P1-100. THE ONE PLACE that answers "does a lockout currently bind on this account", i.e.
+        /// must an order be refused. Every reader of that fact calls this; none re-derives it.
+        ///
+        /// It exists because the fact HAD three readers and they disagreed. `P2-92` taught CanTrade
+        /// to honour the authority a lockout was imposed under, and `P2-94` taught it to read
+        /// LockoutUntil -- both edits landed here and nowhere else, so `IsAccountLocked`, which the
+        /// bridge's order paths consult, still returned the raw flag and was wrong in BOTH
+        /// directions: it refused real orders on a shadow-only observation (measured live
+        /// 2026-08-14, `P1-100`), and it admitted orders during a TIMED manual lockout, which is
+        /// `P2-94` verbatim surviving at a second reader. A predicate with one caller is a
+        /// convention; a predicate with every caller is a guarantee.
+        ///
+        /// The three parts, and why each is load-bearing:
+        ///
+        ///   * `IsLockedOut || UtcNow &lt; LockoutUntil` -- an OR, per `P1-54`. LockAccount's timed
+        ///     branch sets only the deadline; every rule breach sets only the flag. Reading either
+        ///     one alone misses half the lockouts in this codebase.
+        ///
+        ///   * `!LockoutWasShadowOnly` -- `P2-92`. A rule breach observed in shadow mode records
+        ///     what it WOULD have done. Shadow exists to evaluate the guard without touching
+        ///     trading, so an observation must not gate an order. Note this is a property of the
+        ///     LOCKOUT, not of the current mode: consulting `_mode` here would make a mode switch a
+        ///     lockout bypass. Manual lockouts set it false explicitly and so always bind.
+        ///
+        ///   * the disarmed bypass -- FR-30 + judge-loop `P1-4`. Lockouts survive a disarm unless
+        ///     the account is listed in LockoutBypassWhileDisarmedAccounts, so a panic toggle-off
+        ///     cannot defeat a daily-loss lockout on a prop account.
+        ///
+        /// Precondition: caller holds _stateLock.
+        /// </summary>
+        private bool LockoutBinds(string accountName)
+        {
+            if (!_accountStates.TryGetValue(accountName, out var state)) return false;
+            return LockoutBinds(accountName, state);
+        }
+
+        // Overload for callers that already hold the AccountState. Same predicate, no second copy.
+        private bool LockoutBinds(string accountName, AccountState state)
+        {
+            if (state == null) return false;
+
+            bool underLockout = state.IsLockedOut
+                || (state.LockoutUntil > DateTime.MinValue && DateTime.UtcNow < state.LockoutUntil);
+            if (!underLockout) return false;
+
+            if (state.LockoutWasShadowOnly) return false;
+
+            bool bypassAllowed = !_isArmed
+                && _config != null
+                && _config.LockoutBypassWhileDisarmedAccounts != null
+                && _config.LockoutBypassWhileDisarmedAccounts.Contains(accountName);
+            return !bypassAllowed;
+        }
+
         public bool CanTrade(string accountName, string instrument, string strategyName = "DefaultStrategy")
         {
             lock (_stateLock)
             {
-                // FR-30 + judge-loop P1-4: lockouts persist even when disarmed, UNLESS the account is
-                // explicitly listed in LockoutBypassWhileDisarmedAccounts (e.g. personal/SIM accounts).
-                // This prevents a panic toggle-off from defeating a daily-loss/consecutive-loss lockout
-                // on prop-firm accounts.
-                //
-                // P2-94: a TIMED manual lockout (LockAccount(name, minutes)) sets LockoutUntil but not
-                // IsLockedOut. CanTrade read only IsLockedOut, so new orders were admitted and the
-                // sweep then flattened the fills -- worse than a clean refusal. The lockout test is
-                // `IsLockedOut || UtcNow < LockoutUntil` (an OR, per P1-54), so CanTrade must use the
-                // same test. LockoutWasShadowOnly applies only to rule breaches, not to manual
-                // lockouts: LockAccount sets LockoutWasShadowOnly = false, so a timed manual lockout
-                // is never shadow-only and cannot be bypassed.
-                if (_accountStates.TryGetValue(accountName, out var state)
-                    && (state.IsLockedOut || (state.LockoutUntil > DateTime.MinValue && DateTime.UtcNow < state.LockoutUntil))
-                    && !state.LockoutWasShadowOnly)
-                {
-                    bool bypassAllowed = !_isArmed
-                        && _config.LockoutBypassWhileDisarmedAccounts != null
-                        && _config.LockoutBypassWhileDisarmedAccounts.Contains(accountName);
-                    if (!bypassAllowed) return false;
-                }
+                if (LockoutBinds(accountName)) return false;
 
                 if (!_isArmed) return true;
                 if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accountName)) return true;
@@ -1181,15 +1216,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 
 
+        /// <summary>
+        /// "Is this account gated?" -- the question the MCP bridge asks before placing an order
+        /// (PlaceOrder, PlaceOcoOrder, PlaceAtmOrder) and answers on GET /api/lockout.
+        ///
+        /// P1-100: this returned the raw `IsLockedOut` flag, which is NOT the predicate the guard
+        /// enforces. Wrong in both directions, both measured or derivable from live logs:
+        ///   * a SHADOW-only observation refused every real order on a sim account under evaluation;
+        ///   * a TIMED manual lockout (deadline set, flag not) reported the account free to trade.
+        /// It now shares LockoutBinds with CanTrade, so the reported gate and the enforced gate are
+        /// the same predicate rather than two that agree by inspection. F-9's lesson, applied to a
+        /// reader instead of a rule display: derive the report FROM the enforcer.
+        /// </summary>
         public bool IsAccountLocked(string accountName)
         {
             lock (_stateLock)
             {
-                if (_accountStates.TryGetValue(accountName, out var state))
-                {
-                    return state.IsLockedOut;
-                }
-                return false;
+                return LockoutBinds(accountName);
             }
         }
 
@@ -1782,7 +1825,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                             }
                         }
 
-                        if (stateModel.IsLockedOut || stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses)
+                        // P1-100: the THIRD reader of "is this account locked out", and it read the
+                        // raw flag like the other two did. DrainPendingCancels withholds
+                        // intervention cancels in shadow, so nothing was actually cancelled -- but
+                        // this block still emitted `ENTRY_CANCEL: Cancelled order N because account
+                        // is locked out` into interventions.jsonl, which is the audit record, for an
+                        // order that was never touched. A log line that asserts an action the mode
+                        // does not perform is the same family as P2-101's retry.
+                        if (LockoutBinds(accountName, stateModel)
+                            || stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses)
                         {
                             if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                             {

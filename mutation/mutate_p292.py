@@ -85,16 +85,22 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 
 MUTANTS = [
-    ("CanTrade stops consulting the authority -- the defect, restored. Every lockout bites in\n"
-     "     every mode, so a shadow breach halts the copier and every strategy again",
-     '&& !state.LockoutWasShadowOnly)',
-     ')'),
+    # P1-100 moved the predicate these two defend out of CanTrade and into `LockoutBinds`,
+    # which is now its ONE home -- CanTrade, IsAccountLocked and the entry-cancel block all
+    # call it. The anchors were repointed there rather than retired: the invariant did not
+    # change, only its address, and `check_anchors.py` is what noticed. Both mutants are now
+    # strictly stronger, because a single edit here regresses all three readers at once.
+    ("the shared predicate stops consulting the authority -- the defect, restored. Every\n"
+     "     lockout bites in every mode, so a shadow breach halts the copier, every strategy\n"
+     "     and (since P1-100) every order the bridge places",
+     '            if (state.LockoutWasShadowOnly) return false;',
+     '            if (false) return false;'),
 
-    ("THE WRONG FIX: CanTrade consults the CURRENT mode instead of the stored authority. Looks\n"
-     "     equivalent; it is not. An operator locked out in live escapes by switching to shadow,\n"
-     "     which is FR-30 / P1-4's bypass through a different setting",
-     '&& !state.LockoutWasShadowOnly)',
-     '&& IsActingMode())'),
+    ("THE WRONG FIX: the shared predicate consults the CURRENT mode instead of the stored\n"
+     "     authority. Looks equivalent; it is not. An operator locked out in live escapes by\n"
+     "     switching to shadow, which is FR-30 / P1-4's bypass through a different setting",
+     '            if (state.LockoutWasShadowOnly) return false;',
+     '            if (!IsActingMode()) return false;'),
 
     ("the authority sense is INVERTED in the helper: shadow breaches enforce and live breaches\n"
      "     do not. One character, maximally wrong",

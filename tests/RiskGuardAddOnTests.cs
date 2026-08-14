@@ -350,6 +350,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP199_ASingleExecutionOrderIsUnchanged();
             TestP199_ASecondOrderStartsItsOwnCount();
 
+            // P1-100: "is this account locked out" had three readers that disagreed. The bridge's
+            // order paths used the one that was never taught about shadow authority or deadlines.
+            TestP1100_AShadowOnlyLockoutDoesNotGateTheBridgesOrderPath();
+            TestP1100_ALiveAuthorityLockoutStillGatesTheBridgesOrderPath();
+            TestP1100_ATimedManualLockoutGatesTheBridgesOrderPathToo();
+            TestP1100_AnEodManualLockoutBindsEvenInShadowMode();
+            TestP1100_TheDisarmedBypassIsHonouredByBothReaders();
+            TestP1100_TheReportedGateAndTheEnforcedGateCannotDisagree();
+            TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder();
+            TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels();
+
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
@@ -4826,6 +4837,307 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "A second 100-lot order copies another 10, for 20 in total. Carrying the first "
                 + "order's count over would make the second copy NOTHING -- the original defect "
                 + "reintroduced by the fix's own state. Got " + P199CopiedTotal(follower) + ".");
+        }
+
+        // - P1-100 -------------------------------------------------------------------------------
+        //
+        // A SHADOW-only lockout blocked real orders. Found by driving the deployed box on
+        // 2026-08-14: the guard was in `shadow`, a 100-lot MNQ entry tripped MAX_SIZE_BREACH and
+        // DAILY_LOSS_BREACH, both logged `SHADOW_LOCKOUT ... no flatten executed`, nothing was
+        // flattened (P2-92 working) -- and every subsequent order was refused, including a limit
+        // 10,000 points from the market that could never fill. So the ACCOUNT was gated, not the
+        // order, and shadow mode had halted trading on an account it exists only to observe.
+        //
+        // The cause was not the guard's own gate. `CanTrade` was correct. The bridge's order paths
+        // ask `RiskGuardAddOn.IsAccountLocked`, which returned the RAW `IsLockedOut` flag: neither
+        // P2-92's authority test nor P2-94's deadline test had reached it, because both landed in
+        // CanTrade and nothing compared the two readers. Wrong in BOTH directions -- it refused on
+        // a shadow observation, and it admitted orders during a timed manual lockout.
+        //
+        // ⚠️ The whole suite -- 1355 tests -- stayed green through the fix. Every test that touched
+        // this set `IsLockedOut = true` directly, which is the one combination where all three
+        // readers agree. Same shape as P1-90: state fixed in one place and read in several.
+        //
+        // These tests are written against BOTH readers on purpose. A test that asserts only the
+        // enforced gate cannot see this defect, and a test that asserts only the reported gate is
+        // what F-9 warns about.
+
+        private static RiskGuardAddOn P1100Guard(string acct, string mode, RiskConfig config,
+                                                 out AccountState state,
+                                                 out Account account, bool armed = true)
+        {
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            addon.SetSubscribedAccountForTest(acct);
+            addon.SetArmedForTest(armed);
+            addon.SetModeForTest(mode);
+            state = new AccountState(acct);
+            addon.SetAccountStateForTest(acct, state);
+            account = new Account { Name = acct };
+            return addon;
+        }
+
+        /// <summary>
+        /// The defect itself, driven through the rule path that produced it live: an oversized
+        /// position evaluated in shadow mode. MarkRuleLockout stamps the observation shadow-only,
+        /// and neither reader may gate an order on it.
+        /// </summary>
+        private static void TestP1100_AShadowOnlyLockoutDoesNotGateTheBridgesOrderPath()
+        {
+            Console.WriteLine("\n[TEST] P1-100: a shadow-only lockout does not gate the bridge's order path");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            AccountState state; Account account;
+            var addon = P1100Guard("ShadowGateAcc", "shadow", config, out state, out account);
+
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 100, 20000, 0, config);
+            var actions = addon.EvaluateRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "MAX_SIZE_BREACH"),
+                "precondition: the oversized position breaches MAX_SIZE_BREACH");
+            Assert(state.IsLockedOut && state.LockoutWasShadowOnly,
+                "precondition: a breach in shadow mode records a SHADOW-ONLY lockout (P2-92)");
+
+            Assert(addon.CanTrade("ShadowGateAcc", ""),
+                "the guard's own gate lets the account trade -- this half was already right (P2-92)");
+            Assert(!addon.IsAccountLocked("ShadowGateAcc"),
+                "THE DEFECT: the reader the bridge's PlaceOrder/PlaceOcoOrder/PlaceAtmOrder paths "
+                + "consult must give the SAME answer. Returning the raw IsLockedOut flag here "
+                + "refused every real order on an account the guard was only observing.");
+        }
+
+        /// <summary>
+        /// The negative control, and the one that matters most: the fix must not turn a real
+        /// lockout into a no-op. Identical to the test above except for the mode.
+        /// </summary>
+        private static void TestP1100_ALiveAuthorityLockoutStillGatesTheBridgesOrderPath()
+        {
+            Console.WriteLine("\n[TEST] P1-100: a live-authority lockout still gates the order path");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            AccountState state; Account account;
+            var addon = P1100Guard("LiveGateAcc", "live", config, out state, out account);
+
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 100, 20000, 0, config);
+            addon.EvaluateRules(account, state);
+
+            Assert(state.IsLockedOut && !state.LockoutWasShadowOnly,
+                "precondition: the same breach in live mode is NOT shadow-only");
+            Assert(!addon.CanTrade("LiveGateAcc", ""), "the guard refuses to trade");
+            Assert(addon.IsAccountLocked("LiveGateAcc"),
+                "and the bridge refuses the order. Relaxing the shadow case must not relax this one.");
+        }
+
+        /// <summary>
+        /// The OTHER direction, which nothing had noticed: LockAccount's timed branch sets only
+        /// LockoutUntil, so the raw flag is false and the bridge placed orders on an account the
+        /// operator had just locked for an hour. That is P2-94 verbatim, still live at a second
+        /// reader nine days after P2-94 was closed in CanTrade.
+        /// </summary>
+        private static void TestP1100_ATimedManualLockoutGatesTheBridgesOrderPathToo()
+        {
+            Console.WriteLine("\n[TEST] P1-100: a TIMED manual lockout gates the bridge's order path too (P2-94's second reader)");
+
+            AccountState state; Account account;
+            var addon = P1100Guard("TimedAcc", "live", new RiskConfig(), out state, out account);
+
+            addon.LockAccount("TimedAcc", 60);
+
+            Assert(!state.IsLockedOut,
+                "precondition: the timed branch deliberately leaves IsLockedOut false -- the "
+                + "deadline IS the lockout (P1-54's OR)");
+            Assert(!addon.CanTrade("TimedAcc", ""), "the guard refuses to trade (P2-94)");
+            Assert(addon.IsAccountLocked("TimedAcc"),
+                "and so must the bridge. Reading only IsLockedOut here reported an account free to "
+                + "trade for the whole 60 minutes, while the sweep flattened every resulting fill.");
+        }
+
+        /// <summary>
+        /// A manual lockout is an operator instruction, not an observation, so it binds in every
+        /// mode. This is the case that must NOT be swept up by the shadow relaxation -- an operator
+        /// who locks an account while evaluating in shadow means it.
+        /// </summary>
+        private static void TestP1100_AnEodManualLockoutBindsEvenInShadowMode()
+        {
+            Console.WriteLine("\n[TEST] P1-100: an EOD manual lockout binds even in shadow mode");
+
+            AccountState state; Account account;
+            var addon = P1100Guard("ManualShadowAcc", "shadow", new RiskConfig(), out state, out account);
+
+            addon.LockAccount("ManualShadowAcc", -1);
+
+            Assert(state.IsLockedOut && !state.LockoutWasShadowOnly,
+                "precondition: LockAccount stamps live authority explicitly, in every mode (P2-92)");
+            Assert(!addon.CanTrade("ManualShadowAcc", ""), "the guard refuses to trade");
+            Assert(addon.IsAccountLocked("ManualShadowAcc"),
+                "and the bridge refuses the order. The relaxation is keyed on the LOCKOUT's "
+                + "authority, not on the current mode -- keying it on the mode would make a mode "
+                + "switch a lockout bypass.");
+        }
+
+        /// <summary>
+        /// The disarmed bypass (FR-30 / P1-4) was the third clause the second reader never had.
+        /// If the guard is going to let the order through, the bridge must not refuse it.
+        /// </summary>
+        private static void TestP1100_TheDisarmedBypassIsHonouredByBothReaders()
+        {
+            Console.WriteLine("\n[TEST] P1-100: the disarmed-bypass list is honoured by both readers");
+
+            AccountState state; Account account;
+            var config = new RiskConfig();
+            config.LockoutBypassWhileDisarmedAccounts.Add("BypassAcc");
+            var addon = P1100Guard("BypassAcc", "live", config, out state, out account, armed: false);
+            state.IsLockedOut = true;
+
+            Assert(addon.CanTrade("BypassAcc", ""),
+                "precondition: a disarmed guard lets a listed account trade through its lockout");
+            Assert(!addon.IsAccountLocked("BypassAcc"),
+                "and the bridge must agree. Before P1-100 it refused the order the guard had just "
+                + "decided to allow -- a disagreement no test could see, because the two answers "
+                + "were never compared.");
+
+            // Same state, NOT on the list: both must still refuse.
+            AccountState other; Account otherAcc;
+            var addon2 = P1100Guard("NotListedAcc", "live", new RiskConfig(), out other, out otherAcc, armed: false);
+            other.IsLockedOut = true;
+            Assert(!addon2.CanTrade("NotListedAcc", ""), "an unlisted account stays gated when disarmed");
+            Assert(addon2.IsAccountLocked("NotListedAcc"), "and the bridge keeps refusing it");
+        }
+
+        /// <summary>
+        /// The class, not the instance. Every combination of the three inputs, asserted through
+        /// BOTH readers at once: whatever the guard enforces is what the bridge reports.
+        ///
+        /// This is the test that fails if someone re-derives either answer. The instance tests
+        /// above would all still pass against a fourth reader added tomorrow; this one states the
+        /// invariant those three readers exist to satisfy. An empty instrument is passed to
+        /// CanTrade deliberately -- it is the only argument that makes CanTrade answer the lockout
+        /// question and nothing else.
+        /// </summary>
+        private static void TestP1100_TheReportedGateAndTheEnforcedGateCannotDisagree()
+        {
+            Console.WriteLine("\n[TEST] P1-100: the reported gate and the enforced gate cannot disagree");
+
+            int checkedCases = 0;
+            foreach (bool flag in new[] { false, true })
+            foreach (int deadlineMinutes in new[] { 0, -30, 30 })   // none / lapsed / live
+            foreach (bool shadowOnly in new[] { false, true })
+            foreach (bool armed in new[] { true, false })
+            foreach (bool listed in new[] { false, true })
+            {
+                AccountState state; Account account;
+                var config = new RiskConfig();
+                if (listed) config.LockoutBypassWhileDisarmedAccounts.Add("MatrixAcc");
+                var addon = P1100Guard("MatrixAcc", "live", config, out state, out account, armed: armed);
+
+                state.IsLockedOut = flag;
+                state.LockoutWasShadowOnly = shadowOnly;
+                state.LockoutUntil = deadlineMinutes == 0
+                    ? DateTime.MinValue
+                    : DateTime.UtcNow.AddMinutes(deadlineMinutes);
+
+                bool enforced = !addon.CanTrade("MatrixAcc", "");
+                bool reported = addon.IsAccountLocked("MatrixAcc");
+
+                Assert(enforced == reported,
+                    string.Format(
+                        "the two readers disagree for flag={0} deadline={1}m shadowOnly={2} "
+                        + "armed={3} listed={4}: the guard {5} the trade, the bridge {6} the order",
+                        flag, deadlineMinutes, shadowOnly, armed, listed,
+                        enforced ? "REFUSES" : "allows", reported ? "REFUSES" : "allows"));
+                checkedCases++;
+            }
+
+            Assert(checkedCases == 48,
+                "all 48 combinations were driven, not a subset -- got " + checkedCases);
+        }
+
+        /// <summary>
+        /// The third reader: the entry-cancel block in OnOrderUpdate. DrainPendingCancels already
+        /// withholds the broker call in shadow (P0-51), so nothing was cancelled -- but this block
+        /// still wrote `ENTRY_CANCEL: Cancelled order N because account is locked out` into
+        /// interventions.jsonl, which is the audit record read after an incident. A log line that
+        /// asserts an action the mode does not perform is the same family as P2-101's retry.
+        /// </summary>
+        private static void TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder()
+        {
+            Console.WriteLine("\n[TEST] P1-100: a shadow-only lockout does not log a cancel it never performed");
+
+            var events = new List<string>();
+            AccountState state; Account account;
+            var addon = P1100Guard("ShadowCancelAcc", "shadow", new RiskConfig(), out state, out account);
+
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            state.IsLockedOut = true;
+            state.LockoutWasShadowOnly = true;
+
+            var entry = new Order
+            {
+                Id = "TRADER-SHADOW-1",
+                Name = "Entry1",
+                Instrument = new Instrument("MNQ 03-26"),
+                OrderType = OrderType.Limit,
+                OrderAction = OrderAction.Buy,
+                OrderState = OrderState.Working,
+                Quantity = 1,
+                LimitPrice = 10000
+            };
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try { addon.ExecuteOrderUpdate(account, new OrderEventArgs { Order = entry }); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(!events.Contains("ENTRY_CANCEL"),
+                "no ENTRY_CANCEL is written for an order that was never cancelled. Got: "
+                + string.Join(", ", events));
+            Assert(entry.OrderState == OrderState.Working,
+                "and the trader's order is left alone");
+
+            Account.All.Clear();
+        }
+
+        /// <summary>
+        /// Its negative control. Same order, same shadow mode, lockout imposed under LIVE authority
+        /// -- the enforcement path must still run, because that is the queue P0-51 governs.
+        /// </summary>
+        private static void TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels()
+        {
+            Console.WriteLine("\n[TEST] P1-100: a live-authority lockout still queues the entry cancel");
+
+            var events = new List<string>();
+            AccountState state; Account account;
+            var addon = P1100Guard("LiveCancelAcc", "live", new RiskConfig(), out state, out account);
+
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            state.IsLockedOut = true;   // LockoutWasShadowOnly stays false: live authority
+
+            var entry = new Order
+            {
+                Id = "TRADER-LIVE-1",
+                Name = "Entry1",
+                Instrument = new Instrument("MNQ 03-26"),
+                OrderType = OrderType.Limit,
+                OrderAction = OrderAction.Buy,
+                OrderState = OrderState.Working,
+                Quantity = 1,
+                LimitPrice = 10000
+            };
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try { addon.ExecuteOrderUpdate(account, new OrderEventArgs { Order = entry }); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Contains("ENTRY_CANCEL"),
+                "the entry cancel still fires for a real lockout -- the shadow relaxation must not "
+                + "disarm it. Got: " + string.Join(", ", events));
+
+            Account.All.Clear();
         }
 
         private static int CountCopyOutcomes(List<string> log)

@@ -347,6 +347,18 @@ jobs:
           # follower on the OPPOSITE side to the leader notices -- the one case the block exists for.
           # Declares one EXPECTED SURVIVOR (the reconciler mutant; unreachable until P2-27).
           - { label: P0-96, battery: mutate_p096.py }
+
+          # P1-100, new in session 37, and the SHORTEST battery here at 4 mutants -- placed last on
+          # that basis until the first green run gives it a measured time. A SHADOW-only lockout
+          # blocked real orders: the guard's own gate was right (P2-92), but the bridge's three
+          # order paths ask IsAccountLocked, which returned the raw flag and had never been taught
+          # about either shadow authority or lockout deadlines. Wrong in BOTH directions -- it
+          # refused on an observation and admitted orders during a timed manual lockout. The fix is
+          # one predicate with every reader calling it, so the two mutants you would expect here
+          # (delete the authority clause; key it on the current mode) now live in mutate_p292.py,
+          # whose anchors were REPOINTED at that predicate. check_anchors.py is what caught them
+          # going stale, in the same commit that moved them.
+          - { label: P1-100, battery: mutate_p1100.py }
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
