@@ -361,6 +361,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder();
             TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels();
 
+            // P2-101: a shadow lockout retried its flatten forever, and the warning that should
+            // have caught that could never fire.
+            TestP2101_AShadowLockoutStopsAfterOneObservation();
+            TestP2101_ALiveLockoutRetriesToItsBudgetAndNoFurther();
+            TestP2101_TheGiveUpWarningFiresExactlyOnce();
+            TestP2101_EnteringANewPhaseRestoresTheBudget();
+            TestP2101_EndingTheLockoutRestoresTheBudget();
+
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
@@ -5136,6 +5144,270 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(events.Contains("ENTRY_CANCEL"),
                 "the entry cancel still fires for a real lockout -- the shadow relaxation must not "
                 + "disarm it. Got: " + string.Join(", ", events));
+
+            Account.All.Clear();
+        }
+
+
+        // - P2-101 -------------------------------------------------------------------------------
+        //
+        // A lockout in shadow mode retried its flatten FOREVER. The retry's exit condition is
+        // "the position is still open", and in shadow the flatten is never sent, so the condition
+        // never cleared. Measured on the deployed box 2026-08-14: a LOCKOUT_FLATTEN_RETRY plus a
+        // SHADOW_ACTION every 5 seconds, on three sim accounts AND the funded one, indefinitely --
+        // ~12 lines per minute per account into interventions.jsonl, which is the audit record
+        // someone reads after an incident. Both of that session's live findings came out of that
+        // file, and this was burying it.
+        //
+        // THE GENERAL RULE, worth grepping for elsewhere: a retry whose exit condition is an
+        // action the current mode does not perform will never exit.
+        //
+        // ⚠️ And the warning that should have caught it COULD NOT FIRE. LOCKOUT_STUCK read
+        // `UtcNow > LastLockoutFlattenAttempt.AddSeconds(30)` while the retry set
+        // LastLockoutFlattenAttempt = UtcNow every 5 seconds -- the interval it measured was reset
+        // by the loop it was watching. Thirteen rounds of retries produced zero LOCKOUT_STUCK
+        // lines. One alarm that never stopped and one that could never start, in the same block.
+
+        private static RiskGuardAddOn P2101Guard(string acct, string mode, out AccountState state,
+                                                 out Account account)
+        {
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetSubscribedAccountForTest(acct);
+            addon.SetArmedForTest(true);
+            addon.SetModeForTest(mode);
+            state = new AccountState(acct);
+            state.IsLockedOut = true;
+            addon.SetAccountStateForTest(acct, state);
+            account = new Account { Name = acct };
+            Account.All.Clear();
+            Account.All.Add(account);
+            return addon;
+        }
+
+        /// <summary>
+        /// Drives `sweeps` evaluations, defeating the 5s/3s spacing each time so the test does not
+        /// wait. It is the ATTEMPT BUDGET under test, not the timer -- the timer was never the
+        /// thing that failed to stop.
+        /// </summary>
+        private static int P2101Drive(RiskGuardAddOn addon, Account account, AccountState state, int sweeps)
+        {
+            int emitted = 0;
+            for (int i = 0; i < sweeps; i++)
+            {
+                state.LastLockoutFlattenAttempt = DateTime.MinValue;
+                var actions = addon.EvaluateLockoutPhase(account, state);
+                if (actions != null) emitted += actions.Count;
+            }
+            return emitted;
+        }
+
+        private static void TestP2101_AShadowLockoutStopsAfterOneObservation()
+        {
+            Console.WriteLine("\n[TEST] P2-101: a shadow lockout emits ONE flatten attempt, not an endless stream");
+
+            AccountState state; Account account;
+            var addon = P2101Guard("ShadowRetryAcc", "shadow", out state, out account);
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            int emitted = P2101Drive(addon, account, state, 20);
+
+            Assert(emitted == 1,
+                "THE DEFECT: twenty sweeps of an unclosable position emit ONE flatten action, not "
+                + "twenty. Shadow's product is the OBSERVATION, and the observation is complete "
+                + "after the first -- ProcessAction answers SHADOW (SKIPPED) every time, so the "
+                + "position can never close and the retry's exit condition is permanently true. "
+                + "Got " + emitted + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2101_ALiveLockoutRetriesToItsBudgetAndNoFurther()
+        {
+            Console.WriteLine("\n[TEST] P2-101: a live lockout retries to its budget and then stops");
+
+            // The negative control, and the one that matters: bounding the retry must not stop a
+            // REAL flatten from being re-attempted. A broker can reject one.
+            AccountState state; Account account;
+            var addon = P2101Guard("LiveRetryAcc", "live", out state, out account);
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            int emitted = P2101Drive(addon, account, state, 20);
+
+            Assert(emitted == 6,
+                "a live lockout re-attempts the flatten six times -- 5s apart, so the ~30 seconds "
+                + "the old stuck warning was written for -- and then gives up rather than "
+                + "retrying for the rest of the session. Got " + emitted + ".");
+            Assert(emitted > 1,
+                "and it is emphatically more than the shadow case: bounding the loop must not "
+                + "turn a real flatten into a single best-effort attempt");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2101_TheGiveUpWarningFiresExactlyOnce()
+        {
+            Console.WriteLine("\n[TEST] P2-101: LOCKOUT_STUCK fires -- once -- when the attempts are spent");
+
+            // ⚠️ This is the assertion the OLD code could not have passed at all, in either
+            // direction: its stuck warning measured an interval that the retry reset every 5s, so
+            // it was unreachable. A detector that cannot fire and a retry that cannot stop, one
+            // after the other in the same block.
+            var events = new List<string>();
+            AccountState state; Account account;
+            var addon = P2101Guard("StuckAcc", "shadow", out state, out account);
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try { P2101Drive(addon, account, state, 20); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            int stuck = events.Count(e => e == "LOCKOUT_STUCK");
+            Assert(stuck == 1,
+                "exactly one LOCKOUT_STUCK across twenty sweeps -- an alarm that repeats is the "
+                + "defect this entry is about, and one that never fires is what it replaced. "
+                + "Got " + stuck + ".");
+
+            int retries = events.Count(e => e == "LOCKOUT_FLATTEN_RETRY");
+            Assert(retries == 1,
+                "and one retry line, matching the one action. Got " + retries + ".");
+
+            Account.All.Clear();
+
+            // ⚠️ The half that matters, added because a mutant SURVIVED the first run of
+            // mutation/mutate_p2101.py. Restoring the OLD, time-keyed condition
+            // (`UtcNow > LastLockoutFlattenAttempt.AddSeconds(30)`) still produced exactly one
+            // warning above -- because P2101Drive zeroes LastLockoutFlattenAttempt to defeat the
+            // retry spacing, which makes that stale interval read as elapsed. The count assertion
+            // could not tell a count-keyed alarm from a time-keyed one.
+            //
+            // This does: with a LIVE budget of six, one sweep must produce NO warning. The
+            // time-keyed version fires on the first sweep, before anything is exhausted, which is
+            // an alarm going off while the guard is working normally.
+            var early = new List<string>();
+            AccountState liveState; Account liveAccount;
+            var liveAddon = P2101Guard("EarlyStuckAcc", "live", out liveState, out liveAccount);
+            liveAccount.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => early.Add(evt);
+            try { P2101Drive(liveAddon, liveAccount, liveState, 1); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(!early.Contains("LOCKOUT_STUCK"),
+                "no give-up warning after ONE of six attempts -- the alarm is keyed on the attempt "
+                + "COUNT, the same thing that bounds the retry, so the two cannot drift. Keying it "
+                + "on elapsed time is what made the original unreachable in production and "
+                + "hair-trigger here. Got: " + string.Join(", ", early));
+            Assert(early.Contains("LOCKOUT_FLATTEN_RETRY"),
+                "and the attempt itself did happen, so the absence above is not vacuous");
+
+            // ⚠️ And the assertion that actually kills the time-keyed version, which the one above
+            // does NOT: it survived a second run too, because on any sweep where the retry fires
+            // it sets LastLockoutFlattenAttempt = UtcNow immediately before the stuck check reads
+            // it, so the stale interval reads as zero. That is precisely why the original could
+            // never fire in production, and no assertion about a sweep where the retry fired can
+            // see it.
+            //
+            // The discriminator is the LAST budgeted sweep: the retry fires (refreshing the
+            // timestamp) and the budget is spent in the same pass. Count-keyed, the warning
+            // fires. Time-keyed, it cannot -- the timestamp is one line old.
+            var atExhaustion = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => atExhaustion.Add(evt);
+            try { P2101Drive(liveAddon, liveAccount, liveState, 5); }   // 1 + 5 = the whole budget
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(atExhaustion.Contains("LOCKOUT_STUCK"),
+                "the give-up warning fires on the sweep that SPENDS the last attempt, not on some "
+                + "later sweep that happens not to retry. Keyed on elapsed time it never fires at "
+                + "all here, which is exactly what it did on the live box: thirteen rounds of "
+                + "retries, zero stuck lines. Got: " + string.Join(", ", atExhaustion));
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2101_EnteringANewPhaseRestoresTheBudget()
+        {
+            Console.WriteLine("\n[TEST] P2-101: the attempt budget belongs to the PHASE, not to the lockout");
+
+            AccountState state; Account account;
+            var addon = P2101Guard("PhaseAcc", "live", out state, out account);
+
+            // Phase 1: a working order to cancel. Spend the whole cancel budget.
+            var working = new Order
+            {
+                Id = "W-1",
+                Instrument = new Instrument("MNQ SEP26"),
+                OrderType = OrderType.Limit,
+                OrderAction = OrderAction.Buy,
+                OrderState = OrderState.Working,
+                Quantity = 1,
+                LimitPrice = 20000
+            };
+            account.Orders.Add(working);
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            int cancels = P2101Drive(addon, account, state, 20);
+            Assert(cancels == 6, "the cancel phase spends its own six attempts. Got " + cancels + ".");
+
+            // The order goes away -> PendingFlatten, which must start with a full budget of its
+            // own. Carrying the cancel phase's spent count over would mean the position never got
+            // a single flatten attempt.
+            account.Orders.Clear();
+            int flattens = P2101Drive(addon, account, state, 20);
+            Assert(flattens == 6,
+                "the flatten phase then gets its OWN six. Carrying the previous phase's count over "
+                + "would leave the position with no flatten attempt at all. Got " + flattens + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2101_EndingTheLockoutRestoresTheBudget()
+        {
+            Console.WriteLine("\n[TEST] P2-101: unlocking and re-locking starts the budget over");
+
+            AccountState state; Account account;
+            var addon = P2101Guard("RelockAcc", "live", out state, out account);
+            account.Positions.Add(new Position
+            {
+                Instrument = new Instrument("MNQ SEP26"),
+                MarketPosition = MarketPosition.Long,
+                Quantity = 11
+            });
+
+            Assert(P2101Drive(addon, account, state, 20) == 6, "the first lockout spends its budget");
+
+            addon.UnlockAccount("RelockAcc");
+            state.IsLockedOut = true;   // a fresh breach
+
+            Assert(P2101Drive(addon, account, state, 20) == 6,
+                "a NEW lockout gets a new budget. A counter that survives the unlock would leave "
+                + "the second lockout unable to flatten anything -- and a lockout that cannot act "
+                + "is the failure mode the whole P0 band exists to prevent");
 
             Account.All.Clear();
         }

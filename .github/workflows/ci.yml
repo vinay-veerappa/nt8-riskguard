@@ -359,6 +359,17 @@ jobs:
           # whose anchors were REPOINTED at that predicate. check_anchors.py is what caught them
           # going stale, in the same commit that moved them.
           - { label: P1-100, battery: mutate_p1100.py }
+
+          # P2-101, new in session 38, 7 mutants -- unmeasured, sits beside P1-100 on that basis.
+          # A shadow lockout retried its flatten forever: the retry's exit condition is "the
+          # position is still open", and in shadow the flatten is never sent. ~12 log lines a
+          # minute per account, on the FUNDED account too, burying interventions.jsonl. Mutant 2
+          # is THE PARTIAL FIX -- one budget for every mode, which stops the unbounded growth and
+          # still repeats an observation five more times than shadow needs. Mutant 7 is the other
+          # half: the LOCKOUT_STUCK warning was keyed on an interval the retry itself reset every
+          # 5s, so it could never fire, and killing that mutant took two attempts because any
+          # sweep where the retry fires hides it. Declares one EXPECTED SURVIVOR.
+          - { label: P2-101, battery: mutate_p2101.py }
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

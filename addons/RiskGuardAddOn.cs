@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.21.0";
+        public const string Version = "1.22.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -2013,8 +2013,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         stateModel.PeakGivebackTriggered = false;
                         stateModel.PeakGivebackLastTriggerUnrealized = double.NaN;
                         stateModel.IsLockedOut = false;
-                        stateModel.InitialLockoutFlattened = false;
-                        stateModel.CurrentLockoutPhase = AccountState.LockoutPhase.None;
+                        stateModel.ResetLockoutPhase();   // P2-101
                         stateModel.SessionStartRealizedPnL = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
                         stateModel.LastRealizedPnL = stateModel.SessionStartRealizedPnL;
                         // P1-17: bank the session that just ended before zeroing it, so the
@@ -3283,8 +3282,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 && DateTime.UtcNow >= stateModel.LockoutUntil)
             {
                 stateModel.IsLockedOut = false;
-                stateModel.CurrentLockoutPhase = AccountState.LockoutPhase.None;
-                stateModel.InitialLockoutFlattened = false;
+                stateModel.ResetLockoutPhase();   // P2-101
                 _stateDirty = true;
                 LogEvent(stateModel.AccountName, "LOCKOUT_LAPSED",
                     $"Lockout deadline {stateModel.LockoutUntil:o} has passed; the account is tradeable again.");
@@ -3296,11 +3294,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // Not locked out -> reset phase if it was left dirty
                 if (stateModel.CurrentLockoutPhase != AccountState.LockoutPhase.None)
                 {
-                    stateModel.CurrentLockoutPhase = AccountState.LockoutPhase.None;
-                    stateModel.InitialLockoutFlattened = false;
+                    stateModel.ResetLockoutPhase();   // P2-101
                 }
                 return actions;
             }
+
+            // P2-101. See EnterLockoutPhase / LockoutPhaseAttemptBudget below the method.
 
             // Check actual account state (not stale memory)
             bool hasWorkingOrders = false;
@@ -3343,11 +3342,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (stateModel.CurrentLockoutPhase == AccountState.LockoutPhase.None)
                     {
-                        stateModel.CurrentLockoutPhase = AccountState.LockoutPhase.PendingCancel;
-                        LogEvent(stateModel.AccountName, "LOCKOUT_PHASE",
+                        EnterLockoutPhase(stateModel, AccountState.LockoutPhase.PendingCancel,
                             "Phase: PendingCancel - cancelling all working orders");
                     }
-                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(3))
+                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(3)
+                        && stateModel.LockoutPhaseAttempts < LockoutPhaseAttemptBudget())
                     {
                         actions.Add(new GuardAction
                         {
@@ -3356,14 +3355,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                             RuleId = "LOCKOUT_CANCEL"
                         });
                         stateModel.LastLockoutFlattenAttempt = DateTime.UtcNow;
+                        stateModel.LockoutPhaseAttempts++;
                     }
                 }
                 else
                 {
-                    stateModel.CurrentLockoutPhase = AccountState.LockoutPhase.PendingFlatten;
-                    stateModel.LastLockoutFlattenAttempt = DateTime.MinValue; // Allow immediate flatten action emit
-                    LogEvent(stateModel.AccountName, "LOCKOUT_PHASE",
+                    EnterLockoutPhase(stateModel, AccountState.LockoutPhase.PendingFlatten,
                         "Phase: PendingFlatten - orders cancelled, now flattening position");
+                    stateModel.LastLockoutFlattenAttempt = DateTime.MinValue; // Allow immediate flatten action emit
                 }
             }
 
@@ -3372,7 +3371,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (hasOpenPosition)
                 {
-                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(5))
+                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(5)
+                        && stateModel.LockoutPhaseAttempts < LockoutPhaseAttemptBudget())
                     {
                         actions.Add(new GuardAction
                         {
@@ -3381,8 +3381,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                             RuleId = "LOCKOUT_FLATTEN"
                         });
                         stateModel.LastLockoutFlattenAttempt = DateTime.UtcNow;
+                        stateModel.LockoutPhaseAttempts++;
                         LogEvent(stateModel.AccountName, "LOCKOUT_FLATTEN_RETRY",
-                            $"Flatten attempt for {stateModel.AccountName} (position still open)");
+                            $"Flatten attempt {stateModel.LockoutPhaseAttempts} of "
+                            + $"{LockoutPhaseAttemptBudget()} for {stateModel.AccountName} "
+                            + "(position still open)");
                     }
                 }
                 else
@@ -3396,17 +3399,62 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
 
-            // Stuck warning
-            if (stateModel.CurrentLockoutPhase == AccountState.LockoutPhase.PendingFlatten &&
-                DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(30) &&
-                hasOpenPosition)
+            // P2-101. Give up ONCE and say so, rather than retrying forever and saying it forever.
+            //
+            // ⚠️ The warning this replaces could NEVER FIRE. It read
+            // `UtcNow > LastLockoutFlattenAttempt.AddSeconds(30)`, and the retry above sets
+            // `LastLockoutFlattenAttempt = UtcNow` every 5 seconds -- so the interval it measured
+            // was reset by the very loop it was watching, and could not reach 30. The live run
+            // that found P2-101 produced 13 rounds of retries and zero LOCKOUT_STUCK lines. The
+            // ONE alarm that would have told an operator the guard was not getting the position
+            // closed was unreachable, in the same block as an alarm that never stopped.
+            //
+            // It is keyed on the attempt COUNT now -- the same thing that bounds the retry -- so
+            // the two cannot drift apart, and `LockoutStuckLogged` makes it exactly one line.
+            bool exhausted = stateModel.LockoutPhaseAttempts >= LockoutPhaseAttemptBudget();
+            if (exhausted && (hasOpenPosition || hasWorkingOrders) && !stateModel.LockoutStuckLogged)
             {
+                stateModel.LockoutStuckLogged = true;
                 LogEvent(stateModel.AccountName, "LOCKOUT_STUCK",
-                    $"WARNING: Position still open after 30s of flatten attempts. " +
-                    $"Manual intervention required. Account: {stateModel.AccountName}");
+                    $"GIVING UP after {stateModel.LockoutPhaseAttempts} attempt(s) in phase "
+                    + $"{stateModel.CurrentLockoutPhase}. Position open: {hasOpenPosition}, "
+                    + $"working orders: {hasWorkingOrders}. "
+                    + (IsActingMode()
+                        ? "Manual intervention required."
+                        : "This is SHADOW mode -- no flatten was ever sent, so the position was "
+                          + "never going to close. Nothing is wrong with the account.")
+                    + $" Account: {stateModel.AccountName}");
             }
 
             return actions;
+        }
+
+        // P2-101. How many intervention attempts one lockout phase may emit before it gives up.
+        //
+        // ⚠️ ONE in a non-acting mode, and that is the whole defect, not a tuning choice.
+        // `ProcessAction` answers "SHADOW (SKIPPED)" for every action outside `live`, so the
+        // position cannot close, so "is the position still open" -- the retry's exit condition --
+        // is permanently true. A second identical `[SHADOW] Would execute FlattenPosition` line
+        // carries no information the first did not: shadow's product is the OBSERVATION, and the
+        // observation is complete after one. Measured before this: ~12 lines/minute/account,
+        // indefinitely, across three sim accounts and the funded one.
+        //
+        // SIX in live -- the retries are 5s apart, so that is the ~30 seconds the old (unreachable)
+        // stuck warning was written for. Both numbers now come from here, so the retry and the
+        // give-up warning cannot disagree.
+        private int LockoutPhaseAttemptBudget()
+        {
+            return IsActingMode() ? 6 : 1;
+        }
+
+        // Entering a phase resets its attempt budget and its give-up flag. Precondition: caller
+        // holds _stateLock.
+        private void EnterLockoutPhase(AccountState stateModel, AccountState.LockoutPhase phase, string message)
+        {
+            stateModel.CurrentLockoutPhase = phase;
+            stateModel.LockoutPhaseAttempts = 0;
+            stateModel.LockoutStuckLogged = false;
+            LogEvent(stateModel.AccountName, "LOCKOUT_PHASE", message);
         }
 
         // -- Aggregate sizing (event-driven via PositionUpdate) --
@@ -3972,8 +4020,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     state.LastRealizedPnL = currentRealized;
                     state.RealizedPnL = 0.0;
                     state.UnrealizedPnL = 0.0;
-                    state.InitialLockoutFlattened = false;
-                    state.CurrentLockoutPhase = AccountState.LockoutPhase.None;
+                    state.ResetLockoutPhase();   // P2-101
 
                     // Sync positions to avoid stale memory
                     state.Positions.Clear();
@@ -5305,6 +5352,33 @@ namespace NinjaTrader.NinjaScript.AddOns
         public DateTime LockoutUntil { get; set; } = DateTime.MinValue;
         public bool InitialLockoutFlattened { get; set; } = false;
         public DateTime LastLockoutFlattenAttempt { get; set; } = DateTime.MinValue;
+
+        // P2-101. How many intervention attempts the CURRENT lockout phase has emitted, and
+        // whether its give-up warning has been written. Both reset when a phase is entered.
+        //
+        // The retry's exit condition was "the position is still open", which in shadow mode is an
+        // action the guard does not perform -- so it never exited. Measured 2026-08-14: ~12 lines
+        // per minute per account, indefinitely, on three sim accounts AND the funded one, burying
+        // interventions.jsonl. The general rule, and it is worth grepping for elsewhere: A RETRY
+        // WHOSE EXIT CONDITION IS AN ACTION THE CURRENT MODE DOES NOT PERFORM WILL NEVER EXIT.
+        public int LockoutPhaseAttempts { get; set; } = 0;
+        public bool LockoutStuckLogged { get; set; } = false;
+
+        /// <summary>
+        /// P2-101. Everything the lockout PHASE machine owns, cleared together.
+        ///
+        /// Four call sites end a lockout -- the daily session reset, the deadline lapse, the
+        /// not-locked-out sweep branch, and UnlockAccount -- and each had its own copy of the
+        /// two-line reset. Adding a third field to the cluster meant editing all four, which is
+        /// how P1-100's three readers happened. One method, four callers.
+        /// </summary>
+        public void ResetLockoutPhase()
+        {
+            CurrentLockoutPhase = LockoutPhase.None;
+            InitialLockoutFlattened = false;
+            LockoutPhaseAttempts = 0;
+            LockoutStuckLogged = false;
+        }
         // P2-46: order id -> first time seen inside the rate window. Keyed by id so one order
         // passing Submitted -> Accepted -> Working counts once, not three times.
         public Dictionary<string, DateTime> RecentOrderIds { get; set; } = new Dictionary<string, DateTime>();
