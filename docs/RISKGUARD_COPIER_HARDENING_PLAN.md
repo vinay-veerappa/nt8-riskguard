@@ -141,16 +141,22 @@ re-derivation routine that is currently called from only one place.
 ## 1. P0 — Naked-risk and wrong-size defects (fix before any live use)
 
 > ✅ **THE WHOLE `P0-1`…`P0-8` BLOCK IS CLOSED.** It was fixed as tickets `T1`–`T5` in phase 1,
-> and the record of each is in the **handover**, not here — these eight entries were written
-> before this file carried a status marker in the heading, which is why a `grep` for un-struck
-> headings still returns them. **Do not read their absence of a ✅ as "open".**
+> and the record of each is in the **handover**, not here.
 >
-> They are deliberately left as they were written: the plan keys defects to `file:line` across
-> the whole history, and rewriting them would falsify the trail. The count in
-> [RISKGUARD_HARDENING_HANDOVER.md](RISKGUARD_HARDENING_HANDOVER.md) §5.0 is the derived one;
-> this note exists so the derivation is not read as eight open naked-risk defects.
+> ⚠️ **These eight headings carried no status marker until 2026-08-14 (session 39), and this note
+> is what stood in for one.** That was a prose assertion two hundred lines above the entries it
+> describes, so every mechanical reading of this file — including `grep`s in the handover that
+> derive the counts — returned eight *apparently open* naked-risk defects and needed a human to
+> know about this paragraph. A note explaining why a check is wrong is not a substitute for the
+> check being right: *a gate nobody reads is a comment*, and this was the inverse again — a
+> comment standing in for a gate.
+>
+> The bodies are still exactly as written, because the plan keys defects to `file:line` across the
+> whole history and rewriting those would falsify the trail. Only the status token was appended,
+> which asserts nothing this note did not already assert. `tools/check_next_list_ids.py` now
+> requires every entry to carry one, so this cannot recur silently.
 
-### P0-1. FSM returning to `Unprotected` never re-arms the grace timer → permanent naked position
+### P0-1. FSM returning to `Unprotected` never re-arms the grace timer → permanent naked position — CLOSED 2026-08-07 (phase 1, ticket T1)
 **Where**: `RiskGuardAddOn.cs:1667-1677` (`UpdateFsmOnOrder`, terminal-stop branch), `1763-1776` (`FsmWatchdog`)
 **What happens**: When the recognised protective stop goes terminal (cancelled by the user,
 rejected by the broker, or filled on a partial) while the position is still open, the FSM is
@@ -174,7 +180,7 @@ unprotected for the rest of the session with the guard reporting the condition i
 **Test**: position open + stop reaches `Working` → cancel the stop → assert a new grace timer is
 armed and `MISSING_STOP_ATTACH` (or `_FLATTEN`) is emitted exactly once.
 
-### P0-2. Auto-stop state is recorded *after* submission and unconditionally
+### P0-2. Auto-stop state is recorded *after* submission and unconditionally — CLOSED 2026-08-07 (phase 1, ticket T1)
 **Where**: `RiskGuardAddOn.cs:2595-2611`
 **What happens**:
 ```csharp
@@ -197,7 +203,7 @@ before** `Submit`, then roll back to `Unprotected` + re-arm grace if `CreateOrde
 from there. Add an explicit `AUTO_STOP_SUBMIT_FAILED` event and escalate to
 `MISSING_STOP_FLATTEN` after `StopGuard.MaxAutoStopAttempts` (new config, default 2).
 
-### P0-3. Auto-stop quantity is a stale snapshot — can flip the position
+### P0-3. Auto-stop quantity is a stale snapshot — can flip the position — CLOSED 2026-08-07 (phase 1, ticket T2)
 **Where**: `RiskGuardAddOn.cs:2508-2597` (uses `action.Quantity`), `ValidateInvariant:2436-2440`
 **What happens**: `ExecuteAction` re-reads the live `position` (line 2511) but then sizes the stop
 from `action.Quantity`, captured when the action was emitted. `ValidateInvariant` for
@@ -211,7 +217,7 @@ the action if the position is flat or the side flipped. Tighten `ValidateInvaria
 live position and confirm the action is genuinely risk-reducing (this is what the "ActionArbiter"
 claims to do — see §6 doc drift).
 
-### P0-4. Scale-in keeps `Protected` without checking stop coverage
+### P0-4. Scale-in keeps `Protected` without checking stop coverage — CLOSED 2026-08-07 (phase 1, ticket T2)
 **Where**: `RiskGuardAddOn.cs:1555-1563`
 **What happens**: A same-side quantity update updates `PositionQuantity` in place and explicitly
 preserves `Protected`/`ProtectedPending`. Nothing compares `RecognizedStopOrder.Quantity` to
@@ -221,7 +227,7 @@ invasive). On a same-side increase, if covered < position, re-arm the grace time
 uncovered delta and emit `MISSING_STOP_ATTACH` sized to the delta. REAPER does the equivalent by
 checking stop *quantity* coverage, not mere existence.
 
-### P0-5. Copier exit sizing is not position-mirroring → follower reverses
+### P0-5. Copier exit sizing is not position-mirroring → follower reverses — CLOSED 2026-08-07 (phase 1, ticket T3)
 **Where**: `TradeCopierEngine.cs:401` (`return isExit ? leaderQty : rel.FixedLotSize`),
 `427` (`if (isExit) return rawCopyQty;`), consumed at `OnExecution:685-737`
 **What happens**: exits are sized from the leader's execution quantity and returned
@@ -239,7 +245,7 @@ needed. Target-position mirroring (compute the follower's *desired* position fro
 *resulting* position, then submit the delta) is strictly safer than replaying execution
 quantities; adopt it.
 
-### P0-6. Micro→Mini conversion floors to 1 contract → 10× notional
+### P0-6. Micro→Mini conversion floors to 1 contract → 10× notional — CLOSED 2026-08-07 (phase 1, ticket T3)
 **Where**: `TradeCopierEngine.cs:426` — `Math.Max(1, Math.Round(leaderQty * absRatio * symbolMultiplier))`
 **What happens**: with `symbolMultiplier = 0.1` (MNQ→NQ), a leader trading 5 MNQ yields
 `Math.Max(1, round(0.5))` = **1 NQ = 10 MNQ equivalent**, i.e. 2× intended notional; a leader
@@ -249,7 +255,7 @@ Optionally carry a per-(relationship, instrument) fractional residue accumulator
 sub-1 copies eventually emit one contract. Add a hard notional-parity assertion in tests:
 `followerQty × followerPointValue ≈ leaderQty × leaderPointValue × ratio`.
 
-### P0-7. Peak-giveback rule compares incompatible quantities → fires on every profitable flat account
+### P0-7. Peak-giveback rule compares incompatible quantities → fires on every profitable flat account — CLOSED 2026-08-07 (phase 1, ticket T4)
 **Where**: `RiskGuardAddOn.cs:1154`, predicate at `PropFirmProtectionSuite.cs:104-111`
 **What happens**: `EvaluatePeakEquityGiveback(peakOpenGain, currentUnrealized)` is called as
 `EvaluatePeakEquityGiveback(stateModel.PeakEquity, stateModel.UnrealizedPnL, …)`.
@@ -265,7 +271,7 @@ unrealized only, reset on flat) and compare against current unrealized; or track
 `PeakTotalPnL` and compare against current total. Add a `position != flat` precondition and a
 latch so the rule fires once per episode.
 
-### P0-8. The copier is the only order path that bypasses the RiskGuard lockout
+### P0-8. The copier is the only order path that bypasses the RiskGuard lockout — CLOSED 2026-08-07 (phase 1, ticket T5)
 **Where**: `TradeCopierEngine.OnExecution:645-737` vs `McpBridgeAddOn.cs:2252`, `2315`, `3966`
 **What happens**: every order path in `McpBridgeAddOn` checks
 `RiskGuardAddOn.Instance.IsAccountLocked(...)` before submitting. The copier does not. A follower
@@ -277,7 +283,7 @@ arriving on every leader fill.
 — and auto-quarantine the relationship (P2-24) when the follower is locked. Also skip copying
 *from* a locked leader.
 
-### P0-9. Followers are left naked — no bracket replication — naked exposure CLOSED 2026-08-07 (stops); targets/ATM still open
+### P0-9. Followers are left naked — no bracket replication — naked exposure CLOSED 2026-08-07 (stops); targets/ATM still open — PARTIALLY CLOSED 2026-08-10 (three recorded non-goals below)
 **Where**: `TradeCopierEngine.OnExecution:721-738` (always `OrderType.Market`, no protective legs);
 `EnableFollowerAtm` / `FollowerAtmStrategyName` are carried between DTOs (`:91`, `:36-37`) and
 **never read**
@@ -4230,7 +4236,7 @@ is what makes it testable at all.
 > `"requested": {}` alongside the complete, unchanged live config. **The MCP tool most likely to be
 > reached for as a read was itself a destructive write.**
 
-### P2-29. Single-file size / complexity
+### P2-29. Single-file size / complexity — OPEN
 `RiskGuardAddOn.cs` is 4,108 lines including a ~700-line WPF window (`RiskGuardWindow`,
 `:3389-4096`); `McpBridgeAddOn.cs` is 5,452. V12 solved the same problem by splitting one
 `partial class` across 71 files by concern and gating complexity in CI.
@@ -4327,7 +4333,7 @@ precise "expected vs actual" to compare, instead of inferring intent from order 
 ### P3-32. Follower risk anchored to the follower's own fill — SUPERSEDED by P0-9, CLOSED 2026-08-13
 **Verified**: `FollowerBracket.FollowerEntryPrice` is the follower's own average fill (`bracket.FollowerEntryPrice = pos.AveragePrice` at `TradeCopierEngine.cs:4558`). The stop and target offsets are SIGNED and applied to the follower's entry, not the leader's (`ComputeDesiredBracket` in `CopierReconciler.cs` uses `followerEntryPrice + stopOffset`). This is precisely "follower risk anchored to the follower's own fill". P0-9 is fully implemented and live-validated (§5.13). P3-32 is superseded and closed.
 
-### P3-33. Replace the global lock on the hot path
+### P3-33. Replace the global lock on the hot path — OPEN
 V12 enforces zero `lock()` via an `Enqueue(ctx => …)` actor model, so no event handler can ever
 block another. A full port is large; the pragmatic subset is: keep `_stateLock` for state
 mutation only, never hold it across I/O or broker calls (P1-10/12), and move the action queue to

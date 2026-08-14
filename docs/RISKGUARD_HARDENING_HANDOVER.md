@@ -32,7 +32,7 @@ tuning value. ⚠️ And the alarm that should have caught it **could not fire**
 an interval the retry reset every 5s. One alarm that could not stop beside one that could not start.
 
 ⚠️ **`P1-106` is the item to do next**: a lockout refuses the order that would **close** the position
-it is locking you out of — the half of `P0-104` its fix deliberately left. Then **`P2-107`**: the same
+it is locking you out of — the half of `P0-104` (closed) that its fix left deliberately. Then **`P2-107`**: the same
 repeated-action family survived `P2-101`'s fix on a **different path** (`PEAK_GIVEBACK_BREACH`, 7
 emissions in 20s), found in `P2-101`'s own validation run — so the de-duplication belongs where
 actions **leave** the guard, not inside each producer. Then `P1-102`, `P1-105`, `P2-103`, `P2-95`.
@@ -223,7 +223,7 @@ four tags behind until session 29 reconstructed them as §5.24.
 
 ## 0. Start here
 
-### Verified state — 2026-08-13, re-measured after session 34
+### Verified state — 2026-08-14, re-measured after session 39
 
 Every row below was **measured for this pass**, not carried forward, and the row says so when it was
 not. The command that checks it is in the last column.
@@ -234,20 +234,28 @@ not. The command that checks it is in the last column.
 > the documented reading order — "§0, then §5 from §5.6" — got a correct order of work and a wrong
 > set of facts about what is deployed. **If you append a session record, re-derive this table in
 > the same commit.**
+>
+> ⚠️ **It happened again, and the second time is more instructive than the first.** Sessions 35–38
+> left six rows at session-34 values — suite 1311, bridge 92, `v1.18.0` deployed, 25 tags — while
+> the box ran `v1.22.0` and the suite stood at 1436. What makes it worth recording is that session
+> 38 **did** return here and updated the Mutation row **only**, so the table was *half* re-derived
+> and read as maintained. **A partially updated table is worse than an obviously old one**: nothing
+> distinguishes the fresh rows from the stale ones, and the timestamp at the top vouches for all of
+> them. Re-derive the WHOLE block or none of it, and say which rows you measured.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1311 passed, 0 failed**; **bridge 92 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **108 IDs — 102 closed, 6 open** (`P1-77` deferred, `P2-78`, `P1-81`, **`P1-99`**, `P2-29`, `P3-33`). ⚠️ This row said `104 IDs — 99 closed, 5 open` for several sessions after §0 had moved on; it is now derived from §5.0's table. Old text follows for the trail: (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | ✅ **`P2-98` is CLOSED and live-validated** (§5.38) — a partial fill is now accumulated across its slices and reported once, quantity-weighted, when the order is done; a live 2+8 copy reported `-2.2 ticks on 10 contract(s) across 2 slices`. 🆕 **Next is `P1-99`**, which that validation opened: **the copier sizes each leader EXECUTION independently**, so a 100-lot leader order filling as 20 × 5 under symbol conversion copies **nothing** — leader long 100, follower FLAT, twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error. Silent position divergence, `P0-5`'s family. Then **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then `P2-95`/`P2-93`/`P2-94`, **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
-| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
+| **Suite** | **core 1436 passed, 0 failed**; **bridge 108 passed, 0 failed**; **MCP wrapper 43 passed, 0 failed** — all re-measured 2026-08-14 (session 39) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **117 IDs — 103 closed, 14 open**, re-derived 2026-08-14 (session 39) by the `grep` in §5.0 plus the composition table beside it: **106** banded plan entries (13 open) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-9`…`F-16`; only `F-16` open). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), not defects, and are deliberately not in this total. The 13 open banded entries are `P1-106`, `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, and three PARTIALLY closed with a recorded remainder: `P0-9`, `P1-13`, `P2-27`. **The whole `P0-1`…`P0-8` block is CLOSED**, and every heading now carries a status token — until session 39 those eight carried none and a prose note stood in for one | `python tools/check_next_list_ids.py`, which derives it and refuses to pass vacuously |
+| **Do next** | 🆕 **`P1-106`** — a lockout refuses the order that would **close** the position it is locking you out of; the half of `P0-104` (closed) that its fix left deliberately. Read the **position**, never the `OrderAction` label (`P1-97`, closed), and clamp on **quantity** — a `Sell 20` against a long 11 is an exit *and* a new short 9. Then **`P2-107`** (outbound action de-duplication at `CoalesceActions`, once for all producers), then `P1-105`, `P1-102`, `P2-103`, then the architectural `P2-29` / `P3-33`. ⚠️ This row named **six closed IDs** for nine sessions — see §5.6 | §5.6, and `python tools/check_next_list_ids.py` |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, all three repos. **29 tags**, `v1.0.0`…**`v1.22.0`** — measured 2026-08-14 | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.22.0` core + bridge are live in NT8** — measured 2026-08-14 (session 39) from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files identical)** and `deploy.py --verify` **ALL IN SYNC (13 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs`, `BridgeAccountResolver.cs`, `BridgeFlattenPlan.cs` and `CopierEnforcementView.cs` on top of the vendored core. ⚠️ **A green `--verify` from both repos does NOT mean the box loaded your code** — it compares content hashes of the files each repo OWNS, and cannot see a third file, owned by nobody, that breaks the assembly they belong to. Session 37 had 651 compile errors under two green verifies | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.22.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-14 (session 39)**. The firm mapping is LIVE on 94 accounts, including the funded 50K TPT PRO | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/version` (Bearer, **not** `X-Auth-Token`, which returns `Unauthorized`) |
+| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
 | **Mutation** | **29 batteries** — **27 here** + **2 in `nt8-mcp-bridge`** (`mutate_p190`, `mutate_p0104`; ⚠️ that repo's CI ran **neither** until §5.44, because `check_ci_runs_every_battery.py` is per-repo). **283 anchors / 0 broken — measured 2026-08-14.** Three declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant, `mutate_p2101`'s redundant reset); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run them all locally (283 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push as a MATRIX, so a push is 12–20m, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
-| **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 39) on `v1.22.0`**. 25 warnings, every one pre-existing and in a third-party indicator (`CS0108`/`CS3005` name hiding and CLS compliance). ⚠️ **ALWAYS read `errorCount`, never the call's success.** Session 37 got **651 errors** while `nt_health` read healthy — 96 accounts, feed connected, guard armed — because **NT8 keeps running the LAST GOOD assembly**, so a broken deploy is indistinguishable from one that worked. The cause was a duplicate `.cs` (`CS0101`, then 496 × `CS0229`), which no `--verify` can see. ⚠️ And a green net8.0 suite cannot see production either: `P3-30`'s audit timer sat inside `#if TESTING`, so 1275 green tests passed over a feature absent from the net48 assembly | `nt_compile`, and read `errorCount` |
+| **CI** | **Green in both repos, measured 2026-08-14 (session 39)**: the last five `nt8-riskguard` runs all succeeded at **11m48s–19m31s**, and the last five `nt8-mcp-bridge` runs at 1m17s–2m36s. ⚠️ **Run this BEFORE the first claim about state, not after a deploy.** It has been red-and-unread twice: 7 consecutive runs across sessions 27–29 on a correct version gate, and **10 consecutive runs back to `v1.17.0`**, found only in session 36, because two batteries were unpassable by construction and every battery after them never ran | `gh run list -R vinay-veerappa/nt8-riskguard -L 10`; same for `nt8-mcp-bridge` |
+| **Bridge pin** | ✅ **`v1.22.0`, and the RANGE is empty** — `git diff --name-only v1.22.0..main -- addons/` returns nothing, measured 2026-08-14. ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range, and the pin has gone stale FOUR times, each caught by `deploy.py --verify` refusing (exit 2). The worst was session 33's — core `main` ran 21 commits past `v1.12.2` with 7 touching `addons/`, so deploying would have **reverted `F-9`, `F-9b` and `P2-92` out of a live NT8**. Any core commit past the tag puts it behind, so the remedy is a tag per core CHANGE, not per session | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify`, and `git diff --name-only <pin>..main -- addons/` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
@@ -3136,7 +3144,7 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 98, re-run 2026-08-14 (session 36)
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 106, re-run 2026-08-14 (session 39)
 ```
 
 > ⚠️ **What §0's total is MADE OF, because the two numbers do not match and session 36 had to
@@ -3145,22 +3153,30 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 >
 > | Family | Count | Where |
 > |---|---|---|
-> | banded `Pn-m` entries in the plan | **98** | the grep above |
-> | untriaged `P?-64`, `P?-65`, `P?-66` | **3** | §5.2 — the *digits* are final, only the band is open |
-> | `F-9`…`F-15`, the firm-mapping findings | **7** | §4493, filed here and never given a plan entry |
-> | **§0's total** | **108** | |
+> | banded `Pn-m` entries in the plan | **106** | the grep above |
+> | untriaged `P?-64`, `P?-65`, `P?-66` | **3** | §5.2 — all three CLOSED, and listed as open work until session 39 |
+> | `F-9`…`F-16` findings | **8** | filed here and never given a plan entry. `F-1`…`F-8` are FEATURES (§5.17), not defects |
+> | **§0's total** | **117** | 103 closed, 14 open |
 >
-> That composition was **not written down anywhere** until now, so `107` in §0 and `98` from the
-> grep read as a contradiction rather than as two different questions. If you change either, change
-> this table in the same commit.
+> That composition was **not written down anywhere** until session 36, so `107` in §0 and `98` from
+> the grep read as a contradiction rather than as two different questions. If you change either,
+> change this table in the same commit. ⚠️ **Session 39 re-derived every figure**: the grep had moved
+> 98 → 106 while §0 still said 108, and `F-16` had been filed into a family the table capped at
+> `F-15`. `tools/check_next_list_ids.py` derives the open/closed split now, so only the totals are
+> hand-carried.
 
 | | Count | Which |
 |---|---|---|
-| Numbered entries in the plan | **90** | `P0-1`…`P0-9`, `P0-48`…`P0-51`, `P0-53`, `P0-55`, `P0-59`…`P0-63`, `P0-67`, **`P0-68`**, `P1-10`…`P1-23`, `P1-35`…`P1-37`, `P1-39`, `P1-40`, `P1-42`…`P1-45`, `P1-47`, `P1-52`, `P1-54`, `P1-56`, `P1-57`, **`P1-69`**, **`P1-70`**, **`P1-71`**, **`P1-79`**, **`P1-80`**, **`P1-81`**, `P2-24`…`P2-29`, `P2-38`, `P2-41`, `P2-46`, `P2-58`, `P3-30`…`P3-34` |
-| Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. The *digits* are final and reserved; only the band is untriaged |
-| **Total IDs** | **93** | 4 opened by the live validation (§5.13), 4 by the MCP wrapper pass (§5.16), 3 by the feature audit + the UI question (§5.17), 1 found while WRITING the `UI2` ticket (`P1-79`, §5.21), 2 found while writing `UI4`'s tests (`P2-82`, `P2-83`, §5.23), 1 opened by `P1-90`'s LIVE VALIDATION (`P1-91`, §5.26) |
-| **Open** | **14** | §5.1 + **`P1-77`** (the consistency cap is dead config) and **`P2-78`**. ✅ `P?-64`, `P?-65`, `P1-79` closed in §5.21 and **merged, tagged and deployed**; `P2-82` + `P2-83` opened and closed in §5.23. Fifteen closed 2026-08-13 |
-| **Closed or superseded** | **79** | `P0-67`, `P0-68`, `P1-69`…`P1-71` in §5.14; `P1-72`…`P1-75` in §5.16; `P1-76` in §5.16; **`P1-90` in §5.26, live-validated** |
+| Banded entries in the plan | **106** | the `grep` above. **13 open**: `P1-106`, `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13` and `P2-27` marked PARTIALLY CLOSED with a recorded remainder |
+| Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. **All three are CLOSED** (`P?-66` in §5.13, `P?-64`/`P?-65` in §5.21). ⚠️ They were listed as outstanding work in every ordering block until session 39 |
+| `F-` findings | **8** | `F-9`…`F-16`. Only **`F-16`** (MCP tool schema conformance, 52 tools) is open. ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), **not defects**, and are deliberately excluded |
+| **Total IDs** | **117** | **103 closed, 14 open** |
+
+⚠️ **The table that stood here said 90 / 93 / 14 / 79 and contradicted the composition table
+directly above it** — two hand-maintained summaries of the same entries, in the same section,
+disagreeing. It is replaced by counts that `tools/check_next_list_ids.py` derives, which is also
+what now forces every plan entry to carry a status token: until session 39 fourteen carried none,
+so any mechanical count had to be corrected by hand against a prose note two hundred lines away.
 
 ⚠️ **Session 29 added nine IDs** (`P1-82`…`P1-90`) and closed eight. ✅ **Session 30 closed the
 ninth, `P1-90`, and live-validated it** (§5.26) — six sites, not the three that were filed. It
@@ -3332,7 +3348,40 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-99` — the copier's SIZING GRAIN
+> ### Do next: `P1-106` — the lockout that traps you in the position
+>
+> **Updated session 39 (2026-08-14).** Every block below this one is struck through and
+> kept for the order it forced, not for its contents.
+>
+> ⚠️ **This block had been carrying SIX closed IDs, and that is why
+> `tools/check_next_list_ids.py` now exists.** `P2-95`, `P2-93` and `P2-94` were closed in
+> session 34 and still headed the order of work nine sessions later; all three `P?-` UI
+> write items were closed in §5.13 and §5.21 and were still listed as outstanding. Nobody
+> added them back: each session wrote its ordering block by copying the previous one and
+> striking the item it had just closed, so **an item closed while it was NOT at the head of
+> the list was never struck by anybody.** Closures propagated forward into the record and
+> never backwards into the ordering. The gate reads this block, §0's `Do next` row and the
+> newest `Order from here` against the plan's per-entry status, and fails in both
+> directions — it also requires every plan entry to *carry* a status, which is the half
+> that would have rotted.
+>
+> **`P1-106` is the item to do next.** A lockout refuses the order that would **close** the
+> position it is locking you out of — the half of `P0-104` (closed) that its fix left deliberately,
+> and what turns "the flatten failed" into "and you cannot fix it by hand". The guard has
+> `IsPositionReducingOrder` for exactly this reason (`P1-44`, closed); the bridge's three order
+> paths do not.
+>
+> ⚠️ Two things to carry into the fix, both already paid for. **Read the POSITION, never
+> the `OrderAction` label** — `P1-97` (closed) is that mistake in the copier, where an MCP short
+> entry read as an exit because the caller picks the label. And **clamp on quantity**: a
+> `Sell 20` against a long 11 is an exit *and* a new short 9, so "is this reducing?" is not
+> a yes/no question about the order. `PlaceOrder` already computes the position (`P1-97`, closed),
+> so the information is at the refusal site.
+>
+> Then **`P2-107`** — the outbound action de-duplication, done once for all producers at
+> `CoalesceActions` rather than inside each one. Then `P1-105`, `P1-102`, `P2-103`.
+
+> ### ~~Do next: `P1-99` — the copier's SIZING GRAIN~~ (session 36, superseded)
 >
 > **Updated session 36.** The block below is session 35's and is superseded by this
 > paragraph; it is kept because the order it forced is the reusable part, and because
@@ -7473,7 +7522,112 @@ Sixth instance of *an alarm that is always on is off*.
 ### Order from here
 
 1. **`P1-106`** — a lockout refuses the order that would CLOSE the position it is locking you out of.
-   The guard has `IsPositionReducingOrder` for exactly this reason (`P1-44`); the bridge does not.
+   The guard has `IsPositionReducingOrder` for exactly this reason (`P1-44`, closed); the bridge
+   does not.
 2. **`P2-107`** — the outbound action de-duplication, done once for all producers.
-3. **`P1-102`** (no MCP tool reads or clears a lockout — every unlock this session was a raw `curl`),
-   then `P1-105`, `P2-103`, `P2-95`.
+3. **`P1-105`**, then **`P1-102`** (no MCP tool reads or clears a lockout — every unlock this
+   session was a raw `curl`), then **`P2-103`**.
+
+⚠️ **This list carried six CLOSED IDs until session 39** — `P2-95` (closed s34), `P2-93` (closed
+s34), `P2-94` (closed s34), and all three `P?-` UI write items (closed in §5.13 / §5.21).
+`tools/check_next_list_ids.py` reads this block now, so it cannot happen silently again.
+
+## 5.46 Session 39 — the ordering list had been wrong for nine sessions, and nothing could tell
+
+No defect was fixed here. What was fixed is the surface that decides which defect gets fixed
+next, and the reason it is worth a section is that **every existing gate passed while it was
+wrong**.
+
+### What was wrong
+
+The three live "what to do next" surfaces — §0's `Do next` row, §5.6's live block, and the newest
+`Order from here` — had been carrying **six closed IDs**:
+
+| ID | Closed | Still listed as work to do until |
+|---|---|---|
+| `P2-95` (`FirmStartingBalance`) | session 34 | session 39 |
+| `P2-93` (`pure` / `override_with_friction`) | session 34 | session 39 |
+| `P2-94` (timed manual lockout) | session 34 | session 39 |
+| `P?-64`, `P?-65` (copier UI writes) | §5.21 | session 39 |
+| `P?-66` (copier metrics reading) | §5.13 | session 39 |
+
+`CLAUDE.md` in the consumer repo said *"Weigh `P2-95` first now"* for all nine of those sessions.
+
+⚠️ **Nobody added them back, and that is the whole mechanism.** Each session wrote its ordering
+block by copying the previous session's and striking the item it had just closed. So **an item
+closed while it was NOT at the head of the list was never struck by anybody** — `P2-95`, `P2-93`
+and `P2-94` were all closed in one session, in one commit, by a session whose ordering block was
+about something else entirely. Closures propagate **forward** into the record and never
+**backwards** into the ordering.
+
+The cost is not cosmetic. The ordering block is the one thing a session reads before choosing what
+to work on, so a stale entry spends a whole session's attention on work already done — and the
+reader who spots one cannot tell which of the *remaining* entries are also wrong, which is the
+expensive part. This session found it only by checking each ID against its plan entry instead of
+trusting the list.
+
+### Why no gate caught it
+
+Because the plan could not answer the question. **Fourteen of its entries carried no status token
+at all**, including the whole `P0-1`…`P0-8` block, closed since phase 1. A prose note two hundred
+lines above them explained that their *absence* of a marker should not be read as "open" — which
+is the inverse failure this repo keeps finding: *a gate nobody reads is a comment*, and here **a
+comment was standing in for a gate**. Fifth instance.
+
+⚠️ **And a substring check for `CLOSED` reads `P1-105` — an OPEN defect — as closed**, because its
+title contains `positionClosed: true`. That is not hypothetical; it is how the first draft of this
+audit lost it. Status is read from a **separated token position** now, never by scanning the line.
+
+### `tools/check_next_list_ids.py`
+
+Fails in **both** directions, so neither half can rot:
+
+* every defect ID named in a live ordering block must be a plan entry whose status is **open**;
+* every `### Pn-m.` heading must **carry** a status token — the half that had rotted.
+
+Three design decisions worth keeping:
+
+1. **It polices only the LIVE surfaces, not every ordering block in the file.** Each session record
+   ends with its own, and those are history — they record the order that session chose, which is
+   the reusable part. Rewriting them to match today's closures would falsify the record. A
+   struck-through heading is history *by construction*, which matches §5.6's existing convention.
+2. **A closed ID may be CITED** — `P1-106`'s entry names `P1-44` and `P1-97`, both closed, both the
+   reason the fix is cheap. A citation is exempt when marked closed within 60 characters of itself.
+   ⚠️ Deciding by *position* instead (first ID is the work, later ones are citations) was the other
+   candidate, and it **fails on the exact drift this exists for**: `then P1-105, P2-103, P2-95`
+   put all three mid-sentence. ⚠️ The window was 30 first, and 30 made me **rewrite honest prose to
+   satisfy the gate** — that is how a check starts costing more than it returns.
+3. **It refuses (exit 2) if it finds fewer than three live surfaces**, so renaming a marker cannot
+   silently reduce what it inspects. That is `check_ci_runs_every_battery.py`'s lesson applied
+   before the fact: *changing the SHAPE of what a gate inspects changes its evidence even though
+   its code did not.*
+
+**Watched failing on four deliberate breaks before being wired**: reintroducing `P2-95` into the
+tail (exit 1), stripping one status token (exit 1), renaming every `Order from here` (exit 2), and
+striking the live §5.6 block so nothing is current (exit 2). ⚠️ The *first* attempt at break 3
+renamed only one of the two headings and the gate correctly still found the newest — **a break
+that does not break anything proves nothing**, and it looked identical to a pass.
+
+### §0 was half re-derived, which is worse than stale
+
+Six rows sat at session-34 values — suite 1311, bridge 92, `v1.18.0` deployed, 25 tags, 108 IDs —
+while the box ran `v1.22.0` and the suite stood at 1436. ⚠️ **Session 38 did return to §0 and
+updated the Mutation row only.** So the table was *partially* maintained and read as current:
+nothing distinguishes a fresh row from a stale one, and the timestamp at the top vouches for all of
+them. **Re-derive the whole block or none of it.** Also collapsed: §5.0 carried **two** tables
+counting the same entries and disagreeing (90/93/14/79 against 98+3+7).
+
+### Measured this session
+
+Core suite **1436/0**, bridge harness **108/0**, MCP wrapper **43/0**, **283 anchors / 0 broken**,
+29 batteries, `nt_compile` **0 errors** on net48, guard live at **`1.22.0`** (`shadow`, armed,
+guarding), both `--verify`s in sync (8 files / 13 files, 0 orphans), bridge pin range **empty**,
+CI green in both repos. Defect total re-derived: **117 IDs — 103 closed, 14 open**.
+
+### Order from here
+
+1. **`P1-106`** — a lockout refuses the order that would CLOSE the position it is locking you out
+   of. The guard has `IsPositionReducingOrder` for exactly this reason (`P1-44`, closed); the
+   bridge's three order paths do not.
+2. **`P2-107`** — the outbound action de-duplication, done once for all producers.
+3. **`P1-105`**, then **`P1-102`**, then **`P2-103`**.

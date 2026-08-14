@@ -118,6 +118,17 @@ jobs:
       - name: Code the test build compiles away still parses
         run: python tools/check_window_parses.py
 
+      # The ordering blocks a session reads before choosing what to work on had been
+      # carrying SIX closed IDs -- P2-95, P2-93 and P2-94 (all closed in session 34) and
+      # the three P?- UI write items -- because each session wrote its list by copying the
+      # previous one and striking only the item it had just closed. Closures propagated
+      # forward into the record and never backwards into the ordering, so nine sessions
+      # were told to "weigh P2-95 first". This also requires every plan entry to CARRY a
+      # status token, which is the half that would rot: 14 carried none, including the
+      # whole P0-1...P0-8 block. Watched failing on all four breaks before being added.
+      - name: Ordering lists name only open defects
+        run: python tools/check_next_list_ids.py
+
       - name: Build
         run: dotnet build tests/RiskGuardTests.csproj -v q --nologo
 
