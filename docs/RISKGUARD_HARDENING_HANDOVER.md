@@ -2,11 +2,15 @@
 
 **Last updated**: 2026-08-14 (**session 37 — §5.41**). Core **`v1.20.0`** is tagged and
 **NT8-compiled clean** — suite **1355/0**, bridge **92/0**, MCP wrapper **43/0**, **25** core
-mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **110 IDs, 7 open**; the `P0` band
+mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **112 IDs, 9 open**; the `P0` band
 and the untriaged band are both empty, and every naked-risk item is closed. Every figure here was
 **measured, not incremented**. ✅ `v1.20.0` is deployed, **NT8-compiled clean (651 -> 0 errors, see §5.41)** and
 live-validated on sim. ⚠️ Doing so opened **`P1-100`** (a SHADOW-only lockout BLOCKS real orders) and
-**`P2-101`** (a shadow lockout retries its flatten forever). **`P1-100` is the item to do next.**
+**`P2-101`** (a shadow lockout retries its flatten forever), and cleaning up after it exposed
+**`P1-102`** (no MCP tool can read or CLEAR a lockout) and **`P2-103`** (the guard inventory and
+copier conformance snapshots have no MCP tool at all). **`P1-100` + `P1-102` are the item to do
+next, and they are one job**: shadow mode can freeze an account and the toolset has no way to
+unfreeze it.
 
 ⚠️ **`P2-98` is CLOSED and live-validated** (§5.38), and closing it **opened a P1**. The fix moves
 the grain of a measurement from the SLICE to the COPY: a partial fill is accumulated across its
@@ -7105,3 +7109,56 @@ produced defects no static gate did.
 
 `P1-100` first — it is the one that makes an operator switch the guard off. Then `P2-101`, then
 `P2-27` / `P2-95`.
+
+---
+
+## 5.42 The MCP surface was measured against the bridge, and the honest answers are the unreachable ones
+
+Asked directly whether the MCP wrapper needs work for RiskGuard/copier. Measured rather than guessed:
+the bridge exposes **67 routes**, the wrapper defines **52 `nt_` tools**, and **15 routes are
+reachable from no tool**. Ten routes are risk-related; five have a tool and five do not.
+
+| route | tool |
+|---|---|
+| `/api/riskguard/config` | `nt_riskguard_config` |
+| `/api/riskguard/fsm-state` | `nt_riskguard_state` |
+| `/api/copier/config` | `nt_copier_config` |
+| `/api/prop/limits` | `nt_prop_limits` |
+| `/api/compliance/report` | `nt_compliance_report` |
+| `/api/riskguard/inventory` | **none** |
+| `/api/copier/snapshot` | **none** |
+| `/api/lockout` | **none** |
+| `/api/riskguard/version` | **none** |
+| `/api/riskguard/fsm-reset` | **none** |
+
+Filed as **`P1-102`** (lockout) and **`P2-103`** (the read-only truth surfaces).
+
+**The finding worth carrying is the shape of the gap, not its size.** The two missing read surfaces
+are `BuildGuardSnapshot()` and `TradeCopierEngine.GetSnapshot()` — the per-rule inventory ("is this
+rule *Enforcing*, and what limit is it holding me to") and the per-relationship conformance view
+(orphan positions, quarantine reasons). Those are exactly what `UI1`, `UI3`, `UI4`, `UI5` and `UI6`
+exist for — **five of the 25 mutation batteries**, and the set whose every mutant is deliberately
+written to make the payload *more reassuring than the box*. `F-9` was a defect in the same surface.
+
+So a large amount of machinery was built to make one answer truthful, and **the agent driving the
+system cannot read that answer.** The honesty was bought and is not being spent. That is a different
+class of gap from "a route lacks a wrapper": the missing tools are not the convenient ones, they are
+the ones that would let an operator or an agent check the guard's claims against the guard's
+behaviour, which is this project's entire recurring theme (`configured / evaluated / enforcing`).
+
+It has a measured operational cost too. Answering "what is running and is it protecting anything"
+this session required parsing `interventions.jsonl` by hand, reading `config.json` off disk, and a raw
+`curl` with the token from `Documents/NinjaTrader 8/mcp_token.txt`. `nt_riskguard_state` returns the
+FSM only; `nt_copier_config` returns configuration and session metrics, **not** conformance.
+
+⚠️ **`P1-102` and `P1-100` are one job.** Shadow mode can freeze an account (`P1-100`) and no tool can
+unfreeze it (`P1-102`). Separately each is a nuisance; together they are "the guard stopped my account
+and I cannot start it again", which is the shape that gets a risk system switched off rather than
+debugged.
+
+⚠️ **Three traps for whoever writes these tools**, all previously paid for here:
+`unlock` **removes protection**, so no `default:` on `account` (`P1-91`) and the `action` enum pinned
+to the addon's own whitelist (`P1-72`, which REGRESSED by advertising two actions that both answered
+`UNKNOWN_COPIER_ACTION`); and the test must verify the **enforcer**, not the report — the hand-run
+unlock this session was confirmed by re-sending an unfillable limit order and watching it be accepted,
+because `F-9`'s lesson is that what a rule reports can disagree with what it does, in either direction.

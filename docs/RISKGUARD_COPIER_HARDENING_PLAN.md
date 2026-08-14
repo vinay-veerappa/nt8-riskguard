@@ -2804,6 +2804,69 @@ exists for and where the operator needs it.
 
 ---
 
+### P1-102. There is no MCP tool to READ or CLEAR a lockout, so an account frozen by the guard cannot be recovered by the agent that is driving it — OPEN, found 2026-08-14
+
+**Where**: `mcp/ninjatrader-mcp/lib/tools.js` (in `tvDownloadOHLC`). The bridge has
+`POST /api/lockout` with `action` of `status` | `unlock` | `reset` | `clear`, hardened by `P1-90`'s
+account resolver. **No `nt_` tool calls it.**
+
+**Found while cleaning up after `P1-99`'s live validation.** Three sim accounts were locked out by the
+guard; clearing them needed a raw `curl` with the bridge token read off disk
+(`Documents/NinjaTrader 8/mcp_token.txt`), because no tool exposes the route.
+
+**Why it is P1 and not a nice-to-have**: `P1-100` means a **shadow-only lockout can freeze an
+account**. So the mode an operator is told to evaluate the guard in can halt trading, and the toolset
+they are driving it with has **no way to undo that**. Those two defects compose into "the guard
+stopped my account and I cannot start it again", which is the shape that gets a risk system deleted
+rather than debugged.
+
+⚠️ **`unlock` REMOVES PROTECTION** — it is the one write here that must not get a permissive schema.
+`P1-90` records that `HandleLockout` used to feed a guessed account name straight into
+`UnlockAccount` with no existence check, so omitting the field unlocked `Sim101` and a typo returned
+`success:true, isLockedOut:false` for an account that does not exist. The resolver fixed the addon;
+a new tool must not re-open it from the other side — no `default:` on `account` (`P1-91`), and the
+`action` enum pinned to the addon's own whitelist (`P1-72`'s remedy).
+
+⚠️ **Verify the ENFORCER, not the report.** `{"success":true,"isLockedOut":false}` is a claim. When
+this was done by hand the unlock was confirmed by re-sending an unfillable limit order and watching it
+be accepted, because `F-9`'s lesson is that what a rule REPORTS can disagree with what it DOES in
+either direction. The tool's test must assert the same way.
+
+---
+
+### P2-103. The three read-only surfaces that answer "is the guard actually protecting me?" have NO MCP tool, and they are exactly the ones five mutation batteries exist to make honest — OPEN, found 2026-08-14
+
+**Where**: `mcp/ninjatrader-mcp/lib/tools.js`. Measured 2026-08-14 by diffing the bridge's 67 routes
+against the 52 `nt_` tools: **15 routes are unreachable**, and these are the ones that matter:
+
+| route | returns | MCP tool |
+|---|---|---|
+| `/api/riskguard/inventory` | `BuildGuardSnapshot()` — the per-rule inventory: is this rule `Enforcing`, and what limit is it holding you to | **none** |
+| `/api/copier/snapshot` | `TradeCopierEngine.GetSnapshot()` — per-relationship conformance, orphan positions, quarantine reasons | **none** |
+| `/api/riskguard/version` | the version an operator reads to know what is deployed | **none** |
+| `/api/riskguard/fsm-reset` | clears a stuck FSM entry | **none** |
+
+**Why this is worth a defect ID rather than a feature request.** `UI1`, `UI3`, `UI4`, `UI5` and `UI6`
+— **five of the 25 mutation batteries**, and the ones whose every mutant is deliberately written to
+make the payload *more reassuring than the box* — exist to keep precisely these two snapshots honest.
+`F-9` was a defect in the same surface. That is a large amount of machinery built to make an answer
+truthful, and **the agent driving the system cannot read the answer.** The honesty was bought and is
+not being spent.
+
+It also has a direct operational cost, measured this session: establishing "what is actually running
+and is it protecting anything" needed `interventions.jsonl` parsed by hand, `config.json` read off
+disk, and a raw `curl`. `nt_riskguard_state` returns the FSM only; `nt_copier_config` returns
+configuration and session metrics, **not** conformance.
+
+**Fix**: three read-only tools (`nt_riskguard_inventory`, `nt_copier_snapshot`, and the version — the
+last can fold into `nt_health`, which already reports a bridge version and is where anyone would look).
+Read-only, so the `P1-91` schema risk is low; `fsm-reset` is a write and belongs with `P1-102`'s
+review. ⚠️ Do **not** add these by widening an existing tool's `action` enum without pinning it to the
+addon's whitelist — that is exactly how `P1-72` regressed, advertising `quarantine`/`unquarantine`
+actions that both answered `UNKNOWN_COPIER_ACTION`.
+
+---
+
 ## 2. P1 — Concurrency and invariant violations
 
 ### P1-10. The safety sweep holds `_stateLock` across broker calls — CLOSED 2026-08-07
