@@ -239,6 +239,30 @@ the most likely single reason this system gets switched off**, and it is a one-l
 Values marked **→** were changed; everything else is a decision to keep what is there. Every
 change named below is applied and pinned by a mutation battery.
 
+### 3.0 Copier — GLOBAL (`P3-34`, core `v1.15.0`)
+
+One switch, above every relationship. It is the copier's own, deliberately **not** a reading of
+the guard's mode: the operator drives sim copies while the guard sits in `shadow`, which is how
+§5.13's live validation was run, and following the guard's mode would take that away.
+
+| Field | Default | Why |
+|---|---|---|
+| `CopierMode` | **`live`** | ⚠️ **Deliberately not `shadow`, and this is the one default in this file chosen to preserve existing behaviour rather than to increase safety.** §5.25's rule is that a new default applies only to fields *absent* from the stored config — so every `copier_config.json` on disk today lands on this value. A safety feature that silently stops a working copier at the next restart is one that gets switched off. **Moving it to `shadow` is a protection increase and the operator's call.** |
+
+Recognised values, and nothing else acts:
+
+| Value | Behaviour |
+|---|---|
+| `live` | today's behaviour: an enabled, armed relationship places real orders |
+| `shadow` | logs the fully-formed order it *would* have sent (`COPY_BLOCKED_COPIER_SHADOW`, with instrument, action and quantity) and submits nothing |
+| `disabled` | copier off, under its own event name so the two intentions stay distinguishable in a log that is grepped by event type |
+| anything else | **does not trade.** `P1-87`'s rule: the permissive branch here places real orders, so a typo must not be the difference between observing and trading |
+
+Entering `live` runs `RunCopierPreflight` and is **refused** if a follower does not resolve.
+Leaving `live` is never gated — a gate on the safe direction is one an operator routes around.
+Readable and settable over `GET`/`POST /api/copier/config` (`copierMode`, `action=set_mode`) and
+`nt_copier_config`.
+
 ### 3.1 Copier — per relationship and per group
 
 | Field | Default | Why |

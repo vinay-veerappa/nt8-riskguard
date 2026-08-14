@@ -34,10 +34,13 @@
 > | §6.7: `EvaluateGraceExpiry` "called from a per-FSM Timer **or the sweep**" | the sweep never calls it — that "defensive" path does not exist |
 > | §9.1: automatic relationship quarantine on execution error / risk breach | ✅ `P2-24` closed — dead code removed; the reconciler (P3-30/P3-31) is the repair path |
 > | §9.3: news / target / giveback auto-lockout and auto-flatten | ✅ `P2-25` closed — news shield now loads events from disk; giveback was fixed (P0-7); target semantics were fixed (P1-17) |
-> | §2/§4/§8: "87 unit tests" / "84 comprehensive test methods" / "60 original + 24 FSM" | three different numbers **in one document**. The suite is **1265** |
-> | "central `v1.1.0` version info" | the constant is now `1.13.0` and matches tag `v1.13.0` |
+> | §2/§4/§8: "87 unit tests" / "84 comprehensive test methods" / "60 original + 24 FSM" | three different numbers **in one document**. The suite is **1311** (2026-08-14). ⚠️ Do not "fix" this by writing 1311 into §2/§4/§8 — that is how three numbers got here. Derive it: `dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+> | "central `v1.1.0` version info" | the constant is now `1.18.0` and matches tag `v1.18.0` |
 > | §5/§6: "guard evaluation on the WPF dispatcher" | ✅ `P1-13` closed — `RunGuardWork` now runs inline always; the dispatcher is no longer in the path |
 > | §9.1: "order identification by name substring" | ✅ `P1-57` closed — orders are tracked by object reference, not name substring |
+>
+> | §9.x: the copier acts whenever a relationship is enabled and armed | ⚠️ **No longer true.** `P3-34` added a GLOBAL `CopierMode` (`live`/`shadow`/`disabled`) above every relationship. In `shadow` nothing is submitted, however a relationship is configured |
+> | anywhere the copier decides an exit's direction | ⚠️ **`P0-96`**: it read the SIDE off the SIGN of `Position.Quantity`, which is **absolute** in NT8. A leader covering a short sent the follower a `Sell`, doubling it. Both sites now read `MarketPosition` |
 >
 > **Entirely undescribed here**, all of it live behaviour: the pending-cancel queue and
 > `DrainPendingCancels` (`P1-35`), the sweep's three-phase lockout ordering (`P1-11`),
@@ -45,7 +48,10 @@
 > `LastShadowSessionDate` in the persisted state (`P1-37`), the whole mirrored-bracket stop **and
 > target** with OCO pairing (`P0-9`), the total `OrderState` classification with `OccupiesSlot` /
 > `ProvidesCoverage` / `AcceptsModification` (`P0-60`, `P0-61`), `CopierReconciler` (`P3-30`), and
-> the ignored-`Change()` detection and recovery (`P0-63`). **Anyone reading this doc to understand
+> the ignored-`Change()` detection and recovery (`P0-63`). **Added since and also undescribed**: the
+> clock-driven guard audit (`RunGuardAudit`, `P3-30`'s second half — which shipped compiled out of
+> the production build and matching nothing, §5.33), the in-flight order ledger and reconciler timer
+> (`P3-31`), and the copier's own mode and preflight (`P3-34`). **Anyone reading this doc to understand
 > the current lockout or copier path will be wrong about all of them.**
 >
 > When `P2-26` is done, add the doc-drift check the plan asks for: assert the documented sweep

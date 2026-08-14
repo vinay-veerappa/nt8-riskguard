@@ -45,18 +45,25 @@ made them disagree.
 > `P0-63`/`P0-67`. It is now **derived from the per-defect entries in §1–§5**, which were always the
 > accurate part. A warning label is not a fix; see the handover §5.12.
 
-**83 defect IDs. Numbered once, never renumbered, never reused.** Verify the count rather than
-trusting it:
+**Numbered once, never renumbered, never reused.** ⚠️ **This paragraph used to assert "83 defect
+IDs" while the derivation returned 95** — the same failure the banner above describes, one revision
+later. So it no longer asserts a total at all; run the command:
 
 ```bash
+# how many defect entries this file carries. Run it; do not trust a number written here.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 80 entries here
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 95, re-run 2026-08-14 (session 35)
 ```
 
-The other **3** are `P?-64`, `P?-65`, `P?-66` — opened by live runs, digits reserved, band letter not
-yet triaged, and documented in the handover's §5.2 rather than here because they have no mechanism
-write-up yet. 80 + 3 = 83. (`P?-66` is one of the three and is now **closed**, so it counts as an ID
-but not as an open item.)
+**The TOTAL is not maintained here**, because a second copy of a number is a second thing to
+forget. It lives in the handover's **§5.0**, which derives it, and it is larger than the figure
+above for two reasons: the three untriaged `P?-64`/`P?-65`/`P?-66` have no mechanism write-up here
+(handover §5.2), and the non-`P` workstream IDs — `F-9`, `F-9b`, `UI1`…`UI7`, `T1`…`T5` — were
+never plan entries.
+
+⚠️ Three IDs appear in the handover's prose and are **not** entries here: `P0-64` and `P0-66` (the
+reserved digits, referred to by their eventual band) and `P1-4`. Reserved digits are why `P0-67` is
+newer than `P0-63` despite being opened first.
 
 | Band | IDs | Count | Open | Status |
 |---|---|---|---|---|

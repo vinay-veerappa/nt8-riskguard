@@ -2,13 +2,13 @@
 
 > ## ⚠️ There are THREE version identifiers for this addon, and only one is authoritative
 >
-> **Re-measured 2026-08-13 after session 30.** Every value below was read off the repo and the live
+> **Re-measured 2026-08-14 after session 35.** Every value below was read off the repo and the live
 > box. They agree today; they have not always, and the block under the table is why.
 >
 > | Identifier | Value | Authoritative? |
 > |---|---|---|
-> | **Git tag on `main`** | **`v1.12.2`** (19 tags, `v1.0.0`…`v1.12.2`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
-> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ✅ **`1.12.2`** — agrees, as of session 30 | ❌ **Still not authoritative.** Reported over `GET /api/riskguard/version`, **hand-maintained, and it has drifted twice.** Agreement today is a fact, not a guarantee. |
+> | **Git tag on `main`** | **`v1.18.0`** (25 tags, `v1.0.0`…`v1.18.0`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
+> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ✅ **`1.18.0`** — agrees, and the live box answers it | ❌ **Still not authoritative.** Reported over `GET /api/riskguard/version`, **hand-maintained, and it has drifted twice.** Agreement today is a fact, not a guarantee. |
 > | The `v1.7.0-ui-audit` scheme this file used to lead with | — | ❌ No. A pre-hardening release-notes scheme, abandoned mid-2026-07 and unrelated to the tags. Note the collision: there is now a real `v1.7.0` tag that has nothing to do with it. |
 >
 > ✅ **RESOLVED in `v1.12.2` (session 30), and the history is the point.** The constant had drifted to
@@ -36,9 +36,9 @@
 These are the real versions. The repo was created by the 2026-08-12 split; everything before it is
 under "Pre-split history" below.
 
-### ⚠️ `v1.0.3` … `v1.12.2` — derived, not written up
+### ⚠️ `v1.0.3` … `v1.18.0` — derived, not written up
 
-**This file's prose notes stop at `v1.0.2` and sixteen tags shipped after it.** Rather than
+**This file's prose notes stop at `v1.0.2` and twenty-two tags shipped after it.** Rather than
 back-fill sixteen sections from memory — which is how the identifier table above came to name a tag
 that was 11 releases old — the table below is **derived from `git`**: date, subject, and whether the
 release touched `addons/` at all. The narrative for each lives in the handover section named in the
@@ -53,6 +53,12 @@ done
 
 | Tag | Date | Touched `addons/`? | What it carried | Written up in |
 |---|---|---|---|---|
+| **`v1.18.0`** | 2026-08-14 | 2 | **`P0-96`** — the copier read a position's SIDE off the SIGN of its quantity, so a leader **covering a short** sent the follower a `Sell`, which **doubles** a short rather than closing it. Behind 1311 green tests | §5.35 |
+| `v1.17.0` | 2026-08-13 | 1 | Two defects the **live audit log** found in `P3-34` minutes after deploying it: a refused mode change left no trace, and the events logged under a doubled `COPIER_COPIER_` prefix | §5.34 |
+| `v1.16.0` | 2026-08-13 | 1 | The copier mode predicates became a public contract, so the bridge derives what it REPORTS from the gate. ⚠️ **Its CI run was RED** — making the predicate `public` broke a `mutate_p334` anchor, which `check_anchors.py` caught and `v1.17.0` fixed | §5.34 |
+| `v1.15.0` | 2026-08-13 | 1 | **`P3-34`** — the copier's own `live`/`shadow`/`disabled` mode, and `RunCopierPreflight` finally gets a caller that refuses the move to `live` | §5.33 |
+| `v1.14.0` | 2026-08-13 | 1 | **`P3-30` re-opened and re-closed**: the guard audit did not exist in the production build (`#if TESTING`), was called by nothing, and matched nothing. Plus `check_no_dead_safety_machinery.py` | §5.33 |
+| `v1.13.0` | 2026-08-13 | in-range: 5 | `P2-92`, `F-9`, `F-9b`, and the deploy parity the tag restores | §5.30 |
 | **`v1.12.2`** | 2026-08-13 | 1 (`RiskGuardAddOn.cs`) | **The version constant, which had drifted to `1.10.0` and kept CI red for 7 runs across three sessions.** The live box had been answering the wrong version to `GET /api/riskguard/version`. Docs re-derived in the same pass | §5.26 |
 | `v1.12.1` | 2026-08-13 | in-range: **`GuardRules.cs`** | Re-pointed the `ui3` mutation anchor a `GuardRules` comment edit had broken — **a stale anchor scores a SURVIVOR, silently** | §5.25 |
 | `v1.12.0` | 2026-08-13 | — | agent-loop ledger + learning feedback from the config-defaults session | §5.25 |
