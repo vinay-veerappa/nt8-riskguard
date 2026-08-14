@@ -2447,6 +2447,52 @@ and ignored. **(b) is the fail-closed choice** and is one line.
 
 ---
 
+### P0-96. The copier read a position's SIDE off the SIGN of its quantity — ✅ FIXED 2026-08-13 (v1.18.0)
+
+**Where**: `TradeCopierEngine.OnExecution` (the exit-direction alignment) and
+`ReconcileFollowerPosition` (the direction-mismatch check).
+
+**What happens**: NT8's `Position.Quantity` is **absolute** — the side lives in
+`MarketPosition`, which is why that property exists, and every one of the ~1300 tests in this
+repo already models a short as `MarketPosition.Short` with a **positive** quantity. Two places
+read the sign anyway:
+
+```csharp
+if (currentFollowerPos < 0) followerAction = OrderAction.BuyToCover;   // UNREACHABLE
+else if (currentFollowerPos > 0) followerAction = OrderAction.Sell;    // runs for BOTH sides
+```
+
+So a leader **covering a short** sent the follower a `Sell`. A `Sell` does not close a short —
+it **doubles** it, in a direction the leader has already left. The copier's own log said so as
+soon as a test drove it:
+
+```
+COPY_SUBMITTED: MNQ 03-26 Sell 1 submitted to 'SimFollower'
+                mirroring leader 'SimLeader' BuyToCover 1@18000 (isExit=True)
+```
+
+`P0-5`'s family (*copier exit sizing is not position-mirroring → follower reverses*), reached by
+a different route. The second site made `ReconcileFollowerPosition`'s `directionMismatch`
+permanently false, so the only branch in that method that takes a broker action **could not
+fire**.
+
+**Why 1300 green tests missed it**: every long-side test passes under the defect, and there was
+no short-**exit** test. The suite had short *entries* and short *stop* mirroring; the exit
+action was never asserted.
+
+**Fix**: both sites read `MarketPosition`. The sizing is untouched — `CalculateFollowerQuantity`
+takes the quantity through `Math.Abs`, so it was always sign-agnostic.
+
+**Pinned by** `mutation/mutate_p096.py` — 5 mutants, 4 killed. Two of them are the lesson:
+mutant 3 **deletes the alignment block entirely** and only a test with the follower on the
+*opposite* side to the leader notices, because `followerAction` already defaults to the leader's
+action; and mutant 4 drops the `isExit` guard, turning a scale-in **entry** into an order that
+closes the position. Both survived the first draft and both now have tests. The fifth is a
+**documented survivor**: the reconciler half is inside `#if !TESTING` and called by nothing, so
+no test here can reach it — when `P2-27` makes it testable, that is the first test to write.
+
+---
+
 ## 2. P1 — Concurrency and invariant violations
 
 ### P1-10. The safety sweep holds `_stateLock` across broker calls — CLOSED 2026-08-07

@@ -668,6 +668,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             var followerPosObj = followerAccount.Positions.FirstOrDefault(p => p.Instrument == instrument);
             double leaderQty = leaderPosObj != null ? leaderPosObj.Quantity : 0;
             double followerQty = followerPosObj != null ? followerPosObj.Quantity : 0;
+            // Position.Quantity is ABSOLUTE in NT8; the side is MarketPosition. The direction
+            // check below compared the SIGNS of these two, which are never negative -- so the
+            // only branch in this method that takes a broker action could not fire at all. Same
+            // root cause as the copy path's exit alignment, found the same day.
+            MarketPosition leaderSide = leaderPosObj != null ? leaderPosObj.MarketPosition : MarketPosition.Flat;
+            MarketPosition followerSide = followerPosObj != null ? followerPosObj.MarketPosition : MarketPosition.Flat;
 
             if (Math.Abs(leaderQty) < double.Epsilon)
             {
@@ -685,7 +691,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
 
-            bool directionMismatch = (leaderQty > 0 && followerQty < 0) || (leaderQty < 0 && followerQty > 0);
+            bool directionMismatch =
+                (leaderSide == MarketPosition.Long && followerSide == MarketPosition.Short)
+                || (leaderSide == MarketPosition.Short && followerSide == MarketPosition.Long);
             if (directionMismatch)
             {
                 System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
@@ -695,9 +703,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // this defect -- the position disappears and nothing readable says who did it.
                     CopierLog(followerAccount != null ? followerAccount.Name : null,
                         "RECONCILER_DIRECTION_MISMATCH",
-                        $"leader is {leaderQty} and follower is {followerQty} on "
-                        + $"{(instrument != null ? instrument.FullName : "?")} -- opposite directions, "
-                        + "so FLATTENING the follower. This is a broker action taken by the copier.");
+                        $"leader is {leaderSide} {leaderQty} and follower is {followerSide} "
+                        + $"{followerQty} on {(instrument != null ? instrument.FullName : "?")} -- "
+                        + "opposite directions, so FLATTENING the follower. This is a broker "
+                        + "action taken by the copier.");
                     try { followerAccount.Flatten(new[] { instrument }); } catch {}
                 });
             }
@@ -4993,9 +5002,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 int currentFollowerPos = 0;
                 var followerPositionObj = followerAcc.Positions.FirstOrDefault(p => p.Instrument.FullName.Equals(targetInstrument.FullName, StringComparison.OrdinalIgnoreCase));
+                // NT8's Position.Quantity is ABSOLUTE -- the side lives in MarketPosition, which
+                // is why that property exists. Both are captured because they answer different
+                // questions: the quantity sizes the copy (CalculateFollowerQuantity takes it
+                // through Math.Abs), and the SIDE decides which way the exit order goes.
+                // Reading the side off the sign of the quantity is what made a short exit double
+                // the follower's short instead of closing it.
+                MarketPosition currentFollowerSide = MarketPosition.Flat;
                 if (followerPositionObj != null)
                 {
                     currentFollowerPos = followerPositionObj.Quantity;
+                    currentFollowerSide = followerPositionObj.MarketPosition;
                 }
 
                 bool isClamped;
@@ -5051,9 +5068,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (isExit)
                 {
-                    // Align exit order action with follower's current position direction if non-zero
-                    if (currentFollowerPos < 0) followerAction = OrderAction.BuyToCover;
-                    else if (currentFollowerPos > 0) followerAction = OrderAction.Sell;
+                    // Align the exit order with the follower's OWN side. It can differ from the
+                    // leader's -- a partially filled or manually touched follower is the reason
+                    // this branch exists at all.
+                    //
+                    // It used to read `currentFollowerPos < 0` / `> 0`. Position.Quantity is never
+                    // negative in NT8, so the BuyToCover arm was UNREACHABLE and the Sell arm ran
+                    // for both sides: a leader covering a short sent the follower a Sell, which
+                    // does not close a short, it DOUBLES it -- in a direction the leader has
+                    // already left. P0-5's family, and the every-test-models-a-short-as-positive
+                    // convention in the suite is what made it visible.
+                    if (currentFollowerSide == MarketPosition.Short) followerAction = OrderAction.BuyToCover;
+                    else if (currentFollowerSide == MarketPosition.Long) followerAction = OrderAction.Sell;
                 }
 
                 TimeInForce tif = (exec.Order.TimeInForce != TimeInForce.Gtc) ? exec.Order.TimeInForce : TimeInForce.Day;

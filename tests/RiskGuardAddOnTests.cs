@@ -328,6 +328,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
             TestCopier_P171_ASuccessfulCopyAnnouncesItself();
+            TestCopier_AShortExitCoversTheFollowerRatherThanDoublingIt();
+            TestCopier_ALongExitStillSellsTheFollowersLong();
+            TestCopier_AnExitClosesTheFollowersOwnSideWhenItDivergedFromTheLeader();
+            TestCopier_AScaleInEntryKeepsTheLeadersDirection();
             TestCopier_P334_ShadowModeDescribesTheCopyAndDoesNotSendIt();
             TestCopier_P334_TheShadowLineNamesTheOrderItWouldHaveSent();
             TestCopier_P334_LiveModeIsUnchangedAndIsTheDefault();
@@ -4817,6 +4821,156 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }, broken);
             }
             finally { TradeCopierEngine.Instance.SetCopierModeForTest("live"); }
+        }
+
+        /// <summary>
+        /// A leader exiting a SHORT must close the follower's short, not double it.
+        ///
+        /// `Position.Quantity` in NT8 is ABSOLUTE -- the side lives in `MarketPosition`, which is
+        /// why that property exists at all, and every one of the ~1300 tests in this file models a
+        /// short as `MarketPosition.Short` with a POSITIVE quantity. The exit-alignment block read
+        /// it as signed:
+        ///
+        ///     if (currentFollowerPos &lt; 0) followerAction = OrderAction.BuyToCover;   // unreachable
+        ///     else if (currentFollowerPos &gt; 0) followerAction = OrderAction.Sell;    // both sides
+        ///
+        /// So a short follower took the `Sell` branch and the leader's correct `BuyToCover` was
+        /// overridden with an order that ADDS to the short. P0-5's family: the follower ends up
+        /// on the wrong side, and larger.
+        /// </summary>
+        private static void TestCopier_AShortExitCoversTheFollowerRatherThanDoublingIt()
+        {
+            Console.WriteLine("\n[TEST] COPIER: a leader exiting a SHORT covers the follower's short, not doubles it");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            // Leader goes short 1, and the copy makes the follower short too.
+            SetPosition(leader, mnq, MarketPosition.Short, 1, 18000.00);
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.SellShort, 1, "SHORTEXIT-A"));
+
+            var entryCopy = follower.Orders.Last(o => o.Name == "COPIER_FOLLOW");
+            Assert(entryCopy.OrderAction == OrderAction.SellShort,
+                "precondition: the entry copy put the follower SHORT. Got: " + entryCopy.OrderAction);
+
+            // The follower is now short. NT8 reports that as MarketPosition.Short with a
+            // POSITIVE quantity -- this line is the whole point of the test.
+            SetPosition(follower, mnq, MarketPosition.Short, entryCopy.Quantity, 18000.00);
+
+            // The leader covers. A short exit is BuyToCover, which sets isExit.
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.BuyToCover, 1, "SHORTEXIT-B"));
+
+            var exitCopy = follower.Orders.Last(o => o.Name == "COPIER_FOLLOW");
+            Assert(!ReferenceEquals(exitCopy, entryCopy),
+                "precondition: an exit copy was actually placed");
+
+            Assert(exitCopy.OrderAction == OrderAction.BuyToCover,
+                "the exit copy COVERS the follower's short. A Sell here does not close the "
+                + "position -- it adds to it, so a leader flattening leaves the follower twice as "
+                + "short as it was, in a direction the leader has already left. Got: "
+                + exitCopy.OrderAction);
+        }
+
+        /// <summary>
+        /// The case the branch EXISTS for, and the one that stops it being deleted as
+        /// redundant: the follower is on the OPPOSITE side to the leader. Without this, the
+        /// whole `else if (isExit)` block can be removed and every other test stays green,
+        /// because `followerAction` already defaults to the leader's action.
+        ///
+        /// A follower can diverge like this after a partial fill, a manual trade on the
+        /// follower account, or a copy that was skipped while quarantined. Whatever the
+        /// cause, the exit must close what the follower ACTUALLY holds.
+        /// </summary>
+        private static void TestCopier_AnExitClosesTheFollowersOwnSideWhenItDivergedFromTheLeader()
+        {
+            Console.WriteLine("\n[TEST] COPIER: an exit closes the follower's OWN side when it diverged from the leader");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            // Leader is LONG and exits with a Sell...
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            // ...while the follower is SHORT. Divergent, and the reason this branch exists.
+            SetPosition(follower, mnq, MarketPosition.Short, 1, 18000.00);
+
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.Sell, 1, "DIVERGE-A"));
+
+            var exitCopy = follower.Orders.LastOrDefault(o => o.Name == "COPIER_FOLLOW");
+            Assert(exitCopy != null, "an exit copy was placed");
+            Assert(exitCopy.OrderAction == OrderAction.BuyToCover,
+                "the exit covers the follower's SHORT, because that is what the follower holds -- "
+                + "taking the leader's Sell here would add to a short the leader never had. Got: "
+                + (exitCopy != null ? exitCopy.OrderAction.ToString() : "n/a"));
+        }
+
+        /// <summary>
+        /// The `isExit` guard on that block, which nothing else pins.
+        ///
+        /// The alignment exists to close what the follower holds. Applied to an ENTRY it does
+        /// the opposite: a scale-in while the follower is already long would be rewritten from
+        /// Buy to Sell, reversing a position instead of adding to it. Found by a surviving
+        /// mutant, not by review.
+        /// </summary>
+        private static void TestCopier_AScaleInEntryKeepsTheLeadersDirection()
+        {
+            Console.WriteLine("\n[TEST] COPIER: a scale-in ENTRY keeps the leader's direction, it is not re-aligned");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            // Both already long, and the leader adds to the position.
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            SetPosition(follower, mnq, MarketPosition.Long, 1, 18000.00);
+
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.Buy, 1, "SCALEIN-A"));
+
+            var copy = follower.Orders.LastOrDefault(o => o.Name == "COPIER_FOLLOW");
+            Assert(copy != null, "the scale-in was copied");
+            Assert(copy.OrderAction == OrderAction.Buy,
+                "a scale-in ADDS to the follower's long. Re-aligning an entry to the follower's "
+                + "current side turns adding into closing, and then into reversing. Got: "
+                + (copy != null ? copy.OrderAction.ToString() : "n/a"));
+        }
+
+        /// <summary>
+        /// The long side of the same block, so a fix cannot simply invert the comparison.
+        /// </summary>
+        private static void TestCopier_ALongExitStillSellsTheFollowersLong()
+        {
+            Console.WriteLine("\n[TEST] COPIER: a leader exiting a LONG still sells the follower's long");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            ResetBracketState();
+
+            SetPosition(leader, mnq, MarketPosition.Long, 1, 18000.00);
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.Buy, 1, "LONGEXIT-A"));
+
+            var entryCopy = follower.Orders.Last(o => o.Name == "COPIER_FOLLOW");
+            SetPosition(follower, mnq, MarketPosition.Long, entryCopy.Quantity, 18000.00);
+
+            TradeCopierEngine.Instance.OnExecution(
+                LeaderExec(leader, mnq, OrderAction.Sell, 1, "LONGEXIT-B"));
+
+            var exitCopy = follower.Orders.Last(o => o.Name == "COPIER_FOLLOW");
+            Assert(exitCopy.OrderAction == OrderAction.Sell,
+                "the exit copy SELLS the follower's long. Got: " + exitCopy.OrderAction);
         }
 
         /// <summary>
