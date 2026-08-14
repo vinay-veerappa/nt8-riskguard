@@ -1,10 +1,30 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 35 — §5.33…§5.37**). Core **`v1.18.0`** is tagged,
-deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **92/0**, MCP wrapper
-**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **107 IDs, 6
-open**; the `P0` band and the untriaged band are both empty,
-and every naked-risk item is closed.
+**Last updated**: 2026-08-14 (**session 36 — §5.38**). Core **`v1.19.0`** is tagged,
+deployed, **NT8-compiled clean (0 errors)** and **live-validated** — suite **1328/0**, bridge
+**92/0**, MCP wrapper **43/0**, **24** core mutation batteries + the bridge's 1, **263 anchors / 0
+broken**. **108 IDs, 6 open**; the `P0` band and the untriaged band are both empty, and every
+naked-risk item is closed. Every figure here was **measured, not incremented** — the deploy is
+verified by content hash from both repos (`sync_nt8.py --verify` → 8 files; `deploy.py --verify` →
+12 files, 0 orphans).
+
+⚠️ **`P2-98` is CLOSED and live-validated** (§5.38), and closing it **opened a P1**. The fix moves
+the grain of a measurement from the SLICE to the COPY: a partial fill is accumulated across its
+slices and reported once, quantity-weighted, when the order is done. Live, a 10-lot copy filled
+**2 + 8** and reported `slippage=-2.2 ticks on 10 contract(s) across 2 slices` — where `v1.18.0`
+would have reported `-3 ticks` from the 2-lot and raised `FILL_NOT_MEASURED` for the 8.
+
+🆕 **`P1-99` is OPEN and is the item to do next.** Found by driving the box during that same
+validation: **the copier runs the whole copy path per leader EXECUTION**, so a leader order that
+fills in small slices is scaled and rounded slice by slice. A 100-lot MNQ order filling as
+**20 × 5** under MNQ→NQ conversion drops **every** slice — leader long 100, follower **FLAT**,
+twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error anywhere. It came out right in the
+validation run **by luck** (5 + 95). Silent position divergence, `P0-5`'s family.
+
+⚠️ **The shared lesson of the last two sessions: the suite models an order as ONE fill, and reality
+does not.** `P2-98` was that blind spot on the follower side; `P1-99` is the same blind spot on the
+leader side. Every existing copy-path test sends a single execution for the full quantity, which is
+why a green suite, 24 mutation batteries and a clean compile all passed over both.
 
 ⚠️ **`P0-96`, found in this session's last hour and the sharpest thing in it**: NT8's `Position.Quantity` is **absolute** — the side is `MarketPosition` — and the copier read the **sign** of it in two places. So a leader **covering a short** sent the follower a `Sell`, which does not close a short, it **doubles** it. **1300 green tests passed under it**, because every long-side test does and there was no short-EXIT test. Found while reading adjacent code, not by the suite and not by any CI gate. **A convention the whole suite encodes is not a convention the code follows** — nothing compared the two.
 
@@ -161,8 +181,8 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1311 passed, 0 failed**; **bridge 92 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | ✅ `P0-96`, the guard audit and the copier's shadow mode are all **LIVE-VALIDATED** (§5.36). ✅ **`P1-97` is CLOSED and live-validated too** (§5.37) — the copier can open a short for the first time. Next: **`P2-98`** — a partial fill measures only its first slice, and on the validation run **every** copy partial-filled, so exactly HALF the fills went unmeasured. Then **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Defects** | **108 IDs — 102 closed, 6 open** (`P1-77` deferred, `P2-78`, `P1-81`, **`P1-99`**, `P2-29`, `P3-33`). ⚠️ This row said `104 IDs — 99 closed, 5 open` for several sessions after §0 had moved on; it is now derived from §5.0's table. Old text follows for the trail: (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
+| **Do next** | ✅ **`P2-98` is CLOSED and live-validated** (§5.38) — a partial fill is now accumulated across its slices and reported once, quantity-weighted, when the order is done; a live 2+8 copy reported `-2.2 ticks on 10 contract(s) across 2 slices`. 🆕 **Next is `P1-99`**, which that validation opened: **the copier sizes each leader EXECUTION independently**, so a 100-lot leader order filling as 20 × 5 under symbol conversion copies **nothing** — leader long 100, follower FLAT, twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error. Silent position divergence, `P0-5`'s family. Then **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then `P2-95`/`P2-93`/`P2-94`, **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3059,8 +3079,23 @@ re-run the command rather than trusting the table.
 # every BANDED defect ID that has an entry in the plan. The three P?- IDs do not
 # match (the pattern requires a digit after the P) and are counted separately below.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 91, re-run 2026-08-13 (session 32)
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 98, re-run 2026-08-14 (session 36)
 ```
+
+> ⚠️ **What §0's total is MADE OF, because the two numbers do not match and session 36 had to
+> reverse-engineer the difference.** The grep above returns only the **banded** IDs that have a plan
+> entry. §0's figure adds two families that live in this file instead:
+>
+> | Family | Count | Where |
+> |---|---|---|
+> | banded `Pn-m` entries in the plan | **98** | the grep above |
+> | untriaged `P?-64`, `P?-65`, `P?-66` | **3** | §5.2 — the *digits* are final, only the band is open |
+> | `F-9`…`F-15`, the firm-mapping findings | **7** | §4493, filed here and never given a plan entry |
+> | **§0's total** | **108** | |
+>
+> That composition was **not written down anywhere** until now, so `107` in §0 and `98` from the
+> grep read as a contradiction rather than as two different questions. If you change either, change
+> this table in the same commit.
 
 | | Count | Which |
 |---|---|---|
@@ -3240,7 +3275,33 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: the copier mode's READ SURFACE, then the architectural items
+> ### Do next: `P1-99` — the copier's SIZING GRAIN
+>
+> **Updated session 36.** The block below is session 35's and is superseded by this
+> paragraph; it is kept because the order it forced is the reusable part, and because
+> item 1 in it (the copier mode's read surface) has since landed.
+>
+> **`P1-99` is the item to do next, and it outranks everything else open on
+> consequence, not band letter.** The copier runs the whole copy path **per leader
+> EXECUTION**, so a leader order is scaled and rounded slice by slice. Under MNQ→NQ
+> conversion a 100-lot order filling as **20 × 5** drops every slice: leader long 100,
+> follower **FLAT**, twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error
+> anywhere. Found by driving the box during `P2-98`'s live validation (§5.38), where it
+> came out right only by luck (5 + 95). The follower's size is a function of **how the
+> leader's order happened to fill** — a property of the book, not of the trade.
+>
+> ⚠️ Two things to carry into the fix. **Rounding a slice harder is the wrong answer**:
+> rounding 5 MNQ up to 1 NQ doubles the copy on a 20-slice fill. And **the exit side is
+> not symmetrical** — `P0-6`'s exit clamp mirrors the follower's actual position rather
+> than scaling the leader's quantity, so exits do not have this defect and must not
+> acquire it. Plan entry `P1-99` has the two candidate shapes.
+>
+> ⚠️ **Any test for it must feed MULTIPLE executions for one leader order.** Every
+> existing copy-path test sends a single execution for the full quantity. That is the
+> same blind spot `P2-98` had on the follower side, and it is why a green suite, 24
+> mutation batteries and a clean compile passed over both.
+
+> ### ~~Do next: the copier mode's READ SURFACE, then the architectural items~~ (session 35, superseded)
 >
 > **Updated session 35.** `P3-34`'s core landed in `v1.15.0` — the copier has its own
 > `live`/`shadow`/`disabled` mode and preflight gates the move to `live`. ⚠️ **But
@@ -6517,3 +6578,166 @@ why 1311 tests, 23 mutation batteries and a clean NT8 compile all passed over th
    ⚠️ `P?-66`'s rule: a latency rejected by the sanity bound must not count as a sample.
 2. **`P2-27`** coverage for `ReconcileFollowerPosition`, still the last `KNOWN_DEAD` entry.
 3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.
+
+---
+
+## 5.38 `P2-98` closed — a measurement's grain is the COPY, and the box found a P1 while proving it
+
+**Session 36, 2026-08-13/14. Core `v1.19.0` tagged, deployed, compiled and LIVE-VALIDATED.**
+Suite **1311 → 1328 / 0**. Bridge **92 / 0**. **24** mutation batteries, **263 anchors / 0 broken**.
+
+### What was wrong
+
+A partial fill delivers several `Execution`s for the **same `Order` object**. `ObserveFollowerFill`
+consumed the pending-copy entry on the **first** of them:
+
+```csharp
+pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
+if (pendingFound) _pendingCopies.Remove(exec.Order);      // <- on the FIRST fill
+```
+
+So every later slice missed the lookup. Two consequences, and the second is the one that costs
+more over time:
+
+1. **The metric described the smallest slice.** Live, `slippage=2 ticks` came from **1 contract of
+   10** while the nine carrying the risk went unmeasured — and nothing about the line said so.
+2. **`FILL_NOT_MEASURED` asserted a cause that was not the cause**: *"OrderId is display-only and
+   must never be used as the map key."* That trap is real — `OrderReferenceComparer` exists because
+   of it — but it explained **none** of the misses seen live. The same event also fires on **every**
+   manual or strategy fill on an account that happens to be a follower, which is routine. An event
+   that fires routinely while naming a defect that is not there teaches its reader to skip it, and
+   then it cannot report the day the defect **is** there. `P3-30`'s audit false positives, in
+   miniature.
+
+### The fix, and the three decisions inside it
+
+**The grain of a measurement moved from the SLICE to the COPY.** `PendingCopy` accumulates
+`SliceCount` / `FilledQuantity` / `FollowerNotional`; the entry is removed when the order is
+**done**; one sample, one latency reading and one quarantine decision per copy.
+
+**1. The average is quantity-weighted.** `FollowerNotional / FilledQuantity` vs the leader fill.
+An unweighted mean of the slices would be the same defect in a subtler form — a 1-lot counting for
+as much as the 9 lots beside it — and it would have passed a test that only asserted "not the first
+slice's figure". `mutate_p298.py` mutant 4 is that mutant.
+
+**2. Completion needs BOTH signals, and neither alone is sound.**
+
+| Signal alone | What it loses |
+|---|---|
+| accumulated quantity ≥ order quantity | a copy **cancelled or rejected after a partial fill**: its measurement is never reported and its entry sits until the bounded FIFO reaps it |
+| terminal `OrderState` | **the ordinary case** — NT8 does not guarantee the state is already `Filled` when the last execution arrives, and the test stub leaves a submitted order in `Submitted` for good, so a state-only implementation passes review and measures **nothing** |
+
+⚠️ The second row is the trap worth carrying: the stub's `Submit` sets `Submitted` and no test ever
+advances it, so *"wait for the order to go terminal"* — which reads as the obviously correct rule —
+would have taken the suite from 1328 to 1305 and been diagnosed as a broken test rather than a
+broken rule. `mutate_p298.py` mutant 9 is exactly that, and it kills 23 tests.
+
+**3. Latency is read ONCE, on the first slice, and the verdict is carried on the pending entry.**
+Two reasons, and only the first is obvious:
+
+* it is the **right measurement**. Time-to-first-fill is how long the copy took to **reach** the
+  market; time-to-complete is how long the market took to fill ten lots, which is liquidity.
+* it is what **enforces `P?-66`'s rule**. Re-deriving the reading at completion would let a
+  **rejected** latency be replaced by a later slice's — a plausible figure manufactured out of the
+  same disagreeing clocks that produced the rejected one. That mutant (6) keeps the whole fix and
+  fails **one** test; it is the reason the accept/reject verdict is state and not a recomputation.
+
+A new **`FILL_SLICE`** event covers the gap in between: a partial fill is neither a measurement nor
+a miss and must not be mistakable for either.
+
+### Evidence
+
+**9 tests, and three of them were GREEN at baseline for the wrong reason** — the later slice missed
+the lookup, so nothing could overwrite the first slice's reading. They are regression guards on the
+new shape, not evidence of the old defect, and they are labelled as such. The six that were red are
+the evidence. `mutation/mutate_p298.py`: **13 mutants, 0 survivors.**
+
+⚠️ **One anchor elsewhere broke on this change** — `mutate_ui1.py`'s latency-sample mutant named
+`latencyAccepted`/`latencyMs`, both of which now live on the pending copy. `check_anchors.py` caught
+it (263 checked, 1 broken); re-anchored, same mutant, still killed. Second session running in which
+that gate has caught a silently-dead battery.
+
+### LIVE-VALIDATED, and it reproduced the defect exactly
+
+On sim accounts with the operator's standing authorisation, `v1.19.0` live and compiling clean:
+
+**(a) the miss message, on its commonest real cause** — a manual 1-lot on `Sim-ORB`, which is a
+follower:
+
+```
+COPIER_FILL_NOT_MEASURED  No pending copy for order 'P298_MANUAL_ON_FOLLOWER'
+  (OrderId e00eac..., state Filled); this fill is not measured. Expected whenever the order was
+  not submitted by this engine -- a manual or strategy fill on an account that happens to be a
+  follower. ...
+```
+
+**(b) a partial fill, on both followers.** A 100-lot MNQ leader order, auto-converted to 10 NQ per
+follower, filled **2 + 8** on each:
+
+```
+COPIER_FILL_SLICE     Slice 1 of the copy on order 'COPIER_FOLLOW': 2 @ 30159.5 filled,
+                      2 of 10 so far. Not measured yet -- the copy is reported once, when the
+                      order is done.
+COPIER_FILL_MEASURED  latency=119.11 ms, slippage=-2.2 ticks on 10 contract(s) across 2 slices.
+```
+
+Check the arithmetic against the tape: leader filled 30160.25; follower VWAP =
+`(2×30159.5 + 8×30159.75)/10` = 30159.70; `(30159.70 − 30160.25)/0.25` = **−2.2 ticks**, negative
+being **favourable**. **Under `v1.18.0` this exact fill would have reported `−3 ticks` from the
+2-lot slice and raised `FILL_NOT_MEASURED` for the 8.** Zero `FILL_NOT_MEASURED` for the copies in
+this run.
+
+### ⚠️ And the run opened a P1 — `P1-99`
+
+**Found by driving the box, not by review and not by the suite**, which was green throughout. The
+leader's own 100-lot filled **5 + 95**, and the copier ran the **whole copy path per execution**:
+
+```
+COPIER_EXEC_SEEN                 MNQ SEP26 Buy 5@30160
+COPIER_COPY_SKIPPED_SUB_MINIMUM  scaled quantity for NQ SEP26 on 'Sim-ORB' came out below 1
+                                 contract from leader qty 5 (ratio 1, sizing QuantityRatio)
+COPIER_EXEC_SEEN                 MNQ SEP26 Buy 95@30160.25
+COPIER_COPY_SUBMITTED            NQ SEP26 Buy 10 submitted to 'Sim-ORB'
+```
+
+It came out right **by luck**: 95 MNQ scaled to 9.5 NQ and rounded up to 10, which is the whole
+order's equivalent. **A 100-lot filling as 20 × 5 drops every slice** — leader long 100 MNQ,
+follower **FLAT**, twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error anywhere. The
+follower's size is a function of **how the leader's order happened to fill**, which is a property of
+the book and not of the trade.
+
+`P1-71`'s live validation already found the single-order version (1 MNQ at ratio 1.0 rounds below
+one NQ contract). What is new is that **partial fills manufacture small leader quantities out of a
+large order**, so the case is reachable from a trade nobody would call small. Plan entry `P1-99` has
+the two candidate fixes; the accumulate-and-copy-the-delta one is the one to reach for, because a
+carried fractional remainder is state with four ways to go wrong that a reader cannot see.
+
+⚠️ **A test for it must feed MULTIPLE executions for one leader order.** Every existing copy-path
+test sends a single execution for the full quantity — the same blind spot `P2-98` had on the
+follower side, and the reason both defects survived a green suite. **That is the shared lesson of
+this session and the last one**: the suite models an order as one fill, and reality does not.
+
+### Two process notes worth more than they look
+
+**Killing a mutation battery mid-run leaves a MUTANT in the source tree.** The batteries restore the
+original only on completion. A batch was stopped to free the tree for a deploy and left
+`mutate_cm4.py`'s third mutant in `TradeCopierEngine.cs` — the suite went 1328 → 1326 and the two
+failures named symbol conversion, nothing to do with what was being worked on. It was found because
+the suite was re-run before committing; a `git diff` skim did **not** find it, because a
+one-line insertion in a 200-line diff reads as part of the change. **Re-run the suite after
+stopping a battery, and read the number.**
+
+**The defect-ID count in the plan was stale by 2 the moment it was written.** The line reads
+`# -> 95, re-run 2026-08-14 (session 35)` and the true figure was 97 before this session touched
+anything, because `P1-97` and `P2-98` were filed after it. The file's own advice — *run the command,
+do not trust the number written here* — arriving one revision late, again.
+
+### Next
+
+1. **`P1-99`** — the copier's sizing grain. It is the highest-consequence open item: silent position
+   divergence, `P0-5`'s family, and it is reachable from an ordinary large order.
+2. **`P2-27`** coverage for `ReconcileFollowerPosition`, still the last `KNOWN_DEAD` entry, inside
+   `#if !TESTING`, and it **flattens a live follower position**.
+3. **`P2-95`** (`FirmStartingBalance` is off by the account's lifetime profit), then `P2-93`,
+   `P2-94`.
+4. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.

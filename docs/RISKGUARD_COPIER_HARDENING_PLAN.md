@@ -52,7 +52,11 @@ later. So it no longer asserts a total at all; run the command:
 ```bash
 # how many defect entries this file carries. Run it; do not trust a number written here.
 grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md \
-  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 95, re-run 2026-08-14 (session 35)
+  | grep -oE "P[0-9?]+-[0-9]+" | sort -u | wc -l      # -> 98, re-run 2026-08-14 (session 36)
+# ⚠️ It said 95 when it was re-run in session 35 and the true figure was 97 by the time
+# anyone read it: P1-97 and P2-98 were filed AFTER the line was written, in the same session.
+# That is this file's own lesson arriving one revision later, again -- the command is the
+# answer, the number beside it is a comment with a shelf life.
 ```
 
 **The TOTAL is not maintained here**, because a second copy of a number is a second thing to
@@ -2623,6 +2627,66 @@ count as a sample, or the average silently becomes a lie again.
 > ⚠️ One anchor elsewhere broke on this change (`mutate_ui1.py`'s latency-sample mutant, which
 > named `latencyAccepted`/`latencyMs` — both now live on the pending copy). `check_anchors.py`
 > caught it. Re-anchored, same mutant, still killed.
+
+---
+
+### P1-99. The copier sizes each leader EXECUTION independently, so a leader order that fills in small slices can copy NOTHING — OPEN, found live 2026-08-14
+
+**Where**: `TradeCopierEngine.OnExecution` — the whole copy path runs **per execution**, and
+`ScaleQuantity` rounds each one on its own. `COPY_SKIPPED_SUB_MINIMUM` is raised when the result
+lands below one contract.
+
+**Found by driving the deployed box** while live-validating `P2-98`, not by review and not by the
+suite. A 100-lot MNQ market order on the leader filled **5 + 95**, and the copier treated the two
+slices as two independent copies:
+
+```
+COPIER_EXEC_SEEN              MNQ SEP26 Buy 5@30160    order='P298_LEADER_100LOT'
+COPIER_COPY_SKIPPED_SUB_MINIMUM  scaled quantity for NQ SEP26 on 'Sim-ORB' came out below 1
+                                 contract from leader qty 5 (ratio 1, sizing QuantityRatio)
+COPIER_EXEC_SEEN              MNQ SEP26 Buy 95@30160.25 order='P298_LEADER_100LOT'
+COPIER_COPY_SUBMITTED         NQ SEP26 Buy 10 submitted to 'Sim-ORB'
+```
+
+Here it came out right by luck — 95 MNQ scaled to 9.5 NQ and rounded **up** to 10, which happens to
+be the whole 100-lot's equivalent. Change the fill shape and it does not:
+
+* a 100-lot filling as **20 × 5** drops **every** slice. The leader is long 100 MNQ (10 NQ
+  equivalent) and the follower is **FLAT**, with twenty `COPY_SKIPPED_SUB_MINIMUM` lines and no
+  error anywhere;
+* a 100-lot filling as **10 × 10** copies 10 × 1 NQ = 10 NQ, which is right;
+* a 100-lot filling as **11 + 89** copies 1 + 9 = 10 NQ, also right.
+
+So the follower's size is a function of **how the leader's order happened to fill**, which is a
+property of the book, not of the trade. `P1-71`'s live validation already found the single-order
+version of this (1 MNQ at ratio 1.0 rounds below one NQ contract and is dropped); what is new is
+that **partial fills manufacture small leader quantities out of a large order**, so the case is
+reachable from a trade nobody would call small.
+
+**Why it is P1 and not P2**: the failure is silent position divergence — `P0-5`'s family. The
+copier's whole contract is that the follower mirrors the leader, and here it does not, with the
+audit log recording each drop as a routine skip.
+
+**Fix — the shape, not the arithmetic.** Rounding a slice harder is the wrong answer: rounding 5 MNQ
+UP to 1 NQ doubles the copy on a 20-slice fill. What is wrong is the **grain**: the copier decides
+size per execution where the leader's intent is per ORDER. Two candidates, and the second is the one
+this repo's own history argues for:
+
+1. Accumulate the leader's fills per order and copy the DELTA of the correctly-scaled cumulative
+   target — i.e. after 5 filled, target = round(0.5) = 0, copy nothing; after 100, target = 10, copy
+   10. Self-correcting, and each slice's rounding error cannot accumulate.
+2. Carry a per-relationship fractional REMAINDER across slices. Simpler to write, but it is state
+   that has to be reset on flat, on quarantine, on a symbol change and on a restart — four ways to
+   get a wrong size that a reader cannot see.
+
+⚠️ **Whichever is chosen, the exit side is NOT symmetrical** and must be reasoned about separately:
+`P0-6`'s exit clamp already mirrors the follower's actual position rather than scaling the leader's
+quantity, so exits do not have this defect and must not acquire it. Same asymmetry as `P2-98`'s
+quarantine decision and `P1-23`'s fail-closed sizing.
+
+⚠️ **A test for this must feed MULTIPLE executions for one leader order.** Every existing copy-path
+test sends a single execution for the full quantity, which is the same blind spot `P2-98` had on the
+follower side — and the reason both defects survived a suite that was green.
 
 ---
 
