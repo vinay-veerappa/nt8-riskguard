@@ -198,7 +198,7 @@ not. The command that checks it is in the last column.
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **25 batteries** — **24 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **263 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (263 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 24-job MATRIX, so a push is ~12 minutes, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **Mutation** | **25 batteries** — **24 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **263 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (263 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 24-job MATRIX, so a push is **15m36s measured**, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
 | **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
@@ -6816,7 +6816,7 @@ do not trust the number written here* — arriving one revision late, again.
 
 ---
 
-## 5.39 CI went from 1h56m to ~12 minutes, and the tests were never the reason it was slow
+## 5.39 CI went from 1h56m to 15m36s, and the tests were never the reason it was slow
 
 The operator asked why the tests take so long and whether they could be vectorised or
 parallelised. The honest answer to the first half is that **they don't** — and measuring it
@@ -6859,9 +6859,17 @@ The workflow is now two jobs:
 * **`checks`** — the eight source gates, build, suite, and `check_anchors.py`. ~75s.
 * **`mutation`** — a 24-entry matrix, one battery per job, `needs: checks`.
 
-Wall clock is setup + the **longest single battery** (UI4, 553s) ≈ **10 minutes**, ~12 with the
-gate job. **1h56m → ~12m.** The repo is PUBLIC, so Actions minutes are free and unlimited even
-on Windows runners; the parallelism costs nothing.
+**Measured on run `31774605782`, the first sharded one: 15m36s, all 25 jobs green. 1h56m →
+15m36s, 7.4x.**
+
+⚠️ **And it is slower than the arithmetic predicted** (setup + UI4's 553s ≈ 10 min), which is
+worth recording because the sequential timings could not show either reason: every battery runs
+**10–20% slower as one of 24 concurrent jobs** (UI4 553s → 618s), and **runner provisioning is
+not free** — 24 Windows runners do not all start at once, and that is most of the gap. Total
+compute went **UP**, 6957s → 8723s, because per-job setup is now paid 25 times. The repo is
+PUBLIC so all of it is free, but *free* is not *costless*: on a private repo this trade would
+have raised the bill by a quarter. The lesson is the ordinary one — **a fan-out's wall clock is
+not `total / N`**, and the residual is where the interesting part is.
 
 Three decisions inside it are the load-bearing ones:
 
