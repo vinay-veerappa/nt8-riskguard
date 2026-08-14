@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1436 passed, 0 failed**; **bridge 133 passed, 0 failed** (9 added by `P1-106`); **MCP wrapper 43 passed, 0 failed** — all re-measured 2026-08-14 (session 39) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **117 IDs — 104 closed, 13 open**, re-derived 2026-08-14 (session 39) by the `grep` in §5.0 plus the composition table beside it: **106** banded plan entries (12 open) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-9`…`F-16`; only `F-16` open). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), not defects, and are deliberately not in this total. The 12 open banded entries are `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, and three PARTIALLY closed with a recorded remainder: `P0-9`, `P1-13`, `P2-27`. **The whole `P0-1`…`P0-8` block is CLOSED**, and every heading now carries a status token — until session 39 those eight carried none and a prose note stood in for one | `python tools/check_next_list_ids.py`, which derives it and refuses to pass vacuously |
-| **Do next** | 🆕 **`P2-107`** — `PEAK_GIVEBACK_BREACH` re-emits its flatten on every evaluation (7 in ~20s, on two follower accounts, found in the validation run of `P2-101`, closed). **De-duplication belongs where actions LEAVE the guard**, at `CoalesceActions`, not inside each producer — and it must not suppress a `live` re-attempt doing real work. Then `P1-105`, `P1-102`, `P2-103`, then the architectural `P2-29` / `P3-33`. ✅ `P1-106` closed in session 39 (section 5.47) | §5.6, and `python tools/check_next_list_ids.py` |
+| **Do next** | 🆕 **`P1-105`** — a log line that reports an outcome it did not observe. Then **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47), **`P2-103`**, then the architectural **`P2-29`** / **`P3-33`**. ✅ `P1-106` closed in session 39 (§5.47). ✅ `P2-107` closed in session 40 (§5.48) — outbound de-duplication now lives in `GuardActionDeduplicator` behind one `DispatchActions` that all five emission sites use; the record clears when the CONDITION resolves, never on a timer, and the operator's panic buttons deliberately bypass it. ⚠️ Its battery went 13/13 on the first run and **five later mutants all survived**, one of them walking the measured path around the whole mechanism; and **two of this repo's own gates were caught proving nothing** — read §5.48 before adding a check anywhere. | §5.6, §5.48, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, all three repos. **29 tags**, `v1.0.0`…**`v1.22.0`** — measured 2026-08-14 | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.22.0` core + bridge are live in NT8** — measured 2026-08-14 (session 39) from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files identical)** and `deploy.py --verify` **ALL IN SYNC (13 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs`, `BridgeAccountResolver.cs`, `BridgeFlattenPlan.cs` and `CopierEnforcementView.cs` on top of the vendored core. ⚠️ **A green `--verify` from both repos does NOT mean the box loaded your code** — it compares content hashes of the files each repo OWNS, and cannot see a third file, owned by nobody, that breaks the assembly they belong to. Session 37 had 651 compile errors under two green verifies | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.22.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-14 (session 39)**. The firm mapping is LIVE on 94 accounts, including the funded 50K TPT PRO | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/version` (Bearer, **not** `X-Auth-Token`, which returns `Unauthorized`) |
@@ -3348,9 +3348,9 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-107` — de-duplicate actions where they LEAVE the guard
+> ### Do next: `P1-105` — a log line that reports the outcome it did not observe
 >
-> **Updated session 39 (2026-08-14).** Every block below this one is struck through and
+> **Updated session 40 (2026-08-14).** Every block below this one is struck through and
 > kept for the order it forced, not for its contents.
 >
 > ⚠️ **This block had been carrying SIX closed IDs, and that is why
@@ -3363,30 +3363,26 @@ the *order* they forced is the reusable part.
 > never backwards into the ordering. The gate reads this block, §0's `Do next` row and the
 > newest `Order from here` against the plan's per-entry status, and fails in both
 > directions — it also requires every plan entry to *carry* a status, which is the half
-> that would have rotted.
+> that would have rotted. **It earned its keep in session 40**: it named all three surfaces
+> the moment `P2-107` (closed) flipped status, before anything was committed.
 >
 > ✅ **`P1-106` closed in session 39** (section 5.47) — a lockout now admits an order that
 > strictly reduces the position, and refuses a bracket even when its entry would. Refusal half
 > live-validated; the admit half rests on an 8/8 battery, because **nothing on the box can impose
 > a lockout on an account that holds a position** (section 5.47, and it enlarges `P1-102`).
 >
-> **`P2-107` is the item to do next.** `PEAK_GIVEBACK_BREACH` re-emits its flatten on **every
-> evaluation** — 7 emissions in ~20 seconds on two follower accounts, found in the validation
-> run of `P2-101` (closed), within the hour of that fix landing. Same family, different
-> mechanism: `P2-101` (closed) bounded a timer, this is per-evaluation, so it has no spacing at all and its rate is set
-> by market data.
+> ✅ **`P2-107` closed in session 40** (section 5.48) — the outbound de-duplication now lives in
+> `GuardActionDeduplicator` behind one `DispatchActions` that all five emission sites use, the
+> record clears when the **condition** resolves rather than on a timer, and the operator's panic
+> buttons deliberately bypass it. Suite 1469/0, battery 18/18. ⚠️ **Read §5.48 before adding a
+> gate anywhere**: that battery went 13/13 on its first run and five later mutants all survived,
+> including one that walked the measured path around the whole mechanism — and **two of this
+> repo's own gates were caught proving nothing**, both by detection-by-substring over a region
+> nobody bounded.
 >
-> ⚠️ **That is the finding, not the instance.** `P2-101` (closed) was fixed inside `EvaluateLockoutPhase`,
-> one of several producers of repeated actions, and the second instance turned up on the first
-> accounts anyone looked at. **De-duplication belongs where actions LEAVE the guard, not inside
-> each producer.** `CoalesceActions` (`P1-19`, closed) already sits on that path and merges within
-> one batch; nothing suppresses the identical batch arriving three seconds later.
->
-> ⚠️ Whatever goes there **must not suppress a `live` re-attempt doing real work** — the budget
-> of 6 in `P2-101` (closed) exists because a broker can reject a flatten — so the record has to clear when the
-> condition resolves, not on a timer. Sixth instance of *an alarm that is always on is off*.
->
-> Then `P1-105`, `P1-102`, `P2-103`.
+> **`P1-105` is the item to do next**, then `P1-102`, `P2-103`, then the architectural
+> `P2-29` / `P3-33`. Weigh by §5.6's consequence rule, not by band letter — `P1-90` (closed)
+> was a `P0` on consequence.
 
 > ### ~~Do next: `P1-99` — the copier's SIZING GRAIN~~ (session 36, superseded)
 >
@@ -7741,3 +7737,107 @@ comment but not run**.
 1. **`P2-107`** — the outbound action de-duplication, at `CoalesceActions`, once for all
    producers.
 2. **`P1-105`**, then **`P1-102`** (now larger than filed, above), then **`P2-103`**.
+
+---
+
+## 5.48 `P2-107` closed — de-duplicate where actions LEAVE the guard, and two gates that proved nothing
+
+**Session 40, 2026-08-14.** Suite **1469/0** (was 1436). Battery **18/18**, no survivors. Anchors
+**283 → 301** — and that increase is a finding, not a total.
+
+### What it was
+
+`PEAK_GIVEBACK_BREACH` re-emitted its flatten on **every evaluation** — 7 in ~20 seconds on two
+follower accounts, measured in `P2-101`'s own validation run, within the hour of that fix landing.
+Same family as `P2-101`, different mechanism: that one was a timer retry whose exit condition
+`shadow` could never satisfy; this one is per-evaluation, so it has **no spacing at all** and its
+rate is set by market data.
+
+**Two instances in one hour is the finding, not the instance.** `P2-101` was fixed inside
+`EvaluateLockoutPhase`, one of several producers; the second turned up on the first accounts
+anyone looked at. A bound written into each producer is a bound the sixth producer will not have.
+
+### The fix
+
+`addons/GuardActionDeduplicator.cs` — names no NT8 type, so the harness **executes** it (the
+`P2-27` pattern, now the sixth such file across the two repos) — behind one new `DispatchActions`
+on `RiskGuardAddOn`. All five emission sites call it: `PositionUpdate`, `AggregateSizing`,
+`AccountItemUpdate`, `OrderUpdate`, `SafetySweep`, `GraceExpiry`. `CoalesceActions` (`P1-19`) now
+has **exactly one caller**, inside the dispatcher.
+
+⚠️ **A side effect worth knowing about**: the `OrderUpdate` site was calling `ProcessAction` in a
+**bare loop** — the only one of the five that never called `CoalesceActions` at all, so `P1-19`'s
+within-batch merge had never applied on the order-update path. Routing it through the dispatcher
+fixed that for free. It is recorded because a fix that arrives silently is one nobody can later
+find the reason for.
+
+Four decisions inside it:
+
+1. **The record clears when the CONDITION resolves, never on a timer.** A time-based expiry
+   re-admits while the condition is still true — the defect on a slower clock. The observable is
+   that the producer evaluated the account and did *not* ask, so `DispatchActions` takes the
+   accounts the producer **evaluated**, including those it decided needed nothing.
+2. **The budget is re-read from the mode every call**: `1` observing, `6` acting — the same numbers
+   as `P2-101` so they cannot drift in a reader's head. **The 1 is the fix, not a tuning value.**
+   Not baking it into the record means arming to `live` re-admits a key `shadow` had exhausted,
+   which is what an operator switching to live wants.
+3. **The scope carries the PRODUCER as well as the account.** `AccountItemUpdate` does not evaluate
+   the lockout rules, so its batches legitimately lack their keys; if any producer's silence could
+   clear any record, nearly every batch would clear nearly everything and the mechanism would do
+   nothing **while passing every test that drives a single producer**. This is also why
+   `EvaluateAggregateSizing` was split out of the `PositionUpdate` batch — it iterates every
+   subscribed account while the rules beside it looked at one.
+4. **The operator's panic buttons deliberately bypass it.** A second press flattens twice. A safety
+   control that ignores it because it recognised the first is worse than the defect being closed.
+
+### ⚠️ The battery went 13/13 on its first run, and that was the wrong place to stop
+
+Five more mutants, aimed at what the first thirteen never touched, **all survived**:
+
+* the key dropping its **rule**, so a second rule's breach is swallowed by the first;
+* the key dropping its **action type**, so a cancel is counted as a flatten;
+* the **session reset** no longer clearing, so a suppression crosses the day boundary;
+* the account-wide producers declaring an **empty scope** — which fails *open*, so everything is
+  still dispatched and nothing else in the suite notices;
+* and the sharpest: **the `AccountItemUpdate` handler reverted to its old bare loop.** The
+  de-duplicator, the dispatcher and eleven tests of both were present and correct, and *the one
+  path the defect was measured on* walked around all of it. That is `P3-30`'s shape, and only a
+  test that drives the **event** rather than the helper can see it —
+  `TestP2107_TheRealAccountItemUpdateHandlerGoesThroughTheDispatcher` exists for exactly that, and
+  asserts the rule fired **at all** before asserting it fired once, because otherwise it would pass
+  on a guard that does nothing.
+
+### ⚠️ Two of this repo's own gates were caught proving nothing, by one habit
+
+Both are **detection by substring over a region nobody bounded**:
+
+* `mutation/check_anchors.py` recognised only `(PATH, label, old, new)` 4-tuples and **silently
+  `continue`d** on anything else. This battery put the file constant second, so **all 18 anchors
+  were skipped** and it printed `ok`. It now locates the `ast.Name` wherever it sits, and an entry
+  it cannot read is a **failure**, not a skip — a check whose product is a count of what it
+  verified cannot skip what it cannot parse. Watched failing both ways (a broken anchor; an
+  unparseable entry), and restored clean.
+* `tools/check_expected_survivors.py` searched for `EXPECTED SURVIVOR:` in
+  `src.split('MUTANTS = [', 1)[-1]` — **not the list, but everything after it opens**. A closing
+  comment telling the next reader *how to declare one* made the gate report a declaration the
+  battery does not make, then demand the exit form that would have been wrong. It parses the
+  `MUTANTS` list with `ast` now and **refuses** a battery it cannot read. Watched failing on a real
+  declaration placed inside the list.
+
+Same family as `check_next_list_ids.py` reading `positionClosed: true` in a title as a CLOSED
+status, and the CI matrix comment that would have counted a deleted battery as wired. **Three
+gates, one habit — and the newest gate in the repo was one of them.** When adding a check, state
+the *region* it inspects, not just the string it looks for.
+
+⚠️ `tools/check_next_list_ids.py` (session 39) **earned its keep here**: it named all three
+ordering surfaces the moment `P2-107`'s plan entry flipped to CLOSED, before anything was
+committed.
+
+### Order from here
+
+1. **`P1-105`** — a log line that reports an outcome it did not observe.
+2. **`P1-102`** (now larger than filed — see §5.47: nothing on the box can *impose* a lockout on an
+   account holding a position, and `action: "lock"` silently answers `isLockedOut: false`).
+3. **`P2-103`**, then the architectural **`P2-29`** / **`P3-33`**.
+
+Weigh by §5.6's consequence rule, not by band letter.

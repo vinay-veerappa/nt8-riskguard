@@ -92,18 +92,34 @@ def main():
             if not isinstance(entry, (ast.Tuple, ast.List)):
                 continue
             items = list(entry.elts)
-            if len(items) == 4 and isinstance(items[0], ast.Name):
-                path = consts.get(items[0].id)
-                old = literal(items[2])
-                label = literal(items[1])
+            # 4-tuples name their target file with a module constant. Both orders occur --
+            # (PATH, label, old, new) and (label, PATH, old, new) -- so find the Name rather
+            # than assuming a position.
+            if len(items) == 4:
+                named = [i for i, it in enumerate(items) if isinstance(it, ast.Name)]
+                if len(named) == 1 and named[0] in (0, 1):
+                    path = consts.get(items[named[0]].id)
+                    label = literal(items[1 - named[0]])
+                    old = literal(items[2])
+                else:
+                    path = label = old = None
             elif len(items) == 3:
                 path = default_path
                 old = literal(items[1])
                 label = literal(items[0])
             else:
-                continue
+                path = label = old = None
+
+            # ⚠️ An unrecognised entry shape used to `continue`, so a battery whose tuples this
+            # parser could not read printed `ok` having checked NOTHING. P2-107's battery landed
+            # with its file constant second, all 18 anchors were skipped in silence, and the
+            # gate reported clean -- which is *a gate nobody reads is a comment* wearing the
+            # gate's own output. Not being able to read an entry is a FAILURE, not a skip: this
+            # check's whole product is the count of anchors it verified.
             if path is None or old is None:
-                problems.append('  ? could not read an entry statically')
+                checked += 1
+                problems.append('  ? entry %d: could not read it statically (%d element(s)). This '
+                                'check cannot skip what it cannot parse.' % (len(problems) + 1, len(items)))
                 continue
             if path not in sources:
                 sources[path] = io.open(path, encoding='utf-8').read()

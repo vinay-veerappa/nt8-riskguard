@@ -22,6 +22,7 @@ inside the gate.
 
 Exits non-zero on any violation. Wired into CI beside `check_ci_runs_every_battery.py`.
 """
+import ast
 import os
 import re
 import sys
@@ -32,6 +33,31 @@ MUTATION = os.path.join(REPO, 'mutation')
 MARKER = 'EXPECTED SURVIVOR:'
 HELPER_CALL = '_battery.finish('
 PLAIN_EXIT = 'sys.exit(1 if survivors else 0)'
+
+
+def _strings_in(node):
+    """Every string literal reachable from a node, folding `'a' 'b'` and `'a' + 'b'`."""
+    out = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            out.append(child.value)
+    return out
+
+
+def declares_expected_survivor(src):
+    """True when the MUTANTS list itself contains the marker.
+
+    Raises on a battery whose MUTANTS list cannot be read, rather than answering False: a
+    battery this cannot parse is one the gate is not checking, and reporting `all mutants must
+    die` about it would be the gate lying in its own output.
+    """
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and node.targets[0].id == 'MUTANTS':
+            return any(MARKER in s for s in _strings_in(node.value))
+    raise ValueError('no module-level MUTANTS list')
 
 
 def main():
@@ -48,10 +74,25 @@ def main():
         path = os.path.join(MUTATION, name)
         src = open(path, encoding='utf-8').read()
 
-        # The marker only counts inside a MUTANT DESCRIPTION -- a module docstring mentioning it
-        # (this file's own prose, or a battery explaining the convention) is not a declaration.
-        body = src.split('MUTANTS = [', 1)[-1] if 'MUTANTS = [' in src else ''
-        declares = MARKER in body
+        # The marker only counts inside a MUTANT DESCRIPTION -- a module docstring mentioning it,
+        # or a comment explaining the convention, is not a declaration.
+        #
+        # ⚠️ This used to read `src.split('MUTANTS = [', 1)[-1]`, which is not the list: it is
+        # EVERYTHING AFTER the list opens, including every line below it. P2-107's battery ends
+        # with a comment telling the next reader to "declare the mutant EXPECTED SURVIVOR: with
+        # the reason", and that sentence made this gate report a declaration the battery does not
+        # make -- then demand the one exit form that would have been wrong. Detection by
+        # substring over a region nobody bounded, which is the exact habit this repo has been
+        # bitten by three times (a plan entry read as CLOSED because its title contained
+        # `positionClosed`, a battery counted as wired because a comment named it). Read the
+        # list.
+        try:
+            declares = declares_expected_survivor(src)
+        except (SyntaxError, ValueError) as exc:
+            problems.append('%s could not be read: %s. A battery this gate cannot parse is one it '
+                            'is not checking.' % (name, exc))
+            print('  %-34s UNREADABLE' % name)
+            continue
 
         uses_helper = HELPER_CALL in src
         uses_plain = PLAIN_EXIT in src

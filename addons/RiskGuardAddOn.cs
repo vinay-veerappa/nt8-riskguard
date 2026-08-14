@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.22.0";
+        public const string Version = "1.23.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -1347,6 +1347,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal void ExecutePositionUpdateDetails(Account account, Position pos)
         {
             List<GuardAction> actions = null;
+            List<GuardAction> aggregateActions = null;   // P2-107: its own scope, see below.
+            List<string> aggregateScope = null;
             try
             {
                 string accountName = account.Name;
@@ -1400,12 +1402,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     // -- Aggregate sizing (event-driven via PositionUpdate) --
                     // Scan all accounts' positions instantly on any position change.
-                    var aggregateActions = EvaluateAggregateSizing();
-                    if (aggregateActions != null && aggregateActions.Count > 0)
-                    {
-                        if (actions == null) actions = new List<GuardAction>();
-                        actions.AddRange(aggregateActions);
-                    }
+                    //
+                    // P2-107: kept in its OWN list rather than folded into `actions`. It iterates
+                    // every subscribed account while the rules above looked at one, so the two
+                    // have different evaluated scopes and merging them would make one producer's
+                    // silence clear the other's records -- which is the de-duplication doing
+                    // nothing while still passing any test that drives a single account.
+                    //
+                    // The cost of the split is that an aggregate flatten and a per-account
+                    // flatten for the same account are no longer coalesced into one call. Two
+                    // flattens against one account are idempotent at the broker; a de-duplicator
+                    // that clears itself is not.
+                    aggregateActions = EvaluateAggregateSizing();
+                    aggregateScope = AggregateEvaluatedAccounts();
 
                     // -- Lockout phase enforcement (event-driven via PositionUpdate) --
                     // When a position goes flat, check if the lockout can advance to Confirmed.
@@ -1422,13 +1431,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // the actions, so an orphaned stop dies before any new order is placed.
                 DrainPendingCancels();
 
+                // P1-19 coalescing and P2-107 de-duplication both live in DispatchActions now.
+                // The scope is this ONE account: EvaluateRules and EvaluateLockoutPhase looked at
+                // no other.
                 if (actions != null)
-                {
-                    foreach (var action in CoalesceActions(actions))   // P1-19
-                    {
-                        ProcessAction(action);
-                    }
-                }
+                    DispatchActions(actions, "PositionUpdate", new List<string> { account.Name });
+
+                // Aggregate sizing looked at every subscribed account, so its silence about an
+                // account is evidence about that account -- which is exactly what the separate
+                // scope buys.
+                if (aggregateActions != null || aggregateScope != null)
+                    DispatchActions(aggregateActions, "AggregateSizing", aggregateScope);
             }
             catch (Exception ex)
             {
@@ -1557,11 +1570,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
+                // P2-107. This is the path the defect was MEASURED on: PEAK_GIVEBACK_BREACH,
+                // raised by EvaluatePnLRules, re-emitted 7 times in ~20 seconds because a PnL
+                // change re-evaluates and the giveback condition was still true. Scope is the one
+                // account whose PnL moved.
                 if (actions != null)
-                {
-                    foreach (var action in CoalesceActions(actions))   // P1-19
-                        ProcessAction(action);
-                }
+                    DispatchActions(actions, "AccountItemUpdate", new List<string> { accountName });
             }
             catch (Exception ex)
             {
@@ -1751,6 +1765,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal void ExecuteOrderUpdate(object sender, OrderEventArgs e)
         {
             List<GuardAction> lockoutActions = null;
+            string orderUpdateAccountName = null;   // P2-107 scope; see the dispatch at the end.
             lock (_stateLock)
             {
                 try
@@ -1892,10 +1907,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // advance to the next phase (PendingFlatten or Confirmed).
                     // Collect actions here; process OUTSIDE the lock to avoid
                     // re-entrancy corruption when ProcessAction triggers events.
-                    if (_accountStates.TryGetValue(accountName, out var lockState) &&
-                        (lockState.IsLockedOut || DateTime.UtcNow < lockState.LockoutUntil))
+                    //
+                    // P2-107: this producer evaluated the account whether or not it turned out to
+                    // be locked out, and "not locked out any more" IS the resolution signal. So
+                    // the scope is recorded either way; only the evaluation is conditional. Set
+                    // it inside the `if` instead and a lockout that ends would leave its records
+                    // in place forever, and the next real one would be suppressed unseen.
+                    if (_accountStates.TryGetValue(accountName, out var lockState))
                     {
-                        lockoutActions = EvaluateLockoutPhase(account, lockState);
+                        orderUpdateAccountName = accountName;
+                        if (lockState.IsLockedOut || DateTime.UtcNow < lockState.LockoutUntil)
+                        {
+                            lockoutActions = EvaluateLockoutPhase(account, lockState);
+                        }
                     }
 
                     LogEvent(accountName, "ORDER_UPDATE", new JObject
@@ -1930,13 +1954,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             DrainPendingCancels();
 
             // Process lockout actions OUTSIDE the lock to prevent re-entrancy.
-            if (lockoutActions != null && lockoutActions.Count > 0)
-            {
-                foreach (var a in lockoutActions)
-                {
-                    ProcessAction(a);
-                }
-            }
+            //
+            // ⚠️ P2-107 found this site calling ProcessAction in a BARE loop -- the only one of
+            // the five that never called CoalesceActions, so P1-19's within-batch merge had never
+            // applied on the order-update path at all. Routing it through the dispatcher fixes
+            // that as a side effect; it is recorded here because a fix that arrives silently is
+            // one nobody can later find the reason for.
+            if (orderUpdateAccountName != null)
+                DispatchActions(lockoutActions, "OrderUpdate", new List<string> { orderUpdateAccountName });
         }
 
         internal bool IsPositionReducingOrder(Order order, AccountState stateModel)
@@ -2014,6 +2039,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                         stateModel.PeakGivebackLastTriggerUnrealized = double.NaN;
                         stateModel.IsLockedOut = false;
                         stateModel.ResetLockoutPhase();   // P2-101
+                        // P2-107. A new session is a new set of conditions. Absence-based
+                        // clearing would get there on its own, but only after each producer next
+                        // evaluates -- and a suppression carried across a session boundary is a
+                        // rule that fires on the new day and says nothing.
+                        _actionDedup.ClearAccount(accName);
                         stateModel.SessionStartRealizedPnL = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
                         stateModel.LastRealizedPnL = stateModel.SessionStartRealizedPnL;
                         // P1-17: bank the session that just ended before zeroing it, so the
@@ -2252,10 +2282,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
-                foreach (var action in CoalesceActions(sweepActions))   // P1-19
-                {
-                    ProcessAction(action);
-                }
+                // P1-19 + P2-107. The sweep iterates every subscribed account, so its silence
+                // about one of them is a statement about that account, not an omission.
+                DispatchActions(sweepActions, "SafetySweep", AggregateEvaluatedAccounts());
 
                 // All rule evaluation is now event-driven:
                 // - PositionUpdate -> EvaluateRules + EvaluateLockoutPhase + UpdateFsmOnPosition
@@ -2795,10 +2824,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             var actions = EvaluateGraceExpiry(account, instrument);
             if (actions != null)
-            {
-                foreach (var action in CoalesceActions(actions))   // P1-19
-                    ProcessAction(action);
-            }
+                DispatchActions(actions, "GraceExpiry", new List<string> { account.Name });   // P1-19 + P2-107
         }
 
         // Called from ExecuteOrderUpdate. Classifies the order against the active FSM.
@@ -4231,6 +4257,147 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ordered.Add(a);
             }
             return ordered;
+        }
+
+        // P2-107. The accounts the account-wide producers (EvaluateAggregateSizing, the safety
+        // sweep) iterate. It mirrors their filter exactly on purpose: a scope that does not match
+        // what the producer actually looked at is the one way this mechanism goes silently wrong,
+        // in either direction -- too narrow and a record never clears, too wide and it clears on
+        // an evaluation that never happened.
+        //
+        // Takes _stateLock itself rather than declaring a precondition: one caller is inside the
+        // lock (ExecutePositionUpdateDetails) and one is outside it (ExecuteSafetySweep, which
+        // dispatches after releasing it per P1-10). _stateLock is reentrant, so this is correct
+        // from both.
+        internal List<string> AggregateEvaluatedAccounts()
+        {
+            var names = new List<string>();
+            lock (_stateLock)
+            {
+                foreach (var accName in _subscribedAccounts)
+                {
+                    if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accName)) continue;
+                    if (!_accountStates.ContainsKey(accName)) continue;
+                    names.Add(accName);
+                }
+            }
+            return names;
+        }
+
+        // P2-107. The de-duplication record for the outbound action path. See
+        // GuardActionDeduplicator.cs for why it is here and not inside each rule; in short,
+        // P2-101 fixed this shape inside EvaluateLockoutPhase and the same shape turned up on a
+        // different path within the hour.
+        private readonly GuardActionDeduplicator _actionDedup = new GuardActionDeduplicator();
+
+        // P2-107. THE outbound path. Every rule-produced action goes through here: coalesced
+        // within the batch (P1-19), then de-duplicated across batches, then processed.
+        //
+        // ⚠️ `accountsEvaluated` is not decoration and it is not derivable from `actions`. It is
+        // the set of accounts this producer just looked at, INCLUDING the ones it decided needed
+        // nothing -- because that decision is the only signal that a condition resolved. An
+        // account left out of it keeps its record forever and will never re-announce; an account
+        // wrongly included has its record cleared by a producer that did not evaluate it, which
+        // restores the repetition. Pass exactly what the producer iterated.
+        //
+        // ⚠️ Do NOT route the operator's panic buttons through here. TriggerManualFlatten and
+        // TriggerManualFlattenAll call ProcessAction(forceLive: true) directly, deliberately: a
+        // second press is a second instruction, not a duplicate.
+        internal void DispatchActions(List<GuardAction> actions, string producer, IList<string> accountsEvaluated)
+        {
+            var coalesced = CoalesceActions(actions);
+            if (coalesced == null) coalesced = new List<GuardAction>();
+
+            if (accountsEvaluated == null || accountsEvaluated.Count == 0)
+            {
+                // A producer that names no scope gets no de-duplication rather than no dispatch.
+                // Dropping a flatten is a far worse failure than repeating one, so this path
+                // fails OPEN -- and says so, because a silent bypass of the whole mechanism would
+                // look exactly like it working.
+                foreach (var a in coalesced)
+                {
+                    if (a == null) continue;
+                    LogEvent(a.AccountName, "ACTION_UNSCOPED",
+                        $"Producer {producer} dispatched {a.ActionType} ({a.RuleId}) without naming the"
+                        + " accounts it evaluated, so P2-107 de-duplication was skipped for it.");
+                    ProcessAction(a);
+                }
+                return;
+            }
+
+            bool acting = IsActingMode();
+
+            var evaluated = new List<string>();
+            var evaluatedSet = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var name in accountsEvaluated)
+            {
+                string n = name ?? "";
+                if (evaluatedSet.Add(n)) evaluated.Add(n);
+            }
+
+            var byAccount = new Dictionary<string, List<GuardAction>>(StringComparer.Ordinal);
+            var unscoped = new List<GuardAction>();
+            foreach (var a in coalesced)
+            {
+                if (a == null) continue;
+                string name = a.AccountName ?? "";
+                if (!evaluatedSet.Contains(name)) { unscoped.Add(a); continue; }
+                List<GuardAction> list;
+                if (!byAccount.TryGetValue(name, out list))
+                {
+                    list = new List<GuardAction>();
+                    byAccount[name] = list;
+                }
+                list.Add(a);
+            }
+
+            // Iterate the EVALUATED accounts, not the ones that produced actions. An account that
+            // produced nothing is the whole point: that is how its record clears.
+            foreach (var name in evaluated)
+            {
+                List<GuardAction> list;
+                if (!byAccount.TryGetValue(name, out list)) list = new List<GuardAction>();
+
+                var keys = new List<string>();
+                foreach (var a in list)
+                {
+                    keys.Add(GuardActionDeduplicator.KeyFor(
+                        a.AccountName, a.RuleId, a.ActionType.ToString(), a.Instrument));
+                }
+
+                var decisions = _actionDedup.Filter(
+                    GuardActionDeduplicator.ScopeFor(producer, name), keys, acting);
+
+                for (int i = 0; i < list.Count && i < decisions.Count; i++)
+                {
+                    var d = decisions[i];
+                    if (d.Admit)
+                    {
+                        ProcessAction(list[i]);
+                        continue;
+                    }
+
+                    // Exactly one line per episode. Suppressing in silence would be the inverse
+                    // of the defect: the operator sees neither the action nor its absence.
+                    if (d.AnnounceSuppression)
+                    {
+                        LogEvent(name, "ACTION_SUPPRESSED",
+                            $"Holding back {list[i].ActionType} from {list[i].RuleId} on {name}"
+                            + (string.IsNullOrEmpty(list[i].Instrument) ? "" : " (" + list[i].Instrument + ")")
+                            + $": {d.Reason}. Attempt {d.Attempt} of budget {d.Budget}, producer {producer}."
+                            + " This is the last line about it until the condition resolves.");
+                    }
+                }
+            }
+
+            foreach (var a in unscoped)
+            {
+                LogEvent(a.AccountName, "ACTION_UNSCOPED",
+                    $"Producer {producer} raised {a.ActionType} ({a.RuleId}) for {a.AccountName}, which is"
+                    + " not among the accounts it declared it evaluated, so P2-107 de-duplication was"
+                    + " skipped for it. Dispatching anyway.");
+                ProcessAction(a);
+            }
         }
 
         private void ExecuteAction(GuardAction action)

@@ -381,6 +381,20 @@ jobs:
           # 5s, so it could never fire, and killing that mutant took two attempts because any
           # sweep where the retry fires hides it. Declares one EXPECTED SURVIVOR.
           - { label: P2-101, battery: mutate_p2101.py }
+
+          # P2-107, new in session 40, 18 mutants -- unmeasured, sits beside P2-101 on that basis.
+          # The same repeated-action family as P2-101, found on a DIFFERENT path in that fix's own
+          # validation run: PEAK_GIVEBACK_BREACH re-emitting its flatten 7 times in ~20s,
+          # per-evaluation so with no spacing at all. Two instances in one hour is why the
+          # de-duplication moved to where actions LEAVE the guard (GuardActionDeduplicator behind
+          # DispatchActions) instead of being written into each producer.
+          #
+          # ⚠️ Read the battery's second block before trusting a green here. The first THIRTEEN
+          # mutants all died on the first run; five more, aimed at the parts none of them touched,
+          # ALL SURVIVED -- including a revert of the AccountItemUpdate handler to its old bare
+          # loop, i.e. the one path the defect was measured on walking around the entire
+          # mechanism while eleven tests of that mechanism passed. That is P3-30's shape.
+          - { label: P2-107, battery: mutate_p2107.py }
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

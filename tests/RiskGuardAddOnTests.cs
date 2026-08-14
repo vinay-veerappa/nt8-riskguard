@@ -369,6 +369,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2101_EnteringANewPhaseRestoresTheBudget();
             TestP2101_EndingTheLockoutRestoresTheBudget();
 
+            // P2-107: the same family on a different path, so the de-duplication moved to where
+            // actions LEAVE the guard instead of being written into each producer.
+            TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack();
+            TestP2107_ActingRetriesToItsBudgetAndNoFurther();
+            TestP2107_AbsenceFromABatchIsTheOnlyThingThatClearsTheRecord();
+            TestP2107_OneProducersSilenceDoesNotClearAnothersRecord();
+            TestP2107_TwoAccountsUnderOneProducerAreIndependent();
+            TestP2107_ADuplicateInsideOneBatchSpendsOneAttempt();
+            TestP2107_TheSuppressionIsAnnouncedExactlyOncePerEpisode();
+            TestP2107_ArmingToLiveReAdmitsAKeyShadowHadExhausted();
+            TestP2107_TheMeasuredDefect_SevenShadowLinesBecomeOne();
+            TestP2107_AnAccountThatProducedNothingClearsItsOwnRecord();
+            TestP2107_AnActionOutsideTheDeclaredScopeIsDispatchedNotDropped();
+            TestP2107_TheOperatorsPanicButtonIsNotDeduplicated();
+            // Second round: five mutants that survived the first battery, all of them in parts
+            // the first thirteen never touched. The handler one is the P3-30 shape.
+            TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced();
+            TestP2107_TwoActionTypesForOneRuleAreBothDispatched();
+            TestP2107_TheRealAccountItemUpdateHandlerGoesThroughTheDispatcher();
+            TestP2107_TheSessionResetClearsTheRecords();
+            TestP2107_TheAccountWideProducersDeclareARealScope();
+
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
@@ -5408,6 +5430,544 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "a NEW lockout gets a new budget. A counter that survives the unlock would leave "
                 + "the second lockout unable to flatten anything -- and a lockout that cannot act "
                 + "is the failure mode the whole P0 band exists to prevent");
+
+            Account.All.Clear();
+        }
+
+        // - P2-107 -------------------------------------------------------------------------------
+        //
+        // The same family as P2-101, on a DIFFERENT path, found in P2-101's own validation run and
+        // within the hour. PEAK_GIVEBACK_BREACH re-emitted its flatten on every evaluation -- 7
+        // times in ~20 seconds on the two follower accounts, per-evaluation so with no spacing at
+        // all and a rate set by market data.
+        //
+        // Two instances in one hour is the finding: the de-duplication belongs where actions LEAVE
+        // the guard, not inside each producer, because a bound written into each producer is a
+        // bound the sixth producer will not have. Hence GuardActionDeduplicator + DispatchActions.
+        //
+        // ⚠️ THE WHOLE SUITE STAYED GREEN through this change (1436 before, 1436 after), because
+        // every existing test drives ONE event and the de-duplicator only speaks on the second.
+        // That is the same shape as P1-100's 1355 and P0-96's 1311: a green suite through a
+        // behaviour change means the behaviour was never covered, not that it is safe.
+
+        private static string P2107Key(string acct, string rule)
+        {
+            return GuardActionDeduplicator.KeyFor(acct, rule, "FlattenPosition", "");
+        }
+
+        private static int P2107Admitted(List<ActionDedupDecision> decisions)
+        {
+            int n = 0;
+            foreach (var d in decisions) if (d.Admit) n++;
+            return n;
+        }
+
+        private static void TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack()
+        {
+            Console.WriteLine("\n[TEST] P2-107: twenty identical batches in shadow admit ONE action");
+
+            var dedup = new GuardActionDeduplicator();
+            var key = P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH");
+            int admitted = 0;
+
+            for (int i = 0; i < 20; i++)
+                admitted += P2107Admitted(dedup.Filter(
+                    GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB"),
+                    new List<string> { key }, false));
+
+            Assert(admitted == 1,
+                "THE DEFECT, reduced: twenty evaluations of a condition that has not resolved admit "
+                + "ONE action. Shadow's product is the observation and the observation is complete "
+                + "after one -- the 1 is the fix, not a tuning value. Got " + admitted + ".");
+        }
+
+        private static void TestP2107_ActingRetriesToItsBudgetAndNoFurther()
+        {
+            Console.WriteLine("\n[TEST] P2-107: in live the budget is 6, because a broker can reject a flatten");
+
+            // The negative control, and the one that matters. A de-duplicator that silences a
+            // REAL re-attempt has replaced a noisy guard with a guard that gives up after one try.
+            var dedup = new GuardActionDeduplicator();
+            var key = P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH");
+            int admitted = 0;
+
+            for (int i = 0; i < 20; i++)
+                admitted += P2107Admitted(dedup.Filter(
+                    GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB"),
+                    new List<string> { key }, true));
+
+            Assert(admitted == GuardActionDeduplicator.ActingBudget,
+                "a live guard re-attempts to its budget of " + GuardActionDeduplicator.ActingBudget
+                + " and then stops saying so. Suppressing the second attempt would mean a rejected "
+                + "flatten is never retried. Got " + admitted + ".");
+            Assert(GuardActionDeduplicator.ActingBudget > GuardActionDeduplicator.ObservingBudget,
+                "and acting is strictly more permissive than observing, which is the only ordering "
+                + "that makes sense: observing produces a log line, acting produces an order");
+        }
+
+        private static void TestP2107_AbsenceFromABatchIsTheOnlyThingThatClearsTheRecord()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the record clears when the producer stops asking, and only then");
+
+            var dedup = new GuardActionDeduplicator();
+            string scope = GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB");
+            var key = P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH");
+            var asking = new List<string> { key };
+            var silent = new List<string>();
+
+            Assert(P2107Admitted(dedup.Filter(scope, asking, false)) == 1, "the first ask is admitted");
+            Assert(P2107Admitted(dedup.Filter(scope, asking, false)) == 0, "the second is held back");
+
+            // The producer evaluated the account and wanted nothing. That is the condition
+            // resolving, and it is the ONLY signal -- a time-based expiry would re-admit the
+            // action while the condition is still true, which is the defect on a slower clock.
+            dedup.Filter(scope, silent, false);
+            Assert(dedup.TrackedCount == 0,
+                "an evaluation that asked for nothing dropped the record. Got "
+                + dedup.TrackedCount + " still held.");
+
+            Assert(P2107Admitted(dedup.Filter(scope, asking, false)) == 1,
+                "so a genuinely NEW breach after the condition resolved is announced again. Without "
+                + "this the mechanism is not de-duplication, it is a one-shot mute");
+        }
+
+        private static void TestP2107_OneProducersSilenceDoesNotClearAnothersRecord()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the scope carries the PRODUCER, so one producer's silence is not another's");
+
+            // Why this is load-bearing: AccountItemUpdate does not evaluate the lockout rules, so
+            // its batches legitimately lack their keys. If any producer's silence could clear any
+            // record, almost every batch would clear almost everything and the de-duplication
+            // would do nothing at all -- while passing every test that drives a single producer.
+            var dedup = new GuardActionDeduplicator();
+            var key = P2107Key("Sim-ORB", "LOCKOUT_PHASE");
+
+            dedup.Filter(GuardActionDeduplicator.ScopeFor("OrderUpdate", "Sim-ORB"),
+                         new List<string> { key }, false);
+            Assert(dedup.TrackedCount == 1, "OrderUpdate is holding one record");
+
+            dedup.Filter(GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB"),
+                         new List<string>(), false);
+
+            Assert(dedup.TrackedCount == 1,
+                "a silent AccountItemUpdate batch did NOT clear the record OrderUpdate is holding. "
+                + "Got " + dedup.TrackedCount + ".");
+            Assert(P2107Admitted(dedup.Filter(GuardActionDeduplicator.ScopeFor("OrderUpdate", "Sim-ORB"),
+                                              new List<string> { key }, false)) == 0,
+                "and the suppression still holds on the producer that owns it");
+        }
+
+        private static void TestP2107_TwoAccountsUnderOneProducerAreIndependent()
+        {
+            Console.WriteLine("\n[TEST] P2-107: an event for one account does not clear another account's record");
+
+            var dedup = new GuardActionDeduplicator();
+            var orb = P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH");
+            var mes = P2107Key("Sim-MES", "PEAK_GIVEBACK_BREACH");
+
+            dedup.Filter(GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB"),
+                         new List<string> { orb }, false);
+            dedup.Filter(GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-MES"),
+                         new List<string> { mes }, false);
+            Assert(dedup.TrackedCount == 2, "both accounts are holding a record");
+
+            // Sim-ORB's PnL ticks again. It says nothing about Sim-MES.
+            dedup.Filter(GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB"),
+                         new List<string> { orb }, false);
+
+            Assert(P2107Admitted(dedup.Filter(GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-MES"),
+                                              new List<string> { mes }, false)) == 0,
+                "Sim-MES is still suppressed. If the scope were the producer alone, the two live "
+                + "accounts would clear each other on every tick and both would repeat forever -- "
+                + "which is the measured defect, with an extra step");
+        }
+
+        private static void TestP2107_ADuplicateInsideOneBatchSpendsOneAttempt()
+        {
+            Console.WriteLine("\n[TEST] P2-107: a key repeated inside one batch spends ONE attempt, not two");
+
+            var dedup = new GuardActionDeduplicator();
+            var key = P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH");
+
+            var decisions = dedup.Filter(GuardActionDeduplicator.ScopeFor("SafetySweep", "Sim-ORB"),
+                                         new List<string> { key, key, key }, false);
+
+            Assert(P2107Admitted(decisions) == 1,
+                "the batch dispatches the action once. Got " + P2107Admitted(decisions) + ".");
+            Assert(decisions[1].AnnounceSuppression == false && decisions[2].AnnounceSuppression == false,
+                "and an in-batch duplicate is not announced as a suppression -- CoalesceActions "
+                + "already merged it, so saying so would be noise about noise");
+            // Drain what is left, one batch at a time -- a batch can only ever admit a key once,
+            // so the remaining budget has to be counted across batches.
+            int remaining = 0;
+            for (int i = 0; i < 20; i++)
+                remaining += P2107Admitted(dedup.Filter(GuardActionDeduplicator.ScopeFor("SafetySweep", "Sim-ORB"),
+                                                        new List<string> { key }, true));
+
+            Assert(remaining == GuardActionDeduplicator.ActingBudget - 1,
+                "and only ONE attempt was spent by that three-deep batch: acting has "
+                + (GuardActionDeduplicator.ActingBudget - 1) + " of its "
+                + GuardActionDeduplicator.ActingBudget + " left. Counting in-batch duplicates would "
+                + "let a single batch exhaust the budget, so a real retry could never happen. Got "
+                + remaining + ".");
+        }
+
+        private static void TestP2107_TheSuppressionIsAnnouncedExactlyOncePerEpisode()
+        {
+            Console.WriteLine("\n[TEST] P2-107: exactly one 'holding this back' line per episode -- never zero");
+
+            var dedup = new GuardActionDeduplicator();
+            string scope = GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB");
+            var asking = new List<string> { P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH") };
+
+            int announcements = 0;
+            for (int i = 0; i < 20; i++)
+                foreach (var d in dedup.Filter(scope, asking, false))
+                    if (d.AnnounceSuppression) announcements++;
+
+            Assert(announcements == 1,
+                "one announcement across twenty batches. ZERO would be the inverse of the defect -- "
+                + "the operator would see neither the action nor any statement that it was withheld, "
+                + "which is worse than the noise. Got " + announcements + ".");
+
+            // A new episode gets its own announcement, or the second incident is silent.
+            dedup.Filter(scope, new List<string>(), false);
+            dedup.Filter(scope, asking, false);
+            announcements = 0;
+            foreach (var d in dedup.Filter(scope, asking, false))
+                if (d.AnnounceSuppression) announcements++;
+            Assert(announcements == 1, "and the next episode announces itself once too");
+        }
+
+        private static void TestP2107_ArmingToLiveReAdmitsAKeyShadowHadExhausted()
+        {
+            Console.WriteLine("\n[TEST] P2-107: switching to live re-admits an action shadow had already spent");
+
+            var dedup = new GuardActionDeduplicator();
+            string scope = GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB");
+            var asking = new List<string> { P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH") };
+
+            dedup.Filter(scope, asking, false);
+            Assert(P2107Admitted(dedup.Filter(scope, asking, false)) == 0, "shadow is done after one");
+
+            Assert(P2107Admitted(dedup.Filter(scope, asking, true)) == 1,
+                "and arming to live admits it again -- 1 attempt spent against a budget of 6. The "
+                + "operator switched to live in order for the action to HAPPEN, and a record that "
+                + "baked in the budget it was created under would swallow the first real flatten");
+        }
+
+        // -- Through the addon: the dispatcher, not just the predicate ----------------------------
+
+        private static RiskGuardAddOn P2107Guard(string acct, string mode, out Account account)
+        {
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetSubscribedAccountForTest(acct);
+            addon.SetArmedForTest(true);
+            addon.SetModeForTest(mode);
+            addon.SetAccountStateForTest(acct, new AccountState(acct));
+            account = new Account { Name = acct };
+            Account.All.Clear();
+            Account.All.Add(account);
+            return addon;
+        }
+
+        private static List<GuardAction> P2107Flatten(string acct, string rule)
+        {
+            return new List<GuardAction>
+            {
+                new GuardAction { AccountName = acct, ActionType = GuardActionType.FlattenPosition, RuleId = rule }
+            };
+        }
+
+        private static void TestP2107_TheMeasuredDefect_SevenShadowLinesBecomeOne()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the measured live shape -- 7 PEAK_GIVEBACK flattens in 20s emit ONE line");
+
+            Account account;
+            var addon = P2107Guard("Sim-ORB", "shadow", out account);
+            var events = new List<string>();
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                for (int i = 0; i < 7; i++)
+                    addon.DispatchActions(P2107Flatten("Sim-ORB", "PEAK_GIVEBACK_BREACH"),
+                                          "AccountItemUpdate", new List<string> { "Sim-ORB" });
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            int shadowLines = events.Count(e => e == "SHADOW_ACTION");
+            int suppressed = events.Count(e => e == "ACTION_SUPPRESSED");
+
+            Assert(shadowLines == 1,
+                "one SHADOW_ACTION for seven evaluations of an unresolved condition. Baseline wrote "
+                + "seven, which is what interventions.jsonl actually contained. Got " + shadowLines + ".");
+            Assert(suppressed == 1,
+                "and exactly one line saying so, so the operator can tell suppression from silence. "
+                + "Got " + suppressed + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2107_AnAccountThatProducedNothingClearsItsOwnRecord()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the dispatcher clears on an evaluation that asked for nothing");
+
+            Account account;
+            var addon = P2107Guard("Sim-ORB", "shadow", out account);
+            var events = new List<string>();
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                addon.DispatchActions(P2107Flatten("Sim-ORB", "PEAK_GIVEBACK_BREACH"),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+                // The giveback recovered: the producer ran and wanted nothing. THIS is the call
+                // that must still happen -- a dispatcher that returns early on an empty batch
+                // would never clear anything, and the suppression above would be permanent.
+                addon.DispatchActions(new List<GuardAction>(),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+                addon.DispatchActions(P2107Flatten("Sim-ORB", "PEAK_GIVEBACK_BREACH"),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Count(e => e == "SHADOW_ACTION") == 2,
+                "the second breach is announced, because the first one resolved in between. Got "
+                + events.Count(e => e == "SHADOW_ACTION") + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2107_AnActionOutsideTheDeclaredScopeIsDispatchedNotDropped()
+        {
+            Console.WriteLine("\n[TEST] P2-107: an out-of-scope action fails OPEN and says so");
+
+            // This path exists to reduce noise. Dropping a flatten because the producer named its
+            // scope wrongly would trade a logging defect for a risk defect, so it dispatches -- and
+            // announces, because a silent bypass of the whole mechanism looks exactly like it working.
+            Account account;
+            var addon = P2107Guard("Sim-ORB", "shadow", out account);
+            var events = new List<string>();
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                    addon.DispatchActions(P2107Flatten("Sim-ORB", "PEAK_GIVEBACK_BREACH"),
+                                          "AccountItemUpdate", new List<string> { "SomeOtherAccount" });
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Count(e => e == "SHADOW_ACTION") == 3,
+                "every action still reached ProcessAction. Got "
+                + events.Count(e => e == "SHADOW_ACTION") + ".");
+            Assert(events.Count(e => e == "ACTION_UNSCOPED") == 3,
+                "and each one is labelled, so the mis-scoped producer is findable. Got "
+                + events.Count(e => e == "ACTION_UNSCOPED") + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2107_TheOperatorsPanicButtonIsNotDeduplicated()
+        {
+            Console.WriteLine("\n[TEST] P2-107: pressing the panic button twice flattens twice");
+
+            // An operator repeating themselves is not a duplicate. A safety control that ignores
+            // the second press because it recognised the first is a worse defect than the one
+            // P2-107 closes, so the manual triggers deliberately bypass the dispatcher.
+            Account account;
+            var addon = P2107Guard("Sim-ORB", "shadow", out account);
+            var events = new List<string>();
+
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                addon.TriggerManualFlatten("Sim-ORB");
+                addon.TriggerManualFlatten("Sim-ORB");
+                addon.TriggerManualFlatten("Sim-ORB");
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Count(e => e == "INTERVENTION") == 3,
+                "three presses, three interventions -- forceLive means these run even in shadow, "
+                + "and nothing de-duplicates them. Got " + events.Count(e => e == "INTERVENTION")
+                + " from events: " + string.Join(", ", events));
+            Assert(!events.Contains("ACTION_SUPPRESSED"),
+                "and nothing was held back");
+
+            Account.All.Clear();
+        }
+
+        // -- Second round. The first thirteen mutants all died on the first run, which is the
+        // -- moment to distrust a battery rather than stop: five more, aimed at the parts none of
+        // -- them touched, ALL SURVIVED. The sharpest was the P3-30 shape -- the AccountItemUpdate
+        // -- handler could go back to dispatching around the whole mechanism and every test that
+        // -- drove DispatchActions directly still passed. These five exist because of that.
+
+        private static void TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the key carries the RULE, so a second rule's breach is not swallowed");
+
+            var dedup = new GuardActionDeduplicator();
+            string scope = GuardActionDeduplicator.ScopeFor("AccountItemUpdate", "Sim-ORB");
+
+            dedup.Filter(scope, new List<string> { P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH") }, false);
+            int admitted = P2107Admitted(dedup.Filter(scope, new List<string>
+            {
+                P2107Key("Sim-ORB", "PEAK_GIVEBACK_BREACH"),
+                P2107Key("Sim-ORB", "DAILY_LOSS_BREACH")
+            }, false));
+
+            Assert(admitted == 1,
+                "the giveback is held back and the daily-loss breach is announced -- one admit, not "
+                + "zero and not two. A key without the rule would report the account as 'already "
+                + "handled' and the operator would never learn the daily loss limit went too. Got "
+                + admitted + ".");
+        }
+
+        private static void TestP2107_TwoActionTypesForOneRuleAreBothDispatched()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the key carries the ACTION TYPE -- a cancel is not a flatten");
+
+            var dedup = new GuardActionDeduplicator();
+            string scope = GuardActionDeduplicator.ScopeFor("OrderUpdate", "Sim-ORB");
+
+            dedup.Filter(scope, new List<string>
+            {
+                GuardActionDeduplicator.KeyFor("Sim-ORB", "LOCKOUT_PHASE", "FlattenPosition", "")
+            }, false);
+
+            int admitted = P2107Admitted(dedup.Filter(scope, new List<string>
+            {
+                GuardActionDeduplicator.KeyFor("Sim-ORB", "LOCKOUT_PHASE", "FlattenPosition", ""),
+                GuardActionDeduplicator.KeyFor("Sim-ORB", "LOCKOUT_PHASE", "CancelAllOrders", "")
+            }, false));
+
+            Assert(admitted == 1,
+                "the cancel goes through while the repeated flatten does not. Collapsing the two "
+                + "would leave working orders alive because a flatten had already been counted -- "
+                + "the lockout phase machine emits both, deliberately. Got " + admitted + ".");
+        }
+
+        private static void TestP2107_TheRealAccountItemUpdateHandlerGoesThroughTheDispatcher()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the REAL PnL handler de-duplicates -- not just DispatchActions in a test");
+
+            // ⚠️ This test exists because a mutant that reverted THIS handler to its old bare
+            // `foreach (CoalesceActions(actions)) ProcessAction(a)` loop survived the whole suite.
+            // The de-duplicator, the dispatcher and eleven tests of both were all present and
+            // correct, and the one path the defect was actually measured on walked around them.
+            // That is P3-30's shape exactly: machinery that exists, works, and is called by
+            // nothing. Drive the event, not the helper.
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            config.PnLRules.DailyLossLimit = 500.0;
+            addon.SetConfigForTest(config);
+            addon.SetSubscribedAccountForTest("Sim-ORB");
+            addon.SetArmedForTest(true);
+            addon.SetModeForTest("shadow");
+
+            var state = new AccountState("Sim-ORB");
+            addon.SetAccountStateForTest("Sim-ORB", state);
+
+            var account = new Account { Name = "Sim-ORB" };
+            account.Values[AccountItem.UnrealizedProfitLoss] = -5000.0;
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                // Seven unrealized-PnL ticks with the loss limit still breached -- the live shape.
+                for (int i = 0; i < 7; i++)
+                    addon.ExecuteAccountItemUpdate(account, new AccountItemEventArgs
+                    {
+                        AccountItem = AccountItem.UnrealizedProfitLoss,
+                        Value = -5000.0
+                    });
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            int shadowLines = events.Count(e => e == "SHADOW_ACTION");
+            Assert(shadowLines > 0,
+                "the rule fired at all -- without this the test would pass on a guard that does "
+                + "nothing, which is how a de-duplication test lies. Got events: "
+                + string.Join(", ", events.Distinct()));
+            Assert(shadowLines == 1,
+                "seven PnL ticks through the REAL handler produce ONE shadow action. Got "
+                + shadowLines + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2107_TheSessionResetClearsTheRecords()
+        {
+            Console.WriteLine("\n[TEST] P2-107: a new session starts the suppression over");
+
+            Account account;
+            var addon = P2107Guard("Sim-ORB", "shadow", out account);
+            var state = addon.GetAccountStateForTest("Sim-ORB");
+            state.LastSessionDate = DateTime.UtcNow.Date.AddDays(-3);   // the sweep will reset it
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try
+            {
+                addon.DispatchActions(P2107Flatten("Sim-ORB", "DAILY_LOSS_BREACH"),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+                addon.DispatchActions(P2107Flatten("Sim-ORB", "DAILY_LOSS_BREACH"),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+
+                addon.ExecuteSafetySweep();   // rolls the session over
+
+                addon.DispatchActions(P2107Flatten("Sim-ORB", "DAILY_LOSS_BREACH"),
+                                      "AccountItemUpdate", new List<string> { "Sim-ORB" });
+            }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+
+            Assert(events.Count(e => e == "SHADOW_ACTION") == 2,
+                "the breach is announced once before the session boundary and once after. A "
+                + "suppression carried across the reset is a rule that fires on the new day and "
+                + "says nothing. Got " + events.Count(e => e == "SHADOW_ACTION") + ".");
+
+            Account.All.Clear();
+        }
+
+        private static void TestP2107_TheAccountWideProducersDeclareARealScope()
+        {
+            Console.WriteLine("\n[TEST] P2-107: the sweep and aggregate sizing name the accounts they evaluate");
+
+            // An empty scope is not a small bug here: DispatchActions fails OPEN on one, so the
+            // sweep and aggregate sizing would bypass de-duplication entirely and nothing else in
+            // the suite would notice -- everything still gets dispatched, which is what the other
+            // tests assert about that path.
+            var addon = new RiskGuardAddOn();
+            var config = new RiskConfig();
+            addon.SetConfigForTest(config);
+            addon.SetArmedForTest(true);
+            addon.SetModeForTest("shadow");
+            addon.SetSubscribedAccountForTest("Sim-ORB");
+            addon.SetAccountStateForTest("Sim-ORB", new AccountState("Sim-ORB"));
+            addon.SetSubscribedAccountForTest("Sim-MES");
+            addon.SetAccountStateForTest("Sim-MES", new AccountState("Sim-MES"));
+
+            var scope = addon.AggregateEvaluatedAccounts();
+
+            Assert(scope.Contains("Sim-ORB") && scope.Contains("Sim-MES"),
+                "both subscribed accounts are named. Got: " + string.Join(", ", scope));
+
+            config.ExcludedAccounts = new List<string> { "Sim-MES" };
+            addon.SetConfigForTest(config);
+            scope = addon.AggregateEvaluatedAccounts();
+
+            Assert(scope.Contains("Sim-ORB") && !scope.Contains("Sim-MES"),
+                "and it mirrors the producers' own exclusion filter. A scope that does not match "
+                + "what the producer looked at is the one way this mechanism goes silently wrong: "
+                + "too narrow and a record never clears, too wide and it clears on an evaluation "
+                + "that never happened. Got: " + string.Join(", ", scope));
 
             Account.All.Clear();
         }

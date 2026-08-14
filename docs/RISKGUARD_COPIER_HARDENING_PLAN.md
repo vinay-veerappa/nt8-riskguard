@@ -2917,7 +2917,7 @@ attempt**: count-keyed it fires, time-keyed it cannot.
 
 ---
 
-### P2-107. `PEAK_GIVEBACK_BREACH` re-emits its flatten on every evaluation, so the same family survives `P2-101`'s fix on a different path — OPEN, found live 2026-08-14
+### P2-107. `PEAK_GIVEBACK_BREACH` re-emits its flatten on every evaluation, so the same family survives `P2-101`'s fix on a different path — CLOSED 2026-08-14 (session 40)
 
 **Where**: the rule evaluators, not the lockout phase machine — so `P2-101`'s attempt budget does not
 reach it.
@@ -2948,6 +2948,69 @@ condition resolving, not by a timer.
 
 Related: `P2-101` (same family, bounded), `P3-30` (an audit firing on a correctly protected account),
 `P2-98`'s `FILL_NOT_MEASURED`. **Sixth instance of *an alarm that is always on is off*.**
+
+**Fixed by** `addons/GuardActionDeduplicator.cs` (names no NT8 type, so the harness executes it —
+the `P2-27` pattern) behind one new `DispatchActions` method that **all five emission sites now
+use**. Actions are coalesced within the batch (`P1-19`, unchanged), then de-duplicated across
+batches, then processed. Suite **1469/0**; battery **18/18**, no survivors.
+
+Four things in it are worth reusing, and the last two are the ones that cost time:
+
+1. **The record clears when the CONDITION resolves, never on a timer.** A time-based expiry
+   re-admits the action while the condition is still true, which is the defect again on a slower
+   clock. The observable that means *resolved* is that the producer evaluated the account and did
+   **not** ask for the action — so `DispatchActions` takes the accounts the producer **evaluated**,
+   including the ones it decided needed nothing, and absence from that batch is the resolution.
+   ⚠️ An account left out of the declared scope keeps its record forever; one wrongly included has
+   its record cleared by a producer that never looked at it. Both directions are silent.
+2. **The budget is re-read from the mode on every call** — `1` outside an acting mode, `6` inside
+   one, the same numbers as `P2-101` so the two cannot drift in a reader's head. **The 1 is the
+   fix, not a tuning value.** Because it is not baked into the record, arming to `live` re-admits a
+   key `shadow` had already exhausted, which is exactly what an operator switching to live wants.
+3. ⚠️ **The scope must carry the PRODUCER as well as the account.** `AccountItemUpdate` does not
+   evaluate the lockout rules, so its batches legitimately lack their keys — if any producer's
+   silence could clear any record, nearly every batch would clear nearly everything and the
+   mechanism would do nothing **while passing every test that drives a single producer**. This is
+   also why `EvaluateAggregateSizing` was split out of the `PositionUpdate` batch: it iterates
+   every subscribed account while the rules beside it looked at one, so the two have different
+   scopes. The price is that an aggregate flatten and a per-account flatten for one account are no
+   longer merged; two flattens are idempotent at the broker, a de-duplicator that clears itself is
+   not.
+4. ⚠️ **The operator's panic buttons deliberately do NOT come through here.**
+   `TriggerManualFlatten`/`TriggerManualFlattenAll` call `ProcessAction(forceLive: true)` directly,
+   so a second press flattens twice. A safety control that ignores the second press because it
+   recognised the first is a worse defect than the one this closes. Pinned by a mutant.
+
+⚠️ **The suite was 1436 green before this change and 1436 green after it**, because every existing
+test drives one event and a de-duplicator only speaks on the second. Same shape as `P1-100`'s 1355
+and `P0-96`'s 1311.
+
+⚠️ **And the battery went 13/13 on its first run, which is when to trust it least.** Five more
+mutants, aimed at the parts the first thirteen never touched, **all survived**. The sharpest
+reverted the `AccountItemUpdate` handler to its old bare loop — *the one path the defect was
+measured on walking around the entire mechanism* while eleven tests of that mechanism passed. That
+is `P3-30`'s shape, and only a test that drives the **event** rather than the helper can see it.
+The other four: the key dropping its rule, the key dropping its action type, the session reset no
+longer clearing, and the account-wide producers declaring an empty scope (which fails **open**, so
+everything is still dispatched and nothing else notices).
+
+⚠️ **Two of this repo's own gates were caught proving nothing by this work, both by the same
+habit — detection by substring over a region nobody bounded:**
+
+* `mutation/check_anchors.py` recognised only `(PATH, label, old, new)` 4-tuples and **silently
+  `continue`d** on any other shape. This battery's tuples put the file constant second, so **all 18
+  anchors were skipped** and the battery printed `ok`. It now finds the `ast.Name` wherever it sits
+  and treats an unreadable entry as a **failure**, not a skip. Anchor count **283 → 301**.
+* `tools/check_expected_survivors.py` searched for `EXPECTED SURVIVOR:` in
+  `src.split('MUTANTS = [', 1)[-1]` — which is not the list, it is *everything after the list
+  opens*. A closing comment telling the next reader how to declare one made the gate report a
+  declaration this battery does not make, and then demand the wrong exit form. It parses the
+  `MUTANTS` list with `ast` now, and **refuses** a battery it cannot read rather than reporting
+  `all mutants must die` about one it never inspected.
+
+  Same family as `check_next_list_ids.py` reading `positionClosed: true` in a title as a CLOSED
+  status, and as the matrix comment that would have counted a deleted battery as wired. **Three
+  gates, one habit.**
 
 ---
 
