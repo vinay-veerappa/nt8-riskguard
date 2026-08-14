@@ -1408,7 +1408,7 @@ default arm is a *read* converts every typo and every unimplemented action into 
    write action over GET is refused with `method not allowed`, whitelisted rather than blacklisted,
    so `?action=remove_group` cannot mutate config over a read verb.
 
-**Where**: `mcp/ninjatrader-mcp/nt-mcp-server.js` (schema), `lib/copier-config-request.js` (mapping),
+**Where**: `nt8-mcp-bridge/mcp/nt-mcp-server.js` (schema), `mcp/lib/copier-config-request.js` (mapping),
 `McpBridgeAddOn.cs` `CopierReadFromQuery`. Live-verified: `?action=remove_group` → `success: false`.
 
 ---
@@ -1438,7 +1438,7 @@ an underspecified write edited a live relationship silently. A relationship writ
 names explicitly, and arming requires `confirmLive` at the boundary instead of being quietly
 downgraded to `armedForLive: false` in a response that contradicts its own request.
 
-**Where**: `mcp/ninjatrader-mcp/nt-mcp-server.js` `TOOLS`, `lib/copier-config-request.js`.
+**Where**: `nt8-mcp-bridge/mcp/nt-mcp-server.js` `TOOLS`, `mcp/lib/copier-config-request.js`.
 33 tests in `tests/copier-config-request.test.js`.
 
 ---
@@ -2283,7 +2283,7 @@ that were being used to validate `P1-90`.
 >    the test-first gate is vacuous. `agent/verify_reporter.py` proves it by feeding the reporter's
 >    real output through the loop's real parser.
 
-**Where**: `tvDownloadOHLC`, `mcp/ninjatrader-mcp/lib/tools.js` (the schemas were at
+**Where**: `nt8-mcp-bridge/mcp/lib/tools.js` (the schemas were at
 `nt-mcp-server.js:89`, `:124`, `:588`, `:672` before the extraction).
 
 ### P2-92. `shadow` mode is not observation-only: a shadow breach stops the account trading — ✅ CLOSED 2026-08-13 (§5.30: a lockout records the AUTHORITY it was imposed under)
@@ -3086,7 +3086,7 @@ three sessions that the validation run produced the next defect.
 
 ### P1-102. There is no MCP tool to READ or CLEAR a lockout, so an account frozen by the guard cannot be recovered by the agent that is driving it — OPEN, found 2026-08-14
 
-**Where**: `mcp/ninjatrader-mcp/lib/tools.js` (in `tvDownloadOHLC`). The bridge has
+**Where**: `nt8-mcp-bridge/mcp/lib/tools.js`. The bridge has
 `POST /api/lockout` with `action` of `status` | `unlock` | `reset` | `clear`, hardened by `P1-90`'s
 account resolver. **No `nt_` tool calls it.**
 
@@ -3343,7 +3343,7 @@ you display from what actually happened), `P1-70`.
 
 ### P2-103. The three read-only surfaces that answer "is the guard actually protecting me?" have NO MCP tool, and they are exactly the ones five mutation batteries exist to make honest — OPEN, found 2026-08-14
 
-**Where**: `mcp/ninjatrader-mcp/lib/tools.js`. Measured 2026-08-14 by diffing the bridge's 67 routes
+**Where**: `nt8-mcp-bridge/mcp/lib/tools.js`. Measured 2026-08-14 by diffing the bridge's 67 routes
 against the 52 `nt_` tools: **15 routes are unreachable**, and these are the ones that matter:
 
 | route | returns | MCP tool |

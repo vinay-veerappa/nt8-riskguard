@@ -245,7 +245,7 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1469 passed, 0 failed** (was 1436; 17 added by `P2-107`); **bridge 133 passed, 0 failed**; **MCP wrapper 43 passed, 0 failed** — core and bridge re-measured 2026-08-14 (session 40), wrapper carried from session 39 and NOT re-run | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 133 passed, 0 failed**; **MCP wrapper 43 passed, 0 failed** — all three re-measured 2026-08-14 (session 40). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **118 IDs — 105 closed, 13 open**, re-derived 2026-08-14 (session 40) from the plan's per-entry status tokens: **107** banded entries (**12 open**: `P1-105`, `P1-102`, `P2-103`, `P2-108`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). `P2-107` closed and `P2-108` opened in the same session, so the open count is unchanged at 13 | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
 | **Do next** | 🆕 **`P1-105`** — a log line that reports an outcome it did not observe. Then **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47), **`P2-103`**, then the architectural **`P2-29`** / **`P3-33`**. ✅ `P1-106` closed in session 39 (§5.47). ✅ `P2-107` closed in session 40 (§5.48) — outbound de-duplication now lives in `GuardActionDeduplicator` behind one `DispatchActions` that all five emission sites use; the record clears when the CONDITION resolves, never on a timer, and the operator's panic buttons deliberately bypass it. ⚠️ Its battery went 13/13 on the first run and **five later mutants all survived**, one of them walking the measured path around the whole mechanism; and **two of this repo's own gates were caught proving nothing** — read §5.48 before adding a check anywhere. | §5.6, §5.48, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
@@ -254,7 +254,7 @@ not. The command that checks it is in the last column.
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
 | **Mutation** | **31 batteries** — **28 here** + **3 in `nt8-mcp-bridge`**. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 40) on `v1.23.0`**, four times across the deploy and the live test. ⚠️ **ALWAYS read `errorCount`, never the call's own `success`** — a broken Custom assembly is invisible, because NT8 keeps serving the last good one | `nt_compile` |
-| **CI** | **Green in both repos as of session 39's push, measured 2026-08-14**: the last four `nt8-riskguard` runs succeeded at 14m23s–16m21s and the last four `nt8-mcp-bridge` runs at 1m53s–3m3s. ⚠️ **Session 40's push is NOT in that measurement** — it adds a 28th battery, so re-run `gh run list` before quoting this. Run it BEFORE the first claim about state, not after a deploy | `gh run list --limit 5` in each repo |
+| **CI** | **`nt8-riskguard` green on the two `P2-107` pushes, measured 2026-08-14 (session 40)**: 16m56s (code, 28-battery matrix) and 16m3s (docs). ⚠️ **Three later pushes and every `nt8-mcp-bridge` run were still QUEUED or IN PROGRESS when this row was written — they are NOT measured here.** Re-run before quoting. Run it BEFORE the first claim about state, not after a deploy | `gh run list --limit 5` in each repo |
 | **Bridge pin** | ✅ **`v1.23.0`, and the RANGE is empty** — `git diff --name-only v1.23.0..main -- addons/` returns nothing, measured 2026-08-14 (session 40). ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range | `git -C vendor/nt8-riskguard describe --tags; git diff --name-only <pin>..main -- addons/` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
@@ -7877,6 +7877,42 @@ in this session had touched. Two rules from it:
 * **`git push origin main` does not mean "push what I just committed."** It pushes the *ref named
   `main`*, wherever HEAD happens to be. Verify with `git log --oneline -1 origin/main`, not with the
   push's exit code.
+
+### The MCP wrapper moved into `nt8-mcp-bridge`, and what that fixes
+
+**2026-08-14, operator-driven, in parallel with `P2-107`.** The Node MCP wrapper — 52 tools, 43
+tests — was its own repo (`vinay-veerappa/ninjatrader-mcp`), wired into `tvDownloadOHLC` as a
+submodule at `mcp/ninjatrader-mcp`. It is now **`nt8-mcp-bridge/mcp/`**, history preserved, and the
+submodule is gone from `tvDownloadOHLC`.
+
+**Why it belongs there and not on its own**: the wrapper and the addon are two halves of ONE
+contract — the wrapper advertises tool schemas, the addon decides what it accepts — and **a contract
+with its two sides in two repos cannot be pinned in one commit**. Every defect ever found in the
+wrapper is contract drift: `P1-91` (schema defaults the addon never reads), `P1-72` (advertised
+`quarantine`/`unquarantine`, which the addon refuses, while `isQuarantined`, which works, was
+absent — filed, fixed, then REGRESSED), and the still-open `F-16`.
+
+Two things it actually bought, both measurable:
+
+* **The `P1-72` pin is now a gate rather than a transcription.** `mcp/tests/tool-schema.test.js`
+  used to hold a hand-typed `ADDON_ACCEPTS` set under a comment naming where it came from — it
+  caught the wrapper drifting from a list that was true when someone typed it, and could **not** see
+  the addon change. It now reads `addons/McpBridgeAddOn.cs` and extracts the real `knownActions`.
+  That is only possible with both sides in one checkout.
+* **The wrapper's 43 tests now run on every push.** That repo had **no CI at all**, in the repo where
+  `P1-91` and `P1-72` (twice) were found.
+
+⚠️ **Paths in this plan predating the move are historical and were left alone; the `**Where**` lines
+of every entry that is still OPEN were repointed** at `nt8-mcp-bridge/mcp/…`. An instruction for
+future work has to be current; a record of where a fix landed in July does not.
+
+⚠️ **The PR branch pinned the PREVIOUS core.** `fold-mcp-wrapper` was cut from `main` before
+`v1.23.0`, so it pinned `v1.22.0` — a core with no `GuardActionDeduplicator.cs` — and its CI was
+proving the wrapper against a core that is not deployed. Merging would **not** have reverted the pin
+(the branch never modified the gitlink, so a three-way merge keeps `main`'s side), and
+`deploy.py`'s `check_vendor_not_stale` reads the **working** submodule and refuses at exit 2 when
+`addons/` differs in the range — but a branch whose CI is green against the wrong core is a green
+that means less than it looks. `main` was merged into it and the pin is `v1.23.0` on both.
 
 ### Order from here
 
