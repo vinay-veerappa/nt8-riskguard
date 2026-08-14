@@ -1,11 +1,12 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-14 (**session 37 — §5.40**). Core **`v1.20.0`** is tagged and
+**Last updated**: 2026-08-14 (**session 37 — §5.41**). Core **`v1.20.0`** is tagged and
 **NT8-compiled clean** — suite **1355/0**, bridge **92/0**, MCP wrapper **43/0**, **25** core
-mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **108 IDs, 5 open**; the `P0` band
+mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **110 IDs, 7 open**; the `P0` band
 and the untriaged band are both empty, and every naked-risk item is closed. Every figure here was
-**measured, not incremented**. ⚠️ `v1.20.0` is **not yet live-validated on the box** — `v1.19.0`
-was; see §5.40's Next.
+**measured, not incremented**. ✅ `v1.20.0` is deployed, **NT8-compiled clean (651 -> 0 errors, see §5.41)** and
+live-validated on sim. ⚠️ Doing so opened **`P1-100`** (a SHADOW-only lockout BLOCKS real orders) and
+**`P2-101`** (a shadow lockout retries its flatten forever). **`P1-100` is the item to do next.**
 
 ⚠️ **`P2-98` is CLOSED and live-validated** (§5.38), and closing it **opened a P1**. The fix moves
 the grain of a measurement from the SLICE to the COPY: a partial fill is accumulated across its
@@ -7025,3 +7026,82 @@ cancel-delivers-no-execution limit, which no one had noticed while writing the f
    `EXPECTED SURVIVOR` is the first test to write when it becomes reachable.
 2. **`P2-95`** (`FirmStartingBalance` off by the account's lifetime profit), then `P2-93`, `P2-94`.
 3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.
+
+---
+
+## 5.41 `P1-99` live-validated, and driving the box opened two more — plus a duplicate file that had broken the whole NT8 assembly
+
+### ⚠️ The compile was RED before anything of mine was deployed, and nothing said so
+
+`nt_compile` returned **651 errors**. Every one was in `Strategies/`, **none in `AddOns/`** — the
+cause was two byte-identical copies of `RiskManagerBase.cs` (same SHA256), one at
+`bin/Custom/Strategies/` and one at `bin/Custom/Strategies/Vinay/`. `CS0101` on a duplicate class,
+then 496 × `CS0229` ambiguity cascading off it.
+
+`Strategies/Vinay/` is where `sync_nt8_strategies.py` writes, so the top-level one was a **stray
+hand-placed copy** — exactly what `NT8_FILE_ORGANIZATION.md` forbids. Backed up to
+`Documents/NinjaTrader 8/_stray_backup/` and removed; the compile went **651 → 0**.
+
+Three things worth keeping:
+
+* **A broken Custom assembly is invisible from the outside.** `nt_health` answered fine, 96 accounts,
+  feed connected, heartbeat current — because NT8 keeps running the **last good assembly**. The box
+  looked healthy while refusing to load anything new. The only symptom was that a deploy had no
+  effect, which is indistinguishable from a deploy that worked.
+* **Both repos verified clean throughout.** `sync_nt8.py --verify` → 8 files identical,
+  `deploy.py --verify` → 12 files, 0 orphans. Deploy parity says the FILES match; it says nothing
+  about whether the assembly they belong to compiles. Two different questions, and only one of them
+  was being asked.
+* **`sync_nt8_strategies.py --verify` reports `23 differ, 212 orphans`** on the strategies side. That
+  is a separate, untouched workstream, and it is where the stray copy came from.
+
+### `P1-99` on the box
+
+Guard `shadow`/armed, copier `live`, two sim followers off `Sim101` at ratio 1 with
+`AutoSymbolConversion` (MNQ→NQ, ×0.1), `MaxPositionSize` 10.
+
+**Entry** — a 100-lot MNQ market order filled **1 + 99**:
+
+```
+COPIER_EXEC_SEEN   MNQ SEP26 Buy 1@30269   order='P199_LIVE_100LOT'
+COPY_SKIPPED_SUB_MINIMUM  ... is still below 1 contract: leader order 'P199_LIVE_100LOT'
+                          has filled 1 so far (this slice 1, slice 1) ...
+COPIER_EXEC_SEEN   MNQ SEP26 Buy 99@30269.25
+COPY_SUBMITTED     NQ SEP26 Buy 10 ... has filled 100 in 2 slice(s), copy now 10 of a 10 target.
+```
+
+Both followers ended at exactly **10**. ⚠️ **Be precise about what that proves**: 99 × 0.1 = 9.9
+rounds to 10 on its own, so **this shape would also have been correct under `v1.19.0`**. It confirms
+the new path is live and produces the right answer; it does **not** discriminate the fix. That is the
+same luck that hid the defect originally (5 + 95) — sim market orders fill in one or two slices, and
+the shapes that discriminate (5+5, 15+15) are not reachable on demand. The discrimination is the 11
+unit tests and 9 killed mutants; the box confirms the code is running.
+
+**Exit** — and this one *is* discriminating. The flatten filled **4 + 96**, and the follower closed
+**1 + 9 = 10**, exactly its position. The exit lines end `(isExit=True).` with **no cumulative
+suffix**, while the entry carried `has filled 100 in 2 slice(s)`. Two different code paths, both
+correct, on the same box in the same minute — which is the `P1-99` asymmetry (mutant 4) demonstrated
+live rather than argued.
+
+### 🆕 Two defects the run opened, both in shadow mode
+
+* **`P1-100`** — a **SHADOW-only lockout BLOCKS real orders**. Both `SHADOW_LOCKOUT` records say "no
+  flatten executed", every action was correctly suppressed, and nothing was flattened — `P2-92`
+  working. And every subsequent order was refused `Account Sim101 is locked out`, including a limit
+  10,000 points from the market that could never fill, so it is the **account** that is gated, not the
+  order. Fails closed, but shadow exists so the guard can be evaluated **without touching trading**,
+  and an operator whose account freezes during evaluation turns the guard off. Same shape as `P1-90`:
+  a second reader of state that `P2-92` fixed in one place.
+* **`P2-101`** — a lockout in shadow retries its flatten **forever**, because the retry's exit
+  condition is "position still open" and shadow never closes it. ~78 log lines in one minute across
+  three accounts, and unbounded. **`An alarm that is always on is off`, fifth instance.** The general
+  rule: *a retry whose exit condition is an action the current mode does not perform will never exit.*
+
+Both were found by **driving the box and reading `interventions.jsonl`** — not by the suite, which was
+green throughout, and not by review. That is now the fourth session running where the deployed system
+produced defects no static gate did.
+
+### Next
+
+`P1-100` first — it is the one that makes an operator switch the guard off. Then `P2-101`, then
+`P2-27` / `P2-95`.

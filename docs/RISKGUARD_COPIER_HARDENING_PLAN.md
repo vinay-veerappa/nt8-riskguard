@@ -2729,6 +2729,81 @@ repo that send more than one execution for one leader order. `mutation/mutate_p1
 
 ---
 
+### P1-100. A SHADOW-only lockout BLOCKS real orders, so shadow mode halts the account it is only supposed to observe — OPEN, found live 2026-08-14
+
+**Where**: whatever `nt_place_order` / the bridge consults for "is this account locked out". `P2-92`
+made `CanTrade` read the **authority** a lockout was imposed under, so a shadow observation could not
+gate trading. This path does not, or does not read the same record.
+
+**Found by driving the deployed box** while live-validating `P1-99`, on sim accounts. Guard in
+`shadow`, armed. A 100-lot MNQ entry tripped two rules, and both recorded shadow-only observations:
+
+```
+13:00:47  Sim101  SHADOW_LOCKOUT  Rule MAX_SIZE_BREACH recorded a shadow-only lockout
+                                  observation; no flatten executed.
+13:01:21  Sim101  SHADOW_LOCKOUT  Rule DAILY_LOSS_BREACH recorded a shadow-only lockout
+                                  observation; no flatten executed.
+```
+
+Every consequent action was correctly suppressed — `[SHADOW] Would execute action FlattenPosition`,
+`LOCKOUT_SWEEP_SHADOW: Would execute lockout sweep` — and **nothing was flattened**, which is
+`P2-92` working. But every subsequent order was refused:
+
+```
+nt_place_order Sim101 MNQ Sell 100 Market  ->  "Order blocked: Account Sim101 is locked out."
+nt_place_order Sim101 MNQ Buy 1 Limit@20000 ->  "Order blocked: Account Sim101 is locked out."
+```
+
+The second is the proof: a limit 10,000 points below the market can never fill, so this is not a risk
+check on the order's content — the **account** is gated. The only lockouts on the box that day are the
+two shadow observations above.
+
+**Why it matters even though it fails CLOSED.** It is not a safety hole; it is more restrictive than
+configured. The consequence is worse than it looks anyway: `shadow` exists so an operator can evaluate
+the guard **without it touching trading**, and an operator whose account freezes during evaluation
+turns the guard OFF. A mode whose whole purpose is "observe only" that halts the account is a mode
+nobody will run, which costs the guard the evaluation period it exists for.
+
+⚠️ **Same shape as `P1-90`**: the fix went into the sites that were filed, and a further site reads
+the same state by another route. Find every reader of the lockout record before fixing one.
+
+**Fix**: one reader, or one predicate. `P2-92` stored the authority precisely so this question has a
+single answer; a second call site that re-derives it is the defect. A test must assert a shadow
+lockout leaves `nt_place_order` WORKING — a positive-only test that a live lockout blocks passes under
+this defect.
+
+---
+
+### P2-101. A lockout in shadow mode retries its flatten FOREVER, because in shadow the flatten never happens — OPEN, found live 2026-08-14
+
+**Where**: `LOCKOUT_FLATTEN_RETRY` / the lockout sweep's retry loop.
+
+The retry is conditioned on "position still open". In `shadow` the flatten is not executed, so the
+position stays open, so the condition never clears:
+
+```
+13:01:24  LOCKOUT_FLATTEN_RETRY  Flatten attempt for Sim101 (position still open)
+13:01:29  LOCKOUT_FLATTEN_RETRY  Flatten attempt for Sim101 (position still open)
+13:01:34  ...   every 5 seconds, on THREE accounts, indefinitely
+```
+
+It ran from 13:01:24 until the operator flattened by hand at 13:02:24 — ~13 rounds × 3 accounts × 2
+events ≈ **78 log lines that describe nothing changing**, and it would have continued indefinitely.
+`interventions.jsonl` is the audit record, and this is the one file that has to stay readable after an
+incident.
+
+⚠️ **`An alarm that is always on is off`, again** — the fifth instance of this family (`P3-30`'s audit
+firing on a protected account, `P2-98`'s `FILL_NOT_MEASURED` on every manual fill, the two unpassable
+batteries, now this). The pattern is stable enough to state as a rule: **a retry whose exit condition
+is an action the current mode does not perform will never exit.**
+
+**Fix**: shadow must not enter the retry loop at all — it has already logged what it would do, once.
+The retry belongs to the enforcing path. ⚠️ Do NOT fix it by capping the retries: a capped loop still
+logs 78 lines on a live account where the flatten is genuinely failing, which is the case the retry
+exists for and where the operator needs it.
+
+---
+
 ## 2. P1 — Concurrency and invariant violations
 
 ### P1-10. The safety sweep holds `_stateLock` across broker calls — CLOSED 2026-08-07
