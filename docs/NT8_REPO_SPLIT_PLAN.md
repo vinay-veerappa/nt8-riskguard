@@ -227,6 +227,37 @@ from the HTTP handlers — **not** to accept an untested bridge. Same rule for
   recorded so it is not lost. **The dead `scripts/setup/` cluster that referenced it was deleted
   2026-08-12** — see that commit; 31 one-shot scripts against a UI that no longer exists.
 
+## 7a. Resolution of every forward-looking item above — added 2026-08-14 (session 40)
+
+The tables and prose above are the migration's record and are deliberately not rewritten. This
+section exists because the sections above make **commitments**, and a commitment that has been met
+but still reads as outstanding is the failure this project has now hit twice — an ordering list
+carried six closed IDs for nine sessions because closures propagated forward into the record and
+never backwards into the lists that name work. Every item below is re-derived, not remembered.
+
+| Commitment | Where | Status |
+|---|---|---|
+| §5: the bridge must not ship untested | `nt8-mcp-bridge/tests/BridgeTests.csproj` | ✅ **harness 133 passed / 0 failed**, plus 3 mutation batteries and `tools/check_bridge_parses.py`. `P2-27` is **partially** closed: the extracted classes that name no NT8 type are EXECUTED (`BridgeAccountResolver`, `BridgeOrderAction`, `BridgeFlattenPlan`, `CopierEnforcementView`, `BridgeLockoutGate`); `McpBridgeAddOn.cs` itself is still in no test build, which is what the parse gate covers |
+| §6: direction check | `nt8-riskguard/tools/check_direction.py` | ✅ exists, in CI — `OK: no addon source names a bridge-owned type (9 files checked)` |
+| §6: no fourth copy | `nt8-riskguard/tools/check_no_stray_copies.py` | ✅ exists, in CI — `OK: 9 addon source(s), no copies outside addons/` |
+| §6: deploy parity in CI | — | ⚠️ **Deliberately NOT in CI.** `--verify` compares against `%USERPROFILE%/Documents/NinjaTrader 8/`, which exists only on the trading machine; on a hosted runner it would pass **vacuously**, and a green check that proves nothing is worse than an absent one. Run it locally before and after every deploy. Recorded in `nt8-mcp-bridge/.github/workflows/ci.yml` |
+| §7: decide what to do with `ninjatrader-mcp`'s `nt8-addon/` copy | — | ✅ **Decided and executed 2026-08-14**: the whole wrapper folded into `nt8-mcp-bridge/mcp/` (history preserved) and the `nt8-addon/` copy was deleted. It was a **fourth**, divergent copy — `McpBridgeAddOn.cs` 41 KB stale, `TestingStubs.cs` 2.5 KB against a canonical 30 KB (the small stub is how a live `P0` hid behind a green suite). The submodule is gone from `tvDownloadOHLC` |
+
+**Why the wrapper went into the bridge rather than staying its own repo**, since §7 left the choice
+open: the wrapper and the addon are two halves of **one contract** — the wrapper advertises MCP tool
+schemas, the addon decides what it accepts — and **a contract with its two sides in two repos cannot
+be pinned in one commit.** Every defect ever found in the wrapper is contract drift (`P1-91`,
+`P1-72` twice, the open `F-16`). The measurable proof that it was the right call: `P1-72`'s pin used
+to be a hand-typed copy of the addon's whitelist under a comment naming where it came from — it
+caught the wrapper drifting from a list that was true when someone typed it and **could not see the
+addon change**. It now reads `addons/McpBridgeAddOn.cs` and extracts the real `knownActions`, which
+is only possible with both sides in one checkout. And the wrapper's **43 tests now run on every
+push**, where that repo had **no CI at all**.
+
+⚠️ The docs describing the wrapper moved too, and **three references were left pointing at
+`docs/architecture/` when the files landed in `docs/`** — caught by resolving every cross-repo
+reference rather than by reading them, because a stale path in Markdown renders as ordinary text.
+
 ## 8. Sequencing
 
 The operator chose: **plan now, execute in a new session.** Handover §5.5 has the next session
