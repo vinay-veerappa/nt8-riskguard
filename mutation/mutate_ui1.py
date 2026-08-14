@@ -119,8 +119,10 @@ MUTANTS = [
     ("a latency REJECTED by the sanity bound counts as a sample, so the pair reports\n"
      "     Samples > 0 against a stale or zero value -- a FALSE 'measured', which is worse\n"
      "     than a blank because it reads as a real reading",
-     '            if (latencyAccepted)\n            {\n                lock (_lock)\n                {\n                    rel.LatencyMs = latencyMs;',
-     '            if (true)\n            {\n                lock (_lock)\n                {\n                    if (latencyAccepted) rel.LatencyMs = latencyMs;'),
+     # P2-98 moved the accept/reject verdict onto the pending copy, because it is now taken
+     # once per COPY (on the first slice) rather than once per fill. Re-anchored, same mutant.
+     '            if (pending.LatencyAccepted)\n            {\n                lock (_lock)\n                {\n                    rel.LatencyMs = pending.LatencyMs;',
+     '            if (true)\n            {\n                lock (_lock)\n                {\n                    if (pending.LatencyAccepted) rel.LatencyMs = pending.LatencyMs;'),
 
     ("the latency counter is never incremented, so a genuinely measured fill still reports\n"
      "     'never measured' and the operator distrusts a working measurement",

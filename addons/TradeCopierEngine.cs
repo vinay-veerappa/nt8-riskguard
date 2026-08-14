@@ -4329,6 +4329,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool PriceComparable;
             public bool FollowerIsBuy;
             public bool IsEntry;
+
+            // P2-98. A partial fill delivers several Executions for the SAME Order object, so a
+            // copy is measured across slices and reported ONCE, when the order is done. The
+            // entry used to be consumed on the first slice, which made the metric describe the
+            // smallest piece of the copy and raised FILL_NOT_MEASURED for every other piece.
+            public int SliceCount;
+            public int FilledQuantity;
+            public double FollowerNotional;   // sum(price * qty); / FilledQuantity is the copy's VWAP
+
+            // Latency is evaluated ONCE, on the first slice: it measures how long the copy took
+            // to reach the market, not how long the market took to fill it. Carrying the verdict
+            // here rather than re-deriving it at completion is what enforces P?-66's rule -- a
+            // reading the sanity bound refused must not be quietly replaced by a later slice's,
+            // which would be a number manufactured from the same disagreeing clocks.
+            public bool LatencyEvaluated;
+            public double LatencyMs;
+            public bool LatencyAccepted;
+            public bool UsedRawSubtraction;   // reported by LATENCY_REJECTED; kept so the line can be raised later
+            public DateTime FirstSliceTime;   // the follower timestamp the reading was taken from
         }
 
         /// <summary>
@@ -4463,6 +4482,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             PendingCopy pending = null;
             CopierRelationship rel = null;
             bool pendingFound = false;
+            bool copyComplete = false;
+            bool latencyJustRejected = false;
+
+            int sliceQty = exec.Quantity;
+            int orderQty = exec.Order.Quantity;
+
             lock (_lock)
             {
                 PruneMetricCountsLocked();
@@ -4470,25 +4495,105 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // Matched on the Order object, never on OrderId -- see OrderReferenceComparer.
                 pendingFound = _pendingCopies.TryGetValue(exec.Order, out pending);
                 if (pendingFound)
-                    _pendingCopies.Remove(exec.Order);
-
-                // Resolve the canonical stored relationship. A group-derived relationship is a
-                // fresh object from ToRelationships(), so writing the metric onto the instance
-                // OnExecution was handed would update a copy that is discarded.
-                if (pendingFound)
                 {
-                    rel = _relationships.FirstOrDefault(r => r.Id == pending.RelationshipId)
-                          ?? _relationships.FirstOrDefault(r =>
-                                r.LeaderAccountName.Equals(pending.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
-                                r.FollowerAccountName.Equals(pending.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                    // P2-98: ACCUMULATE, do not consume. A partial fill delivers several
+                    // Executions for the SAME Order object; removing the entry here -- which is
+                    // what this did -- made every slice after the first miss the lookup, so the
+                    // metric described the smallest piece of the copy and the rest raised
+                    // FILL_NOT_MEASURED. The grain of a measurement is the COPY, not the slice.
+                    pending.SliceCount++;
+                    if (sliceQty > 0)
+                    {
+                        pending.FilledQuantity += sliceQty;
+                        pending.FollowerNotional += exec.Price * sliceQty;
+                    }
+
+                    // Latency on the FIRST slice only: it measures how long the copy took to
+                    // REACH the market, not how long the market took to fill it. Both timestamps
+                    // come from NT8 executions, so they are subtracted raw -- exec.Time's
+                    // DateTimeKind is not dependable and converting one side only would inject the
+                    // UTC offset as latency. When the leader timestamp is absent (the field is
+                    // optional and some feeds leave it default) fall back to wall-clock since
+                    // submit.
+                    if (!pending.LatencyEvaluated)
+                    {
+                        pending.LatencyEvaluated = true;
+                        pending.UsedRawSubtraction =
+                            pending.LeaderExecTime != default(DateTime) && exec.Time != default(DateTime);
+                        pending.LatencyMs = pending.UsedRawSubtraction
+                            ? (exec.Time - pending.LeaderExecTime).TotalMilliseconds
+                            : (DateTime.UtcNow - pending.SubmittedUtc).TotalMilliseconds;
+                        pending.FirstSliceTime = exec.Time;
+
+                        // A negative or absurd figure means the clocks disagree, not that the copy
+                        // was fast. Recording it would make the UI lie in a new direction. Once
+                        // refused it stays refused: a later slice's reading comes from the same
+                        // disagreeing clocks, so accepting it would manufacture a plausible number
+                        // out of a known-bad measurement (P?-66's rule).
+                        pending.LatencyAccepted = pending.LatencyMs >= 0 && pending.LatencyMs < 600000;
+                        latencyJustRejected = !pending.LatencyAccepted;
+                    }
+
+                    // Two completion signals, and both are load-bearing. Quantity alone loses a
+                    // copy cancelled or rejected after a partial fill: its measurement would never
+                    // be reported and its entry would sit until the bounded FIFO reaped it. Order
+                    // state alone loses the ordinary case, because NT8 does not guarantee the
+                    // state is already Filled when the last execution arrives (and the test stub
+                    // leaves a submitted order in `Submitted` for good). A degenerate order
+                    // quantity completes immediately rather than stranding the copy forever.
+                    copyComplete = RiskGuardAddOn.IsTerminal(exec.Order.OrderState)
+                        || orderQty <= 0
+                        || pending.FilledQuantity >= orderQty;
+
+                    if (copyComplete)
+                    {
+                        _pendingCopies.Remove(exec.Order);
+
+                        // Resolve the canonical stored relationship. A group-derived relationship
+                        // is a fresh object from ToRelationships(), so writing the metric onto the
+                        // instance OnExecution was handed would update a copy that is discarded.
+                        rel = _relationships.FirstOrDefault(r => r.Id == pending.RelationshipId)
+                              ?? _relationships.FirstOrDefault(r =>
+                                    r.LeaderAccountName.Equals(pending.LeaderAccountName, StringComparison.OrdinalIgnoreCase) &&
+                                    r.FollowerAccountName.Equals(pending.FollowerAccountName, StringComparison.OrdinalIgnoreCase));
+                    }
                 }
             }
 
             if (!pendingFound)
             {
+                // P2-98: this line used to assert "OrderId is display-only and must never be used
+                // as the map key". That trap is real -- OrderReferenceComparer exists because of
+                // it -- but it was NOT the cause of the misses seen live, which were later slices
+                // of ordinary partial fills. An event that fires routinely while naming a defect
+                // that is not there teaches its reader to skip it, and then it cannot report the
+                // day the defect IS there. Same failure as P3-30's audit false positives. It now
+                // says what is known and lists the causes it genuinely cannot tell apart, likeliest
+                // first.
                 CopierLog(exec.Account != null ? exec.Account.Name : null, "FILL_NOT_MEASURED",
-                    string.Format("Pending-copy lookup missed for order '{0}' (OrderId {1}). OrderId is display-only and must never be used as the map key.",
-                        exec.Order.Name, exec.Order.OrderId));
+                    string.Format("No pending copy for order '{0}' (OrderId {1}, state {2}); this fill is not measured. "
+                        + "Expected whenever the order was not submitted by this engine -- a manual or strategy fill on an "
+                        + "account that happens to be a follower. Otherwise the copy aged out of the bounded pending map, or "
+                        + "its measurement was already reported and this execution arrived afterwards.",
+                        exec.Order.Name, exec.Order.OrderId, exec.Order.OrderState));
+                return;
+            }
+
+            if (latencyJustRejected)
+                CopierLog(pending.FollowerAccountName, "LATENCY_REJECTED",
+                    string.Format("Latency {0:F1} ms rejected by sanity bound. UsedRawSubtraction={1}, LeaderExecTime={2:O}, FollowerExecTime={3:O}, SubmittedUtc={4:O}.",
+                        pending.LatencyMs, pending.UsedRawSubtraction, pending.LeaderExecTime,
+                        pending.FirstSliceTime, pending.SubmittedUtc));
+
+            if (!copyComplete)
+            {
+                // Neither a measurement nor a miss, and it must not be mistakable for either. A
+                // partial fill that logged nothing would put this path back where P?-66 found it:
+                // silence that could mean any of five things.
+                CopierLog(pending.FollowerAccountName, "FILL_SLICE",
+                    string.Format("Slice {0} of the copy on order '{1}': {2} @ {3} filled, {4} of {5} so far. Not measured yet -- the copy is reported once, when the order is done.",
+                        pending.SliceCount, exec.Order.Name, sliceQty, exec.Price,
+                        pending.FilledQuantity, orderQty));
                 return;
             }
 
@@ -4500,40 +4605,27 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
 
-            // Latency. Both timestamps come from NT8 executions, so they are subtracted raw --
-            // exec.Time's DateTimeKind is not dependable and converting one side only would
-            // inject the UTC offset as latency. When the leader timestamp is absent (the field
-            // is optional and some feeds leave it default) fall back to wall-clock since submit.
-            bool usedRawSubtraction = pending.LeaderExecTime != default(DateTime) && exec.Time != default(DateTime);
-            double latencyMs;
-            if (usedRawSubtraction)
-                latencyMs = (exec.Time - pending.LeaderExecTime).TotalMilliseconds;
-            else
-                latencyMs = (DateTime.UtcNow - pending.SubmittedUtc).TotalMilliseconds;
-
-            // A negative or absurd figure means the clocks disagree, not that the copy was fast.
-            // Recording it would make the UI lie in a new direction.
-            bool latencyAccepted = latencyMs >= 0 && latencyMs < 600000;
-            if (latencyAccepted)
+            if (pending.LatencyAccepted)
             {
                 lock (_lock)
                 {
-                    rel.LatencyMs = latencyMs;
+                    rel.LatencyMs = pending.LatencyMs;
                     int n;
                     _latencySampleCounts.TryGetValue(rel.Id, out n);
                     n++;
                     _latencySampleCounts[rel.Id] = n;
                 }
             }
-            else if (latencyMs < 0 || latencyMs >= 600000)
-            {
-                CopierLog(rel.FollowerAccountName, "LATENCY_REJECTED",
-                    string.Format("Latency {0:F1} ms rejected by sanity bound. UsedRawSubtraction={1}, LeaderExecTime={2:O}, FollowerExecTime={3:O}, SubmittedUtc={4:O}.",
-                        latencyMs, usedRawSubtraction, pending.LeaderExecTime, exec.Time, pending.SubmittedUtc));
-            }
+
+            // The copy's own average fill price, weighted by what each slice carried. An
+            // unweighted mean of the slices would be the same defect in a subtler form: a 1-lot
+            // slice counting for as much as the 9 lots beside it.
+            double followerAvgPrice = pending.FilledQuantity > 0
+                ? pending.FollowerNotional / pending.FilledQuantity
+                : 0.0;
 
             if (!pending.PriceComparable || pending.FollowerTickSize <= 0
-                || pending.LeaderFillPrice <= 0 || exec.Price <= 0)
+                || pending.LeaderFillPrice <= 0 || followerAvgPrice <= 0)
             {
                 string failing = string.Empty;
                 if (!pending.PriceComparable)
@@ -4542,16 +4634,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                     failing = failing.Length > 0 ? failing + ", FollowerTickSize<=0" : "FollowerTickSize<=0";
                 if (pending.LeaderFillPrice <= 0)
                     failing = failing.Length > 0 ? failing + ", LeaderFillPrice<=0" : "LeaderFillPrice<=0";
-                if (exec.Price <= 0)
+                if (followerAvgPrice <= 0)
                     failing = failing.Length > 0 ? failing + ", FollowerFillPrice<=0" : "FollowerFillPrice<=0";
 
                 CopierLog(rel.FollowerAccountName, "SLIPPAGE_NOT_COMPARABLE",
                     string.Format("Slippage skipped for relationship {0} on follower '{1}' because prices are not comparable. Failing conditions: {2}. Values: PriceComparable={3}, FollowerTickSize={4}, LeaderFillPrice={5}, FollowerFillPrice={6}.",
-                        rel.Id, pending.FollowerAccountName, failing, pending.PriceComparable, pending.FollowerTickSize, pending.LeaderFillPrice, exec.Price));
+                        rel.Id, pending.FollowerAccountName, failing, pending.PriceComparable,
+                        pending.FollowerTickSize, pending.LeaderFillPrice, followerAvgPrice));
                 return;
             }
 
-            double rawTicks = (exec.Price - pending.LeaderFillPrice) / pending.FollowerTickSize;
+            double rawTicks = (followerAvgPrice - pending.LeaderFillPrice) / pending.FollowerTickSize;
             // Positive always means WORSE for the follower: a buy filled above the leader, or a
             // sell filled below it. Without this the sign is meaningless and a threshold on it
             // would fire on favourable fills.
@@ -4566,16 +4659,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 rel.AvgSlippageTicks = rel.AvgSlippageTicks + (ticks - rel.AvgSlippageTicks) / n;
             }
 
-            // Report `latencyMs`, the figure this fill actually produced -- NOT `rel.LatencyMs`,
-            // which is the stored reading and is stale (or 0 on a first fill) precisely when the
-            // measurement was rejected. Printing the stored value here would put a number in the
-            // log that nothing computed for this fill, in the line that claims the fill was
-            // measured: P1-22's own defect, reproduced inside P1-22's instrumentation. When the
-            // bound rejected the reading, this line and LATENCY_REJECTED now agree on the figure.
-            string latencyNote = latencyAccepted ? string.Empty : " (REJECTED by sanity bound, not recorded)";
+            // Report `pending.LatencyMs`, the figure this copy actually produced -- NOT
+            // `rel.LatencyMs`, which is the stored reading and is stale (or 0 on a first fill)
+            // precisely when the measurement was rejected. Printing the stored value here would
+            // put a number in the log that nothing computed for this fill, in the line that claims
+            // the fill was measured: P1-22's own defect, reproduced inside P1-22's instrumentation.
+            // When the bound rejected the reading, this line and LATENCY_REJECTED agree on the
+            // figure.
+            string latencyNote = pending.LatencyAccepted ? string.Empty : " (REJECTED by sanity bound, not recorded)";
+            // P2-98: the quantity is part of the reading. `slippage=2 ticks` said nothing about
+            // whether it described one contract or ten, and live it described one of ten.
+            string sliceNote = pending.SliceCount > 1
+                ? string.Format(" across {0} slices", pending.SliceCount)
+                : string.Empty;
             CopierLog(rel.FollowerAccountName, "FILL_MEASURED",
-                string.Format("Fill measured for relationship {0}: latency={1:0.##} ms{2}, slippage={3:0.##} ticks.",
-                    rel.Id, latencyMs, latencyNote, ticks));
+                string.Format("Fill measured for relationship {0}: latency={1:0.##} ms{2}, slippage={3:0.##} ticks on {4} contract(s){5}.",
+                    rel.Id, pending.LatencyMs, latencyNote, ticks, pending.FilledQuantity, sliceNote));
 
             if (rel.MaxSlippageTicks <= 0 || ticks <= rel.MaxSlippageTicks) return;
 

@@ -324,6 +324,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo();
             TestCopierSlip_FillIsMatchedWhenOrderIdChanges();
 
+            // P2-98: the grain of a measurement is the COPY, not the slice.
+            TestP298_APartiallyFilledCopyIsMeasuredOnceAcrossAllItsSlices();
+            TestP298_TheMeasuredSlippageIsTheWholeCopyNotItsFirstSlice();
+            TestP298_AnIncompleteCopyIsNeitherMeasuredNorCalledAMiss();
+            TestP298_ASingleSliceThatBreachesAloneDoesNotQuarantineTheWholeCopy();
+            TestP298_AWholeCopyThatBreachesStillQuarantines();
+            TestP298_LatencyIsTheFirstSlicesNotTheLasts();
+            TestP298_ALatencyRejectedOnTheFirstSliceIsNotRescuedByALaterOne();
+            TestP298_ATerminalOrderStateCompletesACopyThatNeverFilledInFull();
+            TestP298_TheMissEventDoesNotAssertACauseItCannotKnow();
+
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
@@ -5771,6 +5782,288 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(LoggedEventContaining(log, "SLIPPAGE_NOT_COMPARABLE"),
                 "The skipped slippage says why. The relationship still reports 0.0 ticks forever, "
                 + "and without this line that is indistinguishable from never slipping.");
+        }
+
+        // ------------------------------------------------------------------
+        // P2-98. A partial fill delivers several executions for the SAME Order object. The
+        // pending-copy entry was consumed on the FIRST of them, so every later slice missed the
+        // lookup: the metric described the smallest slice, and the rest raised FILL_NOT_MEASURED
+        // with a diagnosis ("OrderId is display-only and must never be used as the map key") that
+        // is FALSE for this cause. Measured live 2026-08-13 -- four copies, four measured, four
+        // "not measured", every one of them a routine 1+9.
+        //
+        // The grain that matters is the COPY, not the slice: one sample, one latency, one
+        // quantity-weighted slippage, one quarantine decision. A per-slice grain is what let a
+        // 1-lot slice speak for the 9 lots carrying the risk.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Feeds back ONE SLICE of the copy the engine just submitted. `FillFollowerCopy` sends
+        /// `copy.Quantity` and is therefore always complete on its first execution, which is why
+        /// no test before this one could reach the partial-fill path.
+        ///
+        /// `markFilled` exists because the stub leaves a submitted order in `Submitted` forever:
+        /// the ONLY completion signal available to most of these tests is the accumulated
+        /// quantity. A test that wants the other signal -- a terminal order state arriving before
+        /// the quantity is complete -- asks for it explicitly.
+        /// </summary>
+        private static void FillFollowerCopySlice(
+            Account follower, Instrument inst, double price, int qty, int msAfterLeader,
+            string execId, int orderIndex = 0, bool markFilled = false)
+        {
+            var copy = follower.Orders.Where(o => o.Name == "COPIER_FOLLOW").ElementAt(orderIndex);
+            copy.Filled += qty;
+            if (markFilled) copy.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(new Execution
+            {
+                Account = follower,
+                Instrument = inst,
+                Order = copy,
+                Quantity = qty,
+                Price = price,
+                ExecutionId = execId,
+                Name = "COPIER_FOLLOW",
+                Time = SlipT0.AddMilliseconds(msAfterLeader)
+            });
+        }
+
+        /// <summary>A slip relationship that copies a fixed TEN lots, so a fill can be partial.</summary>
+        private static CopierRelationship SlipRelationshipTenLot(double maxSlippageTicks)
+        {
+            var rel = SlipRelationship(maxSlippageTicks);
+            rel.FixedLotSize = 10;
+            return rel;
+        }
+
+        /// <summary>
+        /// Drives the leader entry and returns the follower, so each test below differs only in
+        /// the slices it feeds back.
+        ///
+        /// `execId` is per-test and not defaulted, deliberately: `_copiedExecutionIds` is a
+        /// process-global dedupe cache that `SetupCopyPath` does not clear, so a shared leader id
+        /// makes the SECOND test's leader execution a silent EXEC_DUPLICATE -- no copy order, and
+        /// then an IndexOutOfRange in the slice helper rather than a failed assertion. A test that
+        /// throws prints no [FAIL] line and removes itself from the gate.
+        /// </summary>
+        private static Account P298Setup(CopierRelationship rel, Instrument mnq, DateTime leaderTime, string execId)
+        {
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            var lead = LeaderExec(leader, mnq, OrderAction.Buy, 10, execId);
+            lead.Time = leaderTime;
+            lead.Price = 18000.00;
+            TradeCopierEngine.Instance.OnExecution(lead);
+            return follower;
+        }
+
+        private static void TestP298_APartiallyFilledCopyIsMeasuredOnceAcrossAllItsSlices()
+        {
+            Console.WriteLine("\n[TEST] P2-98: a 1+9 partial fill is ONE measurement, not one measured slice and one false alarm");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LA");
+
+            var log = CaptureCopierLog(() =>
+            {
+                FillFollowerCopySlice(follower, mnq, 18001.00, 1, 250, "P298-A-1");
+                FillFollowerCopySlice(follower, mnq, 18000.00, 9, 900, "P298-A-2");
+            });
+
+            var measured = log.Where(l => l.StartsWith("FILL_MEASURED|", StringComparison.Ordinal)).ToList();
+            Assert(measured.Count == 1,
+                string.Format("Exactly one FILL_MEASURED for one copy, however many slices filled it (got {0}).",
+                    measured.Count));
+            Assert(!LoggedEventType(log, "FILL_NOT_MEASURED"),
+                "And NO FILL_NOT_MEASURED. The live log raised one per copy on a routine partial "
+                + "fill, asserting an OrderId bug that was not there -- which is how an operator "
+                + "learns to ignore the event that will one day be real.");
+        }
+
+        private static void TestP298_TheMeasuredSlippageIsTheWholeCopyNotItsFirstSlice()
+        {
+            Console.WriteLine("\n[TEST] P2-98: slippage is quantity-weighted across slices, so the 1-lot does not speak for the 9");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LB");
+
+            // 1 @ 18001.00 (4 ticks against) and 9 @ 18000.00 (flat). VWAP 18000.10 -> 0.4 ticks.
+            FillFollowerCopySlice(follower, mnq, 18001.00, 1, 250, "P298-B-1");
+            FillFollowerCopySlice(follower, mnq, 18000.00, 9, 900, "P298-B-2");
+
+            Assert(Math.Abs(rel.AvgSlippageTicks - 0.4) < 1e-9,
+                string.Format("The copy slipped 0.4 ticks on average across its ten contracts (got {0}). "
+                    + "4.0 would be the first slice's figure standing in for a copy ten times its size.",
+                    rel.AvgSlippageTicks));
+        }
+
+        private static void TestP298_AnIncompleteCopyIsNeitherMeasuredNorCalledAMiss()
+        {
+            Console.WriteLine("\n[TEST] P2-98: a copy still filling is not measured yet -- and is not reported as a lookup miss");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LC");
+
+            var log = CaptureCopierLog(() =>
+            {
+                FillFollowerCopySlice(follower, mnq, 18001.00, 1, 250, "P298-C-1");
+            });
+
+            Assert(!LoggedEventType(log, "FILL_MEASURED"),
+                "1 of 10 filled is not a measured copy. Announcing it as one is the defect: the "
+                + "number describes a tenth of the risk and reads as though it described all of it.");
+            Assert(!LoggedEventType(log, "FILL_NOT_MEASURED"),
+                "Nor is it a miss -- the pending entry is right there. The two must not look alike.");
+            Assert(LoggedEventType(log, "FILL_SLICE"),
+                "It is a SLICE, and says so. A partial fill that logged nothing would put the "
+                + "copier back where P?-66 found it: silence that could mean anything.");
+        }
+
+        private static void TestP298_ASingleSliceThatBreachesAloneDoesNotQuarantineTheWholeCopy()
+        {
+            Console.WriteLine("\n[TEST] P2-98: the quarantine decision is made on the whole copy, not on its worst slice");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(2.0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LD");
+
+            // The 1-lot slips 4 ticks -- twice the limit on its own. The copy slips 0.4.
+            FillFollowerCopySlice(follower, mnq, 18001.00, 1, 250, "P298-D-1");
+            FillFollowerCopySlice(follower, mnq, 18000.00, 9, 900, "P298-D-2");
+
+            Assert(!rel.IsQuarantined,
+                string.Format("A copy that slipped 0.4 ticks against a 2.0 limit is not quarantined "
+                    + "(reason recorded: '{0}'). Quarantine BLOCKS every future entry, so deciding it "
+                    + "on a tenth of the fill stops a healthy relationship on evidence it does not have.",
+                    rel.QuarantineReason));
+        }
+
+        private static void TestP298_AWholeCopyThatBreachesStillQuarantines()
+        {
+            Console.WriteLine("\n[TEST] P2-98: ...and a copy that really did slip past the limit still quarantines");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(2.0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LE");
+
+            // Now it is the 9-lot that slips: VWAP 18000.90 -> 3.6 ticks, past the 2.0 limit.
+            var log = CaptureCopierLog(() =>
+            {
+                FillFollowerCopySlice(follower, mnq, 18000.00, 1, 250, "P298-E-1");
+                FillFollowerCopySlice(follower, mnq, 18001.00, 9, 900, "P298-E-2");
+            });
+
+            Assert(rel.IsQuarantined,
+                "The negative case above proves nothing without this one: a threshold that never "
+                + "fires passes every 'did not fire' test there is.");
+            Assert(LoggedEventType(log, "SLIPPAGE_QUARANTINE"),
+                "And the block on future entries is recorded, per P1-71.");
+        }
+
+        private static void TestP298_LatencyIsTheFirstSlicesNotTheLasts()
+        {
+            Console.WriteLine("\n[TEST] P2-98: latency is time-to-FIRST-fill, one sample per copy");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LF");
+
+            FillFollowerCopySlice(follower, mnq, 18000.00, 1, 250, "P298-F-1");
+            FillFollowerCopySlice(follower, mnq, 18000.00, 9, 900, "P298-F-2");
+
+            Assert(Math.Abs(rel.LatencyMs - 250.0) < 1e-9,
+                string.Format("Latency is 250ms -- how long the copy took to REACH the market (got {0}). "
+                    + "900 would be how long the market took to fill ten lots, which is liquidity, not "
+                    + "the copier's responsiveness, and is what this metric exists to watch.",
+                    rel.LatencyMs));
+        }
+
+        private static void TestP298_ALatencyRejectedOnTheFirstSliceIsNotRescuedByALaterOne()
+        {
+            Console.WriteLine("\n[TEST] P2-98: a rejected latency stays rejected -- a later slice does not supply a substitute");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            // Leader stamped 500ms AFTER the first slice: the first reading is -250ms and the
+            // bound throws it out. The second slice would read +400ms and look perfectly sane.
+            var follower = P298Setup(rel, mnq, SlipT0.AddMilliseconds(500), "P298-LG");
+
+            var log = CaptureCopierLog(() =>
+            {
+                FillFollowerCopySlice(follower, mnq, 18000.00, 1, 250, "P298-G-1");
+                FillFollowerCopySlice(follower, mnq, 18000.00, 9, 900, "P298-G-2");
+            });
+
+            Assert(rel.LatencyMs == 0.0,
+                string.Format("No latency is recorded (got {0}). P?-66's rule: a reading the sanity "
+                    + "bound refused must not count as a sample. 400ms here would be a number "
+                    + "manufactured from the same disagreeing clocks that produced the -250ms.",
+                    rel.LatencyMs));
+            var rejected = log.Where(l => l.StartsWith("LATENCY_REJECTED|", StringComparison.Ordinal)).ToList();
+            Assert(rejected.Count == 1,
+                string.Format("And it is reported ONCE, for the copy, not once per slice (got {0}).",
+                    rejected.Count));
+        }
+
+        private static void TestP298_ATerminalOrderStateCompletesACopyThatNeverFilledInFull()
+        {
+            Console.WriteLine("\n[TEST] P2-98: a copy cancelled after a partial fill is measured on what it got");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationshipTenLot(0);
+            var follower = P298Setup(rel, mnq, SlipT0, "P298-LH");
+
+            var log = CaptureCopierLog(() =>
+            {
+                FillFollowerCopySlice(follower, mnq, 18001.00, 4, 250, "P298-H-1", markFilled: true);
+            });
+
+            var measured = log.Where(l => l.StartsWith("FILL_MEASURED|", StringComparison.Ordinal)).ToList();
+            Assert(measured.Count == 1,
+                string.Format("The order is terminal at 4 of 10, so the copy is over and is measured "
+                    + "on the 4 it got (got {0} FILL_MEASURED). Waiting for a tenth contract that is "
+                    + "never coming would lose the measurement entirely.", measured.Count));
+            Assert(Math.Abs(rel.AvgSlippageTicks - 4.0) < 1e-9,
+                string.Format("...and it slipped 4 ticks, the figure its own fills produced (got {0}).",
+                    rel.AvgSlippageTicks));
+        }
+
+        private static void TestP298_TheMissEventDoesNotAssertACauseItCannotKnow()
+        {
+            Console.WriteLine("\n[TEST] P2-98: FILL_NOT_MEASURED stops naming a bug that is usually not the cause");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = SlipRelationship(0);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+
+            var stranger = follower.CreateOrder(mnq, OrderAction.Buy, OrderType.Market,
+                TimeInForce.Day, 1, 0, 0, "", "NOT_A_COPY", null);
+            follower.Submit(new[] { stranger });
+
+            var log = CaptureCopierLog(() =>
+            {
+                TradeCopierEngine.Instance.OnExecution(new Execution
+                {
+                    Account = follower, Instrument = mnq, Order = stranger, Quantity = 1,
+                    Price = 18001.00, ExecutionId = "P298-I-F", Name = "NOT_A_COPY",
+                    Time = SlipT0.AddMilliseconds(250)
+                });
+            });
+
+            var miss = log.Where(l => l.StartsWith("FILL_NOT_MEASURED|", StringComparison.Ordinal)).ToList();
+            Assert(miss.Count == 1,
+                string.Format("The miss is still announced (got {0} lines).", miss.Count));
+            Assert(miss.Count == 1 && miss[0].IndexOf("display-only", StringComparison.OrdinalIgnoreCase) < 0,
+                string.Format("But it no longer asserts the OrderId-as-key bug as the cause. The "
+                    + "commonest real cause is this one -- a fill on a follower account that this "
+                    + "engine did not submit -- and sending the reader after a defect that is not "
+                    + "there is how the event stops being read. Got: {0}",
+                    miss.Count == 1 ? miss[0] : "<no line>"));
+            Assert(miss.Count == 1 && miss[0].IndexOf("not submitted by this engine", StringComparison.OrdinalIgnoreCase) >= 0,
+                string.Format("It names the likely causes instead. Got: {0}",
+                    miss.Count == 1 ? miss[0] : "<no line>"));
         }
 
         // NT8's Order.OrderId is not guaranteed unique and CAN CHANGE over an order's lifetime

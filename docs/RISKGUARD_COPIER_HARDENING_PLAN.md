@@ -2552,7 +2552,7 @@ That is the larger change and it belongs with `P3-32`/`P3-31`, not with this one
 
 ---
 
-### P2-98. A partially filled copy measures only its FIRST slice, and blames the wrong thing for the rest — OPEN, found live 2026-08-13
+### P2-98. A partially filled copy measures only its FIRST slice, and blames the wrong thing for the rest — CLOSED 2026-08-13
 
 **Where**: `TradeCopierEngine.ObserveFollowerFill` (~`:4472`).
 
@@ -2584,6 +2584,45 @@ Two consequences, and the second is the worse one:
 **Fix**: keep the pending entry until the order is terminal, and accumulate across slices.
 ⚠️ `P?-66`'s rule applies to the accumulation: a latency rejected by the sanity bound must **not**
 count as a sample, or the average silently becomes a lie again.
+
+> **Fixed 2026-08-13.** The grain of a measurement moved from the SLICE to the COPY.
+> `PendingCopy` now carries `SliceCount`, `FilledQuantity` and `FollowerNotional`; the entry is
+> removed when the order is **done**, not when it first fills; and the reported slippage is
+> `FollowerNotional / FilledQuantity` vs the leader fill — **quantity-weighted**, because an
+> unweighted mean of the slices is this same defect in a subtler form, a 1-lot counting for as
+> much as the 9 lots beside it. One sample per copy, one quarantine decision per copy.
+>
+> **Completion needs BOTH signals and neither alone is sound.** Quantity alone loses a copy
+> cancelled or rejected after a partial fill — the measurement would never be reported and the
+> entry would sit until the bounded FIFO reaped it. Order state alone loses the ordinary case,
+> because NT8 does not guarantee `OrderState` is already `Filled` when the last execution
+> arrives (and the test stub leaves a submitted order in `Submitted` for good, which is why a
+> state-only implementation passes review and measures nothing).
+>
+> **Latency is read ONCE, on the first slice**, and the verdict is carried on the pending entry.
+> That is what enforces `P?-66`'s rule: re-deriving it at completion would let a *rejected*
+> reading be replaced by a later slice's — a plausible figure manufactured out of the same
+> disagreeing clocks that produced the rejected one. It is also the right measurement:
+> time-to-first-fill is how long the copy took to **reach** the market, where time-to-complete is
+> how long the market took to fill ten lots, which is liquidity.
+>
+> **A third thing had to change, and it is not arithmetic.** `FILL_NOT_MEASURED` asserted
+> *"OrderId is display-only and must never be used as the map key"*. That trap is real —
+> `OrderReferenceComparer` exists because of it — but it was the cause of **none** of the misses
+> seen live, and the event also fires on every manual or strategy fill on an account that
+> happens to be a follower. It now states what is known and lists the causes it genuinely
+> cannot tell apart, likeliest first. A new `FILL_SLICE` event covers the gap in between: a
+> partial fill is neither a measurement nor a miss, and must not be mistakable for either.
+>
+> Nine tests, and three of them (`Latency...NotTheLasts`, `ALatencyRejected...NotRescued`,
+> `ATerminalOrderState...`) were **GREEN at baseline for the wrong reason** — the later slice
+> missed the lookup, so nothing could overwrite the first slice's reading. They are regression
+> guards on the new shape, not evidence of the old defect; the six that were red are that.
+> `mutation/mutate_p298.py`: **13 mutants, 0 survivors.**
+>
+> ⚠️ One anchor elsewhere broke on this change (`mutate_ui1.py`'s latency-sample mutant, which
+> named `latencyAccepted`/`latencyMs` — both now live on the pending copy). `check_anchors.py`
+> caught it. Re-anchored, same mutant, still killed.
 
 ---
 

@@ -301,6 +301,17 @@ jobs:
       - name: Mutation battery P0-96
         run: python mutation/mutate_p096.py
 
+      # P2-98. A partial fill delivers several Executions for the SAME Order object, and the
+      # pending-copy entry was consumed on the first of them: the metric described the
+      # SMALLEST slice, and every later slice raised FILL_NOT_MEASURED naming a cause that was
+      # not the cause. Mutant 6 is the one to know -- it keeps the fix and re-evaluates a
+      # REJECTED latency on the next slice, manufacturing a plausible figure out of the same
+      # disagreeing clocks that produced the rejected one. Mutant 4 is the other: an
+      # unweighted mean is this defect in a subtler form, a 1-lot counting for as much as the
+      # 9 lots beside it.
+      - name: Mutation battery P2-98
+        run: python mutation/mutate_p298.py
+
 # Plan section 6 also lists deploy parity (tools/sync_nt8.py --verify). It is NOT run
 # here: it compares against %USERPROFILE%/Documents/NinjaTrader 8/, which exists only on
 # the trading machine. A hosted runner has no NT8 install, so the check would either be
