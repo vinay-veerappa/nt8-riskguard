@@ -21,6 +21,17 @@ fills in small slices is scaled and rounded slice by slice. A 100-lot MNQ order 
 twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error anywhere. It came out right in the
 validation run **by luck** (5 + 95). Silent position divergence, `P0-5`'s family.
 
+⚠️ **CI had been RED for 10 pushes, back to `v1.17.0`, and it is not the code** (§5.38).
+`mutate_p330.py` and `mutate_p096.py` each declare a mutant *expected* to survive — correctly, with
+the reason no test can reach it — and then exited `1 if survivors`, so they were **unpassable from
+the commit that added them**, and the batteries after them in the workflow **never ran**. Fixed by
+`mutation/_battery.py` (a mutant declares its own expectation; fails on an unexpected survivor
+**and** on a declared one that has since been killed) plus `tools/check_expected_survivors.py`, which
+makes the class mechanical. **Run `gh run list` at the START of a session** — the note saying so was
+already in the memory store and was not acted on. **An alarm that is always on is off**: same shape
+as `P2-98`'s `FILL_NOT_MEASURED` firing on every manual fill and `P3-30`'s audit firing on a
+correctly protected account. Three instances in two sessions.
+
 ⚠️ **The shared lesson of the last two sessions: the suite models an order as ONE fill, and reality
 does not.** `P2-98` was that blind spot on the follower side; `P1-99` is the same blind spot on the
 leader side. Every existing copy-path test sends a single execution for the full quantity, which is
@@ -6716,6 +6727,67 @@ carried fractional remainder is state with four ways to go wrong that a reader c
 test sends a single execution for the full quantity — the same blind spot `P2-98` had on the
 follower side, and the reason both defects survived a green suite. **That is the shared lesson of
 this session and the last one**: the suite models an order as one fill, and reality does not.
+
+### ⚠️ And CI had been RED for 10 pushes, because two batteries could not pass
+
+**Found 2026-08-14 by running `gh run list` — after `P2-98` was already tagged, deployed and
+live-validated.** Not by CI telling anyone: CI had been telling everyone, on every push since
+`v1.17.0`, and the message never changed.
+
+```
+failure  docs: 5.38 -- P2-98 closed and live-validated ...
+failure  fix(copier): P2-98 -- measure a COPY, not its first slice
+failure  docs: section 0 bridge count 69 -> 92, stale by one commit
+failure  docs: 5.37 -- P1-97 closed the same hour ...
+failure  docs: 5.36 -- the live validation ...
+failure  docs: re-derive the four documents ...
+failure  docs: handover 5.35 -- P0-96 ...
+failure  P0-96: a leader covering a SHORT sent the follower a Sell ...
+failure  docs: handover 5.34 -- the copier mode's read surface ...
+failure  v1.17.0: two defects the LIVE audit log found in P3-34 ...
+```
+
+**The cause is not a defect in the code and not a flaky runner.** `mutate_p330.py` and
+`mutate_p096.py` each declare a mutant that is *expected* to survive, correctly and in prose,
+with the reason no test can reach it — the lock-scope mutant, and the reconciler mutant inside
+`#if !TESTING` that `check_no_dead_safety_machinery.py` records as `KNOWN_DEAD`. Both then ended
+with the shared
+
+```python
+sys.exit(1 if survivors else 0)
+```
+
+which is right for the other 22 batteries and **impossible** for these two. They were **red by
+design from the commit that added them**, and the step is early enough in the workflow that
+`P3-34`, `P0-96` and `P2-98`'s own batteries **never ran at all** on any of those ten pushes.
+
+**This is the repo's own recurring lesson, landing inside the gate.** *A gate nobody reads is a
+comment* was written down after `check_version_matches_tag.py` ran red for 7 runs across three
+sessions while the docs claimed green. This is worse than that one: a gate that ran red for a
+*real* reason at least described something true. **A gate that cannot pass describes nothing**,
+and a constant answer is one nobody re-reads — which is exactly the argument `P2-98` made about
+`FILL_NOT_MEASURED` firing on every manual fill, and `P3-30` made about an audit that fired on a
+correctly protected account. Three instances of one shape in two sessions: **an alarm that is
+always on is off.**
+
+**Fix**: `mutation/_battery.py`. A mutant declares its own expectation — a description beginning
+`EXPECTED SURVIVOR:` must survive, everything else must die — so there is no second list to drift
+(a second copy of a fact is a second thing to forget). It **fails in both directions**: an
+unexpected survivor fails, *and* a declared survivor that has since been **KILLED** fails, because
+that is good news which makes the declaration false, and a stale exemption is how an allowlist
+rots into a blanket.
+
+**And the class is mechanical**: `tools/check_expected_survivors.py`, wired into CI beside
+`check_ci_runs_every_battery.py`, refuses a battery that declares an expected survivor and keeps
+the plain exit **and** a battery that routes through the helper without declaring one. It was
+watched failing in both directions before being trusted — the `P3-30` rule, applied to the gate
+that enforces `P3-30`.
+
+⚠️ **The process lesson is the cheap one and it was already written down**: `gh run list` takes
+about five seconds and belongs at the **start** of a session, not after a deploy. It was skipped
+here, and a claim that CI was running-and-would-be-reported was made over a workflow that had
+been failing for ten pushes. `check-ci-before-trusting-docs` says exactly this; having the note
+is not the same as running the command.
 
 ### Two process notes worth more than they look
 

@@ -53,6 +53,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _battery
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 
@@ -96,8 +99,8 @@ MUTANTS = [
      'if (!isProtected || covered < positionQty)',
      'if (!isProtected || covered > positionQty)'),
 
-    ("the audit holds _stateLock across the broker reads (P1-10/P1-12: a broker call under\n"
-     "     the state lock is how this addon deadlocks). Expected to SURVIVE unless the lock\n"
+    ("EXPECTED SURVIVOR: the audit holds _stateLock across the broker reads (P1-10/P1-12: a\n"
+     "     broker call under the state lock is how this addon deadlocks). Survives unless the lock\n"
      "     invariant drives the audit path -- recorded here rather than left to be rediscovered",
      '            try\n            {\n                foreach (Account account in Account.All)\n                {\n                    string accountName = account.Name;',
      '            try\n            {\n                lock (_stateLock)\n                foreach (Account account in Account.All)\n                {\n                    string accountName = account.Name;'),
@@ -150,6 +153,4 @@ for name, old, new in MUTANTS:
 
 open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
 print('\nrestored original;', run())
-print('\nSURVIVORS:', survivors if survivors else 'none')
-
-sys.exit(1 if survivors else 0)
+_battery.finish(survivors, MUTANTS)

@@ -53,6 +53,16 @@ jobs:
       - name: Every mutation battery is wired into this workflow
         run: python tools/check_ci_runs_every_battery.py
 
+      # ...and a battery that IS wired in must be able to pass. Two batteries described a
+      # mutant as "Expected to SURVIVE" -- correctly, with the reason no test can reach it --
+      # and then exited 1 for it, so THIS WORKFLOW FAILED ON 10 CONSECUTIVE PUSHES ACROSS
+      # THREE SESSIONS and nobody looked, because the answer was always the same. A gate that
+      # cannot pass is not a gate; it trains its readers to skip the one signal checking 24
+      # batteries, 263 anchors and 1328 tests. Fails in both directions: a declared survivor
+      # needs `_battery.finish`, and a battery without one must keep the plain exit.
+      - name: A declared EXPECTED SURVIVOR does not make a battery unpassable
+        run: python tools/check_expected_survivors.py
+
       # P2-24's class, made mechanical. Safety machinery that is written and never called
       # passes every other gate here -- it compiles, its own tests call it directly so the
       # suite is green, and the config surface advertising it looks configured. Session 34

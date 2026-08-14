@@ -59,6 +59,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _battery
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 COPIER = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 
@@ -88,8 +91,8 @@ MUTANTS = [
      '                else if (isExit)\n                {',
      '                else if (true)\n                {'),
 
-    ("the RECONCILER goes back to comparing signs, returning its only broker-acting branch to\n"
-     "     one that cannot fire. Expected to SURVIVE: ReconcileFollowerPosition is inside\n"
+    ("EXPECTED SURVIVOR: the RECONCILER goes back to comparing signs, returning its only\n"
+     "     broker-acting branch to one that cannot fire. ReconcileFollowerPosition is inside\n"
      "     `#if !TESTING` and is called by nothing, so no test here can reach it. When P2-27\n"
      "     makes it testable, this is the first test to write",
      '            bool directionMismatch =\n'
@@ -145,6 +148,4 @@ for name, old, new in MUTANTS:
 
 open(COPIER, 'w', encoding='utf-8', newline='').write(ORIGINAL)
 print('\nrestored original;', run())
-print('\nSURVIVORS:', survivors if survivors else 'none')
-
-sys.exit(1 if survivors else 0)
+_battery.finish(survivors, MUTANTS)
