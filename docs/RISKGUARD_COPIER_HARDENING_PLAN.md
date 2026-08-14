@@ -3091,7 +3091,7 @@ this from "the flatten failed" into "and you cannot fix it".
 
 ---
 
-### P1-106. A lockout refuses the order that would CLOSE the position it is locking you out of — OPEN, filed 2026-08-14
+### P1-106. A lockout refuses the order that would CLOSE the position it is locking you out of — ✅ CLOSED 2026-08-14 (session 39), refusal half live-validated
 
 **Where**: `McpBridgeAddOn.cs` — the `IsAccountLocked` gate in `PlaceOrder`, `PlaceOcoOrder` and
 `PlaceAtmOrder`. Filed while closing `P0-104`; it is the half of that incident the fix does not
@@ -3124,6 +3124,50 @@ even under a lockout, and log it as such. Two things to get right:
   (`P1-97`, and `nt8-position-quantity-is-absolute`'s second half).
 
 A test asserting only that a locked account refuses an entry passes under this defect.
+
+**✅ CLOSED 2026-08-14 (session 39).** The decision moved into `nt8-mcp-bridge/addons/
+BridgeLockoutGate.cs` — one predicate, three callers, `P1-100`'s shape deliberately — and the
+bare `if (IsAccountLocked(...)) return blocked;` is gone from all three order paths.
+
+* `PlaceOrder` admits an order that **strictly reduces**: opposite side, quantity ≤ |position|.
+  The lockout test **moved down the method**, past the point where the instrument and the
+  account's position in it are known — it used to run before the symbol was even read, which is
+  why it could not tell an entry from an exit.
+* **The quantity clamp is the load-bearing half.** A `Sell 20` against a long 11 is an exit *and*
+  a new short 9, netted by NT8 into one order the operator reads as an "exit". The refusal names
+  the 9 and the quantity that would work.
+* **It reads the position, never the `OrderAction` label.** The direction passed in is the
+  *request's* `buy`/`sell`; feeding `resolvedAction` back would re-read a label the caller chose,
+  one statement after `P1-97` fixed exactly that. A source assertion pins it.
+* ⚠️ **`PlaceOcoOrder` and `PlaceAtmOrder` stay refused, and that is a decision rather than an
+  omission.** Both submit an entry plus stop and target legs, and the legs take the *opposite*
+  side — so an OCO whose entry flattens a long leaves a resting stop and target that **OPEN a
+  short** once either triggers. A bracket cannot be admitted on the strength of its entry. Both
+  refusals now name a path that does work (a plain order, or `nt_close_position`, which is
+  ungated).
+
+**Evidence.** Bridge harness **133/0** (9 new tests). Battery `mutation/mutate_p1106.py`:
+**8 mutants, 8 killed**. `nt_compile` **0 errors** on net48. Live on Sim101, locked by the panic
+switch and flat: both a `buy 1` and a `sell 1` were refused with *"is locked out and the account
+is FLAT in this instrument, so this order can only open risk"* — text that exists only in the new
+class, so the wiring is proven in the running assembly, not just on disk.
+
+⚠️ **The ADMIT branch could not be driven live, and the reason is a finding — see `P1-102`.**
+Proving it needs a lockout imposed on an account that already holds a position, and **the
+deployed system offers no way to do that**: `/api/lockout` implements only `unlock`/`reset`/
+`clear` (anything else, including `lock`, silently falls through to a status read and returns
+`success: true, isLockedOut: false`), and the only code path that imposes the binding bridge
+lockout is `EmergencyFlatten`, which flattens the position *before* it locks. A guard-side
+lockout does not help either: the box runs `shadow`, where `LockoutBinds` correctly returns false
+(`P1-100`). So the admit branch rests on the executed predicate, its 8/8 battery — mutant 1
+restores the shipped defect verbatim and dies against the exit tests — and the source gate on the
+three call sites. **Say which half was measured; do not let one green stand for both.**
+
+⚠️ **The mutation battery found a real gap the review did not**: mutant 7 replaced
+`Math.Abs(positionQuantity)` with the raw value and **survived**, because every test passed a
+positive quantity. With a signed `-11`, `11 > -11` refuses a legitimate cover — `P1-106` restored
+on the short side only, which is precisely how `P0-96` hid behind 1311 green tests. The killing
+test passes a signed quantity deliberately.
 
 ---
 

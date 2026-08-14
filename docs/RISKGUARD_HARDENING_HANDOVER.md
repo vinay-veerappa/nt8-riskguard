@@ -245,14 +245,14 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1436 passed, 0 failed**; **bridge 108 passed, 0 failed**; **MCP wrapper 43 passed, 0 failed** — all re-measured 2026-08-14 (session 39) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
-| **Defects** | **117 IDs — 103 closed, 14 open**, re-derived 2026-08-14 (session 39) by the `grep` in §5.0 plus the composition table beside it: **106** banded plan entries (13 open) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-9`…`F-16`; only `F-16` open). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), not defects, and are deliberately not in this total. The 13 open banded entries are `P1-106`, `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, and three PARTIALLY closed with a recorded remainder: `P0-9`, `P1-13`, `P2-27`. **The whole `P0-1`…`P0-8` block is CLOSED**, and every heading now carries a status token — until session 39 those eight carried none and a prose note stood in for one | `python tools/check_next_list_ids.py`, which derives it and refuses to pass vacuously |
-| **Do next** | 🆕 **`P1-106`** — a lockout refuses the order that would **close** the position it is locking you out of; the half of `P0-104` (closed) that its fix left deliberately. Read the **position**, never the `OrderAction` label (`P1-97`, closed), and clamp on **quantity** — a `Sell 20` against a long 11 is an exit *and* a new short 9. Then **`P2-107`** (outbound action de-duplication at `CoalesceActions`, once for all producers), then `P1-105`, `P1-102`, `P2-103`, then the architectural `P2-29` / `P3-33`. ⚠️ This row named **six closed IDs** for nine sessions — see §5.6 | §5.6, and `python tools/check_next_list_ids.py` |
+| **Suite** | **core 1436 passed, 0 failed**; **bridge 133 passed, 0 failed** (9 added by `P1-106`); **MCP wrapper 43 passed, 0 failed** — all re-measured 2026-08-14 (session 39) | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Defects** | **117 IDs — 104 closed, 13 open**, re-derived 2026-08-14 (session 39) by the `grep` in §5.0 plus the composition table beside it: **106** banded plan entries (12 open) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-9`…`F-16`; only `F-16` open). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), not defects, and are deliberately not in this total. The 12 open banded entries are `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, and three PARTIALLY closed with a recorded remainder: `P0-9`, `P1-13`, `P2-27`. **The whole `P0-1`…`P0-8` block is CLOSED**, and every heading now carries a status token — until session 39 those eight carried none and a prose note stood in for one | `python tools/check_next_list_ids.py`, which derives it and refuses to pass vacuously |
+| **Do next** | 🆕 **`P2-107`** — `PEAK_GIVEBACK_BREACH` re-emits its flatten on every evaluation (7 in ~20s, on two follower accounts, found in the validation run of `P2-101`, closed). **De-duplication belongs where actions LEAVE the guard**, at `CoalesceActions`, not inside each producer — and it must not suppress a `live` re-attempt doing real work. Then `P1-105`, `P1-102`, `P2-103`, then the architectural `P2-29` / `P3-33`. ✅ `P1-106` closed in session 39 (section 5.47) | §5.6, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, all three repos. **29 tags**, `v1.0.0`…**`v1.22.0`** — measured 2026-08-14 | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.22.0` core + bridge are live in NT8** — measured 2026-08-14 (session 39) from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files identical)** and `deploy.py --verify` **ALL IN SYNC (13 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs`, `BridgeAccountResolver.cs`, `BridgeFlattenPlan.cs` and `CopierEnforcementView.cs` on top of the vendored core. ⚠️ **A green `--verify` from both repos does NOT mean the box loaded your code** — it compares content hashes of the files each repo OWNS, and cannot see a third file, owned by nobody, that breaks the assembly they belong to. Session 37 had 651 compile errors under two green verifies | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.22.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-14 (session 39)**. The firm mapping is LIVE on 94 accounts, including the funded 50K TPT PRO | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/version` (Bearer, **not** `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
-| **Mutation** | **29 batteries** — **27 here** + **2 in `nt8-mcp-bridge`** (`mutate_p190`, `mutate_p0104`; ⚠️ that repo's CI ran **neither** until §5.44, because `check_ci_runs_every_battery.py` is per-repo). **283 anchors / 0 broken — measured 2026-08-14.** Three declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant, `mutate_p2101`'s redundant reset); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run them all locally (283 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push as a MATRIX, so a push is 12–20m, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **Mutation** | **30 batteries** — **27 here** + **3 in `nt8-mcp-bridge`** (`mutate_p190`, `mutate_p0104`, `mutate_p1106`; ⚠️ that repo's CI ran **neither** until §5.44, because `check_ci_runs_every_battery.py` is per-repo). **283 anchors / 0 broken — measured 2026-08-14.** Three declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant, `mutate_p2101`'s redundant reset); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run them all locally (283 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push as a MATRIX, so a push is 12–20m, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 39) on `v1.22.0`**. 25 warnings, every one pre-existing and in a third-party indicator (`CS0108`/`CS3005` name hiding and CLS compliance). ⚠️ **ALWAYS read `errorCount`, never the call's success.** Session 37 got **651 errors** while `nt_health` read healthy — 96 accounts, feed connected, guard armed — because **NT8 keeps running the LAST GOOD assembly**, so a broken deploy is indistinguishable from one that worked. The cause was a duplicate `.cs` (`CS0101`, then 496 × `CS0229`), which no `--verify` can see. ⚠️ And a green net8.0 suite cannot see production either: `P3-30`'s audit timer sat inside `#if TESTING`, so 1275 green tests passed over a feature absent from the net48 assembly | `nt_compile`, and read `errorCount` |
 | **CI** | **Green in both repos, measured 2026-08-14 (session 39)**: the last five `nt8-riskguard` runs all succeeded at **11m48s–19m31s**, and the last five `nt8-mcp-bridge` runs at 1m17s–2m36s. ⚠️ **Run this BEFORE the first claim about state, not after a deploy.** It has been red-and-unread twice: 7 consecutive runs across sessions 27–29 on a correct version gate, and **10 consecutive runs back to `v1.17.0`**, found only in session 36, because two batteries were unpassable by construction and every battery after them never ran | `gh run list -R vinay-veerappa/nt8-riskguard -L 10`; same for `nt8-mcp-bridge` |
 | **Bridge pin** | ✅ **`v1.22.0`, and the RANGE is empty** — `git diff --name-only v1.22.0..main -- addons/` returns nothing, measured 2026-08-14. ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range, and the pin has gone stale FOUR times, each caught by `deploy.py --verify` refusing (exit 2). The worst was session 33's — core `main` ran 21 commits past `v1.12.2` with 7 touching `addons/`, so deploying would have **reverted `F-9`, `F-9b` and `P2-92` out of a live NT8**. Any core commit past the tag puts it behind, so the remedy is a tag per core CHANGE, not per session | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify`, and `git diff --name-only <pin>..main -- addons/` |
@@ -3348,7 +3348,7 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-106` — the lockout that traps you in the position
+> ### Do next: `P2-107` — de-duplicate actions where they LEAVE the guard
 >
 > **Updated session 39 (2026-08-14).** Every block below this one is struck through and
 > kept for the order it forced, not for its contents.
@@ -3365,21 +3365,28 @@ the *order* they forced is the reusable part.
 > directions — it also requires every plan entry to *carry* a status, which is the half
 > that would have rotted.
 >
-> **`P1-106` is the item to do next.** A lockout refuses the order that would **close** the
-> position it is locking you out of — the half of `P0-104` (closed) that its fix left deliberately,
-> and what turns "the flatten failed" into "and you cannot fix it by hand". The guard has
-> `IsPositionReducingOrder` for exactly this reason (`P1-44`, closed); the bridge's three order
-> paths do not.
+> ✅ **`P1-106` closed in session 39** (section 5.47) — a lockout now admits an order that
+> strictly reduces the position, and refuses a bracket even when its entry would. Refusal half
+> live-validated; the admit half rests on an 8/8 battery, because **nothing on the box can impose
+> a lockout on an account that holds a position** (section 5.47, and it enlarges `P1-102`).
 >
-> ⚠️ Two things to carry into the fix, both already paid for. **Read the POSITION, never
-> the `OrderAction` label** — `P1-97` (closed) is that mistake in the copier, where an MCP short
-> entry read as an exit because the caller picks the label. And **clamp on quantity**: a
-> `Sell 20` against a long 11 is an exit *and* a new short 9, so "is this reducing?" is not
-> a yes/no question about the order. `PlaceOrder` already computes the position (`P1-97`, closed),
-> so the information is at the refusal site.
+> **`P2-107` is the item to do next.** `PEAK_GIVEBACK_BREACH` re-emits its flatten on **every
+> evaluation** — 7 emissions in ~20 seconds on two follower accounts, found in the validation
+> run of `P2-101` (closed), within the hour of that fix landing. Same family, different
+> mechanism: `P2-101` (closed) bounded a timer, this is per-evaluation, so it has no spacing at all and its rate is set
+> by market data.
 >
-> Then **`P2-107`** — the outbound action de-duplication, done once for all producers at
-> `CoalesceActions` rather than inside each one. Then `P1-105`, `P1-102`, `P2-103`.
+> ⚠️ **That is the finding, not the instance.** `P2-101` (closed) was fixed inside `EvaluateLockoutPhase`,
+> one of several producers of repeated actions, and the second instance turned up on the first
+> accounts anyone looked at. **De-duplication belongs where actions LEAVE the guard, not inside
+> each producer.** `CoalesceActions` (`P1-19`, closed) already sits on that path and merges within
+> one batch; nothing suppresses the identical batch arriving three seconds later.
+>
+> ⚠️ Whatever goes there **must not suppress a `live` re-attempt doing real work** — the budget
+> of 6 in `P2-101` (closed) exists because a broker can reject a flatten — so the record has to clear when the
+> condition resolves, not on a timer. Sixth instance of *an alarm that is always on is off*.
+>
+> Then `P1-105`, `P1-102`, `P2-103`.
 
 > ### ~~Do next: `P1-99` — the copier's SIZING GRAIN~~ (session 36, superseded)
 >
@@ -7626,8 +7633,111 @@ CI green in both repos. Defect total re-derived: **117 IDs — 103 closed, 14 op
 
 ### Order from here
 
-1. **`P1-106`** — a lockout refuses the order that would CLOSE the position it is locking you out
-   of. The guard has `IsPositionReducingOrder` for exactly this reason (`P1-44`, closed); the
-   bridge's three order paths do not.
-2. **`P2-107`** — the outbound action de-duplication, done once for all producers.
-3. **`P1-105`**, then **`P1-102`**, then **`P2-103`**.
+1. **`P2-107`** — the outbound action de-duplication, done once for all producers, at
+   `CoalesceActions` rather than inside each one.
+2. **`P1-105`**, then **`P1-102`** (which grew in section 5.47 — nothing can IMPOSE a lockout
+   either), then **`P2-103`**.
+
+✅ `P1-106` was closed in this same session — see section 5.47.
+
+## 5.47 `P1-106` closed — a lockout must stop you OPENING risk, never CLOSING it
+
+**`P1-106` is CLOSED.** All three bridge order paths were the same three lines:
+
+```csharp
+if (IsAccountLocked(account.Name))
+    return new { error = "Order blocked: Account " + name + " is locked out." };
+```
+
+which does not care what the order **does**. Measured during `P0-104`'s reproduction: Sim101 long
+11, locked by the panic switch, and a `Sell` refused. **The lockout trapped the operator in the
+exact risk it exists to limit** — the half of `P0-104` its fix deliberately left, and what turned
+"the flatten failed" into "and you cannot fix it by hand".
+
+The guard has had this notion since `P1-44`: its entry-cancel block is gated by
+`IsPositionReducingOrder`, precisely so a rate limit can never cancel a protective order and leave
+a position naked. The bridge had it nowhere.
+
+### The fix
+
+`addons/BridgeLockoutGate.cs` — one predicate, three callers, `P1-100`'s shape deliberately. It
+names no NT8 type, so `tests/BridgeTests.csproj` **executes** it (`P2-27`'s pattern, the fifth
+file to use it).
+
+* `PlaceOrder` admits an order that **strictly reduces**: opposite side, quantity ≤ |position|.
+  ⚠️ **The lockout test had to MOVE DOWN the method**, past the point where the instrument and the
+  position in it are known. It used to run before the symbol was even read — it could not have
+  told an entry from an exit even if it had wanted to. The cost is one thing worth naming: an
+  unparseable request on a locked account now reports the parse error rather than the lockout.
+* ⚠️ **The quantity clamp is the load-bearing half.** A `Sell 20` against a long 11 is an exit
+  *and* a new short 9, which NT8 nets into one order the operator reads as an "exit". Same
+  arithmetic as `P0-6`'s exit clamp and `P1-99`'s delta clamp: **the clamp goes on what is NEW.**
+  The refusal names the 9 *and* the quantity that would work — a refusal the operator cannot act
+  on is one they retry blind.
+* ⚠️ **It reads the POSITION, never the `OrderAction` label.** The direction passed in is the
+  *request's* `buy`/`sell`. Feeding `resolvedAction` back in would re-read a label the caller
+  chose — `P1-97` reintroduced one statement after the code that fixed it — so a source assertion
+  forbids exactly that.
+* ⚠️ **`PlaceOcoOrder` and `PlaceAtmOrder` stay refused, and that is a decision, not an
+  omission.** Both submit an entry plus stop and target legs, and the legs take the **opposite**
+  side — so an OCO whose entry flattens a long leaves a resting stop and target that **OPEN a
+  short** once either triggers. A bracket cannot be admitted on the strength of its entry. Both
+  refusals now name a path that works (a plain order, or `nt_close_position`, which is ungated).
+
+### Evidence, and which half is which
+
+Bridge harness **133/0** (9 new tests). `mutation/mutate_p1106.py`: **8 mutants, 8 killed**.
+`nt_compile` **0 errors** on net48.
+
+Live on Sim101, locked by the panic switch and flat, **both** directions were refused:
+
+```
+buy 1  -> Order blocked: Account Sim101 is locked out and the account is FLAT in this
+          instrument, so this order can only open risk.
+sell 1 -> (the same)
+```
+
+That text exists only in the new class, so **the wiring is proven in the running assembly**, not
+merely on disk. `nt_emergency_flatten` also reported `residualCancelled: 0` again — `P0-104`
+holding.
+
+⚠️ **The ADMIT branch could not be driven live, and the reason is a finding.** It needs a lockout
+imposed on an account that *already holds a position*, and **nothing on the box can do that**:
+
+* `/api/lockout` implements only `unlock`/`reset`/`clear`. **Anything else — including
+  `action: "lock"` — falls through to a status read and returns `success: true,
+  isLockedOut: false`**, which reads as "I locked it and it isn't locked".
+* the only code path that imposes the binding bridge lockout is `EmergencyFlatten`, which
+  flattens the position *before* it locks;
+* a guard-side lockout does not help, because the box runs `shadow` and `LockoutBinds` correctly
+  returns false there (`P1-100`).
+
+**That enlarges `P1-102`**, which was filed as "no MCP tool reads or clears a lockout". It cannot
+**impose** one either, and the one verb it does advertise silently does nothing. So the admit
+branch rests on the executed predicate, the battery (mutant 1 restores the shipped defect verbatim
+and dies against the exit tests), and the source gate on the three call sites. **Say which half
+was measured — do not let one green stand for both.**
+
+### ⚠️ The battery found a gap the review did not
+
+Mutant 7 replaced `Math.Abs(positionQuantity)` with the raw value and **survived**, because every
+test passed a positive quantity. It is tempting to call that unkillable by construction — NT8's
+`Position.Quantity` really is absolute — and that would have been wrong. With a signed `-11`,
+`11 > -11` refuses a legitimate cover: **`P1-106` restored, on the short side only**, which is
+precisely how `P0-96` hid behind 1311 green tests. The killing test passes a signed quantity
+deliberately, and the mutant is now dead rather than declared.
+
+### Also: the bridge's battery gate, ported
+
+Session 38 found that this repo's CI **ran neither of its batteries** and fixed it by adding two
+steps by hand — the instance, not the class. A third battery could arrive tomorrow and sit unwired
+for just as long, which is exactly what the first two did. `tools/check_ci_runs_every_battery.py`
+is ported here now (it is per-repo by construction, so the core's copy could never have seen this
+side), strips comments before matching, and was **watched failing on a battery described in a
+comment but not run**.
+
+### Order from here
+
+1. **`P2-107`** — the outbound action de-duplication, at `CoalesceActions`, once for all
+   producers.
+2. **`P1-105`**, then **`P1-102`** (now larger than filed, above), then **`P2-103`**.
