@@ -3012,6 +3012,76 @@ habit — detection by substring over a region nobody bounded:**
   status, and as the matrix comment that would have counted a deleted battery as wired. **Three
   gates, one habit.**
 
+**Live-validated 2026-08-14 on Sim101**, guard armed in `shadow` at `v1.23.0`, `nt_compile`
+`errorCount: 0`. `DailyLossLimit` was temporarily lowered to force the breach, then the config was
+restored **byte-for-byte** (md5 verified against a backup taken first) and the account flattened.
+
+`DAILY_LOSS_BREACH` — a rule with **no** producer-local latch, so it evaluates true on every PnL
+tick — produced, per episode, **exactly one `SHADOW_ACTION` and exactly one `ACTION_SUPPRESSED`**:
+
+```
+14:36:59.162  SHADOW_ACTION      [SHADOW] Would execute action FlattenPosition triggered by DAILY_LOSS_BREACH
+14:36:59.162  ACTION_SUPPRESSED  Holding back FlattenPosition from DAILY_LOSS_BREACH on Sim101: already
+                                 reported once and the condition has not resolved; the guard is not acting,
+                                 so repeating it adds nothing. Attempt 1 of budget 1, producer
+                                 AccountItemUpdate. This is the last line about it until the condition resolves.
+```
+
+Both at the same millisecond, because NT8 delivers several `AccountItem` changes in one burst and
+each is a separate dispatch into the same scope. The producer, budget and attempt in that line
+exist only in the new class, so the wiring is proven **in the running assembly** and not just on
+disk. The historical file holds **378** `DAILY_LOSS_BREACH` shadow lines under the old behaviour.
+
+### ⚠️ The exemplar this defect was FILED on was not an instance of it
+
+`PEAK_GIVEBACK_BREACH` has had a **producer-local latch since `v1.0.0`** (commit `b125132`,
+2026-08-06): it fires on the first breach of an episode and re-fires only when the position gives
+back **further than the prior trigger point** (`worsenedSinceTrigger`). That was live when the
+7-in-~20s burst was captured, so those seven lines were **seven genuinely deeper givebacks on a
+fast move**, not one condition reported seven times — and `P2-107` correctly does **not** suppress
+them. Measured again live: three emissions in four seconds, **zero** suppressions, because each was
+a new episode by the rule's own definition.
+
+**So the filing generalised from an exemplar that did not belong to the class, and reached the
+right conclusion anyway.** The class is real and large — every rule *without* a latch
+(`DAILY_LOSS_BREACH` 378, `MAX_TRADES_BREACH` 251, `EDGE_WINDOW_BREACH` 123, `MAX_SIZE_BREACH`,
+`AGGREGATE_SIZE_BREACH`, `CONSECUTIVE_LOSS_BREACH`) was streaming one line per evaluation, and each
+of those is now one per episode. But the specific reading *"`PEAK_GIVEBACK` re-emits the same
+demand"* was wrong, and it would have become folklore if the fix had been validated only against
+the suite. **Check whether the exemplar has its own bound before generalising from it** — and
+re-drive the exact instance live, because the suite cannot tell you that the rule you are citing
+already solved its own half.
+
+---
+
+### P2-108. `NAKED_POSITION` repeats every 10 seconds on a path `P2-107` does not cover, because it is a LOG and not an action — OPEN, found live 2026-08-14
+
+**Where**: the guard audit (`P3-30`'s detector), which calls `LogEvent` directly rather than
+raising a `GuardAction`. `DispatchActions` therefore never sees it.
+
+Measured on Sim101 during `P2-107`'s own live validation, holding one unstopped 2-lot in `shadow`:
+
+```
+14:42:05  NAKED_POSITION  MNQ SEP26: position=2, fsmState=FlattenPending, covered=0, gap=2
+14:42:15  ... 14:42:25, 14:42:35, 14:42:45, 14:42:55   -- 12 identical lines in 120 seconds
+```
+
+**180 in the log, 142 of them today.** The condition is real — the position genuinely has no stop —
+but the guard is in `shadow`, so it cannot attach one, so the audit interval is the only thing
+setting the rate. That is *a retry whose exit condition is an action the current mode does not
+perform* (`P2-101`) restated for an alarm, and the **seventh** instance of *an alarm that is always
+on is off*.
+
+**Why it is a separate ID and not a `P2-107` remainder**: `P2-107` de-duplicates **actions**, at the
+point where they leave the guard. This is a log line with no action behind it, so no amount of work
+in `DispatchActions` reaches it. The fix has to sit at `LogEvent` for the alarm event types, or the
+audit has to carry its own "already reported, not yet resolved" record — and **whichever is chosen,
+it must not be a third mechanism**: that is the mistake `P2-107` exists to stop repeating.
+
+⚠️ Note the shape of the discovery: it was found by **driving the deployed box**, in the validation
+run of the fix for its own predecessor — exactly as `P2-107` was found in `P2-101`'s. Third time in
+three sessions that the validation run produced the next defect.
+
 ---
 
 ### P1-102. There is no MCP tool to READ or CLEAR a lockout, so an account frozen by the guard cannot be recovered by the agent that is driving it — OPEN, found 2026-08-14
