@@ -2,8 +2,9 @@
 
 **Last updated**: 2026-08-14 (**session 38 — §5.43**). Core **`v1.21.0`** is tagged, deployed and
 **NT8-compiled clean (0 errors)** — suite **1424/0**, bridge **92/0**, MCP wrapper **43/0**, **26**
-core mutation batteries + the bridge's 1, **276 anchors / 0 broken**, all 8 gates green. **114 IDs,
-10 open.** Every figure here was **measured, not incremented**.
+core mutation batteries + the bridge's **2** (and CI in that repo now runs them — it ran
+**neither** until §5.44), **276 anchors / 0 broken**, all 8 gates green. Bridge harness **108/0**.
+**116 IDs, 10 open.** Every figure here was **measured, not incremented**.
 
 ✅ **`P1-100` is CLOSED and live-validated** (§5.43). A SHADOW-only lockout blocked real orders —
 `CanTrade` was right, but the bridge's three order paths and `GET /api/lockout` all ask
@@ -13,13 +14,20 @@ reported an account free to trade through a timed manual lockout. One predicate 
 three readers, none re-deriving. ⚠️ **The funded 50K TPT PRO account was being gated by it too** — a
 defect found on sim was never confined to sim.
 
-⚠️ **`P0-104` is now the item to do next, and it is the only `P0` open.** `nt_emergency_flatten` —
-the panic kill-switch — **cancels its own flatten order** in its "residual bracket" pass, reports
-`success: true, flattenedAccounts: 1`, and then locks the account so `nt_place_order` refuses the exit
-the operator would place by hand. Measured on Sim101: stops cancelled, flatten cancelled, account
-locked, position still long 11, and nothing said so. Then **`P2-101`** (the shadow retry, now known to
-fire on the funded account as well and in a second flavour), then `P1-102`, `P1-105`, `P2-103`,
-`P2-95`.
+✅ **`P0-104` is CLOSED and live-validated** (§5.44). `nt_emergency_flatten` — the panic kill-switch
+— **cancelled its own flatten order** in its "residual bracket" pass, reported success, and then
+locked the account so `nt_place_order` refused the exit the operator would place by hand. Stops
+cancelled, flatten cancelled, account locked, `success: true`. `residualCancelled` **1 → 0** is the
+discriminating reading; the account now actually goes flat. ⚠️ Its battery **caught the author**: the
+extracted class could not see how its *caller* built the argument, so the survivor was real —
+**extraction moves the untested boundary, it does not remove it.**
+
+⚠️ **`P2-101` is the item to do next**: the shadow lockout's flatten/cancel retry is unbounded, fires
+on the **funded** account too, and in a second flavour (`LOCKOUT_CANCEL`, not just
+`LOCKOUT_FLATTEN_RETRY`). It is burying `interventions.jsonl`, which is where both of this session's
+live findings came from. Then **`P1-106`** (a lockout refuses the order that would CLOSE the position
+it is locking you out of — the half of `P0-104` its fix deliberately left), then `P1-102`, `P1-105`,
+`P2-103`, `P2-95`.
 
 ⚠️ **`P1-102` was raised as half of a composite risk that no longer exists** — with `P1-100` closed,
 shadow mode can no longer freeze an account, so "the guard stopped my account and I cannot start it
@@ -7300,3 +7308,81 @@ throughout.
 
 ⚠️ **`P1-100` is closed, so the composite risk `P1-102` was raised on is halved**: shadow mode can no
 longer freeze an account. `P1-102` is now a workflow gap, not a trap — weigh it accordingly.
+
+---
+
+## 5.44 `P0-104` closed — the panic button, and what an extraction does NOT buy you
+
+**`P0-104` is CLOSED and live-validated** (`nt8-mcp-bridge` `bf1f901`). `nt_emergency_flatten`'s
+second cancel pass — the one "for residual bracket/OCO orders" — enumerated every active order and
+cancelled all of it, **including the `Close` order `acc.Flatten` had submitted a moment earlier**.
+`acc.Flatten` is asynchronous; the pass never tried to tell its own order from a residual.
+
+Discriminating reading, same scenario before and after:
+
+```
+before:  firstPassCancelled 1, residualCancelled 1, flattenedAccounts 1, success true  -> STILL LONG 11
+after:   firstPassCancelled 1, residualCancelled 0, flattenOrdersSubmitted 1,
+         accountsStillOpen [], success true                                            -> FLAT
+```
+
+`residualCancelled` **1 → 0** is the whole defect.
+
+The fix is two halves, and the second is the one that made it invisible:
+
+* **`addons/BridgeFlattenPlan.cs`** — residual = *still active* **AND** *present before this call*.
+  Generic over `T : class`, **reference** identity (NT8's `OrderId` is not stable — the core keys its
+  copy progress with `OrderReferenceComparer` for the same reason — and both snapshots are taken
+  inside one synchronous dispatcher invoke). Names no NT8 type, so the harness **executes** it. The
+  fourth file to take `P2-27`'s cheap route.
+* **The report stopped claiming an outcome.** `flattenRequestedAccounts` / `flattenOrdersSubmitted`
+  say what was asked for and what reached the book. **`accountsStillOpen`** is read *after* the pass
+  behind a bounded settle poll (10 × 150ms, exits on the first clean read), and `success` requires it
+  empty. ⚠️ That poll is the **third** `Thread.Sleep` on this side — §5.39 lists the other two and the
+  injectable clock they want.
+
+### Three things from this one worth keeping
+
+⚠️ **1. Extraction moves the untested boundary; it does not remove it.** `mutate_p0104.py`'s mutant 4
+**survived the first run**: it filtered the *caller's* "before" snapshot by order state, which is this
+defect in the opposite direction (a bracket leg inactive before the flatten and `Working` after it
+reads as new and survives the cleanup the pass exists for). The extracted class cannot see how its
+argument was built. **After extracting logic, ask what the caller still decides** — the source gate
+now pins the unfiltered snapshot as well as the call.
+
+⚠️ **2. The source gate caught its own author.** It asserts the old outcome-claiming field name is
+absent from `McpBridgeAddOn.cs`, and the first draft of the *comment explaining the rename* used it.
+A gate that greps cannot tell prose from code — the CI-matrix lesson (*a comment read as a gate*)
+arriving from the other side, **second instance in two sessions**. There is now a warning beside the
+comment saying so.
+
+⚠️ **3. CI in `nt8-mcp-bridge` ran NEITHER mutation battery.** `check_ci_runs_every_battery.py` lives
+in the core and only knows about the core's batteries, so `mutate_p190.py` had **never run on a push**
+since it was written. Both are wired now, one step each so a failure names the battery. *A battery
+nobody runs is a file* — the same family as the two batteries that were unpassable for 10 pushes
+(§5.38). **The gate that enforces "every battery runs" is itself per-repo, and nothing enforces that
+across repos.**
+
+Harness **92 → 108/0**, `mutate_p0104.py` **5/0**, deploy parity green both repos, `nt_compile`
+**0 errors**.
+
+### What the fix deliberately leaves — `P1-106`
+
+The lockout still lands on an account whose flatten failed, **and a lockout still refuses a
+position-REDUCING order**. Those two together are what turned "the flatten failed" into "and you
+cannot fix it": Sim101 long 11, locked, and a `Sell` was refused.
+
+The guard already has this notion — `IsPositionReducingOrder` guards its entry-cancel block
+(`P1-44`) precisely so a rate limit cannot strip protection — and the bridge does not. *A lockout must
+stop you opening risk, never stop you closing it.* `PlaceOrder` already computes the current position
+(`P1-97` resolves `SellShort`/`BuyToCover` from it), so the information is at the refusal site. Two
+traps recorded in the entry: the quantity clamp is load-bearing (a Sell 20 against a long 11 is an
+exit *and* a new short 9), and it must read the **position**, not the `OrderAction` label, because the
+label is the caller's choice.
+
+### Order from here
+
+1. **`P2-101`** — the shadow flatten/cancel retry. Unbounded, on the **funded** account too, and it is
+   burying the audit record that both of this session's live findings came out of.
+2. **`P1-106`** — the lockout that traps you in a position.
+3. **`P1-102`** (no MCP tool reads or clears a lockout), then `P1-105`, `P2-103`, `P2-95`.

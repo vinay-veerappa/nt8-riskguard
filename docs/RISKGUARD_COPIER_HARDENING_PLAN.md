@@ -2884,7 +2884,7 @@ either direction. The tool's test must assert the same way.
 
 ---
 
-### P0-104. `nt_emergency_flatten` CANCELS ITS OWN FLATTEN ORDER, reports success, and locks the account so the operator cannot exit by hand — OPEN, found live 2026-08-14
+### P0-104. `nt_emergency_flatten` CANCELS ITS OWN FLATTEN ORDER, reports success, and locks the account so the operator cannot exit by hand — ✅ CLOSED 2026-08-14 (session 38)
 
 **Where**: `McpBridgeAddOn.cs`, `EmergencyFlatten`, steps 3-5. In the `nt8-mcp-bridge` repo, which
 `P2-27` records as untested.
@@ -2942,6 +2942,91 @@ worse than not locking it.
 ⚠️ The tests for this live in `nt8-mcp-bridge`, which has none (`P2-27`). The `BridgeAccountResolver`
 pattern applies: extract the order-set arithmetic into a class that **names no NT8 type** and execute
 it. "Which orders did I submit during this call" is pure set logic and does not need a broker.
+
+**FIXED and live-validated 2026-08-14** (`nt8-mcp-bridge`, commit `bf1f901`). Two halves:
+
+* **`addons/BridgeFlattenPlan.cs`** — the set arithmetic. Residual = *still active* **AND** *already
+  present before the call began*; anything else this call created. It is generic over `T : class`
+  with **reference** identity (NT8's `OrderId` is not stable — it is why the core keys its copy
+  progress with `OrderReferenceComparer` — and both snapshots are taken inside one synchronous
+  dispatcher invoke). Names no NT8 type, so `tests/BridgeTests.csproj` **executes** it. Fourth file
+  to use `P2-27`'s cheap pattern.
+* **The report stopped claiming an outcome.** `flattenRequestedAccounts` and
+  `flattenOrdersSubmitted` say what was asked for and what reached the book; **`accountsStillOpen`**
+  is read *after* the pass, behind a bounded settle poll (10 × 150ms, exits on the first clean read,
+  so the healthy path pays one iteration), and `success` now **requires it to be empty**. A panic
+  flatten that left a position open is not a success whatever it cancelled on the way.
+
+⚠️ **The "before" snapshot is deliberately UNFILTERED by order state.** A bracket leg sitting
+inactive before the flatten and reaching `Working` after it is a genuine residual — filtering
+"before" by state would classify it as new and let it survive, which is this defect in the opposite
+direction. That is `mutate_p0104.py`'s mutant 4, and it **survived the first run**.
+
+⚠️ **What that survivor taught, and it is the reusable part**: extraction made the *logic* executable,
+but **how the caller BUILDS its argument stayed in the ungrepped file**. The source gate now pins the
+unfiltered snapshot as well as the call. **Extraction moves the untested boundary; it does not remove
+it** — so after extracting, ask what the caller still decides.
+
+⚠️ The source gate also **caught its own author**: it asserts the old outcome-claiming field name is
+absent from `McpBridgeAddOn.cs`, and the first draft of the *explanatory comment* named it. A gate
+that greps cannot tell prose from code — the CI-matrix lesson (`a comment read as a gate`) arriving
+from the other side, second instance in two sessions.
+
+**Live-validated** on the identical scenario (position + one resting order, then panic):
+
+```
+before (v1.20.0):  firstPassCancelled 1, residualCancelled 1, flattenedAccounts 1,
+                   success true   -> position STILL LONG 11
+after:             firstPassCancelled 1, residualCancelled 0, flattenOrdersSubmitted 1,
+                   accountsStillOpen [], success true   -> account FLAT
+```
+
+`residualCancelled` going **1 → 0** is the discriminating reading.
+
+Harness **92 → 108/0**. `mutation/mutate_p0104.py`, **5 mutants / 0 survivors**. ⚠️ And wiring it up
+found that **CI in `nt8-mcp-bridge` ran NEITHER battery** — the core's
+`check_ci_runs_every_battery.py` only knows about the core's, so `mutate_p190.py` had never run on a
+push since it was written. Both are wired now. *A battery nobody runs is a file.*
+
+**What this fix does NOT do**: see `P1-106`. The lockout still lands on an account whose flatten
+failed, and a lockout still refuses a position-**reducing** order. Those two together are what turned
+this from "the flatten failed" into "and you cannot fix it".
+
+---
+
+### P1-106. A lockout refuses the order that would CLOSE the position it is locking you out of — OPEN, filed 2026-08-14
+
+**Where**: `McpBridgeAddOn.cs` — the `IsAccountLocked` gate in `PlaceOrder`, `PlaceOcoOrder` and
+`PlaceAtmOrder`. Filed while closing `P0-104`; it is the half of that incident the fix does not
+address.
+
+Every one of those paths is:
+
+```csharp
+if (IsAccountLocked(account.Name))
+    return new { error = $"Order blocked: Account {account.Name} is locked out." };
+```
+
+It does not care what the order *does*. So an operator holding an open position on a locked account
+cannot place the exit — the lockout traps them in the risk it exists to limit. Measured directly
+during `P0-104`'s reproduction: Sim101 long 11, locked by the panic switch, and a Sell was refused.
+
+**The guard already has this notion and the bridge does not.** `RiskGuardAddOn`'s entry-cancel block
+is guarded by `IsPositionReducingOrder` (`P1-44`), precisely so a rate limit can never cancel a
+protective order and leave a position naked. The same reasoning applies one level up: *a lockout must
+stop you opening risk, never stop you closing it.*
+
+The bridge's `PlaceOrder` already computes the current position — `P1-97` made it resolve
+`SellShort`/`BuyToCover` from exactly that — so the information is in hand at the refusal site.
+
+**Fix**: admit an order that strictly reduces the position (opposite side, quantity ≤ `|position|`)
+even under a lockout, and log it as such. Two things to get right:
+
+* the quantity clamp is load-bearing — a Sell of 20 against a long 11 is an exit *and* a new short 9;
+* it must read the position, not the `OrderAction` label, because the label is chosen by the caller
+  (`P1-97`, and `nt8-position-quantity-is-absolute`'s second half).
+
+A test asserting only that a locked account refuses an entry passes under this defect.
 
 ---
 
