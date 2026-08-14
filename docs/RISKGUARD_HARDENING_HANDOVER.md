@@ -245,9 +245,9 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 43 passed, 0 failed** — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **121 IDs — 107 closed, 14 open**, re-derived 2026-08-14 (session 41, after `P2-109`) from the plan's per-entry status tokens: **110** banded entries (**13 open**: `P1-102`, `P2-103`, `P2-108`, `P3-110` narrowed, `P3-111`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **The open count has not moved all session** — `P1-105` and `P2-109` closed, `P2-109`/`P3-110`/`P3-111` opened. **Fourth session running in which proving a fix produced the next defect**, which is the system working, not slipping | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-103`**, **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
+| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
+| **Defects** | **121 IDs — 108 closed, 13 open**, re-derived 2026-08-14 (session 41, after `P2-103`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P3-111`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **The open count has not moved all session** — `P1-105` and `P2-109` closed, `P2-109`/`P3-110`/`P3-111` opened. **Fourth session running in which proving a fix produced the next defect**, which is the system working, not slipping | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
+| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3382,7 +3382,8 @@ the *order* they forced is the reusable part.
 > nobody bounded.
 >
 > **`P1-102` is the item to do next** (`P1-105` and `P2-109` closed in session 41, §5.49 and
-> §5.52), then `P2-103`, `P2-108`, `P3-110`, `P3-111`, then the architectural `P2-29` / `P3-33`.
+> §5.52), then `P2-108`, `P3-110`, `P3-111`, then the architectural `P2-29` / `P3-33`.
+> ✅ `P2-103` also closed in session 41 (§5.53).
 > Weigh by §5.6's consequence rule, not by band letter — `P1-90` (closed) was a `P0` on
 > consequence. ⚠️ **And weigh by whether the evidence is OBTAINABLE now**: ✅ `P2-109` (closed) was
 > taken ahead of `P1-102` on a Friday evening because it needed no market, while `P1-102`'s live
@@ -8266,7 +8267,8 @@ slack. **The speed bump is the feature.**
 
 1. **`P1-102`** (larger than filed — §5.47). ⚠️ Its live half needs an account **holding a
    position**, so it wants market hours: futures reopen Sunday 18:00 ET.
-2. **`P2-103`**, then **`P2-108`**, then **`P3-110`** (narrowed to almost nothing — §5.51).
+2. **`P2-108`**, then **`P3-110`** (narrowed to almost nothing — §5.51), then **`P3-111`**.
+   ✅ `P2-103` closed in §5.53.
 3. The architectural **`P2-29`** / **`P3-33`**.
 
 🆕 **`P3-111` filed**: `/api/bars` does `int.Parse(query["count"] ?? "100")` — the `??` handles
@@ -8275,3 +8277,96 @@ read endpoint from a caller typo. Noticed while writing `BridgeOrderQuery`, one 
 route this session fixed. **Filed rather than fixed**: a different endpoint, and a fix riding along
 in a commit whose subject is orders is a fix nobody reviews. The remedy is to reuse
 `BridgeOrderQuery.ParseLimit`'s shape, not to write a third parser.
+
+---
+
+## 5.53 `P2-103` closed — the honesty was bought years ago and was not being spent
+
+**Session 41, 2026-08-14.** Two read-only surfaces answer "is the guard actually protecting me, and
+to what limit?" — `/api/riskguard/inventory` and `/api/copier/snapshot` — and **neither had an MCP
+tool**, so the agent driving the system could not read either. Five of this repo's mutation
+batteries (`UI1`, `UI3`, `UI4`, `UI5`, `UI6`) exist to keep exactly those two payloads honest, and
+every mutant in them is written to make the answer *more reassuring than the box*. `F-9` was a
+defect in the same surface. **A large amount of machinery had been built to make an answer truthful,
+and the answer was unreachable.**
+
+Closed entirely in `nt8-mcp-bridge/mcp/`. Wrapper tests **43 → 51**. Live-validated by driving the
+MCP server over stdio.
+
+### Measure the payload BEFORE designing the view
+
+```
+/api/riskguard/inventory  ->  635,447 bytes   96 accounts   2,304 rule rows
+/api/copier/snapshot      ->    1,216 bytes
+```
+
+**A passthrough tool would have spent the context window on one read.** `nt_riskguard_inventory`
+therefore defaults to a summary — **635,447 → 3,082 bytes**, measured through the real tool call,
+with `view="account"` and `view="full"` available when they are actually wanted.
+
+⚠️ **The summarising lives in the WRAPPER, not the addon, and the reason is worth keeping: the
+constraint is CONTEXT, not bandwidth.** 635KB over localhost costs nothing. Putting it server-side
+would have meant a C# change, a deploy and a new extracted class to make it testable, for no gain
+against the constraint that actually binds.
+
+### Three decisions inside the view
+
+* **Every number is folded out of the same rule rows the `account` view returns.** A summary
+  keeping its own counters would be free to disagree with the detail beneath it — which is `F-9`
+  verbatim. The tests **recount from the fixture and require agreement**, rather than asserting
+  hand-written totals, so the assertion cannot pass a summary that has quietly drifted.
+* **`ConfiguredNotEvaluated` is collapsed by RULE, not per account.** The live box reports **384**
+  such rows: **four** rules × 96 accounts. Listing them per account buries one finding under its own
+  repetition — the `P2-41` shape, where a `PerAccount` rule reading a global collection reported
+  evidence for all 96 accounts from one mapping.
+* **A truncated list SAYS so.** `enforcingCount` is always complete; the named list is capped and
+  carries `enforcingTruncated`. A list that silently stops is how a reader concludes there are only
+  two problems.
+
+`P1-90` on the read path as well: an account name matching nothing is **refused** with the count and
+a sample of real names — exactly what `P2-109` was, closed an hour earlier.
+
+### What the first summary said about the box
+
+| | |
+|---|---|
+| mode / armed | `shadow`, `isArmed: true` |
+| **`Enforcing`** | **0** — correct in shadow, and the number to re-read the moment the mode changes |
+| `EvaluatedNotEnforcing` | 1384 |
+| **`ConfiguredNotEvaluated`** | **384** = *Consistency / daily-profit cap*, *Consistency cap threshold*, *News events file*, *Prop suite armed*, each × 96 |
+| `Inert` / `Disabled` | 288 / 248 |
+
+Those four are `P1-77`'s deferred set and the guard's own `unevaluatedRules` notes say so in words
+(*"NO CODE READS THIS"*). **One tool call now answers what previously took `interventions.jsonl`
+parsed by hand, `config.json` read off disk, and a raw `curl`** — the operational cost the entry was
+filed on, and a cost this session paid repeatedly while closing `P1-105` and `P2-109`.
+
+### Validated by DRIVING the server, not by asserting on source
+
+The server was spawned and sent real `initialize` / `tools/list` / `tools/call` JSON-RPC against the
+running bridge. `tools/list` returned **54** tools including both new names; the summary produced
+the table above; `Sim101` returned its 24 rule rows; `Sim1O1` was **refused**; `nt_copier_snapshot`
+filtered to `Sim-ORB` — a **follower** — matched its relationship, proving the filter reads either
+side of the relationship; `Nope` gave `matchedRows: 0`; `nt_health.riskguard` read
+`{"version":"1.23.0","loaded":true,"mode":"shadow","isArmed":true,"guarding":true}`.
+
+⚠️ **New tools do not appear in a running MCP client until it RESTARTS** — schemas are read at
+startup (`P1-91`). The stdio drive is what proves the tools work without waiting for that, and it is
+the technique to reuse: *a wrapper change can be end-to-end validated in-session even though the
+session's own client cannot see it.*
+
+⚠️ **A third exact-count gate fired**: `TOOLS.length` 52 → 54. Bumped deliberately, reason recorded.
+That is three in one session (twice on the addon's resolver-site count, once here), each one making
+the author state that an addition was intended. Earlier the same day the `>=` version of one of them
+let a mutant survive.
+
+⚠️ **`fsm-reset` was deliberately NOT added.** It is a WRITE, and it belongs with `P1-102`'s review
+of the lockout write-path — where `action: "lock"` already silently answers `isLockedOut: false`.
+Adding a write to a stuck-FSM surface without that review is how `P1-72` regressed.
+
+### Order from here
+
+1. **`P1-102`** — ⚠️ its live half needs an account **holding a position**; futures reopen Sunday
+   18:00 ET.
+2. **`P2-108`**, then **`P3-110`** (narrowed — §5.51), then **`P3-111`**.
+3. The architectural **`P2-29`** / **`P3-33`**.

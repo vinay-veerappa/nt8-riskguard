@@ -3600,7 +3600,7 @@ path with no defect behind it, and nothing would ever have contradicted it.
 
 ---
 
-### P2-103. The three read-only surfaces that answer "is the guard actually protecting me?" have NO MCP tool, and they are exactly the ones five mutation batteries exist to make honest — OPEN, found 2026-08-14
+### P2-103. The three read-only surfaces that answer "is the guard actually protecting me?" have NO MCP tool, and they are exactly the ones five mutation batteries exist to make honest — CLOSED 2026-08-14 (session 41), live-validated
 
 **Where**: `nt8-mcp-bridge/mcp/lib/tools.js`. Measured 2026-08-14 by diffing the bridge's 67 routes
 against the 52 `nt_` tools: **15 routes are unreachable**, and these are the ones that matter:
@@ -3624,12 +3624,78 @@ and is it protecting anything" needed `interventions.jsonl` parsed by hand, `con
 disk, and a raw `curl`. `nt_riskguard_state` returns the FSM only; `nt_copier_config` returns
 configuration and session metrics, **not** conformance.
 
-**Fix**: three read-only tools (`nt_riskguard_inventory`, `nt_copier_snapshot`, and the version — the
-last can fold into `nt_health`, which already reports a bridge version and is where anyone would look).
-Read-only, so the `P1-91` schema risk is low; `fsm-reset` is a write and belongs with `P1-102`'s
-review. ⚠️ Do **not** add these by widening an existing tool's `action` enum without pinning it to the
-addon's whitelist — that is exactly how `P1-72` regressed, advertising `quarantine`/`unquarantine`
-actions that both answered `UNKNOWN_COPIER_ACTION`.
+#### Fixed 2026-08-14 (session 41), entirely in `nt8-mcp-bridge/mcp/`
+
+`nt_riskguard_inventory` and `nt_copier_snapshot` added; `/api/riskguard/version` folded into
+`nt_health`, which is where anyone looks for "what is deployed". All three are **read-only**, so
+the `P1-91` schema risk does not arise — there is no field whose default a receiver could merge
+into stored config. `fsm-reset` is a WRITE and was deliberately left out; it belongs with
+`P1-102`'s review.
+
+⚠️ **The payload was measured BEFORE the view was designed**, per `measure-the-deployed-system`:
+
+```
+/api/riskguard/inventory  ->  635,447 bytes   96 accounts   2,304 rule rows
+/api/copier/snapshot      ->    1,216 bytes
+```
+
+**A passthrough tool would have spent the context window on one read.** So `nt_riskguard_inventory`
+defaults to a summary: **635,447 bytes → 3,082 bytes**, measured through the real tool call. The
+constraint is CONTEXT, not bandwidth — 635KB over localhost costs nothing — which is why the
+summarising lives in the wrapper, after the fetch, rather than in the addon.
+
+Three decisions inside it are the reusable part:
+
+* **Every number is folded out of the same rule rows the `account` view returns.** A summary
+  keeping its own counters would be free to disagree with the detail beneath it, which is `F-9`
+  verbatim: the guard REPORTING one thing while DOING another. The tests recount from the fixture
+  and require agreement rather than asserting hand-written totals.
+* **`ConfiguredNotEvaluated` is collapsed by RULE, not listed per account.** The live box has
+  **384** such rows — which are **four** distinct rules × 96 accounts. Listing them per account
+  buries one finding under its own repetition; that is the `P2-41` shape, where a `PerAccount` rule
+  reading a global collection reported evidence for all 96 accounts from one mapping.
+* **A truncated list says it was truncated.** `enforcingCount` is always complete; the named list
+  is capped and carries `enforcingTruncated`. A list that silently stops is how a reader concludes
+  there are only two problems.
+
+`P1-90` on the read path too: an account name that matches nothing is **refused** with the count and
+a sample of real names, never answered about all 96 — which is exactly what `P2-109` was.
+
+#### What it immediately revealed about the live box
+
+The first summary is a better answer than the endpoint it came from:
+
+| | |
+|---|---|
+| mode / armed | `shadow`, `isArmed: true` |
+| `Enforcing` | **0** — correct and expected in shadow; alarming only in `live` |
+| `EvaluatedNotEnforcing` | 1384 |
+| **`ConfiguredNotEvaluated`** | **384** = 4 rules × 96 accounts: *Consistency / daily-profit cap*, *Consistency cap threshold*, *News events file*, *Prop suite armed* |
+| `Inert` / `Disabled` | 288 / 248 |
+
+Those four are `P1-77`'s deferred set, and the guard's own `unevaluatedRules` notes say so in
+words (*"NO CODE READS THIS"*). **The tool now surfaces in one call what previously required
+parsing `interventions.jsonl` by hand, reading `config.json` off disk, and a raw `curl`** — which
+is the operational cost this entry was filed on.
+
+#### Live validation 2026-08-14 21:06Z — the MCP server driven over stdio
+
+Not asserted from source: the server was spawned and sent real `tools/list` and `tools/call`
+JSON-RPC, against the running bridge. `tools/list` advertised **54** tools including both new
+names; the summary returned the table above; `account: "Sim101"` returned its 24 rule rows;
+`account: "Sim1O1"` was **refused** naming 96 accounts with a sample; `nt_copier_snapshot`
+filtered to `Sim-ORB` — a **follower** — matched its relationship, proving the filter reads either
+side; `account: "Nope"` returned `matchedRows: 0`; and `nt_health.riskguard` read
+`{"version":"1.23.0","loaded":true,"mode":"shadow","isArmed":true,"guarding":true}`.
+
+⚠️ **The tools only appear in THIS session's MCP client after it restarts** — schemas are read at
+startup (`P1-91`'s note). The stdio drive above is what proves they work without waiting for that.
+
+⚠️ **A third exact-count gate fired**, `TOOLS.length` 52 → 54, and was bumped deliberately with the
+reason recorded. Wrapper tests **43 → 51**.
+
+⚠️ **`P1-72`'s trap was avoided by construction**: neither tool widens an existing `action` enum,
+so there is no enum to drift from the addon's whitelist.
 
 ---
 
