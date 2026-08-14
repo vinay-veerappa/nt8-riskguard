@@ -252,7 +252,7 @@ not. The command that checks it is in the last column.
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed session 41 with `BridgeClosePlan.cs` (`deploy.py --verify` **16 files, 0 orphans**), `nt_compile` `errorCount: 0`. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
-| **Mutation** | **32 batteries** — **28 here** + **4 in `nt8-mcp-bridge`** (`mutate_p1105.py` added session 41, wired into that repo's CI and verified by its own `check_ci_runs_every_battery.py`). ⚠️ **All three bridge batteries could not RUN** until session 41: `capture_output=True, text=True` decodes cp1252 on Windows, so one non-ASCII character in a test message killed the reader thread and `res.stdout` came back `None`. `encoding='utf-8'` is pinned in all four now. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
+| **Mutation** | **32 batteries** — **28 here** + **4 in `nt8-mcp-bridge`** (`mutate_p1105.py` added session 41, wired into that repo's CI and verified by its own `check_ci_runs_every_battery.py`). ⚠️ **All FOUR bridge batteries could not RUN** until session 41 — three were fixed and the fourth was reported as a `SKIP` by the bulk patch and **not acted on**, which turned CI red on the next push (§5.50); now enforced by `tools/check_batteries_pin_encoding.py`, which runs BEFORE them. The cause: `capture_output=True, text=True` decodes cp1252 on Windows, so one non-ASCII character in a test message killed the reader thread and `res.stdout` came back `None`. `encoding='utf-8'` is pinned in all four now. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 40) on `v1.23.0`**, four times across the deploy and the live test. ⚠️ **ALWAYS read `errorCount`, never the call's own `success`** — a broken Custom assembly is invisible, because NT8 keeps serving the last good one | `nt_compile` |
 | **CI** | **`nt8-riskguard` green on the two `P2-107` pushes, measured 2026-08-14 (session 40)**: 16m56s (code, 28-battery matrix) and 16m3s (docs). ⚠️ **Three later pushes and every `nt8-mcp-bridge` run were still QUEUED or IN PROGRESS when this row was written — they are NOT measured here.** Re-run before quoting. Run it BEFORE the first claim about state, not after a deploy | `gh run list --limit 5` in each repo |
 | **Bridge pin** | ✅ **`v1.23.0`, and the RANGE is empty** — `git diff --name-only v1.23.0..main -- addons/` returns nothing, measured 2026-08-14 (session 40). ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range | `git -C vendor/nt8-riskguard describe --tags; git diff --name-only <pin>..main -- addons/` |
@@ -8050,3 +8050,69 @@ matching everything is an unrequested liquidation.**
 3. The architectural **`P2-29`** / **`P3-33`**.
 
 Weigh by §5.6's consequence rule, not by band letter.
+
+---
+
+## 5.50 The `P1-105` push turned CI RED — on a battery it never touched, and a gate it never edited
+
+**Session 41, 2026-08-14, immediately after §5.49.** `gh run list` five minutes after the push:
+**failure**, in `Mutation P1-90`, a battery with nothing to do with the change. Two defects, both
+mine, both found by CI and the batteries rather than by review. Fixed in `nt8-mcp-bridge` `350b872`.
+
+### 1. A tool reported a SKIP, I read it, and I did not act on it
+
+§5.49 pinned `encoding='utf-8'` in the bridge's batteries with a bulk patch. Its output was:
+
+```
+patched mutate_p0104.py
+patched mutate_p1105.py
+patched mutate_p1106.py
+SKIP mutate_p190.py (matched 0)
+```
+
+`mutate_p190.py` builds and runs in **two** steps, so it did not match the patch's anchor. The skip
+was honest, printed, and read — and then nothing happened. `P1-105`'s new tests introduced
+non-ASCII test names, so on the next push that battery raised `UnicodeDecodeError` on a reader
+thread, `res.stdout` came back `None`, and it died before its first mutant.
+
+**A human reading a tool's honest report is not a gate.** Made mechanical:
+`tools/check_batteries_pin_encoding.py` parses every `mutate_*.py` with `ast`, finds every
+**text-capturing** `subprocess.run`, and requires an explicit `encoding=`. It refuses a battery it
+cannot parse *and* one with no capture at all — both are "this gate cannot see you", which is the
+state it exists to forbid — prints the number of calls it actually inspected (**5** across 4
+batteries), and runs **before** the batteries in `ci.yml`, because it decides whether they can run
+at all. Watched failing (exit 1) on a deliberate break of one call, then passing.
+
+### 2. Adding CORRECT code silently weakened an unrelated gate
+
+`TestP1_90_NoBridgePathInventsAnAccount` asserted:
+
+```csharp
+int routed = Regex.Matches(code, @"ResolveOrRefuse\(").Count;
+Assert(routed >= 6, ...);
+```
+
+`P1-105` added `ClosePosition` as a **seventh** resolution site. From that moment, a mutant that
+strips the resolver out of the compliance site leaves **6** — and the assertion still passes.
+**Nothing in the gate changed. The code around it grew, and a lower bound is satisfied by unrelated
+growth.**
+
+`mutate_p190.py` caught it on its first run after the addition. Review did not, and the 190 green
+tests could not. Now `== 7`, with the reason in the assertion text so an eighth site must bump it
+in the same commit — **the speed bump is the feature.**
+
+⚠️ **`>=` in a gate is a slow leak.** This is *a gate's evidence changes with shape* in its cheapest
+form: the previous instance needed a CI restructure to trigger, this one needed only a correct
+feature landing next door. **Every lower-bound count in a source gate deserves re-reading as "what
+unrelated addition would satisfy this?"**
+
+### The order the two lessons arrive in matters
+
+Both were found **after** a green local run, a green suite, four green gates and a live validation.
+The battery is the only thing that saw either. That is the third time this session a battery caught
+the author (`P1-105`'s two source-gate survivors were the first two), and it is the argument for
+running **every** battery after a change, not only the one you wrote.
+
+⚠️ **And `gh run list` remains a five-second check that belongs immediately after every push, not
+at the start of the next session.** This is now the third recorded instance of red CI here; the
+difference is that this one was caught in minutes.
