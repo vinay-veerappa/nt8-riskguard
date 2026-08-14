@@ -1,7 +1,7 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
 **Last updated**: 2026-08-13 (**session 35 — §5.33…§5.37**). Core **`v1.18.0`** is tagged,
-deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **69/0**, MCP wrapper
+deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **92/0**, MCP wrapper
 **43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **107 IDs, 6
 open**; the `P0` band and the untriaged band are both empty,
 and every naked-risk item is closed.
@@ -160,7 +160,7 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1311 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Suite** | **core 1311 passed, 0 failed**; **bridge 92 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
 | **Do next** | ✅ `P0-96`, the guard audit and the copier's shadow mode are all **LIVE-VALIDATED** (§5.36). ✅ **`P1-97` is CLOSED and live-validated too** (§5.37) — the copier can open a short for the first time. Next: **`P2-98`** — a partial fill measures only its first slice, and on the validation run **every** copy partial-filled, so exactly HALF the fills went unmeasured. Then **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
