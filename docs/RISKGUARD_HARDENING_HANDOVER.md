@@ -246,7 +246,7 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **121 IDs — 108 closed, 13 open**, re-derived 2026-08-14 (session 41, after `P2-103`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P3-111`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **The open count has not moved all session** — `P1-105` and `P2-109` closed, `P2-109`/`P3-110`/`P3-111` opened. **Fourth session running in which proving a fix produced the next defect**, which is the system working, not slipping | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
+| **Defects** | **121 IDs — 109 closed, 12 open**, re-derived 2026-08-14 (session 42, after `P3-111`) from the plan's per-entry status tokens: **110** banded entries (**11 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **Session 42 closed `P3-111` and opened NOTHING** — the first session in five to break the run in which validating one fix produced the next defect. ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
 | **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
@@ -3382,8 +3382,10 @@ the *order* they forced is the reusable part.
 > nobody bounded.
 >
 > **`P1-102` is the item to do next** (`P1-105` and `P2-109` closed in session 41, §5.49 and
-> §5.52), then `P2-108`, `P3-110`, `P3-111`, then the architectural `P2-29` / `P3-33`.
-> ✅ `P2-103` also closed in session 41 (§5.53).
+> §5.52), then `P2-108`, `P3-110`, then the architectural `P2-29` / `P3-33`.
+> ✅ `P2-103` also closed in session 41 (§5.53); ✅ `P3-111` closed in session 42 (§5.54),
+> live-validated in full and **rebanded — it was filed `P3` and was a `P2`**, because the entry
+> named the one defect of four that is LOUD.
 > Weigh by §5.6's consequence rule, not by band letter — `P1-90` (closed) was a `P0` on
 > consequence. ⚠️ **And weigh by whether the evidence is OBTAINABLE now**: ✅ `P2-109` (closed) was
 > taken ahead of `P1-102` on a Friday evening because it needed no market, while `P1-102`'s live
@@ -8368,5 +8370,123 @@ Adding a write to a stuck-FSM surface without that review is how `P1-72` regress
 
 1. **`P1-102`** — ⚠️ its live half needs an account **holding a position**; futures reopen Sunday
    18:00 ET.
-2. **`P2-108`**, then **`P3-110`** (narrowed — §5.51), then **`P3-111`**.
+2. **`P2-108`**, then **`P3-110`** (narrowed — §5.51). ✅ `P3-111` closed in session 42 (§5.54).
+3. The architectural **`P2-29`** / **`P3-33`**.
+
+---
+
+## 5.54 `P3-111` closed — the entry named the one defect of four that was LOUD
+
+**Session 42. Closed and live-validated in full — every measured case re-driven against the box,
+plus positive controls.** Unlike `P1-106` (refusal half only) and `P1-105` (healthy/empty paths
+only), there is no half of this left unmeasured.
+
+### What was filed, and what was there
+
+The entry read, in its entirety: *"`/api/bars` does `int.Parse(query["count"] ?? "100")` — absent
+is handled, unparseable throws."* True, and the least of it. Probing the deployed box before
+writing code found the endpoint broken at **both ends of every parameter it takes**:
+
+| Request | Before | After |
+|---|---|---|
+| `count=abc` | **HTTP 500 + .NET stack trace** | 200, 100 bars |
+| `periodValue=xyz` | **HTTP 500 + .NET stack trace** | 200, 100 bars |
+| `period=Banana` | **HTTP 500 + .NET stack trace** | a refusal naming all **17** valid types |
+| `count=200000` | **21,285,727 bytes** | 531,720 bytes (5,000 bars) |
+| `count=1000000` | **1,000,000 bars** | 531,720 bytes (5,000 bars) |
+| `count=0` / `-5` | **0 bars** — reads as "no data for this instrument" | 1 bar |
+| `offset=0` vs `offset=500` | **BYTE-IDENTICAL** | different windows; pages abut exactly |
+
+### ⚠️ Weigh the QUIET failure above the LOUD one
+
+**This is the reband and it is the transferable part.** The entry was banded `P3` on the reasoning
+*"it's a read, so the consequence is a 500 rather than an action."* That reasoning is sound about
+the defect it names and it missed the other three, because **a 500 with a stack trace is the only
+one of the four that tells anybody anything.** The unbounded response and the ignored `offset` are
+silent. `count=0` returning zero bars is the worst of them: it is a **well-formed answer that reads
+as a fact about the market**, and nothing anywhere raises. Same family as `FILL_NOT_MEASURED`
+firing on every manual fill and `P3-30`'s audit firing on a correctly protected account — except
+inverted. **When banding an endpoint, enumerate what it returns when it is WRONG, not what it
+throws.**
+
+### ⚠️ `offset` was `P2-109` at a second endpoint, found by running that ticket's own test
+
+`/api/orders` advertised three parameters and implemented none. Hours later, the same two-call
+test — identical requests differing only in the parameter, compared for **inequality** — was
+pointed at `/api/bars`, and `offset=0` and `offset=500` came back byte-identical. The wrapper sent
+it faithfully; the route dropped it. **A test that closed one ticket is a probe you can aim at the
+next endpoint, and it costs one command.**
+
+### ⚠️ The size promise was `P1-72`'s shape, and the fix keeps the promise rather than rewording it
+
+The MCP schema advertised **"max 5,000 rows" in two places** while the addon enforced nothing. Two
+numbers disagreed and only one could stay. The cap is now **5,000 — the number already written
+down** — because raising code to meet an existing promise makes a contract true, where lowering the
+promise breaks whoever believed it. ⚠️ **It is only honest because `offset` now works**: a cap
+bounds one RESPONSE, which is memory; a cap on what is KNOWABLE just pushes callers back to
+`/api/bars/export`. Mutant 7 attacks precisely that confusion — capping the *request* as well looks
+like a tightening and silently makes every page past the first return the same bars.
+
+### ⚠️ Both readers, and the second one was never filed — FOURTH instance
+
+`/api/bars/export` takes the same `period` string and threw on the same typo. **Ten lines below it,
+`merge` has used `Enum.TryParse` with a fallback since the method was written.** One method, two
+enum parameters from the same caller, one of them treated as hostile and the other not, and nothing
+compared them. After `P1-100`, `P2-98`/`P1-99` and `P1-105`. **`Enum.Parse` is `int.Parse` for
+names** — grep for both when you fix either.
+
+The wrapper's `period` enum was **removed, not extended**: it hard-coded five names and the live
+refusal proves NT8 has seventeen, so the schema **forbade twelve values the addon serves**. The
+addon derives the set from `Enum.GetNames(typeof(BarsPeriodType))`, so there is no second copy.
+
+### ⚠️ Three gates caught, and one of them was missing from this repo's sibling entirely
+
+* **`tests/BridgeTests.csproj` now globs `addons/*.cs`** (one exclusion) where it was a hand-typed
+  list of eight. Adding two more by hand would have been the **third hand-typed-inventory drift in
+  one day** after `check_bridge_parses.py`. The glob states `P2-27` mechanically: every addon file
+  naming no NT8 type is EXECUTED from the moment it exists.
+* **`tools/check_anchors.py` ported to `nt8-mcp-bridge` after it was needed.** Moving the parse
+  arithmetic broke **six** of `mutate_p2109.py`'s anchors; they printed `[SKIP]`, scored as
+  **survivors (6/12)**, and only a hand re-run surfaced it. Here the same edit fails in the commit.
+  **Third per-repo gate found missing on the bridge side** after `check_ci_runs_every_battery.py`
+  and `check_expected_survivors.py`. **A gate is per-repo. Writing one where you found the defect
+  leaves the other side unguarded, and the other side is where you work tomorrow — here it was
+  `cp`.** Anchors were **repointed, not retired**, and the move made them stronger: one mutant to
+  the shared clamp is now evidence about **both** endpoints.
+* **A new test gate failed on its own first run**, reading only the FIRST `hasMore` assignment —
+  the empty-window branch's constant `false`. *State the region a gate inspects*, fifth instance.
+
+### ⚠️ The battery's one survivor was the author's, again
+
+Mutant 1 was named *"the route parses at the seam"* and passed `query["count"] ?? "100"` — still a
+string, still handed to the safe parser, still correct. **It never expressed the defect**, so no
+test could kill it and none was missing. The filed defect is now **unrepresentable**: `GetBars`
+takes no `int`, so `int.Parse` at the route does not compile, and a test asserts that property
+directly. Second instance of `P1-99`'s lesson — **a surviving mutant does not always mean a missing
+test**; there it was unkillable by construction, here it did not restore what it was named after.
+**Read what a mutant DOES before writing a test for it**, or you invent a test to satisfy a
+mutation that changes nothing. Replaced with the seam defect still possible — the route discarding
+`offset` — for **10/10**.
+
+### ⚠️ `hasMore` was nearly shipped as `start > 0`
+
+Caught while writing the return statement. When NT8 returns exactly what was asked for, `start` is
+0 and older history still exists, so an agent stops **one page early** believing it read the whole
+series — silent truncation, the mirror of this ticket's silent widening. It compares
+`available >= requestSize`; mutant 8 pins it.
+
+### Evidence
+
+Harness **233 assertions / 46 tests → 302 / 56**; wrapper **51/0**; `mutate_p3111.py` **10/10**;
+`mutate_p2109.py` **6/12 → 12/12** repointed; `check_anchors.py` **64 anchors / 0 broken**;
+**6** batteries wired; `check_bridge_parses.py` **11 files**; `nt_compile` **errorCount 0**;
+`deploy.py --verify` **20 files / 0 orphans**. Every table row re-driven live; a valid export wrote
+**552 rows** as a positive control; the MCP tool path end to end (`offset=0` → 16:58–17:00,
+`offset=3` → 16:55–16:57, contiguous).
+
+### Order from here
+
+1. **`P1-102`** — ⚠️ its live half needs an account **holding a position**; futures reopen Sunday
+   18:00 ET.
+2. **`P2-108`**, then **`P3-110`** (narrowed — §5.51).
 3. The architectural **`P2-29`** / **`P3-33`**.

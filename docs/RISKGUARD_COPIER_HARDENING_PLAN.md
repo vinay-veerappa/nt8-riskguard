@@ -3514,7 +3514,110 @@ implemented), `P1-91` (the schema half of the same contract).
 
 ---
 
-### P3-111. `/api/bars` throws an unhandled `FormatException` on a caller's query typo — OPEN, found by reading 2026-08-14
+### P3-111. `/api/bars` throws an unhandled `FormatException` on a caller's query typo — ✅ CLOSED 2026-08-14 (session 42), live-validated in full. ⚠️ **REBAND: filed `P3`, it was a `P2`** — the entry below describes ONE of FOUR defects on the endpoint, and the one it names is the least serious
+
+**What was filed is quoted verbatim below and was correct as far as it went.** Probing the
+deployed box before writing any code (`measure-the-deployed-system`) found the endpoint broken at
+**both ends of every parameter it takes**. Measured 2026-08-14:
+
+| Request | Before | After |
+|---|---|---|
+| `count=abc` | **HTTP 500 + .NET stack trace** | 200, 100 bars |
+| `periodValue=xyz` | **HTTP 500 + .NET stack trace** | 200, 100 bars |
+| `period=Banana` | **HTTP 500 + .NET stack trace** | 200, a refusal **naming all 17 valid period types** |
+| `count=5000` | 531,658 bytes | 531,720 bytes |
+| `count=200000` | **21,285,727 bytes** | 531,720 bytes (5,000 bars) |
+| `count=1000000` | **1,000,000 bars** | 531,720 bytes (5,000 bars) |
+| `count=0` / `count=-5` | **0 bars** — reads as "this instrument has no data" | 1 bar |
+| `offset=0` vs `offset=500` | **BYTE-IDENTICAL** | different windows; pages abut exactly |
+
+⚠️ **THE PARSE CRASH WAS THE LEAST OF THEM, AND THE FILED ENTRY IS WHY THE BAND WAS WRONG.** A 500
+carrying a stack trace is ugly and **loud** — the caller knows something failed. The unbounded
+response and the ignored `offset` are **silent**, and `count=0` returning zero bars is worse than
+either, because it is a well-formed answer that reads as *a fact about the market*. **Weigh the
+quiet failure above the noisy one**; banding on "it's only a read, so it's a 500" missed three
+defects that never raise anything.
+
+⚠️ **`offset` WAS `P2-109` AT A SECOND ENDPOINT**, found by running that ticket's own test — two
+calls differing only in the parameter, compared for **inequality** — against the next endpoint.
+`/api/orders` advertised three parameters and implemented none; `/api/bars` advertised `offset`,
+the wrapper faithfully sent it, and the route dropped it. Same shape, same repo, hours apart.
+
+⚠️ **AND THE SIZE PROMISE WAS `P1-72`'s SHAPE**: the MCP tool schema advertised **"max 5,000 rows"
+in two places** while the receiver enforced nothing. The cap is now **5,000 — the number the schema
+already said** — because raising the code to meet an existing written promise beats rewording the
+promise to match the code. **It is only honest because `offset` now works**: a bound on one
+RESPONSE is a bound on memory, but a bound on what is KNOWABLE would just push callers back to
+`/api/bars/export`. Mutant 7 attacks exactly that confusion — it caps the *request* too, which
+looks like a tightening and silently makes every page past the first return the same bars.
+
+⚠️ **BOTH READERS WERE FIXED, AND THE SECOND ONE WAS NEVER FILED.** `/api/bars/export` takes the
+same `period` string and threw on the same typo — and **ten lines below it, `merge` has always used
+`Enum.TryParse` with a fallback**. One method, two enum parameters from the same caller, and only
+one of them was ever treated as hostile. Fourth instance of *a second reader that was never told*
+after `P1-100`, `P2-98`/`P1-99` and `P1-105`. `Enum.Parse` is `int.Parse` for names.
+
+⚠️ **THE WRAPPER'S `period` ENUM WAS REMOVED, NOT EXTENDED.** It hard-coded five names; the live
+refusal proves NT8 has **seventeen** (`Tick, Volume, Range, Second, Minute, Day, Week, Month, Year,
+HeikenAshi, Kagi, Renko, PointAndFigure, LineBreak, Volumetric, Delta, PriceOnVolume`). The schema
+**forbade twelve values the addon serves happily** — a hand-typed enum disagreeing with the
+receiver's real whitelist, which is `P1-72` verbatim. The addon now derives the set from
+`Enum.GetNames(typeof(BarsPeriodType))` and its refusal lists it, so a second copy buys nothing.
+
+**Three gates were caught by this ticket, all in the same session:**
+
+* **`tests/BridgeTests.csproj` now GLOBS `addons/*.cs`** with one exclusion, where it had been a
+  hand-typed list of eight. That is the drift surface `check_bridge_parses.py` stopped being hours
+  earlier (2 of 6 files under a comment claiming all of them); adding two more by hand would have
+  been the **third instance in one day**. The glob states `P2-27`'s rule mechanically: every addon
+  source naming no NT8 type is EXECUTED, automatically, from the moment it exists.
+
+* **`tools/check_anchors.py` was PORTED from `nt8-riskguard` after it was needed.** Moving the
+  parse arithmetic into `BridgeQueryValue` broke **six** of `mutate_p2109.py`'s anchors and nothing
+  noticed — they printed `[SKIP]`, scored as **survivors, 6/12**, and the only reason it surfaced
+  is that the battery was re-run by hand. In this repo the identical edit fails in the commit.
+  **Third per-repo gate found missing on the bridge side**, after `check_ci_runs_every_battery.py`
+  and `check_expected_survivors.py`. The anchors were **repointed, not retired**, and the move made
+  them stronger: one mutant to the shared clamp is now evidence about **both** endpoints.
+
+* **A new test gate failed on its own first run** by reading only the FIRST `hasMore` assignment,
+  which is the empty-window branch's constant `false`. *State the region a gate inspects* — fifth
+  instance, and the cheapest one to date.
+
+⚠️ **THE BATTERY'S ONE SURVIVOR WAS THE AUTHOR'S, AGAIN.** Mutant 1 was named "the route parses at
+the seam" and passed `query["count"] ?? "100"` — still a **string**, still handed to the safe
+parser, still correct. It never expressed the defect, so no test could kill it and **none was
+missing**. The filed defect is now **unrepresentable**: `GetBars` takes no `int`, so `int.Parse` at
+the route does not compile, and the test asserts that property directly. Second instance of
+`P1-99`'s lesson — **a surviving mutant does not always mean a missing test**; there it was
+unkillable by construction, here it was a mutant that did not restore what it was named after.
+Replaced with the seam defect that IS still possible (the route discarding `offset`): **10/10**.
+
+⚠️ **`hasMore` was very nearly shipped as `start > 0`**, caught while writing the return statement.
+When NT8 returns exactly what was asked for, `start` is 0 and older history still exists — so an
+agent would stop **one page early** believing it had read the whole series. Silent truncation, the
+mirror of this ticket's silent widening. It compares `available >= requestSize` instead, and
+mutant 8 pins it.
+
+**Evidence**: harness **233 assertions / 46 tests → 302 / 56**; wrapper **51/0**; battery
+`mutate_p3111.py` **10/10**; `mutate_p2109.py` **6/12 → 12/12** after repointing; anchors **64/0**;
+**6** batteries wired; `check_bridge_parses.py` 11 files; `nt_compile` **errorCount 0**;
+`deploy.py --verify` **20 files / 0 orphans**. Every row of the table above was re-driven against
+the deployed box, plus positive controls (a valid export wrote **552 rows**) and the MCP tool path
+end to end (`offset=0` → 16:58–17:00, `offset=3` → 16:55–16:57, contiguous).
+
+**Files**: `addons/BridgeQueryValue.cs` (new), `addons/BridgeBarsQuery.cs` (new),
+`addons/BridgeOrderQuery.cs` (delegates), `addons/McpBridgeAddOn.cs` (route, `GetBars`,
+`ExportBars`), `mcp/lib/tools.js`, `mcp/nt-mcp-server.js`, `tests/BridgeSourceTests.cs`,
+`tests/BridgeTests.csproj`, `tools/check_anchors.py` (ported), `mutation/mutate_p3111.py` (new),
+`mutation/mutate_p2109.py` (repointed), `.github/workflows/ci.yml`.
+
+---
+
+<details>
+<summary>The entry as originally filed, 2026-08-14 — kept because the reband is the lesson</summary>
+
+### P3-111 (as filed). `/api/bars` throws an unhandled `FormatException` on a caller's query typo
 
 **Where**: `McpBridgeAddOn.cs`, the route table, one line below `/api/orders`:
 
@@ -3539,6 +3642,8 @@ why this is a `P3` — but it is reachable by a typo, and an exception page is n
 
 Related: `P2-109` (the same query string, the same class), `P1-91` (schema defaults on the same
 surface).
+
+</details>
 
 ---
 
