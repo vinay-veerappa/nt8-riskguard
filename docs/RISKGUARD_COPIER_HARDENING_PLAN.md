@@ -3304,7 +3304,7 @@ test passes a signed quantity deliberately.
 
 ---
 
-### P1-105. `nt_close_position` reports `positionClosed: true` after submitting nothing — OPEN, found live 2026-08-14
+### P1-105. `nt_close_position` reports `positionClosed: true` after submitting nothing — CLOSED 2026-08-14 (session 41), live-validated
 
 **Where**: `McpBridgeAddOn.cs`, `ClosePosition`, step 2.
 
@@ -3330,14 +3330,136 @@ nothing was submitted. The position was still long 11. A plain `nt_place_order` 
 immediately, and the copier mirrored the exit to both followers, so the account and the path were both
 working.
 
-**The mechanism is not established and this entry does not guess at one.** What is established from
-the source is that the report cannot distinguish "flattened" from "called Flatten and nothing
-happened", which is why the failure was invisible. That is the part to fix first: read the position
-back and report **that**. `status: "flattened"` is a constant string in the return expression — it is
-not a claim about anything.
+**The mechanism was never established and the fix does not guess at one.** What was established from
+the source is that the report could not distinguish "flattened" from "called Flatten and nothing
+happened", which is why the failure was invisible. `status: "flattened"` was a constant string in the
+return expression — never a claim about anything.
 
-Related: `P0-104` (the same unobserved-outcome report, with worse consequences), `F-9` (derive what
-you display from what actually happened), `P1-70`.
+#### The shape: a second reader that was never told
+
+`McpBridgeAddOn.cs` has exactly **two** `.Flatten(` call sites. `EmergencyFlatten` learned all of
+this as `P0-104` and got `BridgeFlattenPlan` plus a bounded settle poll. `ClosePosition` was never
+told — the same way `IsAccountLocked` was never told what `CanTrade` had learned (`P1-100`), and the
+same way the copier's follower side and leader side each had to discover separately that an order is
+not one fill. **When one path learns something, ask which other path answers the same question.**
+
+#### The fix (`addons/BridgeClosePlan.cs`, new — names no NT8 type, so tests EXECUTE it)
+
+* **The report is derived from two observations, not from reaching a line.** `flattenOrdersSubmitted`
+  reuses `BridgeFlattenPlan.SubmittedByThisCall` — order-set arithmetic `P0-104` already validated —
+  and `positionsStillOpen` comes from a bounded settle poll that stops as soon as the scope is flat,
+  so the healthy path pays one iteration and no sleep. ⚠️ **Fourth `Thread.Sleep` site in this file**
+  (handover §5.39); worst case ~1.35s and only on the path that failed.
+* **`positionsMatched == 0` is NOT a close.** It is what a typo'd symbol produces, and it was
+  previously indistinguishable from success.
+* **One scope predicate for both passes.** The acting pass and the observing pass call the same
+  `BridgeClosePlan` functions. If they disagreed, the report would be true about a set the caller
+  never named — `F-9` restated. The source gate **counts** the call sites (≥3 symbol, ≥2 account)
+  rather than checking one is present.
+* **`P1-90` at a seventh site.** This handler *filtered* by account name instead of resolving one, so
+  the six-site sweep never reached it: `account: "Sim1O1"` matched nothing and was reported as a
+  successful close. It now refuses.
+* **Root equality replaces `StartsWith`.** `symbol: "M"` was a request to close MNQ, MES, MCL and MGC
+  together. ⚠️ The **expiry is still not compared** — deliberately, and the live run vindicates it:
+  NT8 reports the position as `MNQ SEP26` while the caller passes `MNQ 09-26`, so an exact full-name
+  match would have silently matched nothing. Recorded as a known limit rather than guessed at.
+* **Cancels credit what was SENT** (`P1-99`'s rule at a second site). The old loop cancelled the whole
+  list inside one `try/catch {}` and then added `toCancel.Count` regardless, so a throw on the first
+  order reported every order in the list as cancelled.
+
+#### Live validation (Sim101, 2026-08-14 ~20:05–20:10Z) — say which half
+
+Five drives, all returning text that exists only in the new class:
+
+| drive | result |
+|---|---|
+| flat account, `MNQ 09-26` | `nothing_to_close`, `positionClosed: false` (old: `"flattened"`) |
+| `account: "Sim1O1"` | **refused**, naming the 96 available accounts |
+| long 2 MNQ, `symbol: "M"` | `positionsMatched: 0` — **the old prefix filter would have closed it** |
+| long 2 MNQ, `MNQ 09-26` | `matched 1, flattenOrdersSubmitted 1, positionsStillOpen [], closed true` |
+| long 3 MNQ + resting limit, `MNQ` | `cancelled 1, flattenOrdersSubmitted 1, still open [], closed true` |
+
+⚠️ **Only the healthy and empty paths are live-validated.** `close_not_submitted` — the status the
+original defect would now produce — **could not be driven on the box**, because the mechanism of the
+original `Flatten` no-op was never established and cannot be reproduced on demand. That path rests on
+the executed predicate and its battery. One green does not stand for both.
+
+#### What the battery caught that review did not
+
+**18/18 killed, after 15/18 on the first run.** All three survivors were real, and **two were SOURCE
+gates that passed under the mutant**:
+
+* Neutering `if (closeResolution.Refused)` to `if (false)` left the `ResolveOrRefuse` call in place,
+  and the gate asserting the resolver is *called* still passed. ⚠️ **A gate that a value is COMPUTED
+  is not a gate that it is USED** — `P2-24`'s class ("dead safety machinery is invisible") reaching
+  the gates themselves. Every "is X called" assertion in that file deserves the same question.
+* Replacing the settle poll's exit condition with a bare `break` left a single immediate read, so
+  **every healthy close would report `close_submitted_not_confirmed`** — *an alarm that is always on
+  is off*, now the **eighth** instance in this project.
+* Dropping the empty-root guard leaves `string.Equals("", "")`, so **two unknowns read as a match**.
+
+⚠️ **And a test disagreed with the class in the same commit, and the test won.** `WantsEverySymbol`
+was written as `IsNullOrWhiteSpace → true` on the reasoning that the handler defaults an absent
+symbol anyway. The handler defaults on `IsNullOrEmpty`, so `{"symbol": "   "}` — a template that
+interpolated an empty variable — would have reached the filter as three spaces and been read as a
+request to **close every position on the account**. The wildcard is now one exact token.
+
+Related: `P0-104` (the same unobserved-outcome report, with worse consequences), `P1-100` (the second
+reader), `F-9` (derive what you display from what actually happened), `P1-70`.
+
+---
+
+### P2-109. `nt_orders`' `account` parameter is ignored — a read answers about an account you did not name — OPEN, found live 2026-08-14
+
+**Where**: the bridge's orders route / `mcp/lib/tools.js`. Found while confirming `P1-105`'s cleanup.
+
+Measured on the live box 2026-08-14 20:10Z, two calls one after the other:
+
+```
+nt_orders(account="Sim101", limit=8)  -> [ { account: "TAKEPROFITPRO524207503", symbol: "MYM SEP26", ... } ]
+nt_orders(limit=6)                    -> [ { account: "TAKEPROFITPRO524207503", symbol: "MYM SEP26", ... } ]
+```
+
+**Byte-identical.** The filter is not narrowing anything, and the one order returned is on a
+**funded TakeProfit account** — not the account the caller named. Sim101 genuinely had no working
+orders at that moment, so the honest answer was `[]`.
+
+This is `P1-90`'s family on a **read** path, which that entry's own header calls out: *"for a write
+that means acting on the wrong account; for a read it means answering confidently about someone
+else's."* It is also `P1-72`'s shape — a parameter that is advertised and does nothing — and the
+remedy there was to pin the surface to the addon's own behaviour rather than re-reviewing it.
+
+⚠️ **Consequence beyond the wrong answer**: an agent asking "does Sim101 have working orders?" before
+flattening, or after, gets an answer about a funded account. Both `P1-105` and `P0-104` were
+diagnosed partly by reading order state.
+
+**Fix**: filter server-side, and refuse an unresolvable name via `BridgeAccountResolver` rather than
+ignoring it. Then a test that asserts the filtered and unfiltered answers **differ** when they should
+— the two calls above are the regression test, and note that a naive "filter returns a subset" test
+passes under the defect.
+
+---
+
+### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, found by reading 2026-08-14
+
+**Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
+`activeStates` by `P1-105`).
+
+The set is `Working, Submitted, Accepted, ChangePending, PartFilled`. NT8 also has
+`TriggerPending` — where a stop or stop-limit order rests until its trigger price is touched, which
+is the ordinary state of a protective stop.
+
+**If that is right, `nt_emergency_flatten` leaves resting stops behind**, and a stop that survives a
+flatten is an order that **OPENS a position** in the opposite direction when it triggers — precisely
+the hazard `P1-106` refuses OCO and ATM orders for.
+
+⚠️ **Not measured, and deliberately not fixed while closing `P1-105`.** Widening what the panic path
+cancels is a behaviour change on the most consequential path in the bridge, and it needs its own live
+validation with a real resting stop. It is filed rather than smuggled into an adjacent commit.
+⚠️ **The stub cannot answer this** — it omitted 6 of 16 `OrderState`s and hid a live `P0` behind a
+green suite (see `test-doubles-are-not-evidence`). Drive it on the box with a real stop.
+
+---
 
 ---
 

@@ -245,14 +245,14 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 133 passed, 0 failed**; **MCP wrapper 43 passed, 0 failed** — all three re-measured 2026-08-14 (session 40). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **118 IDs — 105 closed, 13 open**, re-derived 2026-08-14 (session 40) from the plan's per-entry status tokens: **107** banded entries (**12 open**: `P1-105`, `P1-102`, `P2-103`, `P2-108`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). `P2-107` closed and `P2-108` opened in the same session, so the open count is unchanged at 13 | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P1-105`** — a log line that reports an outcome it did not observe. Then **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47), **`P2-103`**, then the architectural **`P2-29`** / **`P3-33`**. ✅ `P1-106` closed in session 39 (§5.47). ✅ `P2-107` closed in session 40 (§5.48) — outbound de-duplication now lives in `GuardActionDeduplicator` behind one `DispatchActions` that all five emission sites use; the record clears when the CONDITION resolves, never on a timer, and the operator's panic buttons deliberately bypass it. ⚠️ Its battery went 13/13 on the first run and **five later mutants all survived**, one of them walking the measured path around the whole mechanism; and **two of this repo's own gates were caught proving nothing** — read §5.48 before adding a check anywhere. | §5.6, §5.48, and `python tools/check_next_list_ids.py` |
+| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 190 passed, 0 failed across 38 tests** (was 133/26 — `P1-105` added 12); **MCP wrapper 43 passed, 0 failed** — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
+| **Defects** | **120 IDs — 106 closed, 14 open**, re-derived 2026-08-14 (session 41) from the plan's per-entry status tokens: **109** banded entries (**13 open**: `P1-102`, `P2-103`, `P2-108`, `P2-109`, `P3-110`, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **Closing `P1-105` raised the open count**, because validating it opened `P2-109` and `P3-110` — the **fourth** session running in which proving a fix produced the next defect. That is the system working, not slipping | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
+| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-103`**, 🆕 **`P2-109`** (`nt_orders`' `account` filter is ignored — measured returning a **funded** account's order for a request naming `Sim101`), **`P2-108`**, 🆕 **`P3-110`**, then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.23.0` core + bridge are live in NT8** — measured 2026-08-14 (session 40) from both repos: `sync_nt8.py --verify` **ALL IN SYNC (9 files identical)** and `deploy.py --verify` **ALL IN SYNC (15 files, 0 orphans)**. Both counts rose by one: `GuardActionDeduplicator.cs` | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
+| **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed session 41 with `BridgeClosePlan.cs` (`deploy.py --verify` **16 files, 0 orphans**), `nt_compile` `errorCount: 0`. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
-| **Mutation** | **31 batteries** — **28 here** + **3 in `nt8-mcp-bridge`**. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
+| **Mutation** | **32 batteries** — **28 here** + **4 in `nt8-mcp-bridge`** (`mutate_p1105.py` added session 41, wired into that repo's CI and verified by its own `check_ci_runs_every_battery.py`). ⚠️ **All three bridge batteries could not RUN** until session 41: `capture_output=True, text=True` decodes cp1252 on Windows, so one non-ASCII character in a test message killed the reader thread and `res.stdout` came back `None`. `encoding='utf-8'` is pinned in all four now. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 40) on `v1.23.0`**, four times across the deploy and the live test. ⚠️ **ALWAYS read `errorCount`, never the call's own `success`** — a broken Custom assembly is invisible, because NT8 keeps serving the last good one | `nt_compile` |
 | **CI** | **`nt8-riskguard` green on the two `P2-107` pushes, measured 2026-08-14 (session 40)**: 16m56s (code, 28-battery matrix) and 16m3s (docs). ⚠️ **Three later pushes and every `nt8-mcp-bridge` run were still QUEUED or IN PROGRESS when this row was written — they are NOT measured here.** Re-run before quoting. Run it BEFORE the first claim about state, not after a deploy | `gh run list --limit 5` in each repo |
 | **Bridge pin** | ✅ **`v1.23.0`, and the RANGE is empty** — `git diff --name-only v1.23.0..main -- addons/` returns nothing, measured 2026-08-14 (session 40). ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range | `git -C vendor/nt8-riskguard describe --tags; git diff --name-only <pin>..main -- addons/` |
@@ -3348,10 +3348,11 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-105` — a log line that reports the outcome it did not observe
+> ### Do next: `P1-102` — nothing on the box can IMPOSE a lockout on an open position
 >
-> **Updated session 40 (2026-08-14).** Every block below this one is struck through and
-> kept for the order it forced, not for its contents.
+> **Updated session 41 (2026-08-14).** Every block below this one is struck through and
+> kept for the order it forced, not for its contents. ✅ `P1-105` closed in session 41 — see
+> §5.49; its remainder is filed as `P2-109` and `P3-110`, not left inside the closed entry.
 >
 > ⚠️ **This block had been carrying SIX closed IDs, and that is why
 > `tools/check_next_list_ids.py` now exists.** `P2-95`, `P2-93` and `P2-94` were closed in
@@ -3380,9 +3381,10 @@ the *order* they forced is the reusable part.
 > repo's own gates were caught proving nothing**, both by detection-by-substring over a region
 > nobody bounded.
 >
-> **`P1-105` is the item to do next**, then `P1-102`, `P2-103`, then the architectural
-> `P2-29` / `P3-33`. Weigh by §5.6's consequence rule, not by band letter — `P1-90` (closed)
-> was a `P0` on consequence.
+> **`P1-102` is the item to do next** (`P1-105` closed in session 41, §5.49), then `P2-103`,
+> `P2-109`, `P2-108`, `P3-110`, then the architectural `P2-29` / `P3-33`. Weigh by §5.6's
+> consequence rule, not by band letter — `P1-90` (closed) was a `P0` on consequence, and
+> `P2-109` is a **read that answers about a funded account you did not name**.
 
 > ### ~~Do next: `P1-99` — the copier's SIZING GRAIN~~ (session 36, superseded)
 >
@@ -7916,9 +7918,135 @@ that means less than it looks. `main` was merged into it and the pin is `v1.23.0
 
 ### Order from here
 
-1. **`P1-105`** — a log line that reports an outcome it did not observe.
+1. ✅ ~~**`P1-105`**~~ — **closed in session 41, see §5.49.**
 2. **`P1-102`** (now larger than filed — see §5.47: nothing on the box can *impose* a lockout on an
    account holding a position, and `action: "lock"` silently answers `isLockedOut: false`).
-3. **`P2-103`**, then 🆕 **`P2-108`** (above), then the architectural **`P2-29`** / **`P3-33`**.
+3. **`P2-103`**, then 🆕 **`P2-109`** (`nt_orders`' `account` filter is ignored), then
+   **`P2-108`**, then 🆕 **`P3-110`**, then the architectural **`P2-29`** / **`P3-33`**.
+
+Weigh by §5.6's consequence rule, not by band letter.
+
+---
+
+## 5.49 `P1-105` closed — the OTHER flatten path, and two source gates that passed under the mutant
+
+**Session 41, 2026-08-14.** `nt_close_position` answered
+`{"status": "flattened", "positionClosed": true}` with the position **still open**. Closed,
+deployed, live-validated. Suite **133 → 190** (26 → **38** tests), battery **18/18**, `nt_compile`
+`errorCount: 0`.
+
+### The shape is the one to carry: a second reader that was never told
+
+`McpBridgeAddOn.cs` has exactly **two** `.Flatten(` call sites. `EmergencyFlatten` learned all of
+this as `P0-104` — an asynchronous `Flatten` means the line after it proves nothing — and got
+`BridgeFlattenPlan` plus a bounded settle poll. `ClosePosition` was never told.
+
+That is the **third** time this project has met it: `P1-100` (`CanTrade` learned two clauses over two
+sessions and neither reached `IsAccountLocked`), `P2-98`/`P1-99` (each side of the copier discovered
+separately that an order is not one fill), and now this. **When one path learns something, enumerate
+the other paths that answer the same question — the fix is cheap and finding it later is not.**
+
+### What actually changed
+
+`positionClosed` used to be assigned unconditionally on the line after `account.Flatten(...)`, and
+`status` was the **constant string** `"flattened"` in the return expression. Neither was a claim
+about anything. Now:
+
+* `flattenOrdersSubmitted` reuses **`BridgeFlattenPlan.SubmittedByThisCall`** — the order-set
+  arithmetic `P0-104` already validated, rather than a second dialect for the same question.
+* `positionsStillOpen` comes from a bounded settle poll (10 x 150ms) that **stops as soon as the
+  scope is flat**, so the healthy path pays one iteration and no sleep. ⚠️ **Fourth `Thread.Sleep`
+  site in this file** — §5.39 lists the other three and the injectable-clock work they want.
+* **One scope predicate, both passes.** `BridgeClosePlan` (new, names no NT8 type, so the tests
+  EXECUTE it) answers "which positions is this request about?" for the acting pass *and* the
+  observing pass. If they disagreed the report would be true about a set the caller never named —
+  `F-9` restated. The source gate **counts** the call sites (>=3 symbol, >=2 account); asserting one
+  is present would pass while the other pass kept a hand-rolled filter.
+* **`P1-90` at a seventh site.** This handler *filtered* by account name instead of resolving one, so
+  the six-site sweep never reached it. `account: "Sim1O1"` matched nothing and was reported as a
+  successful close; it now refuses, naming the 96 available accounts.
+* **Root equality replaces `StartsWith`**: `symbol: "M"` was a request to close MNQ, MES, MCL and MGC
+  together. ⚠️ The **expiry is still not compared**, and the live run vindicated that: NT8 reports the
+  position as **`MNQ SEP26`** while the caller passes **`MNQ 09-26`**. An exact full-name match would
+  have silently matched nothing — this defect again, in a new place. *Do not tighten a match against
+  a string format you have not measured.*
+* **Cancels credit what was SENT** (`P1-99`'s rule at a second site): the old loop cancelled the whole
+  list in one `try/catch {}` and added `toCancel.Count` regardless.
+
+### Live validation — and which half is NOT validated
+
+Five drives on Sim101 (20:05-20:10Z), each returning text that exists only in the new class: a flat
+account → `nothing_to_close`; a typo'd account → **refused**; `symbol: "M"` against an open MNQ
+position → `positionsMatched: 0` (**the old filter would have closed it**); a real long 2 →
+`matched 1, flattenOrdersSubmitted 1, positionsStillOpen [], closed true`; a long 3 plus a resting
+limit → `cancelled 1` *and* `flattenOrdersSubmitted 1`, the cancelled resting order correctly not
+confused with the flatten's own.
+
+⚠️ **`close_not_submitted` — the status the original defect would now produce — could not be driven
+on the box.** The mechanism of the original `Flatten` no-op was never established and cannot be
+reproduced on demand. That path rests on the executed predicate and its battery. **Say which half was
+measured.**
+
+### The battery caught what review did not, and two of the three were GATES
+
+**15/18 on the first run**, all three survivors real:
+
+1. Neutering `if (closeResolution.Refused)` to `if (false)` left the `ResolveOrRefuse` call in place —
+   and the gate asserting the resolver is **called** still passed. ⚠️ **A gate that a value is
+   COMPUTED is not a gate that it is USED.** That is `P2-24`'s class ("dead safety machinery is
+   invisible") arriving at the gates themselves, and **every "is X called" assertion in
+   `BridgeSourceTests.cs` deserves the same question.**
+2. Replacing the settle poll's exit condition with a bare `break` leaves one immediate read, so
+   **every healthy close would report `close_submitted_not_confirmed`** — *an alarm that is always on
+   is off*, the **eighth** instance here.
+3. Dropping the empty-root guard leaves `string.Equals("", "")` — **two unknowns read as a match**.
+
+### A test disagreed with the class in the same commit, and the test won
+
+`WantsEverySymbol` was first written as `IsNullOrWhiteSpace → true`, reasoning that the handler
+defaults an absent symbol anyway so the two could not drift. **The handler defaults on
+`IsNullOrEmpty`.** So `{"symbol": "   "}` — a template that interpolated an empty variable — would
+have reached the filter as three spaces and been read as a request to **close every position on the
+account**. The wildcard is now one exact token, and turning absence into `"ALL"` happens in exactly
+one greppable line. **The two failure directions are not symmetric: matching nothing wastes a call,
+matching everything is an unrequested liquidation.**
+
+### Two gates in `nt8-mcp-bridge` were fixed on the way past
+
+* **`tools/check_bridge_parses.py` checked 2 of 6 addon files** under a comment reading "every
+  bridge-owned addon source". `BridgeFlattenPlan`, `BridgeLockoutGate`, `BridgeOrderAction` and
+  `CopierEnforcementView` had all been added since, each time leaving the comment's claim less true.
+  It now globs `addons/*.cs` — **the same glob `deploy.py` uses to decide what SHIPS**, so the
+  checked set and the shipped set are one set by construction. 2 → **7** files; watched failing
+  (exit 1) on a deliberate break of a newly-covered file, then passing again. **Fifth instance of
+  *state the region a gate inspects*, and the cheapest form of it: the region was a literal, and the
+  literal aged.**
+* **All three bridge batteries died decoding their own subprocess output.** `capture_output=True,
+  text=True` decodes as cp1252 on Windows, so **one non-ASCII character in a test's message** raised
+  `UnicodeDecodeError` on a reader *thread*, `res.stdout` came back `None`, and the battery crashed
+  before its first mutant. `encoding='utf-8'` is now pinned in all three. **A battery that cannot run
+  is not a battery that passed** — the same class as the two core batteries that were unpassable for
+  10 pushes (§5.38).
+
+### Two new defects, both filed rather than fixed here
+
+* **`P2-109` — `nt_orders`' `account` parameter is ignored.** Measured: `nt_orders(account="Sim101")`
+  and `nt_orders()` returned **byte-identical** payloads, and the single order in them is on a
+  **funded TakeProfit account**. `P1-90`'s family on a *read* path, which that entry's header names
+  explicitly. An agent checking "does Sim101 have working orders?" before or after a flatten is being
+  answered about someone else's account — and both `P1-105` and `P0-104` were diagnosed partly by
+  reading order state. ⚠️ A naive "the filter returns a subset" test **passes under the defect**; the
+  regression test is that the two answers *differ*.
+* **`P3-110` — the panic flatten's cancel set omits `OrderState.TriggerPending`**, which is where a
+  protective stop rests. If that reading is right, `nt_emergency_flatten` leaves resting stops behind,
+  and a surviving stop **opens** a position when it triggers. Not measured; the stub cannot answer it
+  (it omitted 6 of 16 `OrderState`s and hid a live `P0`). Widening the panic path is a behaviour
+  change needing its own live validation, so it was **not** smuggled into this commit.
+
+### Order from here
+
+1. **`P1-102`** (larger than filed — §5.47).
+2. **`P2-103`**, then **`P2-109`**, then **`P2-108`**, then **`P3-110`**.
+3. The architectural **`P2-29`** / **`P3-33`**.
 
 Weigh by §5.6's consequence rule, not by band letter.
