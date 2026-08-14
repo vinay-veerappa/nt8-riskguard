@@ -7856,6 +7856,28 @@ same family on a path `DispatchActions` cannot reach, because it is a `LogEvent`
 behind it. **Seventh** instance of *an alarm that is always on is off*, and the **third session
 running** in which the validation of one fix produced the next defect.
 
+### ⚠️ `git push origin main` from another branch's checkout is a silent no-op that prints success
+
+`nt8-mcp-bridge` was checked out on a **different branch** (a parallel session's feature branch)
+when the `v1.23.0` pin was committed. The commit therefore landed on **that** branch, and
+`git push -q origin main` pushed the local `main` ref — which was unchanged — so it **succeeded and
+printed nothing**. `origin/main` still pinned `v1.22.0`, and the pin commit sat unpushed on someone
+else's branch, where it would have been folded into their PR.
+
+The **deploy was fine** — the feature branch touched no `addons/` or `tools/` file, verified with
+`git diff --name-only origin/main..<branch> -- addons/ tools/` returning empty, and
+`deploy.py --verify` reads **ALL IN SYNC (15 files, 0 orphans)** from `main`. Only the bookkeeping
+was wrong, and a stale pin is exactly what makes `deploy.py` **revert a live core** later.
+
+**Caught by `gh run list`**: the pin commit had no CI run, while runs existed for a branch nobody
+in this session had touched. Two rules from it:
+
+* **Check the branch before committing in a repo you did not start the session in.** `git status -sb`
+  costs nothing; "ahead 1" on an unexpected branch is the whole signal.
+* **`git push origin main` does not mean "push what I just committed."** It pushes the *ref named
+  `main`*, wherever HEAD happens to be. Verify with `git log --oneline -1 origin/main`, not with the
+  push's exit code.
+
 ### Order from here
 
 1. **`P1-105`** — a log line that reports an outcome it did not observe.
