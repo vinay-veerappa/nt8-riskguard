@@ -36,11 +36,30 @@ import sys
 EXPECTED_PREFIX = 'EXPECTED SURVIVOR:'
 
 
+def _description(mutant):
+    """The mutant's description, whichever shape its battery uses.
+
+    Single-file batteries hold `(name, old, new)`; the six that mutate TWO files hold
+    `(path, name, old, new)`. Unpacking three from a four-tuple raises ValueError, so before
+    this existed the FIRST four-tuple battery to declare an EXPECTED SURVIVOR would have
+    crashed here -- and `tools/check_expected_survivors.py` REQUIRES a declaring battery to
+    route through this function, so the gate would have been forcing a call into a crash.
+    """
+    if len(mutant) == 4:
+        return mutant[1]
+    if len(mutant) == 3:
+        return mutant[0]
+    raise ValueError(
+        'a MUTANTS entry must be (name, old, new) or (path, name, old, new); got %d fields. '
+        'Add the shape here rather than reshaping the battery to suit this helper.' % len(mutant))
+
+
 def finish(survivors, mutants):
     """Print the verdict and exit. `survivors` is the list built by the battery's loop (mutant
     descriptions, with ' (ANCHOR)' appended for a find-string that did not match); `mutants` is
     the battery's MUTANTS list, from which the expectations are read."""
-    declared = set(name for name, _old, _new in mutants if name.startswith(EXPECTED_PREFIX))
+    declared = set(_description(m) for m in mutants
+                   if _description(m).startswith(EXPECTED_PREFIX))
 
     anchor_breaks = sorted(s for s in survivors if s.endswith(' (ANCHOR)'))
     survived = set(s for s in survivors if not s.endswith(' (ANCHOR)'))

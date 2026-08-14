@@ -198,7 +198,7 @@ not. The command that checks it is in the last column.
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **23 batteries** — **22 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. New in session 35: `mutate_p330` (7 mutants, 1 **documented survivor** — holding `_stateLock` across the audit's broker reads, which no test here can detect because the stubs never block) and `mutate_p334` (9 / 0). **243 anchors / 0 broken — measured this pass.** ⚠️ The other 20 batteries were **not** re-run locally (~243 mutants × a suite run each) — **CI now runs every one of them on every push**, which is why a push takes ~1h40m and is not a hang. **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **Mutation** | **25 batteries** — **24 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **263 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (263 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 24-job MATRIX, so a push is ~12 minutes, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
 | **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
@@ -6813,3 +6813,116 @@ do not trust the number written here* — arriving one revision late, again.
 3. **`P2-95`** (`FirmStartingBalance` is off by the account's lifetime profit), then `P2-93`,
    `P2-94`.
 4. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.
+
+---
+
+## 5.39 CI went from 1h56m to ~12 minutes, and the tests were never the reason it was slow
+
+The operator asked why the tests take so long and whether they could be vectorised or
+parallelised. The honest answer to the first half is that **they don't** — and measuring it
+was worth more than the speed-up, because the shape of the number says what CI actually is.
+
+### What the 1h56m was
+
+Step timings from run `31768033709`, the first green one:
+
+| | |
+|---|---|
+| Setup (checkout, dotnet, python) | 32s |
+| All eight source gates + build + the 1328-test suite | **42s** |
+| The 24 mutation batteries | **6880s** |
+
+**99% of the wall clock was mutation, and none of it was the tests.** The suite runs in 20s
+on the runner and 5.3s locally. The cost is structural and it is not removable: every one of
+the **263 mutants rewrites a C# source file**, so it needs a real recompile. 263 mutants, plus
+a baseline run and a restore run per battery, is **311 `dotnet build` + `dotnet run` cycles** at
+~22s each. Nothing about that is wasteful; it is what mutation testing costs in a compiled
+language. An in-process Roslyn compile would cut it to under a second a mutant and is the only
+real alternative, at the price of rewriting all 24 batteries.
+
+**"Vectorise" does not apply.** That is array arithmetic; this is process-bound compile-and-run.
+The instinct is right for the consumer repo's parameter sweeps (ADR-022) and wrong here.
+
+### Why it could not be parallelised locally, and why the matrix is not the same thing
+
+Every battery **rewrites the same shared source files in place**. Two running side by side in
+one working tree corrupt each other — which is not hypothetical, it is exactly how a killed
+batch left a live `mutate_cm4` mutant in `TradeCopierEngine.cs` earlier the same day (§5.38).
+Backgrounding two batteries would have manufactured that failure deliberately.
+
+A **GitHub Actions matrix gives every battery its own checkout**, so the hazard does not need
+managing — it does not exist. That is the difference worth remembering: the fix was not "add
+locking", it was to put the concurrent things somewhere they cannot see each other.
+
+The workflow is now two jobs:
+
+* **`checks`** — the eight source gates, build, suite, and `check_anchors.py`. ~75s.
+* **`mutation`** — a 24-entry matrix, one battery per job, `needs: checks`.
+
+Wall clock is setup + the **longest single battery** (UI4, 553s) ≈ **10 minutes**, ~12 with the
+gate job. **1h56m → ~12m.** The repo is PUBLIC, so Actions minutes are free and unlimited even
+on Windows runners; the parallelism costs nothing.
+
+Three decisions inside it are the load-bearing ones:
+
+* **`fail-fast: false`.** The default cancels every other battery the moment one fails, which
+  would hide a survivor in battery 20 behind a survivor in battery 2 and turn a full mutation
+  report into a one-at-a-time bisect across 24 pushes. Each battery is an independent question.
+* **`needs: checks`.** A battery refuses to run against a red baseline (exit 2) rather than score
+  every mutant KILLED on pre-existing failures. Twenty-four jobs discovering that separately
+  would report one broken suite twenty-four times. One job says it once, and `check_anchors.py`
+  stays there too so a broken anchor is reported before 24 runners spend ten minutes each.
+* **Ordered longest-first.** The free plan runs 20 jobs at once and there are 24, so four queue.
+  Starting the long ones first means the four that wait are the short ones, and they finish
+  inside UI4's window instead of extending past it. The per-entry comments carry the measured
+  seconds so the ordering can be re-derived rather than guessed at.
+
+### ⚠️ The matrix silently weakened a gate, in this repo's own recurring shape
+
+`check_ci_runs_every_battery.py` asked only whether the filename appeared **anywhere** in
+`ci.yml`. That was honest while every battery had its own `run:` step. It is not honest under a
+matrix, because **every matrix entry carries a long prose comment above it naming the battery** —
+so a battery deleted from the matrix but left described in its comment would still have passed,
+and the gate would have reported "all 24 wired" while running 23.
+
+That is `a gate nobody reads is a comment` turned **inside out**: a comment being read as a gate.
+It is the fourth instance of this family in three sessions (`P3-30`'s audit, `P2-98`'s
+`FILL_NOT_MEASURED`, the two unpassable batteries, now this) and the pattern is stable enough to
+state plainly: **when you change the SHAPE of a thing a gate inspects, the gate's evidence
+changes even though its code did not.**
+
+The check now strips comments first and requires the name in a form that actually runs
+something (`battery: mutate_x.py`, or a `run:` line). It also fails on a **duplicate** entry — two
+rows re-prove one thing and burn a concurrency slot, which on a 20-slot plan pushes a real
+battery into the next wave. **Both failure modes were driven on purpose before it was trusted**,
+per the workflow's own header rule: entry deleted with its comment left → FAIL; entry duplicated
+→ FAIL; restored → OK.
+
+### A latent trap closed on the way past
+
+`_battery.finish` unpacked `(name, old, new)`. Six batteries mutate **two files** and hold
+`(path, name, old, new)`. `check_expected_survivors.py` REQUIRES a battery declaring an
+`EXPECTED SURVIVOR:` to route through `finish` — so the first four-tuple battery to declare one
+would have hit a `ValueError`, with the gate forcing the call into the crash. `finish` now reads
+the description from either shape and refuses an unrecognised one rather than guessing. Nine
+cases driven across both shapes (declared/undeclared × survived/killed, broken anchor, bad shape).
+
+### Not done, and deliberately
+
+**Two `Thread.Sleep` calls are 3.25s of the suite's runtime** — `Thread.Sleep(1050)` at
+`tests/RiskGuardAddOnTests.cs:8431` (a 1-second trade-debounce window) and `Thread.Sleep(2200)`
+at `:19421` (`InFlightLedger(timeoutSeconds: 2)` then `PurgeExpired`). The suite runs 25 times
+inside the longest battery, so they are ~90s of the ~553s critical path. Worth fixing, and the
+speed is the *lesser* reason: **a time-dependent test that sleeps is flaky under load**, and
+these now run on a shared runner alongside 23 others. The fix is an injectable clock on
+`InFlightLedger` and on `AccountState`'s trade-debounce, not a shorter sleep — shortening the
+wait without shortening the timeout is how a test stops testing the thing it was written for.
+Filed rather than done; it is a ~16% trim on a path already 10x better.
+
+### Next
+
+Unchanged — **`P1-99`** is still the item, and this changed nothing about it. What it changed is
+that the evidence for the fix now arrives in twelve minutes instead of two hours, which matters
+for `P1-99` specifically: it is a **sizing-grain** defect on the leader side, the fix is likely to
+touch the copy path every battery exercises, and a two-hour feedback loop is what makes a
+developer verify one battery locally and trust the rest.
