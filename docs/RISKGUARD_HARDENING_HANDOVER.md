@@ -1,16 +1,29 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-14 (**session 37 — §5.41**). Core **`v1.20.0`** is tagged and
-**NT8-compiled clean** — suite **1355/0**, bridge **92/0**, MCP wrapper **43/0**, **25** core
-mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **112 IDs, 9 open**; the `P0` band
-and the untriaged band are both empty, and every naked-risk item is closed. Every figure here was
-**measured, not incremented**. ✅ `v1.20.0` is deployed, **NT8-compiled clean (651 -> 0 errors, see §5.41)** and
-live-validated on sim. ⚠️ Doing so opened **`P1-100`** (a SHADOW-only lockout BLOCKS real orders) and
-**`P2-101`** (a shadow lockout retries its flatten forever), and cleaning up after it exposed
-**`P1-102`** (no MCP tool can read or CLEAR a lockout) and **`P2-103`** (the guard inventory and
-copier conformance snapshots have no MCP tool at all). **`P1-100` + `P1-102` are the item to do
-next, and they are one job**: shadow mode can freeze an account and the toolset has no way to
-unfreeze it.
+**Last updated**: 2026-08-14 (**session 38 — §5.43**). Core **`v1.21.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1424/0**, bridge **92/0**, MCP wrapper **43/0**, **26**
+core mutation batteries + the bridge's 1, **276 anchors / 0 broken**, all 8 gates green. **114 IDs,
+10 open.** Every figure here was **measured, not incremented**.
+
+✅ **`P1-100` is CLOSED and live-validated** (§5.43). A SHADOW-only lockout blocked real orders —
+`CanTrade` was right, but the bridge's three order paths and `GET /api/lockout` all ask
+`IsAccountLocked`, which returned the raw flag and had never been taught either `P2-92`'s authority
+clause or `P2-94`'s deadline clause. **Wrong in both directions**: it refused on an observation *and*
+reported an account free to trade through a timed manual lockout. One predicate (`LockoutBinds`),
+three readers, none re-deriving. ⚠️ **The funded 50K TPT PRO account was being gated by it too** — a
+defect found on sim was never confined to sim.
+
+⚠️ **`P0-104` is now the item to do next, and it is the only `P0` open.** `nt_emergency_flatten` —
+the panic kill-switch — **cancels its own flatten order** in its "residual bracket" pass, reports
+`success: true, flattenedAccounts: 1`, and then locks the account so `nt_place_order` refuses the exit
+the operator would place by hand. Measured on Sim101: stops cancelled, flatten cancelled, account
+locked, position still long 11, and nothing said so. Then **`P2-101`** (the shadow retry, now known to
+fire on the funded account as well and in a second flavour), then `P1-102`, `P1-105`, `P2-103`,
+`P2-95`.
+
+⚠️ **`P1-102` was raised as half of a composite risk that no longer exists** — with `P1-100` closed,
+shadow mode can no longer freeze an account, so "the guard stopped my account and I cannot start it
+again" is now just a workflow gap. Weigh it accordingly.
 
 ⚠️ **`P2-98` is CLOSED and live-validated** (§5.38), and closing it **opened a P1**. The fix moves
 the grain of a measurement from the SLICE to the COPY: a partial fill is accumulated across its
@@ -7162,3 +7175,128 @@ to the addon's own whitelist (`P1-72`, which REGRESSED by advertising two action
 `UNKNOWN_COPIER_ACTION`); and the test must verify the **enforcer**, not the report — the hand-run
 unlock this session was confirmed by re-sending an unfillable limit order and watching it be accepted,
 because `F-9`'s lesson is that what a rule reports can disagree with what it does, in either direction.
+
+---
+
+## 5.43 `P1-100` closed — one predicate, three readers, and the panic button that cancels its own flatten
+
+**`P1-100` is CLOSED and live-validated (`v1.21.0`).** A SHADOW-only lockout blocked real orders.
+
+**The reader was `IsAccountLocked`, and `CanTrade` was never wrong.** The bridge's `PlaceOrder`,
+`PlaceOcoOrder` and `PlaceAtmOrder` all consult it, and so does `GET /api/lockout` — so the status an
+operator reads came from the same place as the refusal. It returned `state.IsLockedOut` raw. `P2-92`
+(authority) and `P2-94` (deadline) had each added a clause to `CanTrade`; **neither reached this
+reader, because nothing compared the two answers.**
+
+⚠️ **It was wrong in BOTH directions, and only one of them was filed:**
+
+| | `CanTrade` | `IsAccountLocked` (before) |
+|---|---|---|
+| shadow-only rule breach | allows | **refuses** ← the filed defect |
+| `LockAccount(a, 60)` — timed | refuses | **allows** ← found while fixing it |
+
+The second row is `P2-94` verbatim at a second reader, nine days after `P2-94` was closed in
+`CanTrade`. Fixing the observed defect alone would have left it. **The general move: when you find a
+reader that disagrees with the enforcer, enumerate every clause the enforcer has learned and check
+each one, rather than porting the clause you came for.**
+
+**The fix is a predicate, not an edit.** `LockoutBinds(accountName[, state])` is the only place that
+answers "does a lockout bind here", and all three readers call it — the third being the entry-cancel
+block in `OnOrderUpdate`, which **nobody had counted**. A predicate with one caller is a convention;
+a predicate with every caller is a guarantee.
+
+Three things worth carrying:
+
+* **The relaxation keys on the LOCKOUT's authority, never on the current mode.** Reading `_mode` here
+  passes the headline case and makes a mode switch a lockout bypass — flip a live guard to `shadow`
+  and every real lockout evaporates. That is `mutate_p292.py`'s "THE WRONG FIX" mutant, and it is the
+  implementation anyone would reach for first.
+* **The third reader's damage was a LOG LINE.** `P0-51` already withholds intervention cancels in
+  shadow, so nothing was cancelled — but the block still wrote `ENTRY_CANCEL: Cancelled order N
+  because account is locked out` into `interventions.jsonl`. Same family as `P2-101`: a claim about an
+  action the current mode does not perform.
+* ⚠️ **The whole suite — 1355 tests — stayed green through the fix.** Every test that touched this set
+  `state.IsLockedOut = true` directly, the single combination where all three readers agree. The
+  closing tests assert **both** readers at once, and
+  `TheReportedGateAndTheEnforcedGateCannotDisagree` drives all **48** combinations of
+  flag × deadline × authority × armed × bypass-listed asserting `CanTrade == !IsAccountLocked`. The
+  instance tests would all pass against a fourth reader added tomorrow; that one states the invariant.
+
+⚠️ **Extracting the predicate broke two of `mutate_p292.py`'s anchors** — they matched text inside
+`CanTrade`. `check_anchors.py` caught it in the same commit, which is the third time that gate has
+paid for itself. They were **repointed** at `LockoutBinds` rather than retired (the invariant did not
+change, only its address) and are now strictly stronger, since one edit there regresses all three
+readers at once. `mutate_p1100.py` deliberately does **not** duplicate them, and says so.
+
+Suite **1424/0**. `mutate_p1100.py` **4/0** on the first run, `mutate_p292.py` **11/0** re-run against
+the repointed anchors, **276 anchors / 0 broken**, all 8 gates green, 26 batteries wired.
+
+### Live validation, and the blast radius was larger than the defect said
+
+Deployed `v1.21.0` (core + bridge pin), `nt_compile` **0 errors**, `ARMED_ON_START` confirms the
+hot-swap. On Sim101, guard armed in `shadow`, `MaxContractsPerAccount: 10`:
+
+```
+13:44:43  Buy 11 MNQ market -> filled 1 + 10 (a genuine two-slice order)
+13:44:43  SHADOW_LOCKOUT  Rule MAX_SIZE_BREACH recorded a shadow-only lockout observation
+13:45:22  Buy 1 MNQ Limit @ 20000  ->  {"status": "submitted"}      <- v1.20.0 REFUSED this exact call
+```
+
+Then the negative control, which matters more: `nt_emergency_flatten` engages a real (bridge-side)
+lockout, and the same unfillable limit was **refused** — so the fix relaxed the shadow case and
+nothing else. Both directions driven, on the box.
+
+⚠️ **The funded account was being gated too.** `TAKEPROFITPRO524207503` — the 50K TPT PRO, holding a
+real short 3 MES — carried a **persisted shadow-only lockout** and was retrying `LOCKOUT_CANCEL` every
+5 seconds. Under `v1.20.0` the bridge would have refused **every order on that account**. `P1-100` was
+filed off sim accounts and read as a sim-mode annoyance; it was gating a funded account the whole
+time. **A defect found on sim is not a defect confined to sim.**
+
+Incidentally: the 11-lot entry filled as **1 + 10**, and both followers ended at exactly 1 NQ
+(11 MNQ ÷ 10 = 1.1 → 1). Under `v1.19.0`'s per-execution sizing the first slice would have been
+dropped and the second would have copied 1, reaching the same total by luck — but it is the first
+multi-slice order to run through `P1-99`'s accumulator in production, and it was right.
+
+### ⚠️ `P0-104`: the panic kill-switch cancels its own flatten order, and locks you out of fixing it
+
+Found in the cleanup, not the test. `nt_emergency_flatten` on Sim101 returned
+`success: true, flattenedAccounts: 1, cancelledOrders: 2` and **left the account long 11**.
+
+`EmergencyFlatten` cancels working orders (step 2), calls `acc.Flatten` (step 3), then runs **a second
+cancel pass for "residual bracket/OCO orders"** (step 4) that enumerates `acc.Orders` and cancels
+everything active — **including the `Close` order step 3 just submitted**, because `acc.Flatten` is
+asynchronous and it never distinguishes its own order from a residual. The counts are the proof:
+`firstPassCancelled: 1` was the resting limit, `residualCancelled: 1` was the flatten. Then step 5
+engages the lockout, so `nt_place_order` **refuses the exit the operator would place by hand** —
+measured, immediately after.
+
+Ordered the way an operator meets it: **stops cancelled → flatten cancelled → account locked → success
+reported.** Naked position, no protection, no way to exit through the tool, and nothing says so. That
+is `P0`, and it is in `nt8-mcp-bridge`, which has no tests (`P2-27`). The order-set arithmetic —
+"which orders did I submit during this call" — names no NT8 type, so the `BridgeAccountResolver`
+pattern applies directly.
+
+`P1-105` is the same disease with a smaller bite: `ClosePosition` sets `positionClosed = true` on the
+line after `account.Flatten(...)` and returns a constant `status: "flattened"`. Measured returning
+`positionClosed: true` having submitted **nothing** — no `ORDER_UPDATE` in `interventions.jsonl` either
+side of the call, position still long 11.
+
+⚠️ **Both are `flattened++` counting the CALL, not the outcome** — `P1-70`'s family, and the same shape
+as `P2-98`'s latency verdict: a measurement recorded before the thing being measured has happened.
+Neither method ever looks at the position again. **Four sessions running, the defects that matter have
+come from driving the deployed box and reading `interventions.jsonl`**, with the suite green
+throughout.
+
+### What to do next, in order
+
+1. **`P0-104`** — the panic button. It is the only `P0` open and it removes protection while claiming
+   to add it.
+2. **`P2-101`** — the shadow flatten retry. Now known to fire on the **funded** account too, and in a
+   second flavour (`LOCKOUT_CANCEL`, not just `LOCKOUT_FLATTEN_RETRY`), ~12 lines/minute/account
+   indefinitely. *An alarm that is always on is off*, and this one is burying the audit record that
+   `P0-104` was found in.
+3. **`P1-102`** — no MCP tool reads or clears a lockout. Every unlock this session was a raw `curl`.
+4. **`P1-105`**, then `P2-103`, then `P2-95`.
+
+⚠️ **`P1-100` is closed, so the composite risk `P1-102` was raised on is halved**: shadow mode can no
+longer freeze an account. `P1-102` is now a workflow gap, not a trap — weigh it accordingly.

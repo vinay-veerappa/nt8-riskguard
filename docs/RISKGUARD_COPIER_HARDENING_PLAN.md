@@ -2884,6 +2884,104 @@ either direction. The tool's test must assert the same way.
 
 ---
 
+### P0-104. `nt_emergency_flatten` CANCELS ITS OWN FLATTEN ORDER, reports success, and locks the account so the operator cannot exit by hand — OPEN, found live 2026-08-14
+
+**Where**: `McpBridgeAddOn.cs`, `EmergencyFlatten`, steps 3-5. In the `nt8-mcp-bridge` repo, which
+`P2-27` records as untested.
+
+**This is the panic kill-switch.** It runs five steps per account: terminate strategies, cancel all
+working orders, `acc.Flatten(...)`, **a second cancel pass for "residual bracket/OCO orders"**, then
+engage a lockout. `acc.Flatten` is asynchronous — it *submits* a `Close` market order. Step 4 then
+enumerates `acc.Orders` for anything in `Working`/`Submitted`/`Accepted`/`ChangePending`/`PartFilled`
+and cancels **every one of them**, which includes the `Close` order step 3 submitted a moment
+earlier. It cannot tell its own flatten from a residual bracket, because it does not try.
+
+**Measured on Sim101 2026-08-14 13:45:36Z**, while live-validating `P1-100`. Account long 11 MNQ, one
+resting limit:
+
+```
+13:45:36  35541  Limit Buy 1   McpBridge  CancelPending -> CancelSubmitted -> Cancelled   <- step 2, correct
+13:45:36  35542  Market Sell 11  Close     Initialized -> Submitted -> CancelPending
+13:45:36  35542                            -> CancelSubmitted -> Working -> Cancelled     <- step 4 kills the flatten
+```
+
+The response:
+
+```json
+{"success": true, "cancelledOrders": 2, "firstPassCancelled": 1, "residualCancelled": 1,
+ "flattenedAccounts": 1, "lockoutMinutes": 2, "errors": []}
+```
+
+`firstPassCancelled: 1` is the resting limit; **`residualCancelled: 1` is its own `Close` order**. The
+counts are the proof — there were exactly two orders on the account and the second one was the
+flatten. The position was **still long 11** afterwards.
+
+**Why P0.** Sequence the consequences the way an operator hits them in a crisis:
+
+1. their protective stops are cancelled (step 2, and it is right to do so before flattening);
+2. the flatten is cancelled (step 4), so the position is **naked** — no stop, no exit;
+3. the account is locked out (step 5), so `nt_place_order` **refuses** the exit they would place by
+   hand. Measured immediately after, on the same account:
+   `{"error": "Order blocked: Account Sim101 is locked out."}`;
+4. the tool returns **`success: true`, `flattenedAccounts: 1`**, so nothing tells them any of this.
+
+The panic button removes the protection, leaves the position, and takes away the ability to fix it —
+and says it worked. On a funded account that is the whole account.
+
+⚠️ **`flattened++` counts the CALL, not the outcome** — `P1-70`'s family, and the same shape as
+`P2-98`'s latency verdict: a measurement taken before the thing being measured has happened. There is
+no completion signal anywhere in this method; it never looks at the position again.
+
+**Fix**: the residual pass must exclude the orders this call submitted (`acc.Flatten` returns nothing,
+so capture `acc.Orders` before step 3 and cancel only the set difference — or filter by `Name ==
+"Close"`, which is weaker and would break on a bracket legitimately named that). Then re-read the
+position and report what is **actually** flat. And the lockout in step 5 must not be applied to an
+account this call failed to flatten: locking an account with an open unprotected position is strictly
+worse than not locking it.
+
+⚠️ The tests for this live in `nt8-mcp-bridge`, which has none (`P2-27`). The `BridgeAccountResolver`
+pattern applies: extract the order-set arithmetic into a class that **names no NT8 type** and execute
+it. "Which orders did I submit during this call" is pure set logic and does not need a broker.
+
+---
+
+### P1-105. `nt_close_position` reports `positionClosed: true` after submitting nothing — OPEN, found live 2026-08-14
+
+**Where**: `McpBridgeAddOn.cs`, `ClosePosition`, step 2.
+
+```csharp
+account.Flatten(new[] { pos.Instrument });
+positionClosed = true;              // <- the CALL succeeded; the position has not closed
+```
+
+`positionClosed` is assigned unconditionally on the line after the call and returned as the tool's
+answer. It reports that the method reached that line.
+
+**Measured on Sim101 2026-08-14 13:46:33Z**, cleaning up after `P1-100`'s validation. Account long 11
+MNQ, no lockout (just cleared), guard in shadow so nothing could intervene:
+
+```
+request   {"account": "Sim101", "symbol": "MNQ 09-26"}
+response  {"status": "flattened", "positionClosed": true, "cancelledOrdersCount": 0}
+```
+
+`interventions.jsonl` records the HTTP call at `13:46:33` and then **no `ORDER_UPDATE` for Sim101 at
+all** — the audit log covers the window either side, and the account logs every order transition, so
+nothing was submitted. The position was still long 11. A plain `nt_place_order` Sell 11 closed it
+immediately, and the copier mirrored the exit to both followers, so the account and the path were both
+working.
+
+**The mechanism is not established and this entry does not guess at one.** What is established from
+the source is that the report cannot distinguish "flattened" from "called Flatten and nothing
+happened", which is why the failure was invisible. That is the part to fix first: read the position
+back and report **that**. `status: "flattened"` is a constant string in the return expression — it is
+not a claim about anything.
+
+Related: `P0-104` (the same unobserved-outcome report, with worse consequences), `F-9` (derive what
+you display from what actually happened), `P1-70`.
+
+---
+
 ### P2-103. The three read-only surfaces that answer "is the guard actually protecting me?" have NO MCP tool, and they are exactly the ones five mutation batteries exist to make honest — OPEN, found 2026-08-14
 
 **Where**: `mcp/ninjatrader-mcp/lib/tools.js`. Measured 2026-08-14 by diffing the bridge's 67 routes
