@@ -1,10 +1,12 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 35 — §5.33 and §5.34**). Core **`v1.17.0`** is tagged,
-deployed and **NT8-compiled clean (0 errors)** — suite **1303/0**, bridge **69/0**, MCP wrapper
-**43/0**, **22** core mutation batteries + the bridge's 1, **245 anchors / 0 broken**. **104 IDs, 5
+**Last updated**: 2026-08-13 (**session 35 — §5.33, §5.34, §5.35**). Core **`v1.18.0`** is tagged,
+deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **69/0**, MCP wrapper
+**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **105 IDs, 5
 open**; the `P0` band and the untriaged band are both empty,
 and every naked-risk item is closed.
+
+⚠️ **`P0-96`, found in this session's last hour and the sharpest thing in it**: NT8's `Position.Quantity` is **absolute** — the side is `MarketPosition` — and the copier read the **sign** of it in two places. So a leader **covering a short** sent the follower a `Sell`, which does not close a short, it **doubles** it. **1300 green tests passed under it**, because every long-side test does and there was no short-EXIT test. Found while reading adjacent code, not by the suite and not by any CI gate. **A convention the whole suite encodes is not a convention the code follows** — nothing compared the two.
 
 ⚠️ **Session 35's finding is the one to carry forward, because it invalidates a habit rather than a
 line of code**: `P3-30`'s guard audit shipped in session 34 with **1264 green tests**, and it
@@ -156,17 +158,17 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1303 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
+| **Suite** | **core 1311 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | ✅ the copier mode's read surface is DONE (§5.34). Next: **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
-| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.17.0`** | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.17.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
-| **Guard** | `version: 1.17.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.17.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
+| **Do next** | ⚠️ **`P0-96` was found and fixed (§5.35): a leader covering a SHORT sent the follower a `Sell`, which DOUBLES a short rather than closing it — behind 1300 green tests.** Next: **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **26 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
+| **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
 | **Mutation** | **23 batteries** — **22 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. New in session 35: `mutate_p330` (7 mutants, 1 **documented survivor** — holding `_stateLock` across the audit's broker reads, which no test here can detect because the stubs never block) and `mutate_p334` (9 / 0). **243 anchors / 0 broken — measured this pass.** ⚠️ The other 20 batteries were **not** re-run locally (~243 mutants × a suite run each) — **CI now runs every one of them on every push**, which is why a push takes ~1h40m and is not a hang. **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
-| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.17.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
+| **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
-| **Bridge pin** | ✅ **`v1.17.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
+| **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
@@ -6250,3 +6252,79 @@ nothing that runs before a deploy inspects the audit log's *contents*.
 4. ⚠️ **Still not live-validated**: the guard audit and the copier's shadow mode have never run
    against an open position. The box has been flat throughout, and on a flat box a working
    detector and an absent one both produce silence.
+
+## 5.35 Session 35 continued — `P0-96`: the copier read a position's SIDE off the SIGN of its quantity
+
+**This one placed a real, wrong-direction order, and 1300 green tests did not see it.** It was
+found while reading `ReconcileFollowerPosition` for `P2-27` coverage — the defect was in the
+*live copy path* next door, not in the dead code being reviewed.
+
+### What it was
+
+NT8's `Position.Quantity` is **absolute**. The side lives in `MarketPosition`, which is why that
+property exists, and **every one of the ~1300 tests in this repo already models a short as
+`MarketPosition.Short` with a positive quantity** — not one uses a negative. Two places read the
+sign anyway:
+
+```csharp
+if (currentFollowerPos < 0) followerAction = OrderAction.BuyToCover;   // UNREACHABLE
+else if (currentFollowerPos > 0) followerAction = OrderAction.Sell;    // runs for BOTH sides
+```
+
+So a leader **covering a short** sent the follower a `Sell`. **A `Sell` does not close a short —
+it doubles it**, in a direction the leader has already left. The copier's own log said so the
+moment a test drove it:
+
+```
+COPY_SUBMITTED: MNQ 03-26 Sell 1 submitted to 'SimFollower'
+                mirroring leader 'SimLeader' BuyToCover 1@18000 (isExit=True)
+```
+
+`P0-5`'s family (*copier exit sizing is not position-mirroring → follower reverses*), reached by
+a different route. The second site made `ReconcileFollowerPosition`'s `directionMismatch`
+permanently false, so **the only branch in that method that takes a broker action could not
+fire** — dead logic inside dead code.
+
+### Why the suite could not see it, and this is the transferable part
+
+Every **long**-side test passes under the defect. The suite had short *entries* and short *stop*
+mirroring — §5.13's live validation was a short — but **no short EXIT test**, so the exit
+*action* was never asserted on the short side. The defect lived in exactly the gap between two
+well-covered things.
+
+> **A convention the whole suite already encodes is not the same as a convention the code
+> follows.** Every test modelled `Quantity` as absolute; two production sites read it as signed;
+> nothing compared the two. That comparison is not something a reviewer does by reading a diff —
+> the diff looks fine either way.
+
+### What the mutants added, and both were surprises
+
+`mutation/mutate_p096.py` — 5 mutants, **4 killed, 1 documented survivor**. Two mutants changed
+the work:
+
+* **Mutant 3 deletes the exit-alignment block outright** and everything stayed green, because
+  `followerAction` already defaults to the leader's action. The block only matters when the
+  follower is on the **opposite side to the leader** — a partial fill, a manual trade, a copy
+  skipped while quarantined. That case now has a test, and without it the block reads as
+  redundant to anyone who tries to simplify it.
+* **Mutant 4 drops the `isExit` guard**, which turns a scale-in **entry** into an order that
+  closes the position. Also green, also now pinned.
+* The survivor is honest: the reconciler half is inside `#if !TESTING` and called by nothing, so
+  no test here can reach it. **When `P2-27` makes it testable, that mutant is the first test to
+  write.**
+
+### Not live-validated, and deliberately not
+
+Proving this on the box means a real short round trip through the copier. The fix is deployed
+(`v1.18.0`, NT8 0 errors, live box answers `1.18.0`) and pinned by tests and mutants, but **no
+short has been copied since**. That is a scheduled live-validation item, along with the guard
+audit and the copier's shadow mode — all three are waiting on the same thing: an open position.
+
+### Next
+
+1. **`P2-27` coverage for `ReconcileFollowerPosition`**, which is what this session was starting
+   when it found `P0-96`. It is the last `KNOWN_DEAD` entry, it is inside `#if !TESTING`, and it
+   **flattens a live follower position**. `mutate_p096.py`'s surviving mutant is the first test.
+2. A **live short round trip** through the copier, which validates `P0-96`, the guard audit and
+   the copier's shadow mode in one run.
+3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.
