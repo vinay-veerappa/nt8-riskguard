@@ -1515,7 +1515,28 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public int CalculateFollowerQuantity(CopierRelationship rel, int leaderQty, string rawSymbol, int currentFollowerPosition, bool isExit, out bool isClamped)
         {
+            return CalculateFollowerQuantity(rel, leaderQty, rawSymbol, currentFollowerPosition, isExit, out isClamped, out _);
+        }
+
+        /// <summary>
+        /// As above, and additionally reports the quantity BEFORE the position clamp.
+        ///
+        /// P1-99 needs this and nothing else does. Sizing an entry from the leader ORDER's
+        /// cumulative fill means computing a cumulative target and copying the DELTA against what
+        /// earlier slices already copied -- and the clamp has to be applied to that DELTA, against
+        /// the capacity actually left, not to the cumulative. Clamping the cumulative and then
+        /// subtracting would subtract the same earlier slices twice: with MaxPositionSize 10 and a
+        /// 100-lot filling 50+50, the second slice would see capacity 10-5=5, clamp its cumulative
+        /// target of 10 down to 5, subtract the 5 already copied and copy NOTHING -- leaving the
+        /// follower at half size with no event saying so.
+        ///
+        /// `preClampQty` is 0 on every refusal path, because a refusal copies nothing; it is set
+        /// only where a real scaled quantity exists.
+        /// </summary>
+        public int CalculateFollowerQuantity(CopierRelationship rel, int leaderQty, string rawSymbol, int currentFollowerPosition, bool isExit, out bool isClamped, out int preClampQty)
+        {
             isClamped = false;
+            preClampQty = 0;
             if (leaderQty <= 0) return 0;
 
             // Guard against null relationship - convenience overload at line 536 can pass null
@@ -1703,6 +1724,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 rawCopyQty = 1;
             }
+
+            // P1-99: the scaled quantity, before either clamp below. Set HERE rather than at each
+            // return above, so every refusal path leaves it 0.
+            preClampQty = rawCopyQty;
 
             if (isExit)
             {
@@ -4384,6 +4409,57 @@ namespace NinjaTrader.NinjaScript.AddOns
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// P1-99. How much of ONE leader order has filled, and how much of it each relationship has
+        /// already copied.
+        ///
+        /// The copy path runs per EXECUTION, and it used to size each one independently. A leader
+        /// order is not its fills: a 100-lot MNQ order under a MNQ->NQ conversion is 10 NQ however
+        /// the book happens to deliver it, but sized slice by slice it became a function of the
+        /// fill shape. 5+95 copied 10 by luck; 20 x 5 copied NOTHING, because each 5 scales to 0.5
+        /// and rounds to zero -- twenty routine COPY_SKIPPED_SUB_MINIMUM lines, leader long 100,
+        /// follower FLAT, and no error anywhere.
+        ///
+        /// So the grain of the decision is the ORDER. Each slice recomputes the target from the
+        /// CUMULATIVE leader quantity and copies the difference against what has already gone.
+        /// Rounding error cannot accumulate, because every slice re-derives the whole target rather
+        /// than adding to it: 20 x 5 copies 0,1,1,0,0,1... summing to exactly 10.
+        ///
+        /// ⚠️ ENTRIES ONLY. Exits already mirror the follower's ACTUAL position (P0-6's clamp) and
+        /// so were never slice-dependent; routing them through here would make a partial exit
+        /// subtract twice.
+        /// </summary>
+        private class LeaderOrderFillProgress
+        {
+            public int CumulativeLeaderQty;
+            public int SliceCount;
+            // Keyed by CopierRelationship.Id. Per relationship, because two followers on the same
+            // leader order scale differently and may be clamped differently.
+            public readonly Dictionary<string, int> CopiedByRelationshipId =
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Keyed by the LEADER Order object, by reference, for the reason OrderReferenceComparer
+        // exists: OrderId is not stable. Bounded FIFO like _pendingCopies -- an order that stops
+        // filling (cancelled after a partial) would otherwise leak an entry and hold the Order
+        // alive with it, which is P1-14.
+        private readonly Dictionary<Order, LeaderOrderFillProgress> _leaderOrderProgress =
+            new Dictionary<Order, LeaderOrderFillProgress>(OrderReferenceComparer.Instance);
+        private readonly Queue<Order> _leaderOrderProgressQueue = new Queue<Order>();
+        private const int MaxLeaderOrderProgress = 2000;
+
+        /// <summary>
+        /// How many leader orders are currently being tracked. Exists so a test can see that the
+        /// accumulator is RELEASED, which has no other observable consequence -- an entry that
+        /// leaks changes no copy, it just lives to the FIFO bound holding an Order alive (P1-14).
+        /// Without this, "the entry is dropped when the order is done" is an assertion nothing can
+        /// check, and the mutant that removes the terminal-state half of that test survives.
+        /// </summary>
+        internal int LeaderOrderProgressCount
+        {
+            get { lock (_lock) { return _leaderOrderProgress.Count; } }
+        }
+
+        /// <summary>
         /// True when two instrument roots track the same underlying at the same price, so a fill
         /// price on one can be compared to a fill price on the other. Equal roots qualify, as does
         /// either direction of the built-in mini/micro matrix (NQ/MNQ fill at the same index
@@ -4992,6 +5068,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                 $"{activeRels.Count} active relationship(s), isExit={leaderIsExiting}: "
                 + string.Join(", ", activeRels.Select(r => r.FollowerAccountName)));
 
+            // P1-99: accumulate this leader ORDER's fills before sizing anything. Entries are sized
+            // from the cumulative below; exits are not, and do not read this.
+            LeaderOrderFillProgress orderProgress = null;
+            int cumulativeLeaderQty = exec.Quantity;
+            int sliceNumber = 1;
+            if (!leaderIsExiting)
+            {
+                lock (_lock)
+                {
+                    if (!_leaderOrderProgress.TryGetValue(exec.Order, out orderProgress))
+                    {
+                        orderProgress = new LeaderOrderFillProgress();
+                        _leaderOrderProgress[exec.Order] = orderProgress;
+                        _leaderOrderProgressQueue.Enqueue(exec.Order);
+                        while (_leaderOrderProgressQueue.Count > MaxLeaderOrderProgress)
+                        {
+                            Order oldest = _leaderOrderProgressQueue.Dequeue();
+                            _leaderOrderProgress.Remove(oldest);
+                        }
+                    }
+                    orderProgress.CumulativeLeaderQty += exec.Quantity;
+                    orderProgress.SliceCount++;
+                    cumulativeLeaderQty = orderProgress.CumulativeLeaderQty;
+                    sliceNumber = orderProgress.SliceCount;
+                }
+            }
+
             foreach (var rel in activeRels)
             {
                 if (rel.IsQuarantined)
@@ -5115,7 +5218,50 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
 
                 bool isClamped;
-                int targetQty = CalculateFollowerQuantity(rel, exec.Quantity, exec.Instrument.FullName, currentFollowerPos, isExit, out isClamped);
+                int targetQty;
+                int alreadyCopiedThisOrder = 0;
+                int cumulativeTarget = 0;
+
+                if (isExit)
+                {
+                    // UNCHANGED, and deliberately so. P0-6's exit clamp mirrors the follower's
+                    // ACTUAL position rather than scaling the leader's quantity, so an exit was
+                    // never a function of the fill shape. Sizing it from a cumulative as well
+                    // would subtract the same slices twice and under-close the follower.
+                    targetQty = CalculateFollowerQuantity(
+                        rel, exec.Quantity, exec.Instrument.FullName, currentFollowerPos, true, out isClamped);
+                }
+                else
+                {
+                    // P1-99. Size the ENTRY from the leader ORDER's cumulative fill, then copy the
+                    // difference against what earlier slices already copied.
+                    lock (_lock)
+                    {
+                        if (orderProgress != null)
+                            orderProgress.CopiedByRelationshipId.TryGetValue(rel.Id, out alreadyCopiedThisOrder);
+                    }
+
+                    // This asks "how big should the WHOLE copy be", and it reads the PRE-CLAMP
+                    // out-param, so the position argument cannot affect the answer -- 0 is passed
+                    // to say that plainly rather than to select a behaviour. A mutation mutant that
+                    // changed it to `currentFollowerPos` was unkillable for exactly this reason.
+                    //
+                    // ⚠️ That is load-bearing, not incidental: switching this to the RETURN value
+                    // would clamp the cumulative against the capacity left, and the delta below
+                    // would then subtract the already-copied slices a SECOND time. With
+                    // MaxPositionSize 10, a 100-lot filling 50+50 would copy 5 and then nothing,
+                    // leaving the follower at half size with every event reading as success.
+                    CalculateFollowerQuantity(
+                        rel, cumulativeLeaderQty, exec.Instrument.FullName, 0, false,
+                        out bool cumulativeRefused, out cumulativeTarget);
+
+                    int delta = Math.Max(0, cumulativeTarget - alreadyCopiedThisOrder);
+
+                    int availableCapacity = Math.Max(0, rel.MaxPositionSize - Math.Abs(currentFollowerPos));
+                    targetQty = Math.Min(delta, availableCapacity);
+                    isClamped = cumulativeRefused || delta > availableCapacity;
+                }
+
                 if (targetQty <= 0)
                 {
                     if (isExit && currentFollowerPos == 0)
@@ -5133,12 +5279,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                             + $"{rel.MaxPositionSize} (currently {currentFollowerPos}); no room for the "
                             + "copy, so nothing was placed.");
                     }
+                    else if (alreadyCopiedThisOrder > 0 && cumulativeTarget <= alreadyCopiedThisOrder)
+                    {
+                        // P1-99: NOT a shortfall. The leader order's whole scaled size is already on
+                        // the follower, and this slice does not raise it -- the ordinary case for
+                        // every slice after the target stops moving. It keeps the P1-71 convention
+                        // (one terminal outcome per execution) without claiming a copy was lost.
+                        CopierLog(followerAcc.Name, "COPY_SKIPPED_ALREADY_AT_TARGET",
+                            $"slice {sliceNumber} of leader order '{exec.Order.Name}' added nothing for "
+                            + $"'{followerAcc.Name}': {cumulativeLeaderQty} filled so far scales to "
+                            + $"{cumulativeTarget} {targetInstrument.FullName}, and {alreadyCopiedThisOrder} "
+                            + "is already copied. Nothing is missing.");
+                    }
                     else
                     {
+                        // P1-99 changed what this measures. It used to report THIS EXECUTION's
+                        // quantity rounding below a contract, which on a sliced fill was neither
+                        // the whole story nor a real shortfall -- a 100-lot filling 20 x 5 raised it
+                        // twenty times while the correct copy was 10. It now reports the leader
+                        // ORDER's cumulative fill, so it fires only while the order genuinely has
+                        // not yet filled enough to be worth one follower contract.
                         CopierLog(followerAcc.Name, "COPY_SKIPPED_SUB_MINIMUM",
                             $"scaled quantity for {targetInstrument.FullName} on '{followerAcc.Name}' "
-                            + $"came out below 1 contract from leader qty {exec.Quantity} "
-                            + $"(ratio {rel.QuantityRatio}, sizing {rel.SizingMode}); nothing placed.");
+                            + $"is still below 1 contract: leader order '{exec.Order.Name}' has filled "
+                            + $"{cumulativeLeaderQty} so far (this slice {exec.Quantity}, slice {sliceNumber}) "
+                            + $"at ratio {rel.QuantityRatio}, sizing {rel.SizingMode}; nothing placed. "
+                            + "A later slice of the same order will copy once the cumulative reaches one "
+                            + "contract -- this is only a lost copy if the order stops filling here.");
                     }
                     continue;
                 }
@@ -5241,13 +5408,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // would sit in the pending map until evicted.
                         RecordPendingCopy(followerOrder, rel, exec, targetInstrument, followerAction, isExit);
 
+                        // P1-99: credit what was ACTUALLY sent, not the target. A copy reduced by
+                        // the capacity clamp must leave the shortfall outstanding, so a later slice
+                        // re-offers it once the position frees up -- crediting the target instead
+                        // would silently forgive the clamped contracts.
+                        if (!isExit && orderProgress != null)
+                        {
+                            lock (_lock)
+                            {
+                                int prior;
+                                orderProgress.CopiedByRelationshipId.TryGetValue(rel.Id, out prior);
+                                orderProgress.CopiedByRelationshipId[rel.Id] = prior + targetQty;
+                            }
+                        }
+
                         // P1-71: the terminal SUCCESS outcome. Without it, "exactly one outcome per
                         // relationship" could be satisfied by logging skips only, and the invariant
                         // would prove nothing.
                         CopierLog(followerAcc.Name, "COPY_SUBMITTED",
                             $"{targetInstrument.FullName} {followerAction} {targetQty} submitted to "
                             + $"'{followerAcc.Name}' mirroring leader '{acctName}' "
-                            + $"{leadOrderAction} {exec.Quantity}@{exec.Price} (isExit={isExit}).");
+                            + $"{leadOrderAction} {exec.Quantity}@{exec.Price} (isExit={isExit})"
+                            + (isExit
+                                ? "."
+                                : $"; leader order '{exec.Order.Name}' has filled {cumulativeLeaderQty} "
+                                  + $"in {sliceNumber} slice(s), copy now {alreadyCopiedThisOrder + targetQty} "
+                                  + $"of a {cumulativeTarget} target."));
                     }
                     else
                     {
@@ -5264,6 +5450,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                     CopierLog(followerAcc.Name, "COPY_FAILED_SUBMIT",
                         $"placing {targetInstrument.FullName} {followerAction} {targetQty} on "
                         + $"'{followerAcc.Name}' threw {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            // P1-99: drop the accumulator once the leader order can deliver no more fills.
+            //
+            // BOTH signals are needed, which is P2-98's lesson on the other side of the copier:
+            // quantity alone loses an order cancelled after a partial fill, and terminal-state
+            // alone loses the ordinary case, because a stub (and a real broker between events)
+            // can leave a fully filled order reading as still working. The bounded FIFO above is
+            // the backstop, not the mechanism -- relying on it would keep up to 2000 dead orders
+            // and their progress alive.
+            if (!leaderIsExiting && orderProgress != null)
+            {
+                bool leaderOrderDone =
+                    RiskGuardAddOn.IsTerminal(exec.Order.OrderState)
+                    || (exec.Order.Quantity > 0 && cumulativeLeaderQty >= exec.Order.Quantity);
+                if (leaderOrderDone)
+                {
+                    lock (_lock)
+                    {
+                        _leaderOrderProgress.Remove(exec.Order);
+                    }
                 }
             }
         }

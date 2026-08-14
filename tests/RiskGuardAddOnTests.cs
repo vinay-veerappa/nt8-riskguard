@@ -335,6 +335,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP298_ATerminalOrderStateCompletesACopyThatNeverFilledInFull();
             TestP298_TheMissEventDoesNotAssertACauseItCannotKnow();
 
+            // P1-99: the copier sized each leader EXECUTION independently, so a 100-lot order
+            // filling 20 x 5 copied NOTHING. These are the only copy-path tests that send more
+            // than one execution for a single leader order.
+            TestP199_TheCopiedTotalDoesNotDependOnHowTheLeaderOrderFilled();
+            TestP199_RoundingDoesNotAccumulateAcrossSlices();
+            TestP199_AnEarlySliceReportsADeferralNotALoss();
+            TestP199_AnOrderThatStopsFillingSmallStillReportsTheShortfall();
+            TestP199_TheCapacityClampAppliesToTheDeltaNotTheCumulative();
+            TestP199_AnExitIsStillSizedFromTheFollowersOwnPosition();
+            TestP199_AClampedSliceLeavesItsShortfallOutstanding();
+            TestP199_ACancelledPartialFillStillReleasesItsAccumulator();
+            TestP199_TwoFollowersOnOneOrderAccumulateIndependently();
+            TestP199_ASingleExecutionOrderIsUnchanged();
+            TestP199_ASecondOrderStartsItsOwnCount();
+
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
             TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
@@ -4371,6 +4386,448 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// copy proceeds through both, and counting them would let a genuine drop hide behind a
         /// warning.
         /// </summary>
+        // ===================== P1-99: the copier's sizing GRAIN =====================
+        //
+        // The copy path runs per EXECUTION and used to size each one independently, so the
+        // follower's position became a function of how the leader's order happened to FILL --
+        // a property of the book, not of the trade. Found by driving the deployed box, where a
+        // 100-lot filling 5+95 copied the right 10 NQ BY LUCK.
+        //
+        // ⚠️ Every other copy-path test in this file sends ONE execution for the full quantity,
+        // and `LeaderExec` builds a fresh Order for each. That shortcut is why this survived a
+        // green suite -- so these helpers deliberately hold ONE Order across several Executions,
+        // which is what NT8 actually delivers on a partial fill.
+
+        /// <summary>One leader ORDER, reused across slices. State starts Working: it is filling.</summary>
+        private static Order P199LeaderOrder(Instrument inst, OrderAction action, int totalQty, string name)
+        {
+            return new Order
+            {
+                Instrument = inst,
+                OrderAction = action,
+                OrderState = OrderState.Working,
+                OrderType = OrderType.Market,
+                Quantity = totalQty,
+                TimeInForce = TimeInForce.Day,
+                Name = name
+            };
+        }
+
+        /// <summary>One Execution against an existing leader Order -- a single slice of its fill.</summary>
+        private static Execution P199Slice(Account leader, Order order, int qty, string execId)
+        {
+            return new Execution
+            {
+                Account = leader,
+                Instrument = order.Instrument,
+                Order = order,
+                Quantity = qty,
+                Price = 18000,
+                ExecutionId = execId,
+                Name = "LEADER_FILL"
+            };
+        }
+
+        /// <summary>
+        /// MNQ leader -> NQ follower at ratio 1. AutoSymbolConversion supplies the 0.1 multiplier,
+        /// so 100 MNQ is 10 NQ however it arrives -- which is the whole point: the correct answer
+        /// is a property of the ORDER, and no fill shape may change it.
+        /// </summary>
+        private static CopierRelationship P199Relationship(int maxPositionSize = 100)
+        {
+            return new CopierRelationship
+            {
+                LeaderAccountName = "SimLeader",
+                FollowerAccountName = "SimFollower",
+                IsEnabled = true,
+                FixedLotMode = false,
+                SizingMode = CopierSizingMode.QuantityRatio,
+                QuantityRatio = 1.0,
+                AutoSymbolConversion = true,
+                MaxPositionSize = maxPositionSize
+            };
+        }
+
+        private static int P199CopiedTotal(Account follower)
+        {
+            return follower.Orders.Where(o => o.Name == "COPIER_FOLLOW").Sum(o => o.Quantity);
+        }
+
+        /// <summary>
+        /// THE test. The same 100-lot leader order, delivered five ways. Under the defect the
+        /// answers are 10, 10, 10, 10 and ZERO -- and only the last one is obviously wrong, which
+        /// is how a live 5+95 fill passed for correct behaviour.
+        /// </summary>
+        private static void TestP199_TheCopiedTotalDoesNotDependOnHowTheLeaderOrderFilled()
+        {
+            Console.WriteLine("\n[TEST] P1-99: the copied total is the same however the leader's order fills");
+
+            var shapes = new[]
+            {
+                new { Name = "one fill of 100",  Slices = new[] { 100 } },
+                new { Name = "5 + 95",           Slices = new[] { 5, 95 } },
+                new { Name = "ten 10s",          Slices = new[] { 10, 10, 10, 10, 10, 10, 10, 10, 10, 10 } },
+                new { Name = "11 + 89",          Slices = new[] { 11, 89 } },
+                new { Name = "twenty 5s",        Slices = new[] { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+                                                                  5, 5, 5, 5, 5, 5, 5, 5, 5, 5 } },
+            };
+
+            for (int s = 0; s < shapes.Length; s++)
+            {
+                var mnq = new Instrument("MNQ 03-26");
+                var rel = P199Relationship();
+                var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+                var leader = Account.All.First(a => a.Name == "SimLeader");
+
+                var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_ORDER_" + s);
+                int slicesSent = 0;
+                foreach (int qty in shapes[s].Slices)
+                {
+                    slicesSent++;
+                    // The LAST slice completes the order, as a broker would report it.
+                    if (slicesSent == shapes[s].Slices.Length) order.OrderState = OrderState.Filled;
+                    TradeCopierEngine.Instance.OnExecution(
+                        P199Slice(leader, order, qty, $"P199-S{s}-{slicesSent}"));
+                }
+
+                int copied = P199CopiedTotal(follower);
+                Assert(copied == 10,
+                    $"100 MNQ is 10 NQ however it fills. Shape '{shapes[s].Name}' ({shapes[s].Slices.Length} "
+                    + $"slice(s)) copied {copied}. Under the defect twenty 5s copies 0 -- every slice scales "
+                    + "to 0.5 and rounds to zero -- leaving the leader long 100 and the follower FLAT.");
+            }
+        }
+
+        /// <summary>
+        /// The wrong fix, pinned. "Round the slice harder" makes the 5+95 case work and turns the
+        /// twenty-slice case into a 20-contract copy: DOUBLE the leader, in the same direction.
+        /// </summary>
+        private static void TestP199_RoundingDoesNotAccumulateAcrossSlices()
+        {
+            Console.WriteLine("\n[TEST] P1-99: twenty sub-minimum slices must not become twenty contracts");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_ROUND");
+            for (int i = 1; i <= 20; i++)
+            {
+                if (i == 20) order.OrderState = OrderState.Filled;
+                TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 5, "P199-R-" + i));
+            }
+
+            int copied = P199CopiedTotal(follower);
+            Assert(copied == 10,
+                "Each 5 MNQ slice is 0.5 NQ. Flooring each one UP to 1 gives 20 contracts on a "
+                + "10-contract order -- a 2x over-copy that looks like a fix because the drop stops. "
+                + "Got " + copied + ".");
+        }
+
+        /// <summary>
+        /// A slice below the rounding threshold still produces exactly one outcome (P1-71), and the
+        /// message must say the copy is DEFERRED rather than lost -- the old wording asserted a
+        /// shortfall that a later slice went on to fill.
+        /// </summary>
+        private static void TestP199_AnEarlySliceReportsADeferralNotALoss()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a sub-minimum slice reports a deferral, and one outcome");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_DEFER");
+
+            var first = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 5, "P199-D-1")));
+
+            Assert(CountCopyOutcomes(first) == 1,
+                "One relationship was named, so exactly one terminal outcome -- the P1-71 invariant "
+                + "must survive the new grain.");
+            Assert(LoggedEventType(first, "COPY_SKIPPED_SUB_MINIMUM"),
+                "The 5-lot slice is genuinely below one NQ contract, so the skip is correct here.");
+            Assert(LoggedEventContaining(first, "has filled 5 so far"),
+                "The message must name the ORDER's cumulative fill. Reporting only this execution's "
+                + "quantity is what made twenty identical lines look like twenty separate small trades.");
+            Assert(P199CopiedTotal(follower) == 0, "Nothing is copied yet, correctly.");
+
+            order.OrderState = OrderState.Filled;
+            var second = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 95, "P199-D-2")));
+
+            Assert(LoggedEventType(second, "COPY_SUBMITTED"),
+                "The deferred copy arrives on the slice that carries the cumulative over the line.");
+            Assert(P199CopiedTotal(follower) == 10,
+                "and it is the WHOLE order's size, 10, not the 95-lot slice's 9.5 rounded to 10 by "
+                + "luck -- those agree here, which is exactly why the live run looked correct.");
+        }
+
+        /// <summary>
+        /// The negative case, and the one that keeps the skip honest: an order that really does
+        /// stop filling below one contract must still report the shortfall. A fix that simply
+        /// stopped emitting the event would pass every test above.
+        /// </summary>
+        private static void TestP199_AnOrderThatStopsFillingSmallStillReportsTheShortfall()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a leader order that ends below one follower contract still says so");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            // A 5-lot order, filled in full. 5 MNQ is 0.5 NQ; there is no later slice coming.
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 5, "P199_SMALL");
+            order.OrderState = OrderState.Filled;
+
+            var log = CaptureCopierLog(() =>
+                TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 5, "P199-SM-1")));
+
+            Assert(LoggedEventType(log, "COPY_SKIPPED_SUB_MINIMUM"),
+                "This IS the sub-minimum case and must still be reported. P1-71's live finding was "
+                + "that a copy dropped in silence is indistinguishable from one never attempted.");
+            Assert(P199CopiedTotal(follower) == 0, "and nothing is copied, which is correct.");
+        }
+
+        /// <summary>
+        /// MaxPositionSize must clamp the DELTA against the capacity that is left, not the
+        /// cumulative. Clamping the cumulative and then subtracting what earlier slices copied
+        /// subtracts them twice, and the follower silently ends at half size.
+        /// </summary>
+        private static void TestP199_TheCapacityClampAppliesToTheDeltaNotTheCumulative()
+        {
+            Console.WriteLine("\n[TEST] P1-99: the position clamp applies to the slice's delta, not the running total");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var nq = new Instrument("NQ 03-26");
+            var rel = P199Relationship(maxPositionSize: 10);
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_CLAMP");
+
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-C-1"));
+            Assert(P199CopiedTotal(follower) == 5, "50 MNQ is 5 NQ; capacity is 10, so it all goes.");
+
+            // The follower is now actually holding what the first slice bought.
+            follower.Positions.Add(new Position
+            {
+                Instrument = nq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 5,
+                AveragePrice = 18000
+            });
+
+            order.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-C-2"));
+
+            Assert(P199CopiedTotal(follower) == 10,
+                "The cumulative target is 10 and 5 is already copied, so the second slice owes 5 -- "
+                + "and capacity is 10-5=5, which fits exactly. Clamping the CUMULATIVE to the "
+                + "remaining capacity first would return 5, subtract the 5 already copied and place "
+                + "NOTHING, stranding the follower at half the leader's size. Got "
+                + P199CopiedTotal(follower) + ".");
+        }
+
+        /// <summary>
+        /// Exits are NOT routed through the cumulative, and this pins it. P0-6's clamp already
+        /// mirrors the follower's ACTUAL position, so a partial exit is self-correcting; feeding it
+        /// a cumulative as well would subtract the same slices twice and under-close.
+        /// </summary>
+        private static void TestP199_AnExitIsStillSizedFromTheFollowersOwnPosition()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a sliced EXIT still mirrors the follower's own position");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var nq = new Instrument("NQ 03-26");
+            var rel = P199Relationship();
+            // The follower holds NQ, not MNQ: AutoSymbolConversion means the copy -- and therefore
+            // the position the exit has to close -- is in the CONVERTED instrument. Getting this
+            // wrong in the first draft produced COPY_SKIPPED_NO_POSITION_TO_EXIT, which is the
+            // engine correctly reporting that the follower held nothing in NQ.
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 10, nq, MarketPosition.Long);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var order = P199LeaderOrder(mnq, OrderAction.Sell, 100, "P199_EXIT");
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-X-1"));
+
+            int afterFirst = P199CopiedTotal(follower);
+            Assert(afterFirst > 0,
+                "A leader exit must reach the follower on the first slice. Routing exits through the "
+                + "entry accumulator would defer the close of a position the leader has already left "
+                + "-- P0-5's failure, arriving through P1-99's fix. Got " + afterFirst + ".");
+            Assert(afterFirst <= 10,
+                "and it is clamped to what the follower actually holds (10), never the leader's 50. "
+                + "Got " + afterFirst + ".");
+        }
+
+        /// <summary>
+        /// A copy cut short by the capacity clamp must leave the shortfall OUTSTANDING, so a later
+        /// slice re-offers it once room appears. Crediting the target instead forgives the clamped
+        /// contracts silently -- and the earlier clamp test could not see it, because there the
+        /// capacity happened to fit exactly, which made target and actual the same number.
+        /// </summary>
+        private static void TestP199_AClampedSliceLeavesItsShortfallOutstanding()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a copy cut short by the clamp is re-offered when room appears");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var nq = new Instrument("NQ 03-26");
+            var rel = P199Relationship(maxPositionSize: 10);
+            // The follower already holds 7 NQ from an earlier trade, so only 3 of capacity is free.
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 7, nq, MarketPosition.Long);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_SHORTFALL");
+
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-SF-1"));
+            Assert(P199CopiedTotal(follower) == 3,
+                "50 MNQ wants 5 NQ but only 3 of capacity is free, so 3 is copied and 2 is owed. Got "
+                + P199CopiedTotal(follower) + ".");
+
+            // The copy filled, and then the operator closed the ORIGINAL 7 by hand: 10 - 7 = 3 held,
+            // 7 of capacity free again.
+            follower.Positions.Clear();
+            follower.Positions.Add(new Position
+            {
+                Instrument = nq,
+                MarketPosition = MarketPosition.Long,
+                Quantity = 3,
+                AveragePrice = 18000
+            });
+
+            order.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-SF-2"));
+
+            Assert(P199CopiedTotal(follower) == 10,
+                "The whole order is 10 NQ and 3 has gone, so 7 is owed and 7 of capacity is free. "
+                + "Crediting the TARGET rather than what was actually sent would record 5 as copied "
+                + "after the first slice, owe only 5 here, and forgive the 2 contracts the clamp "
+                + "took -- leaving the follower 2 short of the leader with nothing saying so. Got "
+                + P199CopiedTotal(follower) + ".");
+        }
+
+        /// <summary>
+        /// A leader order CANCELLED after a partial fill must release its accumulator. It can never
+        /// reach its quantity, so the quantity half of the completion test cannot fire -- only the
+        /// terminal-STATE half can. That is P2-98's lesson on the other side of the copier, and it
+        /// needs both signals for the same reason.
+        /// </summary>
+        private static void TestP199_ACancelledPartialFillStillReleasesItsAccumulator()
+        {
+            Console.WriteLine("\n[TEST] P1-99: an order cancelled after a partial fill releases its accumulator");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            int before = TradeCopierEngine.Instance.LeaderOrderProgressCount;
+
+            // 100 requested. 20 fills while it is working, then the remainder is cancelled and the
+            // final 10-lot fill is delivered with the order ALREADY terminal -- which is the only
+            // shape where the cleanup can see a cancel at all, because a cancel on its own delivers
+            // no execution. (An order that is cancelled and then goes quiet is released by the FIFO
+            // bound instead; that is the documented backstop, not a second mechanism.)
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_CANCEL");
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 20, "P199-CX-1"));
+            Assert(TradeCopierEngine.Instance.LeaderOrderProgressCount == before + 1,
+                "the order is tracked while it is still filling.");
+
+            order.OrderState = OrderState.Cancelled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 10, "P199-CX-2"));
+
+            Assert(TradeCopierEngine.Instance.LeaderOrderProgressCount == before,
+                "and released once it is terminal. 30 of 100 never satisfies the quantity test, so "
+                + "with only that half the entry survives to the 2000-order FIFO bound, holding a "
+                + "dead Order alive -- P1-14's defect. Got "
+                + TradeCopierEngine.Instance.LeaderOrderProgressCount + ".");
+        }
+
+        /// <summary>
+        /// Two followers on one leader order must accumulate SEPARATELY. A single shared counter
+        /// would let the first relationship's copy satisfy the second's target.
+        /// </summary>
+        private static void TestP199_TwoFollowersOnOneOrderAccumulateIndependently()
+        {
+            Console.WriteLine("\n[TEST] P1-99: two followers on one leader order keep separate running totals");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var relA = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", relA, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var second = new Account { Name = "SimFollower2", Provider = Provider.Simulator };
+            Account.All.Add(second);
+            var relB = P199Relationship();
+            relB.FollowerAccountName = "SimFollower2";
+            TradeCopierEngine.Instance.UpsertRelationship(relB);
+
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_TWO");
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-T-1"));
+            order.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 50, "P199-T-2"));
+
+            Assert(P199CopiedTotal(follower) == 10,
+                "The first follower gets the full 10. Got " + P199CopiedTotal(follower) + ".");
+            Assert(P199CopiedTotal(second) == 10,
+                "and so does the second, independently. One shared counter would let the first "
+                + "relationship's 10 satisfy the second's target and leave it at 0 or 5. Got "
+                + P199CopiedTotal(second) + ".");
+        }
+
+        /// <summary>
+        /// The ordinary single-execution order must be untouched. This is the regression guard for
+        /// the 1300 tests that send one execution for the full quantity -- if the new path changed
+        /// their answer, the fix would be trading one defect for a wider one.
+        /// </summary>
+        private static void TestP199_ASingleExecutionOrderIsUnchanged()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a single-execution order copies exactly as before");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var order = P199LeaderOrder(mnq, OrderAction.Buy, 30, "P199_ONE");
+            order.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, order, 30, "P199-ONE-1"));
+
+            Assert(P199CopiedTotal(follower) == 3,
+                "30 MNQ at ratio 1 with conversion is 3 NQ, one slice or many. Got "
+                + P199CopiedTotal(follower) + ".");
+        }
+
+        /// <summary>
+        /// A second, separate leader order must start from zero. If the accumulator were keyed on
+        /// anything but the Order object -- the instrument, the account, the OrderId -- a follow-up
+        /// trade would inherit the previous order's running total and copy nothing.
+        /// </summary>
+        private static void TestP199_ASecondOrderStartsItsOwnCount()
+        {
+            Console.WriteLine("\n[TEST] P1-99: a second leader order does not inherit the first's running total");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var rel = P199Relationship();
+            var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeader");
+
+            var first = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_SEQ_A");
+            first.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, first, 100, "P199-Q-1"));
+            Assert(P199CopiedTotal(follower) == 10, "First order copies 10.");
+
+            var secondOrder = P199LeaderOrder(mnq, OrderAction.Buy, 100, "P199_SEQ_B");
+            secondOrder.OrderState = OrderState.Filled;
+            TradeCopierEngine.Instance.OnExecution(P199Slice(leader, secondOrder, 100, "P199-Q-2"));
+
+            Assert(P199CopiedTotal(follower) == 20,
+                "A second 100-lot order copies another 10, for 20 in total. Carrying the first "
+                + "order's count over would make the second copy NOTHING -- the original defect "
+                + "reintroduced by the fix's own state. Got " + P199CopiedTotal(follower) + ".");
+        }
+
         private static int CountCopyOutcomes(List<string> log)
         {
             return log.Count(l =>

@@ -173,6 +173,16 @@ jobs:
           # rather than pinned -- see the note beside that mutant before adding a defensive branch.
           - { label: UI4, battery: mutate_ui4.py }
 
+          # P1-99, new in session 37 -- placed second on measured-length grounds once it has a
+          # timing of its own; until then it sits high because it is a copy-path battery and those
+          # run long. The copier sized each leader EXECUTION independently, so a 100-lot order
+          # filling 20 x 5 copied NOTHING -- leader long 100, follower FLAT, twenty routine
+          # COPY_SKIPPED_SUB_MINIMUM lines and no error. Mutant 2 is the one to know: it is THE
+          # WRONG FIX (floor each slice's delta at 1), which stops the drops and turns the same
+          # order into a TWENTY-contract copy. Mutant 4 pins the asymmetry -- exits already mirror
+          # the follower's real position and must NOT acquire the accumulator.
+          - { label: P1-99, battery: mutate_p199.py }
+
           # UI2 (one config owner; the window dispatches requests), 443s. The FIRST battery to
           # mutate two files: four of its mutants edit TradeCopierWindow.cs, whose whole body is
           # `#if !TESTING`, so the suite compiles it away and four acceptance tests read it as

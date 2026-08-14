@@ -1,12 +1,11 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-14 (**session 36 — §5.38**). Core **`v1.19.0`** is tagged,
-deployed, **NT8-compiled clean (0 errors)** and **live-validated** — suite **1328/0**, bridge
-**92/0**, MCP wrapper **43/0**, **24** core mutation batteries + the bridge's 1, **263 anchors / 0
-broken**. **108 IDs, 6 open**; the `P0` band and the untriaged band are both empty, and every
-naked-risk item is closed. Every figure here was **measured, not incremented** — the deploy is
-verified by content hash from both repos (`sync_nt8.py --verify` → 8 files; `deploy.py --verify` →
-12 files, 0 orphans).
+**Last updated**: 2026-08-14 (**session 37 — §5.40**). Core **`v1.20.0`** is tagged and
+**NT8-compiled clean** — suite **1355/0**, bridge **92/0**, MCP wrapper **43/0**, **25** core
+mutation batteries + the bridge's 1, **272 anchors / 0 broken**. **108 IDs, 5 open**; the `P0` band
+and the untriaged band are both empty, and every naked-risk item is closed. Every figure here was
+**measured, not incremented**. ⚠️ `v1.20.0` is **not yet live-validated on the box** — `v1.19.0`
+was; see §5.40's Next.
 
 ⚠️ **`P2-98` is CLOSED and live-validated** (§5.38), and closing it **opened a P1**. The fix moves
 the grain of a measurement from the SLICE to the COPY: a partial fill is accumulated across its
@@ -14,12 +13,23 @@ slices and reported once, quantity-weighted, when the order is done. Live, a 10-
 **2 + 8** and reported `slippage=-2.2 ticks on 10 contract(s) across 2 slices` — where `v1.18.0`
 would have reported `-3 ticks` from the 2-lot and raised `FILL_NOT_MEASURED` for the 8.
 
-🆕 **`P1-99` is OPEN and is the item to do next.** Found by driving the box during that same
-validation: **the copier runs the whole copy path per leader EXECUTION**, so a leader order that
-fills in small slices is scaled and rounded slice by slice. A 100-lot MNQ order filling as
-**20 × 5** under MNQ→NQ conversion drops **every** slice — leader long 100, follower **FLAT**,
-twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error anywhere. It came out right in the
-validation run **by luck** (5 + 95). Silent position divergence, `P0-5`'s family.
+✅ **`P1-99` is CLOSED** (§5.40, `v1.20.0`). The copier ran the whole copy path per leader
+EXECUTION, so a 100-lot MNQ order filling as **20 × 5** under MNQ→NQ conversion dropped **every**
+slice — leader long 100, follower **FLAT**, twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no
+error. It came out right in the validation run **by luck** (5 + 95). The grain of the decision moved
+from the execution to the **ORDER**: each slice recomputes the target from the cumulative leader
+quantity and copies the **delta**, so rounding cannot accumulate. Three things in it are worth
+reusing — the clamp goes on the **delta**, not the cumulative (clamping the cumulative subtracts the
+already-copied slices twice); **credit what was SENT, not the target**, or the clamp's shortfall is
+forgiven; and **exits are deliberately NOT routed through it**, because `P0-6`'s clamp already
+mirrors the follower's real position.
+
+⚠️ **Its battery caught the AUTHOR, not the code.** The first run had three survivors and each meant
+something different: one was **unkillable by construction** and exposed a wrong *comment* rather than
+a wrong line; one was a real coverage gap (the clamp test had capacity fitting *exactly*, making
+"credit the target" and "credit what was sent" the same number); and one had **no observable at
+all**, so the assertion could not exist until an internal count did. **A surviving mutant does not
+always mean a missing test.**
 
 ⚠️ **CI had been RED for 10 pushes, back to `v1.17.0`, and it is not the code** (§5.38).
 `mutate_p330.py` and `mutate_p096.py` each declare a mutant *expected* to survive — correctly, with
@@ -32,10 +42,12 @@ already in the memory store and was not acted on. **An alarm that is always on i
 as `P2-98`'s `FILL_NOT_MEASURED` firing on every manual fill and `P3-30`'s audit firing on a
 correctly protected account. Three instances in two sessions.
 
-⚠️ **The shared lesson of the last two sessions: the suite models an order as ONE fill, and reality
-does not.** `P2-98` was that blind spot on the follower side; `P1-99` is the same blind spot on the
-leader side. Every existing copy-path test sends a single execution for the full quantity, which is
-why a green suite, 24 mutation batteries and a clean compile all passed over both.
+⚠️ **The shared lesson of sessions 36-37: the suite modelled an order as ONE fill, and reality does
+not.** `P2-98` was that blind spot on the follower side; `P1-99` the same on the leader side. Every
+pre-existing copy-path test sends a single execution for the full quantity, which is why a green
+suite, 24 mutation batteries and a clean compile all passed over both. **Both are now closed, and
+the eleven `P1-99` tests are the only ones in the repo that send more than one execution for one
+leader order** — extend those rather than adding another single-fill test.
 
 ⚠️ **`P0-96`, found in this session's last hour and the sharpest thing in it**: NT8's `Position.Quantity` is **absolute** — the side is `MarketPosition` — and the copier read the **sign** of it in two places. So a leader **covering a short** sent the follower a `Sell`, which does not close a short, it **doubles** it. **1300 green tests passed under it**, because every long-side test does and there was no short-EXIT test. Found while reading adjacent code, not by the suite and not by any CI gate. **A convention the whole suite encodes is not a convention the code follows** — nothing compared the two.
 
@@ -198,7 +210,7 @@ not. The command that checks it is in the last column.
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **25 batteries** — **24 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **263 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (263 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 24-job MATRIX, so a push is **~12–16m measured**, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **Mutation** | **26 batteries** — **25 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **272 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (272 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 25-job MATRIX, so a push is **~12–16m measured**, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
 | **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
@@ -6937,3 +6949,79 @@ that the evidence for the fix now arrives in twelve minutes instead of two hours
 for `P1-99` specifically: it is a **sizing-grain** defect on the leader side, the fix is likely to
 touch the copy path every battery exercises, and a two-hour feedback loop is what makes a
 developer verify one battery locally and trust the rest.
+
+---
+
+## 5.40 `P1-99` closed — the copier's sizing GRAIN, and a battery that caught the author
+
+`v1.20.0`. Suite **1328 → 1355**, `mutation/mutate_p199.py` **9 mutants / 0 survivors**, 25 core
+batteries, **272 anchors / 0 broken**.
+
+### What it was
+
+The copy path runs per EXECUTION and handed `CalculateFollowerQuantity` the **slice**. A leader
+order is not its fills: 100 MNQ under a MNQ→NQ conversion is 10 NQ however the book delivers it.
+Sized slice by slice it became a function of the **fill shape** — a property of the book, not of the
+trade:
+
+| fill shape | copied | |
+|---|---|---|
+| one fill of 100 | 10 | correct |
+| 5 + 95 | 0 + 10 = 10 | **correct by luck** — the shape the live box produced |
+| 10 × 10 | 10 × 1 = 10 | correct |
+| 11 + 89 | 1 + 9 = 10 | correct |
+| **20 × 5** | 20 × 0 = **0** | leader long 100, follower **FLAT** |
+
+Twenty routine `COPY_SKIPPED_SUB_MINIMUM` lines and no error anywhere.
+
+### The fix, and the four decisions inside it
+
+The grain moved from the execution to the **order**. `LeaderOrderFillProgress`, keyed by the leader
+`Order` object, carries the cumulative leader quantity and a per-`rel.Id` copied count; each slice
+recomputes the target from the cumulative and copies the **delta**. Rounding cannot accumulate
+because every slice re-derives the whole target rather than adding to it.
+
+* **The clamp goes on the DELTA.** A new `preClampQty` out-param supplies the unclamped cumulative,
+  so `MaxPositionSize` is applied once, to the increment. Clamping the cumulative and then
+  subtracting the already-copied slices subtracts them twice.
+* **Credit what was SENT, not the target**, or the clamp's shortfall is forgiven instead of
+  re-offered.
+* **Exits are NOT routed through it.** `P0-6`'s clamp already mirrors the follower's real position.
+* **Release needs BOTH the terminal-state and the quantity signal** — `P2-98`'s lesson on the other
+  side of the copier — with a documented limit: a cancel delivers no execution, so the state check
+  only fires when the final fill arrives already terminal. A cancelled-then-silent order is released
+  by the bounded FIFO, which is the backstop and not a second mechanism.
+
+### ⚠️ The battery caught the AUTHOR, not just the code
+
+The first run had **three survivors**, and the most useful one was **unkillable by construction**.
+The mutant changed the position argument on the cumulative call from `0` to `currentFollowerPos` —
+and it could not matter, because that call reads the **pre-clamp** out-param. What it exposed was a
+wrong **comment**: mine said "position 0 on purpose", implying the argument selected a behaviour when
+it selects nothing. The mutant was repointed at the real defect (taking the clamped RETURN value),
+and the comment now says what is actually load-bearing.
+
+**A surviving mutant does not always mean a missing test.** Three survivors, three different
+meanings: one wrong comment, one real coverage gap (the first clamp test had capacity fitting
+*exactly*, which made "credit the target" and "credit what was sent" the same number), and one thing
+with **no observable at all** — a leaked accumulator changes no copy, so `LeaderOrderProgressCount`
+had to exist before the assertion could. Writing that third test is what surfaced the
+cancel-delivers-no-execution limit, which no one had noticed while writing the fix.
+
+### ⚠️ Two operational notes
+
+* **`mutation/check_anchors.py` reads the WORKING TREE**, so running it while a battery is mid-run
+  reports false breakage. It said "2 broken" here purely because mutant 4 was applied at that moment;
+  272/0 on a clean tree. Same family as *a killed battery leaves a mutant* — anchor checks belong
+  **before or after** a battery, never during.
+* **Piping a battery through `tail` masks its exit code.** `python mutation/mutate_p199.py | tail -25`
+  reported exit 0 with three survivors on screen, because the pipeline's status is `tail`'s. CI runs
+  them unpiped so the gate is intact, but do not read a piped run's exit code as a verdict.
+
+### Next
+
+1. **`P2-27`** coverage for `ReconcileFollowerPosition` — the last `KNOWN_DEAD` entry, inside
+   `#if !TESTING`, and it **flattens a live follower position**. `mutate_p096`'s declared
+   `EXPECTED SURVIVOR` is the first test to write when it becomes reachable.
+2. **`P2-95`** (`FirmStartingBalance` off by the account's lifetime profit), then `P2-93`, `P2-94`.
+3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.

@@ -2630,7 +2630,7 @@ count as a sample, or the average silently becomes a lie again.
 
 ---
 
-### P1-99. The copier sizes each leader EXECUTION independently, so a leader order that fills in small slices can copy NOTHING — OPEN, found live 2026-08-14
+### P1-99. The copier sizes each leader EXECUTION independently, so a leader order that fills in small slices can copy NOTHING — CLOSED 2026-08-14 (v1.20.0)
 
 **Where**: `TradeCopierEngine.OnExecution` — the whole copy path runs **per execution**, and
 `ScaleQuantity` rounds each one on its own. `COPY_SKIPPED_SUB_MINIMUM` is raised when the result
@@ -2687,6 +2687,45 @@ quarantine decision and `P1-23`'s fail-closed sizing.
 ⚠️ **A test for this must feed MULTIPLE executions for one leader order.** Every existing copy-path
 test sends a single execution for the full quantity, which is the same blind spot `P2-98` had on the
 follower side — and the reason both defects survived a suite that was green.
+
+**FIXED in `v1.20.0`.** Candidate 1 was taken: the grain of the decision moved from the EXECUTION to
+the leader ORDER. `LeaderOrderFillProgress`, keyed by the leader `Order` **object** (never `OrderId`
+— `OrderReferenceComparer`, same reason as `_pendingCopies`), carries the cumulative leader quantity
+and a per-`rel.Id` count of what has already been copied. Each slice recomputes the target from the
+cumulative and copies the **delta**. Rounding cannot accumulate, because every slice re-derives the
+whole target rather than adding to it: 20 × 5 copies 0,1,1,0,0,1… summing to exactly **10**.
+
+Four things in it are worth reusing:
+
+* **The clamp goes on the DELTA, not the cumulative.** The cumulative is read from a new
+  `preClampQty` out-param, so `MaxPositionSize` is applied once, to the increment, against the
+  capacity actually left. Clamping the cumulative first and then subtracting what earlier slices
+  copied subtracts them **twice** — with `MaxPositionSize` 10 a 50+50 fill copies 5 and then
+  nothing, and every event reads as success.
+* **Credit what was SENT, not the target.** A copy cut short by the clamp leaves its shortfall
+  outstanding, so a later slice re-offers it when room appears. Crediting the target forgives the
+  clamped contracts silently.
+* **Exits are NOT routed through it**, and a mutant pins that. `P0-6`'s exit clamp already mirrors
+  the follower's ACTUAL position, so exits were never fill-shape dependent; adding the accumulator
+  would defer closing a position the leader has left — `P0-5`'s failure arriving through this fix.
+* **Releasing the accumulator needs the terminal-STATE signal as well as the quantity one**, which
+  is `P2-98`'s lesson on the other side of the copier. ⚠️ With a documented limit: a cancel delivers
+  **no execution**, so the state check only fires when the final fill arrives with the order already
+  terminal. An order cancelled and then silent is released by the bounded FIFO — that is the
+  backstop, not a second mechanism.
+
+**Evidence**: suite 1328 → **1355**, eleven new tests, and they are the only copy-path tests in the
+repo that send more than one execution for one leader order. `mutation/mutate_p199.py`, **9 mutants /
+0 survivors** — but the FIRST run had **three** survivors and each said something different:
+
+1. one was **unkillable by construction** and caught a wrong comment rather than a wrong line: the
+   cumulative is read from the pre-clamp out-param, so the position argument on that call cannot
+   affect it. The mutant was repointed at the real defect (taking the clamped RETURN value);
+2. one was a real **coverage gap** — the first clamp test had capacity fitting *exactly*, which made
+   "credit the target" and "credit what was sent" the same number;
+3. one had **no observable at all**, because a leaked accumulator changes no copy. An internal
+   `LeaderOrderProgressCount` makes the release assertable, and writing that test is what surfaced
+   the cancel-delivers-no-execution limit above.
 
 ---
 
