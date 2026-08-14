@@ -1,14 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-13 (**session 35 — §5.33…§5.36**). Core **`v1.18.0`** is tagged,
+**Last updated**: 2026-08-13 (**session 35 — §5.33…§5.37**). Core **`v1.18.0`** is tagged,
 deployed and **NT8-compiled clean (0 errors)** — suite **1311/0**, bridge **69/0**, MCP wrapper
-**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **107 IDs, 7
+**43/0**, **23** core mutation batteries + the bridge's 1, **250 anchors / 0 broken**. **107 IDs, 6
 open**; the `P0` band and the untriaged band are both empty,
 and every naked-risk item is closed.
 
 ⚠️ **`P0-96`, found in this session's last hour and the sharpest thing in it**: NT8's `Position.Quantity` is **absolute** — the side is `MarketPosition` — and the copier read the **sign** of it in two places. So a leader **covering a short** sent the follower a `Sell`, which does not close a short, it **doubles** it. **1300 green tests passed under it**, because every long-side test does and there was no short-EXIT test. Found while reading adjacent code, not by the suite and not by any CI gate. **A convention the whole suite encodes is not a convention the code follows** — nothing compared the two.
 
-✅ **All three of this session's unproven features are now LIVE-VALIDATED** (§5.36), on sim accounts with the operator's authorisation: `P0-96` sent `BuyToCover 10` where it used to send `Sell 10` into a short; the guard audit fired 13 correct `NAKED_POSITION`s **and then stayed silent for 84 seconds once flat**; and shadow mode submitted nothing while naming the order it would have sent. ⚠️ **The same four minutes opened two new defects, both in seams between components**: **`P1-97`** — `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier reads every MCP-placed short ENTRY as an exit and every COVER as an entry (a wrong-direction copy, stopped in this run only by a rounding accident) — and **`P2-98`**, a partially filled copy measures only its first slice and blames the wrong cause for the rest.
+✅ **All three of this session's unproven features are now LIVE-VALIDATED** (§5.36), on sim accounts with the operator's authorisation: `P0-96` sent `BuyToCover 10` where it used to send `Sell 10` into a short; the guard audit fired 13 correct `NAKED_POSITION`s **and then stayed silent for 84 seconds once flat**; and shadow mode submitted nothing while naming the order it would have sent. ⚠️ **The same four minutes opened two new defects, both in seams between components**: **`P1-97`** — `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier reads every MCP-placed short ENTRY as an exit and every COVER as an entry (a wrong-direction copy, stopped in this run only by a rounding accident) — since FIXED and live-validated (§5.37), and the copier can now open a short for the first time — and **`P2-98`**, a partially filled copy measures only its first slice and blames the wrong cause for the rest. ⚠️ On the validation run **every one of four copies partial-filled**, so half the fills were unmeasured: not an edge case.
 
 ⚠️ **Session 35's finding is the one to carry forward, because it invalidates a habit rather than a
 line of code**: `P3-30`'s guard audit shipped in session 34 with **1264 green tests**, and it
@@ -162,7 +162,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1311 passed, 0 failed**; **bridge 50 passed, 0 failed** | `dotnet build tests/RiskGuardTests.csproj -v q --nologo; dotnet run --project tests/RiskGuardTests.csproj --no-build` |
 | **Defects** | **104 IDs — 99 closed, 5 open** (`P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`; `P3-34` is mostly closed, read surface outstanding). **The whole `P0` band is CLOSED**, and so is every naked-risk item. `P2-93`…`P2-95`, `P3-31`, `P3-30`, `P1-57`, `P1-13`, `P2-25`, `P2-24`, `P3-32`, `P2-26`, `P2-27` all CLOSED or partially closed. `P1-77` honestly reported, implementation deferred. Derivation in §5.0 | the `grep` in §5.0 |
-| **Do next** | ✅ `P0-96`, the guard audit and the copier's shadow mode are all **LIVE-VALIDATED** (§5.36). Next: **`P1-97`** — `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier reads every MCP-placed short ENTRY as an exit and every COVER as an entry; three lines in the bridge, and a wrong-direction copy behind it. Then **`P2-98`** (a partial fill measures only its first slice) and **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
+| **Do next** | ✅ `P0-96`, the guard audit and the copier's shadow mode are all **LIVE-VALIDATED** (§5.36). ✅ **`P1-97` is CLOSED and live-validated too** (§5.37) — the copier can open a short for the first time. Next: **`P2-98`** — a partial fill measures only its first slice, and on the validation run **every** copy partial-filled, so exactly HALF the fills went unmeasured. Then **`P2-27` coverage for `ReconcileFollowerPosition`** — the last `KNOWN_DEAD` entry, inside `#if !TESTING`, and it **flattens a live follower position** — then **`P2-29`** (file complexity), **`P3-33`** (global lock → actor model), and the 3 `P?-` UI write items | §5.6 |
 | **Branch** | **`main` only**, **0 unpushed**, level with `origin/main`, both repos. **25 tags**, `v1.0.0`…**`v1.18.0`** | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
@@ -6448,3 +6448,72 @@ the only one that shows it works.** It took an authorised live run to watch the 
 1. **`P1-97`** — three lines in the bridge, and it is the one with a wrong-direction order behind it.
 2. **`P2-98`** — keep the pending entry until the order is terminal; `P?-66`'s sampling rule applies.
 3. **`P2-27`** coverage for `ReconcileFollowerPosition`, still the last `KNOWN_DEAD` entry.
+
+## 5.37 `P1-97` closed the same hour it was opened — the copier can open a short for the first time
+
+Filed in §5.36 from a live run, fixed and re-validated on the box within the hour, market still open.
+
+### The fix, and why it went in the bridge and not the copier
+
+`nt_place_order` mapped `buy`/`sell` to `OrderAction.Buy`/`Sell` **unconditionally**, so it could
+never emit `SellShort` or `BuyToCover`. NT8 nets the position correctly either way — **the order
+always worked** — but the copier classifies exits from the label:
+
+```csharp
+bool leaderIsExiting = leadAction == OrderAction.Sell || leadAction == OrderAction.BuyToCover;
+```
+
+⚠️ **The tempting fix is the wrong one.** Widening `leaderIsExiting` treats the symptom: a label is
+chosen by whoever submits the order, so it is the wrong source of truth for *"is this an exit?"*.
+The durable version derives exit-ness from the **position delta**, which is a larger change and
+belongs with `P3-31`/`P3-32`. What went in instead makes the label **true**, which is cheap, local,
+and is already how `McpBridgeAddOn`'s own close path works — `pos.MarketPosition == Long ? Sell :
+BuyToCover`, **370 lines away in the same file**.
+
+`nt8-mcp-bridge/addons/BridgeOrderAction.cs`, on `BridgeAccountResolver`'s terms: strings in,
+strings out, **no NT8 type named**, so the bridge suite *executes* it. **69 → 92 tests.** That is
+now three files extracted on those terms (`BridgeAccountResolver`, `CopierEnforcementView`,
+`BridgeOrderAction`) and the pattern is the cheapest available `P2-27` step — see `tests/README.md`.
+
+### Live-validated, a full short round trip on two followers
+
+```
+20:31:55  SellShort  1@30177.75  isExit=False  -> SellShort 10 MNQ to Sim-ORB AND SimCopy2
+                                                  both accounts genuinely Short 10
+20:32:17  BuyToCover 1@30183.50  isExit=True   -> BuyToCover 10 to both, EVERY ACCOUNT FLAT
+```
+
+Compare the same two actions before the fix, from §5.36:
+
+```
+sell from FLAT  -> Sell  -> isExit=TRUE  -> COPY_SKIPPED_NO_POSITION_TO_EXIT   (never copied)
+buy from SHORT  -> Buy   -> isExit=FALSE -> proceeded as an ENTRY              (opposite direction)
+```
+
+**The copier had never been able to open a short position before this commit.**
+
+### `P2-98` got sharper on the same run, and the number is worse than filed
+
+Four copies went out; **every one of them partial-filled into two slices** (10 = 8+2, 4+6, 2+8,
+1+9). The log shows **4 `FILL_MEASURED` and 4 `FILL_NOT_MEASURED`** — exactly **half** the fills
+measured, because `_pendingCopies.Remove` runs on the first slice.
+
+So this is not an edge case: on this instrument at this size, partial fills were **universal**, and
+the latency/slippage figures describe whichever slice happened to arrive first — here as little as
+1 contract out of 10. `P?-66` was closed on "the numbers were right and unexposed"; these numbers
+are **exposed and unrepresentative**, which is the harder failure to notice.
+
+### What the two sessions of live testing say, in one line
+
+**Every defect found today came from a seam, and the box found all of them in under ten minutes:**
+a label the bridge writes and the copier reads (`P1-97`), a map entry one path inserts and another
+removes (`P2-98`), a side read off a sign (`P0-96`), a key built with `ToString()` where everything
+else uses `FullName` (`P3-30`). **No component was wrong on its own in any of the four**, which is
+why 1311 tests, 23 mutation batteries and a clean NT8 compile all passed over them.
+
+### Next
+
+1. **`P2-98`** — keep the pending entry until the order is terminal and accumulate across slices.
+   ⚠️ `P?-66`'s rule: a latency rejected by the sanity bound must not count as a sample.
+2. **`P2-27`** coverage for `ReconcileFollowerPosition`, still the last `KNOWN_DEAD` entry.
+3. **`P2-29`** / **`P3-33`**, and the 3 `P?-` UI write items.

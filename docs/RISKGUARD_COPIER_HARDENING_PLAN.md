@@ -2500,7 +2500,7 @@ no test here can reach it — when `P2-27` makes it testable, that is the first 
 
 ---
 
-### P1-97. `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier misreads every MCP-placed short — OPEN, found live 2026-08-13
+### P1-97. `nt_place_order` never emits `SellShort`/`BuyToCover`, so the copier misreads every MCP-placed short — ✅ FIXED and LIVE-VALIDATED 2026-08-13, found and closed the same hour
 
 **Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs:2423` versus
 `TradeCopierEngine.OnExecution:4876`.
@@ -2531,6 +2531,19 @@ takes the position. Nothing in the correctness path stopped it.
 
 **Note the bridge already knows how to do this** — `McpBridgeAddOn.cs:2797`, the close path,
 picks `pos.MarketPosition == Long ? Sell : BuyToCover`. The same three lines are missing at 2423.
+
+**FIXED** in `nt8-mcp-bridge/addons/BridgeOrderAction.cs` — its own file on `BridgeAccountResolver`'s
+terms (strings in, strings out, no NT8 type named), so the bridge suite **executes** it rather than
+grepping it. 69 → 92 tests.
+
+✅ **Live-validated after deploying**, a full short round trip on two followers:
+
+```
+SellShort  1@30177.75  isExit=False -> SellShort 10 MNQ to Sim-ORB AND SimCopy2, both Short 10
+BuyToCover 1@30183.50  isExit=True  -> BuyToCover 10 to both, every account FLAT
+```
+
+**The copier had never been able to open a short before this fix.**
 
 **Fix**: choose the action from the account's current position at submit time, as the close path
 does. ⚠️ **Do NOT "fix" it by widening the copier's `leaderIsExiting` test** — a label is the
