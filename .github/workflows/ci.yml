@@ -20,7 +20,9 @@
 # two running side by side in one working tree corrupt each other, which is exactly how
 # a killed batch left a live `mutate_cm4` mutant in TradeCopierEngine.cs on 2026-08-14.
 # A matrix gives every battery its OWN CHECKOUT, so the hazard disappears rather than
-# being managed. MEASURED on run 31774605782, the first sharded one: 15m36s, all green.
+# being managed. MEASURED over the first two sharded runs: 15m36s (31774605782) and
+# 11m48s (31775541688), both all-green. Quote the RANGE, not either number -- the 4-minute
+# spread is runner availability and it is not controllable from here.
 #
 # That is 7.4x, and it is SLOWER than the 10 min the arithmetic predicted (setup + UI4's
 # 553s). Two things the sequential timings could not show: every battery runs 10-20%
