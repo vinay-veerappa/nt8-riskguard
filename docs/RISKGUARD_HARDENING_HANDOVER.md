@@ -1,12 +1,14 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
 **Last updated**: 2026-08-14 (**session 38 — §5.45**). Core **`v1.22.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1436/0**, bridge **92/0**, MCP wrapper **43/0**, **26**
-core mutation batteries + the bridge's **2** (and CI in that repo now runs them — it ran
-**neither** until §5.44), **283 anchors / 0 broken**, all 8 gates green. Bridge harness **108/0**.
+**NT8-compiled clean (0 errors)** — core suite **1436/0**, bridge harness **108/0**, MCP wrapper
+**43/0**, **27** core mutation batteries + the bridge's **2** (and CI in that repo now runs them —
+it ran **neither** until §5.44), **283 anchors / 0 broken**, all 8 gates green.
 **118 IDs, 9 open** — **three closed and live-validated this session** (`P1-100`, `P0-104`,
 `P2-101`), and every one of them was **found by driving the deployed box**, not by the suite, which
-was green throughout all three. Every figure here was **measured, not incremented**.
+was green throughout all three. Every figure here was **measured, not incremented** — the previous
+revision of this paragraph claimed the bridge harness was both `92/0` and `108/0` in consecutive
+sentences, which is what incrementing one number and appending another looks like.
 
 ✅ **`P1-100` is CLOSED and live-validated** (§5.43). A SHADOW-only lockout blocked real orders —
 `CanTrade` was right, but the bridge's three order paths and `GET /api/lockout` all ask
