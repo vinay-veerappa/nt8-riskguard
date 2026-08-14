@@ -1,10 +1,12 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-14 (**session 38 — §5.43**). Core **`v1.21.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — suite **1424/0**, bridge **92/0**, MCP wrapper **43/0**, **26**
+**Last updated**: 2026-08-14 (**session 38 — §5.45**). Core **`v1.22.0`** is tagged, deployed and
+**NT8-compiled clean (0 errors)** — suite **1436/0**, bridge **92/0**, MCP wrapper **43/0**, **26**
 core mutation batteries + the bridge's **2** (and CI in that repo now runs them — it ran
-**neither** until §5.44), **276 anchors / 0 broken**, all 8 gates green. Bridge harness **108/0**.
-**116 IDs, 10 open.** Every figure here was **measured, not incremented**.
+**neither** until §5.44), **283 anchors / 0 broken**, all 8 gates green. Bridge harness **108/0**.
+**118 IDs, 9 open** — **three closed and live-validated this session** (`P1-100`, `P0-104`,
+`P2-101`), and every one of them was **found by driving the deployed box**, not by the suite, which
+was green throughout all three. Every figure here was **measured, not incremented**.
 
 ✅ **`P1-100` is CLOSED and live-validated** (§5.43). A SHADOW-only lockout blocked real orders —
 `CanTrade` was right, but the bridge's three order paths and `GET /api/lockout` all ask
@@ -22,12 +24,16 @@ discriminating reading; the account now actually goes flat. ⚠️ Its battery *
 extracted class could not see how its *caller* built the argument, so the survivor was real —
 **extraction moves the untested boundary, it does not remove it.**
 
-⚠️ **`P2-101` is the item to do next**: the shadow lockout's flatten/cancel retry is unbounded, fires
-on the **funded** account too, and in a second flavour (`LOCKOUT_CANCEL`, not just
-`LOCKOUT_FLATTEN_RETRY`). It is burying `interventions.jsonl`, which is where both of this session's
-live findings came from. Then **`P1-106`** (a lockout refuses the order that would CLOSE the position
-it is locking you out of — the half of `P0-104` its fix deliberately left), then `P1-102`, `P1-105`,
-`P2-103`, `P2-95`.
+✅ **`P2-101` is CLOSED and live-validated** (§5.45). The lockout retry is bounded by an attempt
+count whose budget is **1** outside an acting mode and **6** in `live` — the 1 is the fix, not a
+tuning value. ⚠️ And the alarm that should have caught it **could not fire**: `LOCKOUT_STUCK` measured
+an interval the retry reset every 5s. One alarm that could not stop beside one that could not start.
+
+⚠️ **`P1-106` is the item to do next**: a lockout refuses the order that would **close** the position
+it is locking you out of — the half of `P0-104` its fix deliberately left. Then **`P2-107`**: the same
+repeated-action family survived `P2-101`'s fix on a **different path** (`PEAK_GIVEBACK_BREACH`, 7
+emissions in 20s), found in `P2-101`'s own validation run — so the de-duplication belongs where
+actions **leave** the guard, not inside each producer. Then `P1-102`, `P1-105`, `P2-103`, `P2-95`.
 
 ⚠️ **`P1-102` was raised as half of a composite risk that no longer exists** — with `P1-100` closed,
 shadow mode can no longer freeze an account, so "the guard stopped my account and I cannot start it
@@ -7386,3 +7392,76 @@ label is the caller's choice.
    burying the audit record that both of this session's live findings came out of.
 2. **`P1-106`** — the lockout that traps you in a position.
 3. **`P1-102`** (no MCP tool reads or clears a lockout), then `P1-105`, `P2-103`, `P2-95`.
+
+---
+
+## 5.45 `P2-101` closed — the alarm that could not stop, next to the one that could not start
+
+**`P2-101` is CLOSED and live-validated** (`v1.22.0`). The lockout's flatten retry is bounded by an
+attempt COUNT whose budget depends on the mode: **1** outside an acting mode, **6** in `live`.
+
+⚠️ **The 1 is the fix, not a tuning value.** `ProcessAction` answers `SHADOW (SKIPPED)` for every
+action outside `live`, so a second `[SHADOW] Would execute FlattenPosition` carries nothing the first
+did not. Shadow's product is the observation and it is complete after one. Bounding the loop *without*
+asking why it could not exit is `mutate_p2101.py`'s mutant 2 — "THE PARTIAL FIX" — which stops the
+unbounded growth and still repeats the observation five more times than shadow needs.
+
+⚠️ **And the alarm that should have caught it could not fire.** `LOCKOUT_STUCK` read
+`UtcNow > LastLockoutFlattenAttempt.AddSeconds(30)` while the retry immediately above it set that
+field to `UtcNow` every 5 seconds — **the interval it measured was reset by the loop it was
+watching**. Thirteen rounds of retries, zero stuck lines. One alarm that could not stop and one that
+could not start, in the same block, and the second is why nobody was told about the first. Both are
+keyed on the attempt count now, from `LockoutPhaseAttemptBudget()`, so they cannot drift apart.
+
+Live, guard armed in `shadow`, 11 MNQ against a limit of 10:
+
+```
+10:14:14  LOCKOUT_FLATTEN_RETRY  Flatten attempt 1 of 1 for Sim101 (position still open)
+10:14:14  LOCKOUT_STUCK          GIVING UP after 1 attempt(s) ... This is SHADOW mode -- no flatten
+                                 was ever sent, so the position was never going to close.
+```
+
+…then silence for as long as the position was held. Before: ~12 lines a minute per account, forever.
+
+Suite **1436/0**. Battery **7 mutants, 6 killed, 1 declared EXPECTED SURVIVOR** (dropping the reset
+in `ResetLockoutPhase` is unkillable by construction — every route back into a phase goes through
+`EnterLockoutPhase`, which resets on entry). **283 anchors / 0 broken**, 27 batteries, 8 gates green.
+
+⚠️ **Mutant 7 took two attempts to kill and the failure IS the defect restated.** The obvious
+assertion — *no stuck warning after one of six attempts* — passed **under** the time-keyed mutant,
+because on any sweep where the retry fires it refreshes the timestamp one line before the check reads
+it. **No assertion about a sweep where the retry fired can catch a time-keyed alarm**, which is
+precisely why the original never fired in production. The discriminator is the sweep that spends the
+**last** attempt. The general form is worth keeping: *when a mutant restores a condition that is
+unreachable in production, the test that kills it must reproduce the state that makes it unreachable
+and show the fix escaping it.*
+
+Also collapsed here: four sites cleared the lockout-phase state cluster with their own copies of the
+reset. `AccountState.ResetLockoutPhase()` owns it now — adding a third field to a cluster with four
+hand-written resets is exactly how `P1-100`'s three readers happened, one section ago.
+
+### ⚠️ `P2-107`: the same family survived the fix, on a different path, within the hour
+
+Found in the *validation run itself*, on the two follower accounts:
+`PEAK_GIVEBACK_BREACH` re-emitted its flatten **7 times in ~20 seconds**. Same shape — an action
+repeated while a condition persists, in a mode that cannot clear it — but a different mechanism: this
+is **per-evaluation**, driven by account/position updates rather than a timer, so it has no spacing at
+all and its rate is set by market data.
+
+**That is the finding, not the instance.** `P2-101` was fixed inside `EvaluateLockoutPhase`, one of
+several producers of repeated actions, and the second instance turned up on the first accounts anyone
+looked at. **The deduplication belongs where actions LEAVE the guard, not inside each producer.**
+`CoalesceActions` (`P1-19`) already sits on that path and merges within one batch; nothing suppresses
+the identical batch arriving three seconds later. ⚠️ Whatever goes there must not suppress a **live**
+re-attempt doing real work — `P2-101`'s budget of 6 exists because a broker can reject a flatten — so
+the record has to clear when the condition resolves, not on a timer.
+
+Sixth instance of *an alarm that is always on is off*.
+
+### Order from here
+
+1. **`P1-106`** — a lockout refuses the order that would CLOSE the position it is locking you out of.
+   The guard has `IsPositionReducingOrder` for exactly this reason (`P1-44`); the bridge does not.
+2. **`P2-107`** — the outbound action de-duplication, done once for all producers.
+3. **`P1-102`** (no MCP tool reads or clears a lockout — every unlock this session was a raw `curl`),
+   then `P1-105`, `P2-103`, `P2-95`.

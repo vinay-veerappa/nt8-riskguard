@@ -2824,7 +2824,7 @@ as the 26th. `mutate_p292.py` re-run: **11/0** against the repointed anchors.
 
 ---
 
-### P2-101. A lockout in shadow mode retries its flatten FOREVER, because in shadow the flatten never happens — OPEN, found live 2026-08-14
+### P2-101. A lockout in shadow mode retries its flatten FOREVER, because in shadow the flatten never happens — ✅ CLOSED 2026-08-14 (session 38), v1.22.0
 
 **Where**: `LOCKOUT_FLATTEN_RETRY` / the lockout sweep's retry loop.
 
@@ -2851,6 +2851,97 @@ is an action the current mode does not perform will never exit.**
 The retry belongs to the enforcing path. ⚠️ Do NOT fix it by capping the retries: a capped loop still
 logs 78 lines on a live account where the flatten is genuinely failing, which is the case the retry
 exists for and where the operator needs it.
+
+---
+
+**FIXED and live-validated in `v1.22.0`.** Two halves, and the second was not in the filed defect.
+
+**The retry is bounded by an ATTEMPT COUNT, and the budget depends on the mode**:
+`LockoutPhaseAttemptBudget()` returns **1** outside an acting mode and **6** in `live`.
+
+⚠️ The 1 is not a tuning choice. `ProcessAction` answers `SHADOW (SKIPPED)` for every action outside
+`live`, so a second identical `[SHADOW] Would execute FlattenPosition` carries nothing the first did
+not — **shadow's product is the observation, and the observation is complete after one.** The 6 is
+the ~30 seconds the old stuck warning was written for (retries are 5s apart), and it exists because a
+broker can reject a real flatten. Bounding the loop without asking *why it could not exit* is
+`mutate_p2101.py`'s mutant 2, "THE PARTIAL FIX": it stops the unbounded growth and still repeats the
+observation five more times than shadow needs.
+
+⚠️ **The second half is sharper, and it is the reason nobody was told.** `LOCKOUT_STUCK` — the one
+alarm that says *the guard is not getting this position closed* — read:
+
+```csharp
+UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(30)
+```
+
+while the retry immediately above it set `LastLockoutFlattenAttempt = UtcNow` **every 5 seconds**. The
+interval it measured was reset by the loop it was watching, so it could never reach 30. The live run
+that found `P2-101` produced 13 rounds of retries and **zero** stuck lines. **One alarm that could not
+stop and one that could not start, in the same block.** Both are keyed on the attempt count now, from
+one method, so they cannot drift; `LockoutStuckLogged` makes the give-up exactly one line, and it
+names shadow explicitly so an operator is not sent hunting a broken account.
+
+Also collapsed: four sites cleared this state cluster with their own copies of the reset.
+`AccountState.ResetLockoutPhase()` owns it — adding a third field to a cluster with four hand-written
+resets is exactly how `P1-100`'s three readers happened.
+
+**Live-validated** (guard armed in `shadow`, 11 MNQ against a limit of 10):
+
+```
+10:14:14  SHADOW_LOCKOUT         Rule MAX_SIZE_BREACH ... no flatten executed.
+10:14:14  LOCKOUT_PHASE          Phase: PendingFlatten
+10:14:14  LOCKOUT_FLATTEN_RETRY  Flatten attempt 1 of 1 for Sim101 (position still open)
+10:14:14  LOCKOUT_STUCK          GIVING UP after 1 attempt(s) ... This is SHADOW mode -- no flatten
+                                 was ever sent, so the position was never going to close.
+```
+
+…and then silence, for as long as the position was held. Before: ~12 lines per minute per account,
+indefinitely.
+
+Suite **1424 → 1436/0**. `mutation/mutate_p2101.py`: 7 mutants, **6 killed, 1 DECLARED EXPECTED
+SURVIVOR** (dropping the reset in `ResetLockoutPhase` is unkillable by construction — every route
+back into a phase goes through `EnterLockoutPhase`, which resets on entry).
+
+⚠️ **Mutant 7 took two attempts to kill, and the failure is the defect restated.** The obvious
+assertion — "no stuck warning after one of six attempts" — passed **under** the time-keyed mutant,
+because on any sweep where the retry fires it refreshes the timestamp one line before the check reads
+it. *No assertion about a sweep where the retry fired can catch a time-keyed alarm*, which is exactly
+why the original never fired in production. The discriminator is the sweep that **spends the last
+attempt**: count-keyed it fires, time-keyed it cannot.
+
+---
+
+### P2-107. `PEAK_GIVEBACK_BREACH` re-emits its flatten on every evaluation, so the same family survives `P2-101`'s fix on a different path — OPEN, found live 2026-08-14
+
+**Where**: the rule evaluators, not the lockout phase machine — so `P2-101`'s attempt budget does not
+reach it.
+
+Measured on the box **immediately after `P2-101` was validated**, on the two follower accounts:
+
+```
+10:14:22  Sim-ORB   [SHADOW] Would execute action FlattenPosition triggered by PEAK_GIVEBACK_BREACH
+10:14:25  Sim-ORB   ... 10:14:32, 10:14:33, 10:14:41, 10:14:42   -- 7 in ~20 seconds
+```
+
+Same shape as `P2-101` — an action re-emitted while a condition persists, in a mode that cannot clear
+it — but a **different mechanism**: this is per-evaluation, driven by account/position updates rather
+than a timer, so it has no spacing at all and its rate is set by market data.
+
+**Why it is `P2` and not a duplicate**: `P2-101` was fixed inside `EvaluateLockoutPhase`, which is one
+of several places that emit repeated actions. This is the second instance found in the same hour, on
+the first accounts anyone looked at, which is the signal that **the deduplication belongs where the
+actions LEAVE the guard, not inside each producer.** `CoalesceActions` (`P1-19`) already sits on that
+path and merges actions *within one batch*; nothing suppresses the identical batch arriving three
+seconds later.
+
+**Fix**: prefer one mechanism over N. A per-(account, rule, action) "already emitted, not yet
+resolved" record on the outbound path would cover `P2-101`'s class, this one, and whatever the third
+turns out to be. ⚠️ It must not suppress a **live** re-attempt that is doing real work — `P2-101`'s
+budget of 6 exists because a broker can reject a flatten — so the record has to be cleared by the
+condition resolving, not by a timer.
+
+Related: `P2-101` (same family, bounded), `P3-30` (an audit firing on a correctly protected account),
+`P2-98`'s `FILL_NOT_MEASURED`. **Sixth instance of *an alarm that is always on is off*.**
 
 ---
 
