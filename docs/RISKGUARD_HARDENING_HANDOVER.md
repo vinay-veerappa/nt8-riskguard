@@ -242,7 +242,7 @@ not. The command that checks it is in the last column.
 | **Deployed** | **`v1.18.0` core + bridge are live in NT8** — measured from both repos: `sync_nt8.py --verify` **ALL IN SYNC (8 files)** and `deploy.py --verify` **ALL IN SYNC (10 files, 0 orphans)**. The bridge's count is higher because it owns `McpBridgeAddOn.cs` and `BridgeAccountResolver.cs`. ⚠️ Parity was **broken** mid-session and the guard caught it — see the Bridge pin row | `python tools/sync_nt8.py --verify`; `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
 | **Guard** | `version: 1.18.0`, `loaded: true`, `mode: shadow`, `isArmed: true`, `guarding: true` — **measured 2026-08-13 after the `v1.18.0` recompile**. **The firm mapping is LIVE on 94 accounts**, including the funded 50K TPT PRO | `GET /api/riskguard/version` with **`Authorization: Bearer <token>`** from `Documents/NinjaTrader 8/mcp_token.txt` (not `X-Auth-Token`, which returns `Unauthorized`) |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** | `nt_health` |
-| **Mutation** | **26 batteries** — **25 here** + **`nt8-mcp-bridge/mutation/mutate_p190.py`**. **272 anchors / 0 broken — measured 2026-08-14.** Two declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run all 24 locally (272 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push, and since session 37 it runs them as a 25-job MATRIX, so a push is **~12–16m measured**, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
+| **Mutation** | **29 batteries** — **27 here** + **2 in `nt8-mcp-bridge`** (`mutate_p190`, `mutate_p0104`; ⚠️ that repo's CI ran **neither** until §5.44, because `check_ci_runs_every_battery.py` is per-repo). **283 anchors / 0 broken — measured 2026-08-14.** Three declare an `EXPECTED SURVIVOR:` (`mutate_p330`'s lock-scope mutant, `mutate_p096`'s reconciler mutant, `mutate_p2101`'s redundant reset); `_battery.finish` fails on an unexpected survivor **and** on a declared one that has since been killed. ⚠️ Don't re-run them all locally (283 mutants × a suite run each ≈ 50 min) — **CI runs every one on every push as a MATRIX, so a push is 12–20m, not the old 1h56m** (§5.39). **The anchors are the cheap thing that goes stale — check those** | `python mutation/check_anchors.py` (~1s, and it works while the suite is RED) |
 | **NT8 compile** | **0 errors, net48 — measured 2026-08-13 on `v1.18.0`**. ⚠️ It was RED first, and that is the point: `P3-30`'s audit timer sat inside `#if TESTING`, so a 1275-green net8.0 suite could not see that the audit did not exist in production. Only `nt_compile` did. after the P3-31 sync. Every warning is pre-existing and in someone else's indicator | `nt_compile`, and read `errorCount` |
 | **CI** | Last `nt8-riskguard` run before this pass: **green** (session 33's `v1.13.0` run). ⚠️ The session-34 P3-31 commit had **not finished** when this table was written — check it rather than assuming, which is the whole point of the block below. `nt8-riskguard` ran **RED for 7 consecutive runs** across sessions 27–29 on one correct gate; fixed in `v1.12.2` | `gh run list -R vinay-veerappa/nt8-riskguard -L 10` |
 | **Bridge pin** | ✅ **`v1.18.0`, matches core `main`.** ⚠️ And it went behind AGAIN within the same session, because `P3-34` changed `TradeCopierEngine.cs` after `v1.14.0` was cut — **any core commit past the tag puts it behind**, which is why the remedy is a tag per core change, not a tag per session. ⚠️ **It went stale a THIRD time**: the pin sat at `v1.13.0` while core `main` ran 29 commits past it with five `addons/` files in the range, so `deploy.py --verify` refused again. Three catches in three sessions is the argument for comparing a RANGE, not the tag's own commit. ⚠️ **It went stale AGAIN in session 33 and the guard earned its keep a second time**: core `main` ran 21 commits past `v1.12.2` with **7 touching `addons/`**, so `deploy.py --verify` reported DRIFT on `GuardRules.cs` and refused (exit 1). Deploying would have reverted `F-9`, `F-9b` and `P2-92` out of a live NT8. **The remedy is a TAG** — the pin points at one — which is why `v1.13.0` exists | `cd ../nt8-mcp-bridge; python tools/deploy.py --verify` |
@@ -6860,7 +6860,7 @@ do not trust the number written here* — arriving one revision late, again.
 
 ---
 
-## 5.39 CI went from 1h56m to ~12–16m, and the tests were never the reason it was slow
+## 5.39 CI went from 1h56m to 12–20m, and the tests were never the reason it was slow
 
 The operator asked why the tests take so long and whether they could be vectorised or
 parallelised. The honest answer to the first half is that **they don't** — and measuring it
@@ -6904,7 +6904,17 @@ The workflow is now two jobs:
 * **`mutation`** — a 24-entry matrix, one battery per job, `needs: checks`.
 
 **Measured over the first two sharded runs: 15m36s (`31774605782`) and 11m48s
-(`31775541688`), both 25/25 green. So `1h56m → ~12–16m`, 7–10x.** Quote the RANGE: the
+(`31775541688`), both 25/25 green. So `1h56m → 12–20m`, 6–10x.**
+
+⚠️ **RE-MEASURED after session 38, and the earlier `~12–16m` was too narrow.** Eight green
+sharded runs now span **11m48s to 19m31s**. Two batteries were added in that session
+(`P1-100`, `P2-101`), taking the matrix from 25 jobs to 27 — and the free plan runs **20 at
+once**, so the queue behind the first wave went from 5 to 7. The top of the range moved with
+it, which is what you would expect and is not a regression to chase. **Quote 12–20m, and
+re-measure whenever a battery is added.** The general point stands and is the one to keep:
+a fan-out's wall clock is not `total / N`, and it is not stable either.
+
+Quote the RANGE: the
 four-minute spread between two identical workloads is runner availability, and a single
 measurement reported as *the* figure is the same error as a one-round green in
 [[mutation-testing-beats-review]] — it is the run you should trust least.
