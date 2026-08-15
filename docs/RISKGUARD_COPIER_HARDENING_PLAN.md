@@ -1800,6 +1800,12 @@ without giving `nt_quote` a staleness flag leaves the trap one call further down
 this field will still be `true` always; it will merely stop being noticeably wrong. **Do not close
 this by reconnecting the feed.**
 
+**Measured again with the BROKER CONNECTED, 2026-08-15 14:54 UTC** (operator reconnected Provider31;
+market closed). `feedConnected` is still `true` — as it was with a dormant Playback connection and
+no market at all. **The field did not change value when the thing it names changed completely**,
+which is the cheapest possible demonstration that it measures nothing. Everything else did change:
+`MNQ 09-26` went from a frozen `29533.75` to a live book at `30151.75 / 30155` on 1,925,425 volume.
+
 **The rest of the payload was swept before banding this, and it comes out well** — which is what
 makes the one bad field worth fixing rather than distrusting the whole surface. `/api/riskguard/version`
 computes `loaded`, `mode`, `isArmed` and `guarding` from the live instance (`McpBridgeAddOn.cs:483`),
@@ -3972,6 +3978,77 @@ Related: `P2-109` (the same query string, the same class), `P1-91` (schema defau
 surface).
 
 </details>
+
+---
+
+### P2-116. An equity rule with NO equity reading reports `EvaluatedNotEnforcing` — 88 of 89 prop accounts read exactly like the one that is actually protected — OPEN, found 2026-08-15 the hour the broker was reconnected
+
+**Where**: `addons/GuardRules.cs:265` (and the other `PerAccount` equity rules beside it)
+
+```csharp
+Evaluator = c => c.Config.PnLRules.TrailingDrawdown <= 0
+    ? Off("no trailing drawdown set")
+    : R(c.Account == null ? (double?)null : c.Account.AccountEquity,
+        c.Config.PnLRules.TrailingDrawdown, c.Account == null ? 0 : 1)
+                                            ^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+**The evidence count is the existence of an `AccountState` OBJECT, not of an equity READING.** Every
+subscribed account has a state object, so every account scores evidence `1` and reports
+`EvaluatedNotEnforcing` — the state that means *"this rule ran and you are within it."*
+
+**Measured live, with Provider31 connected (market closed):**
+
+| | |
+|---|---|
+| Provider31 accounts subscribed | **89** |
+| …reporting any equity at all | **1** — `TAKEPROFITPRO524207503`, $50,182.75 |
+| …with any per-account guard event, ever | **0** |
+| `Trailing drawdown` state on all 89 | **`EvaluatedNotEnforcing`**, limit `1500` |
+
+The funded account and a blank one are byte-identical on every equity row except the number:
+
+```
+TAKEPROFITPRO524207503  equity=50182.75   Trailing drawdown  EvaluatedNotEnforcing  cur=50182.75  limit=1500
+TAKEPROFITPRO4945748    equity=0.0        Trailing drawdown  EvaluatedNotEnforcing  cur=0.0       limit=1500
+```
+
+⚠️ **The rule is structurally INCAPABLE of firing on those 88.** Trailing drawdown breaches when
+`currentPnL < PeakEquity - TrailingDrawdown`. With no reading, `PeakEquity` stays `0` and the test is
+`0 < -1500`, which is never true. Confirmed from the other end too: `EvaluatePnLRules` is driven by
+`AccountItemUpdate`, and the audit log shows **zero per-account events for any Provider31 account** —
+the enforcer has not run once.
+
+**This is `F-9`'s class in the OPTIMISTIC direction, which is the dangerous one**, and it is on the
+one surface built specifically to answer *"is the guard actually protecting me"* (`P2-103`). An
+operator reading the inventory sees 89 accounts saying the same reassuring thing and **cannot tell
+the one that is protected from the 88 that cannot be.**
+
+⚠️ **The author already knew this class and applied it eight lines below.** The aggregate cap carries
+`EvidenceLabel = "accounts visible to the aggregate cap"` and the comment *"An aggregate cap over
+ZERO known accounts is not enforcing anything, and would otherwise read as green."* **The identical
+reasoning was never carried to the per-account equity rules** — [[a-second-reader-of-the-same-state]]
+at a fourth site.
+
+**Band**: `P2`. **Not** `P1`, and the reason is the measurement above: because `AccountItemUpdate`
+never fires for these accounts the enforcer never runs, so there is **no spurious flatten** — the
+failure is confined to reporting. ⚠️ **Check that before down-banding it, though**: if a blank
+account ever *did* receive one equity push, `PeakEquity` would jump from `0` to that value in the
+same call, and the very next tick could satisfy `currentPnL < PeakEquity - 1500` legitimately. The
+band rests on "the enforcer never runs", which is an observation about today, not an invariant.
+
+**Fix**: an equity-derived rule with no equity reading has **no evidence**, so it should report
+`Inert` with a note naming the condition — *"the broker reports no equity for this account, so this
+rule cannot evaluate"*. `Inert` already exists for exactly this (`Blocked instruments` uses it with
+`evidenceCount: 0`). Derive the display from the enforcer as `F-9` requires: the discriminator is
+whether an equity reading was ever *received*, which is not the same as `equity != 0` — record
+whether `AccountItemUpdate` has delivered `CashValue` for the account rather than inferring it from
+the value, since a genuinely zero account and an unreported one are otherwise indistinguishable
+(the `P2-41` shape: *a default and an erasure look identical*).
+
+⚠️ **And the count is the headline, not the rule**: the operator has **89 prop accounts and the
+guard holds a real equity reading for one**. Whatever the fix does to the row, that fact belongs on
+the summary view, because it is the answer to the question the surface exists for.
 
 ---
 
