@@ -8816,11 +8816,169 @@ still untracked. `check_batteries_pin_encoding.py` pins the *subprocess* encodin
 battery's own `stdout`. Fixed with `sys.stdout.reconfigure`. **Re-run the suite after any battery
 that does not reach its restore line** — and note the hazard arrived without anyone stopping it.
 
+## 5.59 `P1-77` and `P1-81` closed — and the agent loop did 40% of one, for a reason worth knowing
+
+Both closed 2026-08-15 and live-validated. The measurable outcome is one number off the deployed
+box: the inventory's `ConfiguredNotEvaluated` count went **384 → 97**, and the four rules
+describing protection that does not exist went to **one**.
+
+**`P1-77`** — the consistency cap was implemented, not deleted. `EvaluateConsistencyCap` on
+`PropFirmProtectionSuite`, with the registry entry given a real `Evaluator`. The evidence count is
+**0 when there is no evaluation target**, so the rule reports INERT rather than Enforcing on the
+~90 accounts that have none — 35% of a zero target is zero, and a cap of zero breaches on any
+profit at all.
+
+**`P1-81`** — the prop suite's `ArmedForLive` was deleted, not wired up. It defaulted to false
+"for safety" and had its own `confirmLive` gate, and **no prop rule ever read it**.
+
+### What the agent loop actually did, measured
+
+The loop was run on `P1-81`. Honest scorecard:
+
+* **Run 1 refused, correctly.** It builds its worktree from the last **commit**, so the
+  hand-written failing tests, still uncommitted, were invisible to it. Good gate, my process error.
+* **Run 2 reached round 4** (three compile failures first) and produced a patch that got two of
+  three regions right, and — the part worth crediting — **respected the trap**: it never touched
+  `TradeCopierEngine.cs`, where an identically-named `ArmedForLive` is load-bearing.
+* **It then preserved the defect.** Rather than deleting the property it kept it behind
+  `[Obsolete]`, reasoning *"retained for source compatibility with existing tests."*
+
+⚠️ **That last one was MY ticket error, not the loop's failure.** There genuinely were tests using
+the field, and `*Tests.cs` is a **protected path the loop is structurally forbidden to edit**. I
+handed it a deletion that required a test change it could not make. **Do not write a ticket whose
+acceptance criterion can only be met by editing a protected path** — the loop cannot tell you that
+it is trapped, it can only produce the best patch available inside its constraints, and that patch
+will keep the defect.
+
+Net: it did roughly 40% of the work and cost more setup than it saved on this ticket. The setup —
+failing tests, region scoping, the trap warning — is reusable, and the second ticket in this
+session (§5.60) shows what it looks like when the shape fits.
+
+### Four things the work itself turned up
+
+1. ⚠️ **The bridge reported `enforcing = cfg.ArmedForLive`.** So `nt_prop_limits` had been
+   answering *"are the prop protections enforcing?"* from a flag no rule read — **wrong in both
+   directions**. It now derives from the guard's actual gate (`IsArmed && IsActingMode()`).
+2. ⚠️ **Only `nt_compile` caught that.** Core suite **1570/0**, `sync --verify` clean. NT8 compiles
+   every addon into ONE assembly, so deleting a public core field is a **cross-repo change**, and a
+   broken assembly is invisible because NT8 keeps serving the last good one.
+3. ⚠️ **A repointed mutant found a gap in my own fix.** Every `P1-77` test drove the suite *method*;
+   none drove the registry **evaluator delegate**, which is what the inventory, the API and the UI
+   actually read. Two tests added. Also learned: `Off()` sets `EvidenceCount = 1`, so the
+   discriminator for "switched off" is `DisabledByConfig`, never the evidence count.
+4. ⚠️ **Two existing assertions pinned the defect.** `consistency.Evaluator == null` was asserted
+   deliberately, and correctly at the time. **The suite was defending the gap.** Same shape as
+   §5.61's `"P2-25"` note assertion, twice in one session.
+
+⚠️ Deleting `ArmedForLive` **structurally removed `P1-75`'s mechanism** — a reload could disarm the
+suite only because a `confirmLive`-gated field existed to drop. That test was kept and **inverted**,
+to assert the round trip now loses nothing.
+
+---
+
+## 5.60 `P2-78` closed by the agent loop in ONE ROUND — and the test written to fail did not
+
+`P2-78` is three lines: `PerInstrumentRiskConfig` carried `IsBlocked` and `StopOffsetTicks`, both
+read by nothing, next to a `MaxContracts` that works. `IsBlocked` is the misleading one — the
+config offered **two ways to block an instrument** and only `BlockedInstruments` did anything.
+
+**The loop's scorecard here is the opposite of §5.59's**, and the difference is the ticket shape:
+
+```
+[baseline] 1580 passed, 2 failed;  2 expected failure(s)
+[test-first] 2 acceptance test(s) red at baseline
+round 1: implement kimi-k2.7-code:cloud  3.8s
+   [static] ok   [compile] ok   [test] ok - 1582 passed, 0 failed
+   [panel] APPROVE  [glm-5.2=APPROVE(0), deepseek-v4-flash=APPROVE(0)]
+```
+
+One round, minimal patch, comment included, nothing widened. **What made it work**: one file, one
+region, no protected path involved, and the one part it could not reach (`GuardRules.cs`'s operator
+note, which lives inside a collection initialiser that neither `decl` nor `indent` can scope) was
+**done by hand first and guarded by a test that was green before and after**.
+
+⚠️ **But a one-round green is when to trust it least**, and the finding here is mine, not the
+loop's. **The test written to be RED was GREEN on its first run.** Its region regex was the obvious
+`class X \{(.*?)\}` — and the first `}` in that class closes `{ get; set; }` on the **first
+property**, so the "class body" it inspected was `public int MaxContracts { get; set; ` and the
+absence check passed on unfixed code.
+
+**Fifth gate in this repo caught inspecting a region other than the one it names**, and the only
+thing that caught it was writing the test to fail first and *noticing that it did not*. It now
+closes on the class brace at its own indent and carries a **positive control on the REGION** — a
+substring spanning the accessor list's closing brace — so it cannot silently re-narrow.
+
+---
+
+## 5.61 `P2-113` — the last `ConfiguredNotEvaluated` row was itself the lie
+
+Closed 2026-08-15. Full write-up in the plan; what belongs here is how it was found and the three
+things that generalise.
+
+**How it was found:** by asking what the ONE remaining red row actually was, after §5.59 drove the
+count from 384 to 97. Not by a test, not by CI — the suite was green throughout and **is green
+under the defect**, because nothing compares a rule's stated reason against the code it describes.
+
+**What it was:** `PropFirm.LocalNewsEventsFilePath` reported as read by nothing, 97 rows per poll,
+with a reason beginning *"NO CODE READS THIS"*. `LoadNewsEventsFromDisk` had been opening it since
+**`P2-25` closed in session 34** — two days. A second copy of the same false sentence sat in the
+news shield's own zero-event note. Both are operator-facing.
+
+⚠️ **`F-9`'s class in the PESSIMISTIC direction, and that is not the harmless one.** Every other
+ticket against this registry defends a row reading *greener* than the truth. This one read redder,
+and the cost arrives by the same mechanism one step removed: **a red row that is wrong is how an
+operator learns to discount red rows**, and there were 97 of them per poll.
+
+⚠️ **Nothing re-reads a reason.** `UnevaluatedReason` is prose written once, describing *the
+codebase* rather than the operator's box. It cannot go stale loudly.
+
+**The fix is not the corrected sentence** — deleting the false claim would leave the row saying
+nothing. The rule now reports **whether the operator's news file actually loaded**, which nobody
+could previously see, because every failure in that loader is silent: `[]` parses perfectly,
+malformed JSON was swallowed by a bare `catch { }`, a missing path just returns. **Weigh the quiet
+failure above the loud one** (§5.54 again): the empty file is the worst of the four, because it is
+the only one that looks like a success at every other surface.
+
+### Three things to carry
+
+1. ⚠️ **Closing the last instance of a state can disarm the machinery that reports it.** `P1-77`,
+   `P1-81` and `P2-113` between them gave *every* rule an evaluator, so
+   `Rules.Where(r => r.Evaluator == null)` is empty — and `All` over an empty sequence is true.
+   **Six gates** were written against that population, each carrying an explicit `expected.Count > 0`
+   so it could not pass vacuously, and **all six failed loudly in the commit that emptied it**.
+   That is the good outcome. They keep their subject and get an instance synthetically
+   (`RulesPlusOneUnevaluated()`, plus a `rules` parameter on `BuildSnapshot` production never
+   passes). Deleting them would have retired six checks as a side effect of earning the right to.
+2. ⚠️ **A test can pin a lie as firmly as it pins a truth.** `TestP186_…` *required* the shield's
+   note to contain `"P2-25"`. Correct when written; a gate holding a false sentence in place
+   afterwards. **A note states the CONDITION, never a ticket number.** Second instance this
+   session, after §5.59's `Evaluator == null` assertion.
+3. ⚠️ **An anchor that is a substring of a longer line can silently be the same anchor as
+   another.** Adding a second rule reporting the same evidence count took `mutate_p182`'s
+   `: R(null, null, c.NewsEventCount,` from one match to two — and revealed it had been producing a
+   **byte-identical mutated file** to another entry thirty lines below **since the day it was
+   written**. Two entries, one edit; that battery's coverage count had been overstated by one, and
+   only `check_anchors.py` refusing a 2-match anchor surfaced it. **Anchor on whole lines,
+   including indent.**
+
+⚠️ **The new battery went 5/8 on its first run and all three survivors were real gaps**, including
+the seam between the suite that knows the load outcome and the registry that reports it — my tests
+passed the status *explicitly* to `BuildSnapshot`, so deleting the production wiring changed
+nothing they could see. **Passing a value into the unit under test does not prove anything supplies
+it.**
+
 ### Order from here
 
-1. **`P2-112`** — ⚠️ its fix touches `Account.Change()`, so it wants a live market (§5.55).
+1. **`P2-112`** — ⚠️ its fix touches `Account.Change()`, so it wants a live market (§5.55). Market
+   Replay (§5.56) now supplies one, so this is no longer blocked on the clock.
 2. **`P3-110`** (narrowed — §5.51).
 3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
+
+🆕 **`nt8-mcp-bridge` now has an agent-loop profile** (`agent/nt8_bridge.py`, profile
+`nt8-bridge`), so `F-16` and `P3-110` are reachable by the loop for the first time. Its protected
+set includes **`vendor/*`** — an edit to the pinned core there is not a change, it is a silent fork
+that `deploy.py` would ship as code existing in no tag, and the stale-pin guard compares a RANGE so
+it would not see it either.
 
 ⚠️ **Provider31 is still disconnected** from the replay session. Reconnect and **re-verify guard
 arming** before treating any funded-account reading as meaningful.

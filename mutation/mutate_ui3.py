@@ -80,11 +80,16 @@ MUTANTS = [
      '        ConfiguredNotEvaluated = 9,'),
 
     # ---- THE evidence-count mutants: each one turns an INERT rule green ----
+    # ⚠️ Re-anchored 2026-08-15 by P2-113, which gave the news events FILE its own rule -- and that
+    # rule's evaluator reports the same event count, so this find-string went from one match to
+    # two. check_anchors.py refuses a 2-match anchor for the reason that matters here: a mutant
+    # that could land on either of two rules is not evidence about the one it names. The anchor
+    # now carries the trailing `null)` argument, which only the shield's healthy branch has.
     ("the news shield hardcodes its evidence to 1, so it reports green with ZERO events\n"
      "     loaded and IsInNewsWindow structurally unable to return true. P2-25, and\n"
      "     invisible to every static check",
-     '                    : R(null, null, c.NewsEventCount,',
-     '                    : R(null, null, 1,'),
+     '                            : R(null, null, c.NewsEventCount, null)',
+     '                            : R(null, null, 1, null)'),
 
     # Re-anchored 2026-08-13 by F-9. The evidence expression this used to find --
     # `AccountFirmMap.Count` -- is GONE, because counting the whole map on a PerAccount rule
@@ -149,17 +154,53 @@ MUTANTS = [
      '            new GuardNonRule { ConfigPath = "Mode", Reason = "the guard\'s enforcement mode; it decides whether rules can ACT and is reported on the snapshot itself, not as a rule" },',
      '            new GuardNonRule { ConfigPath = "Mode", Reason = "" },'),
 
-    ("an unevaluated rule loses its stated reason, so a red row cannot tell the operator\n"
-     "     WHY it is red -- which is the only thing that makes it actionable",
-     # P1-77 gave the cap threshold a real evaluator, so it is no longer an unevaluated rule and
-     # cannot demonstrate a missing reason. Repointed onto the news events file, which still
-     # legitimately has none -- the rule this mutant is ABOUT is "an unevaluated rule", not that
-     # particular one.
-     '                UnevaluatedReason = "NO CODE READS THIS, and it is WHY the news shield below can "\n'
-     '                    + "never fire: the path is stored but nothing ever opens it, so the event list "\n'
-     '                    + "is always empty. Loading this one file is what would make the shield real. "\n'
-     '                    + "(P2-25)"',
-     '                UnevaluatedReason = null'),
+    # ⚠️ REPOINTED TWICE, and the second move is the interesting one. This mutant used to blank a
+    # PARTICULAR rule's UnevaluatedReason: first the cap threshold's (P1-77 gave that one a real
+    # evaluator), then the news events file's. P2-113 gave THAT one an evaluator too -- and it was
+    # the last rule in the registry without one, so there is no longer any instance of the thing
+    # this mutant used to corrupt.
+    #
+    # The instinct at that point is to retire the mutant. That would be wrong: the requirement is
+    # not "this rule states its reason", it is "a rule that nothing evaluates cannot report red in
+    # silence", and that requirement outlives every instance of it. So the mutant moves DOWN to the
+    # mechanism -- the assignment in BuildSnapshot that carries the reason onto the row. It is
+    # killed by the synthetic unevaluated rule the tests now inject, which is the same repair the
+    # tests took: keep the subject, supply the instance.
+    #
+    # Strictly stronger than what it replaced. The old version could only ever prove one rule's
+    # text was present; this proves no unevaluated rule of ANY kind can render mute.
+    ("the reason is dropped on its way onto the row, so a rule nothing evaluates reports red\n"
+     "     in silence -- and a red row with no cause is noise, which is how an operator learns\n"
+     "     to ignore red rows",
+     '                    unevaluatedRow.Note = def.UnevaluatedReason;',
+     '                    unevaluatedRow.Note = null;'),
+
+    # ---- P2-113: the row that told the operator the file was read by nothing ----------
+    ("the news events file rule loses its evaluator and goes back to reporting\n"
+     "     CONFIGURED-and-not-EVALUATED -- P2-113 exactly, and it is the FALSE-RED direction,\n"
+     "     which is not the harmless one: a red row that is wrong teaches an operator to\n"
+     "     discount red rows, and this one was 97 of them on every poll",
+     '                    ? Off("no news events file configured")\n'
+     '                    : R(null, null, c.NewsEventCount,\n'
+     '                        c.NewsEventsLoadStatus ?? "the load outcome was not reported to this snapshot")',
+     '                    ? Off("no news events file configured")\n'
+     '                    : Off("no news events file configured")'),
+
+    ("a news events file that loaded NOTHING reports as Enforcing, which is the P2-113 fix\n"
+     "     overshooting into the reassuring direction -- the failure mode the whole registry\n"
+     "     exists to prevent",
+     '                    : R(null, null, c.NewsEventCount,\n'
+     '                        c.NewsEventsLoadStatus ?? "the load outcome was not reported to this snapshot")',
+     '                    : R(null, null, 1,\n'
+     '                        c.NewsEventsLoadStatus ?? "the load outcome was not reported to this snapshot")'),
+
+    ("the load status is dropped from the row, so 'your news file is missing', 'your news\n"
+     "     file is corrupt' and 'your news file is empty' all render as the same INERT row --\n"
+     "     the three silent failures P2-113 exists to tell apart",
+     '                        c.NewsEventsLoadStatus ?? "the load outcome was not reported to this snapshot")\n'
+     '            },',
+     '                        null)\n'
+     '            },'),
 ]
 
 

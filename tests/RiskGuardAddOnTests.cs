@@ -256,6 +256,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount();
             TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne();
             TestP2_29_TheSourceGatesReadTheWholeAddonTree();
+            TestP2_113_TheNewsEventsFileIsNoLongerReportedAsUnread();
+            TestP2_113_NoRuleClaimsTheNewsPathIsOpenedByNothing();
+            TestP2_113_EverySilentLoadFailureIsNamedInTheStatus();
+            TestP2_113_AConfiguredPathThatLoadedNothingIsNotReportedAsHealthy();
+            TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened();
+            TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus();
             TestP2_78_TheDeadPerInstrumentFieldsAreGone();
             TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
             TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist();
@@ -2224,6 +2230,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(GuardRuleRegistry.Rules.Count > 0 && allExplained, string.Format(
                 "every rule without an evaluator explains why ({0} of {1} rules unevaluated)",
                 unevaluated.Count, GuardRuleRegistry.Rules.Count));
+
+            // ⚠️ P2-113 emptied this set. As of that ticket EVERY registered rule has an
+            // evaluator, so the scan above now iterates NOTHING and `All` on an empty sequence is
+            // true -- the check went from proving something to proving that a set is empty, and
+            // it would go on printing a pass if the requirement were deleted outright.
+            //
+            // The requirement still has to hold for the NEXT rule declared without an evaluator,
+            // so the mechanism is asserted directly on synthetic definitions, in both directions.
+            // This is the same repair as the P2-78 region gate two tickets ago: a gate must state
+            // and exercise what it inspects, not rely on the population happening to be non-empty.
+            var reasoned = new GuardRuleDefinition {
+                Name = "synthetic-reasoned", ConfigPath = "synthetic.reasoned",
+                UnevaluatedReason = "nothing reads this, on purpose, and here is why"
+            };
+            var silent = new GuardRuleDefinition {
+                Name = "synthetic-silent", ConfigPath = "synthetic.silent"
+            };
+
+            Assert(GuardRuleRegistry.RuleExplainsItself(reasoned),
+                "the requirement ACCEPTS an unevaluated rule that states its reason");
+            Assert(!GuardRuleRegistry.RuleExplainsItself(silent),
+                "and REFUSES one that does not -- if this ever passes, the check has been "
+                + "deleted and the scan above would not have told you");
+            Assert(GuardRuleRegistry.Rules.All(GuardRuleRegistry.RuleExplainsItself),
+                "and the live registry satisfies the same predicate the synthetics are judged by");
         }
 
         private static void TestUi3_TheFourStatesAreDerivedNotDeclared()
@@ -2665,12 +2696,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (row.ConfigPath == "PropFirm.EnableNewsShield") news = row;
 
             Assert(news != null && news.State == GuardRuleState.Inert, string.Format(
-                "the news shield reports {0} on a default config (P2-25 is still open, so INERT "
-                + "is the only honest reading)",
+                "the news shield reports {0} on a default config -- no events are loaded, so "
+                + "INERT is the only honest reading",
                 news == null ? "NOTHING AT ALL" : news.State.ToString()));
+
+            // ⚠️ P2-113 CHANGED WHAT THIS HALF ASSERTS, and the change is the ticket. It used to
+            // require the note to name "P2-25", i.e. to name a DEFECT IN THE CODEBASE as the
+            // reason the operator's rule is inert. That was right until P2-25 closed and then
+            // pinned a sentence that had become false -- a test can hold a lie in place as firmly
+            // as it holds a truth. What the note must carry is the reason THIS BOX has no events,
+            // which is the only version an operator can act on.
             Assert(news != null && !string.IsNullOrWhiteSpace(news.Note)
-                   && news.Note.IndexOf("P2-25", StringComparison.Ordinal) >= 0,
-                "and it still names the defect that makes it inert");
+                   && news.Note.IndexOf("P2-25", StringComparison.Ordinal) < 0,
+                "and it no longer blames a defect that is closed");
+            Assert(news != null && (news.Note ?? "").IndexOf("NO NEWS EVENTS ARE LOADED",
+                       StringComparison.Ordinal) >= 0,
+                "it states the condition, not a ticket number: " + (news == null ? "" : news.Note));
         }
 
         private static void TestP182_AFlagThatCannotFireMustNotDefaultOn()
@@ -3140,6 +3181,35 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "(was {0}, now {1} after loading two)", before, suite.NewsEventCount));
         }
 
+        /// <summary>
+        /// P2-113. The real registry PLUS one rule declared with no evaluator.
+        ///
+        /// Six gates below were written to scan `Rules.Where(r =&gt; r.Evaluator == null)` and each
+        /// carried an explicit `expected.Count &gt; 0` so it could not pass on an empty set -- which
+        /// was careful, and which is exactly why they FAILED, loudly, in the commit that emptied
+        /// it. That is the good outcome: P1-77, P1-81 and P2-113 between them gave every rule an
+        /// evaluator, so the population these gates depended on is gone ON PURPOSE.
+        ///
+        /// The machinery still has to work for the next rule declared without one, and that rule
+        /// will be declared by someone who is not thinking about this file. So the gates keep
+        /// their subject and get it synthetically. Deleting them instead would have retired six
+        /// checks as a side effect of earning the right to.
+        /// </summary>
+        private static IList<GuardRuleDefinition> RulesPlusOneUnevaluated()
+        {
+            var list = new List<GuardRuleDefinition>(GuardRuleRegistry.Rules);
+            list.Add(new GuardRuleDefinition {
+                Name = "P2-113 synthetic unevaluated rule",
+                ConfigPath = "synthetic.unevaluated",
+                Source = GuardRuleSource.Config,
+                Scope = GuardRuleScope.Session,
+                UnevaluatedReason = "declared with no evaluator on purpose, so that the machinery "
+                    + "which reports CONFIGURED-and-not-EVALUATED stays falsifiable now that no "
+                    + "real rule is in that state"
+            });
+            return list;
+        }
+
         private static void TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates()
         {
             Console.WriteLine("\n[TEST] UI4: a snapshot with no accounts still reports the rules nothing evaluates");
@@ -3148,12 +3218,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             // equally -- it is a property of the BUILD, not of an account -- so if the inventory
             // only ever appears underneath an account, then a box with no accounts loaded renders
             // an empty page and an operator reads "nothing to show" as "nothing is wrong".
+            var registry = RulesPlusOneUnevaluated();
             var snap = GuardRuleRegistry.BuildSnapshot(
                 Ui4Config(), new PropFirmProtectionConfig(), "live", true,
-                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0);
+                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0, null, registry);
 
             var expected = new HashSet<string>(
-                GuardRuleRegistry.Rules.Where(r => r.Evaluator == null).Select(r => r.ConfigPath));
+                registry.Where(r => r.Evaluator == null).Select(r => r.ConfigPath));
 
             bool ok = snap != null && snap.Accounts != null && snap.Accounts.Count == 0
                       && snap.UnevaluatedRules != null
@@ -3234,11 +3305,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { live = addon.BuildGuardSnapshot(); }
             catch (Exception ex) { threw = ex; }
 
+            // ⚠️ P2-113: this used to require `UnevaluatedRules.Count > 0`, and that requirement
+            // is now the WRONG WAY UP. This test drives the addon's own snapshot, which uses the
+            // real registry, and every real rule has an evaluator -- so a non-empty list here
+            // would mean a regression, not health. The list must still EXIST (absent and empty
+            // mean opposite things to the page that renders it); its being empty is the outcome
+            // three tickets were spent on. The machinery that fills it is proven against a
+            // synthetic rule in the two tests below.
             Assert(threw == null && live != null && live.Mode == "shadow" && live.IsArmed
                    && live.Accounts != null && live.UnevaluatedRules != null
-                   && live.UnevaluatedRules.Count > 0,
-                "RiskGuardAddOn.BuildGuardSnapshot reports the guard's own mode and arming and "
-                + "never returns null lists"
+                   && live.UnevaluatedRules.Count == 0,
+                "RiskGuardAddOn.BuildGuardSnapshot reports the guard's own mode and arming, never "
+                + "returns null lists, and reports NO rule that nothing evaluates"
                 + (threw == null ? "" : " (threw " + threw.GetType().Name + ")"));
         }
 
@@ -3260,7 +3338,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // surface. If it is worth adding, it is worth being unable to delete silently.
             GuardSnapshot snap = null;
             Exception threw = null;
-            try { snap = GuardRuleRegistry.BuildSnapshot(Ui4Config(), new PropFirmProtectionConfig(), "live", true, null, 0); }
+            try { snap = GuardRuleRegistry.BuildSnapshot(Ui4Config(), new PropFirmProtectionConfig(), "live", true, null, 0, null, RulesPlusOneUnevaluated()); }
             catch (Exception ex) { threw = ex; }
 
             Assert(threw == null && snap != null && snap.Accounts != null && snap.Accounts.Count == 0
@@ -3276,7 +3354,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // config, where every evaluator fails, plus the unevaluated list.
             var broken = GuardRuleRegistry.BuildSnapshot(
                 null, null, "live", true,
-                new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") }, 0);
+                new List<RiskGuardAddOn.AccountStateSnapshot> { Ui4Account("Ui4Acc") }, 0,
+                null, RulesPlusOneUnevaluated());
 
             var mute = broken.Accounts.SelectMany(a => a.Rules)
                 .Concat(broken.UnevaluatedRules)
@@ -3342,7 +3421,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Ui4Account("Ui5Acc"),
                     Ui4Account("Ui5Excluded", excluded: true)
                 },
-                0);
+                // P2-113: synthetic registry, so the fleet-summary gate still has an unevaluated
+                // rule to insist on carrying. The real registry has none any more, and a summary
+                // that "carries all zero of them" proves nothing about an operator who never
+                // opens an account.
+                0, null, RulesPlusOneUnevaluated());
         }
 
         private static void TestUi5_TheStatesTravelAsNamesNotNumbers()
@@ -3403,9 +3486,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             // `unevaluatedRules` absent and `unevaluatedRules: []` mean opposite things, and
             // P2-83 exists because "nothing to show" and "nothing is wrong" must not render the
             // same. A page that does `(data.accounts || [])` cannot tell them apart either.
+            // P2-113: synthetic registry. The claim under test is that a POPULATED list survives
+            // serialization as a populated list -- so it needs something in it, and the real
+            // registry no longer has anything to put there.
             string json = GuardSnapshotJson.ToJson(GuardRuleRegistry.BuildSnapshot(
                 Ui4Config(), new PropFirmProtectionConfig(), "shadow", true,
-                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0));
+                new List<RiskGuardAddOn.AccountStateSnapshot>(), 0, null, RulesPlusOneUnevaluated()));
             var parsed = Newtonsoft.Json.Linq.JObject.Parse(json ?? "{}");
 
             Assert(parsed["accounts"] != null && parsed["accounts"].Type == Newtonsoft.Json.Linq.JTokenType.Array
@@ -15975,6 +16061,293 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(code.Contains("RiskGuardWindow"),
                 "including the WPF dashboard, which P2-29 moved to its own file and which "
                 + "mutate_p187's WarnOnly mutant SURVIVED against until this helper existed");
+        }
+
+        /// <summary>
+        /// P2-113. The inventory reported `PropFirm.LocalNewsEventsFilePath` as
+        /// CONFIGURED-and-not-EVALUATED against every account on every poll -- 97 rows on the live
+        /// box, the last of that state after P1-77 and P1-81 -- with the stated reason "NO CODE
+        /// READS THIS ... the path is stored but nothing ever opens it". `LoadNewsEventsFromDisk`
+        /// has opened it since P2-25 closed.
+        ///
+        /// Driven through BuildSnapshot rather than asserted on the definition, because the
+        /// definition is not what the operator sees: the STATE is derived, and deriving it is
+        /// where the claim is made.
+        /// </summary>
+        private static void TestP2_113_TheNewsEventsFileIsNoLongerReportedAsUnread()
+        {
+            Console.WriteLine("\n[TEST] P2-113: the news events file is not reported as read by nothing");
+
+            var def = GuardRuleRegistry.Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.LocalNewsEventsFilePath");
+            Assert(def != null, "the news events file is a registered rule");
+            if (def == null) return;
+
+            Assert(def.Evaluator != null,
+                "PropFirm.LocalNewsEventsFilePath has an evaluator -- a rule declared without one "
+                + "reports ConfiguredNotEvaluated BY CONSTRUCTION, which is only honest while no "
+                + "code reads the field");
+
+            var config = new RiskConfig();
+            var propConfig = new PropFirmProtectionConfig { LocalNewsEventsFilePath = "C:\\news.json" };
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> {
+                new RiskGuardAddOn.AccountStateSnapshot { AccountName = "Sim101" }
+            };
+
+            var snap = GuardRuleRegistry.BuildSnapshot(config, propConfig, "live", true, accounts,
+                newsEventCount: 4, newsEventsLoadStatus: "4 news event(s) loaded from C:\\news.json");
+
+            var row = snap.Accounts[0].Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.LocalNewsEventsFilePath");
+            Assert(row != null, "the rule appears on the account's rows");
+            if (row == null) return;
+
+            Assert(row.State != GuardRuleState.ConfiguredNotEvaluated, string.Format(
+                "a configured path that loaded 4 events is not CONFIGURED-and-not-EVALUATED "
+                + "(reported {0})", row.State));
+            Assert(row.State == GuardRuleState.Enforcing, string.Format(
+                "it reports Enforcing on an armed, acting guard (reported {0}: {1})",
+                row.State, row.Note));
+        }
+
+        /// <summary>
+        /// P2-113. The false sentence itself, wherever it is. Two rules asserted it -- the file
+        /// row's UnevaluatedReason and the news shield's zero-event note -- and both are served
+        /// over /api/riskguard/inventory and rendered by nt_riskguard_inventory. Asserted against
+        /// the RENDERED note of every rule, not against the source, because it is the rendered
+        /// text an operator reads and a second copy could be introduced anywhere.
+        /// </summary>
+        private static void TestP2_113_NoRuleClaimsTheNewsPathIsOpenedByNothing()
+        {
+            Console.WriteLine("\n[TEST] P2-113: no rule tells the operator that nothing opens the news file");
+
+            var config = new RiskConfig();
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> {
+                new RiskGuardAddOn.AccountStateSnapshot { AccountName = "Sim101" }
+            };
+
+            // Both worlds: no file configured, and a file configured that yielded nothing. The
+            // second is the one that used to carry the claim.
+            foreach (var propConfig in new[] {
+                new PropFirmProtectionConfig { LocalNewsEventsFilePath = "" },
+                new PropFirmProtectionConfig { LocalNewsEventsFilePath = "C:\\news.json",
+                                               EnableNewsShield = true } })
+            {
+                var snap = GuardRuleRegistry.BuildSnapshot(config, propConfig, "live", true,
+                    accounts, newsEventCount: 0,
+                    newsEventsLoadStatus: "the configured news events file does not exist: C:\\news.json");
+
+                foreach (var row in snap.Accounts[0].Rules)
+                {
+                    var note = row.Note ?? "";
+                    foreach (var lie in new[] { "nothing ever opens it", "NO CODE READS THIS" })
+                        Assert(!note.Contains(lie), string.Format(
+                            "rule '{0}' does not tell the operator '{1}' -- that stopped being "
+                            + "true when P2-25 closed. Note read: {2}", row.Name, lie, note));
+                }
+            }
+        }
+
+        /// <summary>
+        /// P2-113, the half that is new protection rather than a corrected sentence. Every way
+        /// the news file can fail to load is SILENT: a missing path returns, a malformed file is
+        /// swallowed by a bare catch, and `[]` parses fine. All three end with an empty list, and
+        /// an empty list is indistinguishable from "the shield is off" at every other surface.
+        /// </summary>
+        private static void TestP2_113_EverySilentLoadFailureIsNamedInTheStatus()
+        {
+            Console.WriteLine("\n[TEST] P2-113: each silent news-load failure produces a distinct status");
+
+            var suite = PropFirmProtectionSuite.Instance;
+            var dir = Path.Combine(Path.GetTempPath(), "rg_p2113_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var statuses = new List<string>();
+            try
+            {
+                suite.LoadNewsEventsFromDisk("");
+                statuses.Add(suite.NewsEventsLoadStatus);
+                Assert(suite.NewsEventsLoadStatus.Contains("no news events file configured"),
+                    "an empty path says so: " + suite.NewsEventsLoadStatus);
+
+                suite.LoadNewsEventsFromDisk(Path.Combine(dir, "absent.json"));
+                statuses.Add(suite.NewsEventsLoadStatus);
+                Assert(suite.NewsEventsLoadStatus.Contains("does not exist"),
+                    "a missing file says so: " + suite.NewsEventsLoadStatus);
+
+                var bad = Path.Combine(dir, "bad.json");
+                File.WriteAllText(bad, "{ this is not json");
+                suite.LoadNewsEventsFromDisk(bad);
+                statuses.Add(suite.NewsEventsLoadStatus);
+                Assert(suite.NewsEventsLoadStatus.Contains("could not be read"),
+                    "an unparseable file says so instead of being swallowed: "
+                    + suite.NewsEventsLoadStatus);
+
+                // The literal `null` deserializes to a null LIST rather than throwing, so it
+                // reaches neither the catch above nor the count check below. Before P2-113 it
+                // fell through and left the PREVIOUS file's events in place while reporting
+                // nothing at all -- the one failure mode that can leave stale protection loaded.
+                var nul = Path.Combine(dir, "null.json");
+                File.WriteAllText(nul, "null");
+                suite.LoadNewsEventsFromDisk(nul);
+                statuses.Add(suite.NewsEventsLoadStatus);
+                Assert(suite.NewsEventsLoadStatus.Contains("parsed to nothing"),
+                    "a file holding the literal null says so rather than falling through: "
+                    + suite.NewsEventsLoadStatus);
+
+                var empty = Path.Combine(dir, "empty.json");
+                File.WriteAllText(empty, "[]");
+                suite.LoadNewsEventsFromDisk(empty);
+                statuses.Add(suite.NewsEventsLoadStatus);
+                Assert(suite.NewsEventsLoadStatus.Contains("EMPTY"), string.Format(
+                    "a well-formed but empty file says so -- this is the quiet one, because it is "
+                    + "the only failure that looks like a success at every other surface: {0}",
+                    suite.NewsEventsLoadStatus));
+
+                // The five must be DISTINGUISHABLE. One status string reused across two causes
+                // would pass every assertion above and still leave the operator unable to act.
+                Assert(statuses.Distinct().Count() == statuses.Count,
+                    "the five outcomes produce five different statuses");
+
+                // Restore: this suite is a singleton and later tests read its config.
+                suite.LoadNewsEventsFromDisk("");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// P2-113. The direction that matters: fixing a pessimistic report must not produce an
+        /// optimistic one. A configured path that loaded NOTHING must not read as protection.
+        /// </summary>
+        private static void TestP2_113_AConfiguredPathThatLoadedNothingIsNotReportedAsHealthy()
+        {
+            Console.WriteLine("\n[TEST] P2-113: a configured news file that loaded nothing does not read as green");
+
+            var config = new RiskConfig();
+            var propConfig = new PropFirmProtectionConfig {
+                LocalNewsEventsFilePath = "C:\\news.json", EnableNewsShield = true };
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> {
+                new RiskGuardAddOn.AccountStateSnapshot { AccountName = "Sim101" }
+            };
+
+            var snap = GuardRuleRegistry.BuildSnapshot(config, propConfig, "live", true, accounts,
+                newsEventCount: 0,
+                newsEventsLoadStatus: "the news events file loaded and is EMPTY, so the shield "
+                    + "cannot fire: C:\\news.json");
+
+            var row = snap.Accounts[0].Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.LocalNewsEventsFilePath");
+            Assert(row != null && row.State == GuardRuleState.Inert, string.Format(
+                "zero events loaded reports INERT, not Enforcing (reported {0})",
+                row == null ? "no row" : row.State.ToString()));
+            Assert(row != null && (row.Note ?? "").Contains("EMPTY"),
+                "and the row carries the reason, which is the only place it exists");
+
+            // The shield's own row must agree with it. Two rows disagreeing about one fact is
+            // how F-9 was found.
+            var shield = snap.Accounts[0].Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableNewsShield");
+            Assert(shield != null && shield.State == GuardRuleState.Inert, string.Format(
+                "and the shield itself reports INERT for the same reason (reported {0})",
+                shield == null ? "no row" : shield.State.ToString()));
+        }
+
+        /// <summary>
+        /// P2-113. The status BEFORE anything has been loaded. Written because the battery's
+        /// mutant that initialises it to "news events loaded" survived every other test: a guard
+        /// that never calls the loader -- no path configured, or an exception earlier in startup
+        /// -- would then report the news file as healthy for the life of the process, and nothing
+        /// would ever overwrite it.
+        ///
+        /// A FRESH instance, not the singleton. Every other test in this file drives
+        /// PropFirmProtectionSuite.Instance, which by this point in the run has loaded something,
+        /// so the initial value is unobservable through it. That is precisely why the mutant
+        /// survived, and it is the general shape: an initial value can only be tested before
+        /// anything has had a chance to replace it.
+        /// </summary>
+        private static void TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened()
+        {
+            Console.WriteLine("\n[TEST] P2-113: a suite that has loaded nothing does not report a load");
+
+            var fresh = new PropFirmProtectionSuite();
+
+            Assert(fresh.NewsEventCount == 0, "a fresh suite holds no news events (control)");
+            Assert((fresh.NewsEventsLoadStatus ?? "").Contains("no news events file configured"),
+                "and its status says nothing has been configured, rather than describing a load "
+                + "that never happened: " + fresh.NewsEventsLoadStatus);
+        }
+
+        /// <summary>
+        /// P2-113, THE SEAM. The other three tests hand a load status to `BuildSnapshot`
+        /// explicitly -- which proves the registry reports what it is given, and proves nothing
+        /// about anything giving it. Deleting the production wiring in
+        /// `RiskGuardAddOn.BuildGuardSnapshot` left all of them green, and the battery caught it.
+        ///
+        /// PASSING A VALUE INTO THE UNIT UNDER TEST DOES NOT PROVE ANYTHING SUPPLIES IT. This
+        /// drives the addon's own snapshot, so the only source of the status is the real one.
+        /// </summary>
+        private static void TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus()
+        {
+            Console.WriteLine("\n[TEST] P2-113: the addon's own snapshot carries the suite's REAL load status");
+
+            var suite = PropFirmProtectionSuite.Instance;
+            var savedConfig = suite.Config;
+            var missing = Path.Combine(Path.GetTempPath(),
+                "rg_p2113_absent_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                // A path that does not exist. Chosen because its status is a sentence no other
+                // branch produces, so finding it downstream can only mean it travelled.
+                suite.UpdateConfig(new PropFirmProtectionConfig {
+                    LocalNewsEventsFilePath = missing, EnableNewsShield = true });
+
+                Assert(suite.NewsEventsLoadStatus.Contains("does not exist"),
+                    "the suite knows the file is missing (control -- without this the rest proves "
+                    + "nothing): " + suite.NewsEventsLoadStatus);
+
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigForTest(Ui4Config());
+                addon.SetModeForTest("shadow");
+                addon.SetArmedForTest(true);
+
+                var snap = addon.BuildGuardSnapshot();
+                var rows = (snap == null || snap.Accounts == null)
+                    ? new List<GuardRuleRow>()
+                    : snap.Accounts.SelectMany(a => a.Rules).ToList();
+
+                var fileRow = rows.FirstOrDefault(
+                    r => r.ConfigPath == "PropFirm.LocalNewsEventsFilePath");
+
+                // ⚠️ The addon's snapshot has one row per ACCOUNT, and a test build has none. So
+                // the assertion has to survive an empty account list without becoming vacuous:
+                // if the row is absent there is nothing to check, and saying so out loud is the
+                // difference between this test proving something and printing a pass.
+                if (fileRow == null)
+                {
+                    Assert(rows.Count == 0,
+                        "the news events file row is absent only because the snapshot carries no "
+                        + "account rows at all; if it carried rows and not this one, that is the "
+                        + "defect");
+                    // Fall back to the seam itself, which is what the mutant deletes.
+                    var code = AllAddonCode();
+                    Assert(code.Contains("PropFirmProtectionSuite.Instance.NewsEventsLoadStatus"),
+                        "and the addon still passes the suite's load status into BuildSnapshot -- "
+                        + "without this line every row falls back to 'the load outcome was not "
+                        + "reported' and the four distinguishable failures collapse into one");
+                    return;
+                }
+
+                Assert((fileRow.Note ?? "").Contains("does not exist"), string.Format(
+                    "the row the operator reads carries the status the SUITE produced, not a "
+                    + "fallback. Note: {0}", fileRow.Note));
+            }
+            finally
+            {
+                suite.UpdateConfig(savedConfig ?? new PropFirmProtectionConfig());
+                suite.LoadNewsEventsFromDisk("");
+            }
         }
 
         /// <summary>

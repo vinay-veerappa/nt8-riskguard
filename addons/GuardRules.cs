@@ -12,7 +12,12 @@
 //          tests it, it genuinely calls IsInNewsWindow, which genuinely iterates _newsEvents --
 //          a list nothing outside a test ever appends to, because LocalNewsEventsFilePath is
 //          parsed and read by NO loader. Always empty, always false, branch unreachable.
+//          ✅ CLOSED: LoadNewsEventsFromDisk exists and runs. ⚠️ AND THE DESCRIPTION ABOVE WENT
+//          ON BEING SERVED TO THE OPERATOR FOR TWO DAYS AFTER IT STOPPED BEING TRUE -- P2-113.
+//          A registry that records WHY a field is unevaluated inherits the obligation to notice
+//          when it becomes evaluated; nothing re-reads a reason once it is written.
 //   P2-78  PerInstrumentRiskConfig.IsBlocked / .StopOffsetTicks: zero references anywhere.
+//          ✅ CLOSED: both deleted.
 //
 // ⚠️ P2-25 IS WHY THIS IS A REGISTRY AND NOT A LINTER. A static "is this field read?" check
 // scores the news shield as READ -- every mechanical check passes on a rule that has never once
@@ -108,6 +113,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         /// <summary>How many news events are loaded. P2-25's evidence count, passed in rather than read.</summary>
         public int NewsEventCount { get; set; }
+
+        /// <summary>
+        /// P2-113. What the last load of LocalNewsEventsFilePath actually did. The count above
+        /// says WHETHER there is evidence; this says WHY there is not, which is the difference
+        /// between a row an operator can act on and one they can only look at.
+        /// </summary>
+        public string NewsEventsLoadStatus { get; set; }
     }
 
     /// <summary>
@@ -486,10 +498,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Name = "News shield", ConfigPath = "PropFirm.EnableNewsShield",
                 EvidenceLabel = "news events loaded",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                // Fully wired and structurally unable to fire. RiskGuardAddOn.cs:1541 tests the
-                // flag, calls IsInNewsWindow, which iterates _newsEvents -- a list nothing
-                // outside a test appends to, because LocalNewsEventsFilePath has no loader.
-                // Evidence is the EVENT COUNT, so this reports INERT until one is loaded.
+                // Wired end to end since P2-25: RiskGuardAddOn.cs tests the flag and calls
+                // IsInNewsWindow, which iterates _newsEvents, which LoadNewsEventsFromDisk fills
+                // from LocalNewsEventsFilePath. Evidence is the EVENT COUNT, so this reports
+                // INERT while that list is empty -- which is a real state and not a defect.
+                //
+                // ⚠️ P2-113: the zero-event note below used to assert that nothing ever opens the
+                // file. Something does. What the operator needs at zero events is not a verdict
+                // on the codebase but the reason THEIR list is empty, so the note now defers to
+                // the load status and to the row above, which reports it.
                 //
                 // General rule: Disabled means "this would work if you turned it on". A rule
                 // with nothing to evaluate does not qualify, however its switch is set, so the
@@ -498,8 +515,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ? Off("news shield disabled")
                     : c.NewsEventCount == 0
                         ? R(null, null, 0,
-                            "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "
-                            + "stored in the config and nothing ever opens it. (P2-25)")
+                            "NO NEWS EVENTS ARE LOADED, so this cannot fire. "
+                            + (c.NewsEventsLoadStatus ?? "the load outcome was not reported to "
+                                + "this snapshot")
+                            + " -- see the 'News events file' row")
                         : !c.PropConfig.EnableNewsShield
                             ? Off("news shield disabled")
                             : R(null, null, c.NewsEventCount, null)
@@ -539,11 +558,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
             new GuardRuleDefinition {
                 Name = "News events file", ConfigPath = "PropFirm.LocalNewsEventsFilePath",
+                // ⚠️ Deliberately NO EvidenceLabel. A label declares "this rule's evidence count
+                // moves with a collection in RiskConfig", and a test drives every labelled rule
+                // by emptying those collections. This rule's evidence comes from the prop suite's
+                // loaded event list, which that test cannot move -- so a label here would make it
+                // report a state the test never actually produced. The shield below carries the
+                // label for the same count, once, which is where it belongs.
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "NO CODE READS THIS, and it is WHY the news shield below can "
-                    + "never fire: the path is stored but nothing ever opens it, so the event list "
-                    + "is always empty. Loading this one file is what would make the shield real. "
-                    + "(P2-25)"
+                // P2-113. This entry carried an UnevaluatedReason reading "NO CODE READS THIS ...
+                // the path is stored but nothing ever opens it". That was true when written and
+                // has been FALSE since P2-25 closed: LoadNewsEventsFromDisk opens it, from
+                // UpdateConfig, which the bridge calls at startup. So the last remaining
+                // CONFIGURED-and-not-EVALUATED row on the live box -- 97 accounts, every poll --
+                // was itself the lie this registry exists to prevent. F-9's class exactly: the
+                // reporter disagreeing with the enforcer, this time in the pessimistic direction,
+                // which is not the harmless one. A red row that is wrong teaches an operator to
+                // discount red rows.
+                //
+                // What it reports now is the thing nobody could see: WHETHER THE FILE ACTUALLY
+                // LOADED. Every failure in that loader is silent -- a missing path, an unparseable
+                // file and a file containing `[]` all end with an empty list -- so this row is the
+                // only surface on which "I configured a news file" and "my news file loaded" can
+                // be told apart.
+                Evaluator = c => c.PropConfig == null
+                        || string.IsNullOrEmpty(c.PropConfig.LocalNewsEventsFilePath)
+                    ? Off("no news events file configured")
+                    : R(null, null, c.NewsEventCount,
+                        c.NewsEventsLoadStatus ?? "the load outcome was not reported to this snapshot")
             },
             // P1-81: the "Prop suite armed" entry was HERE and is gone with the field it
             // advertised. It reported `PropFirm.ArmedForLive` as a ConfiguredNotEvaluated rule
@@ -594,6 +635,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static IList<GuardRuleDefinition> Rules { get { return _rules.AsReadOnly(); } }
 
+        /// <summary>
+        /// P2-113. The requirement that a rule declared WITHOUT an evaluator states why, as a
+        /// predicate rather than as a loop inside one test.
+        ///
+        /// It is extracted because the population it used to scan is now EMPTY -- every rule has
+        /// an evaluator -- and `All` over an empty sequence is true, so the gate that enforced
+        /// this became unfalsifiable at the moment the last instance was fixed. A predicate can
+        /// be driven with a synthetic rule in both directions and keeps proving something at zero
+        /// instances, which is when it matters: the next rule declared without an evaluator is
+        /// exactly the case nobody is watching for.
+        /// </summary>
+        public static bool RuleExplainsItself(GuardRuleDefinition def)
+        {
+            if (def == null) return false;
+            if (def.Evaluator != null) return true;
+            return !string.IsNullOrWhiteSpace(def.UnevaluatedReason);
+        }
+
         public static IList<GuardNonRule> NonRules { get { return _nonRules.AsReadOnly(); } }
 
         /// <summary>
@@ -643,7 +702,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             string mode,
             bool isArmed,
             IList<RiskGuardAddOn.AccountStateSnapshot> accounts,
-            int newsEventCount)
+            int newsEventCount,
+            // P2-113. Optional so the ~40 existing test call sites keep compiling; null means
+            // "the caller did not say", which the rule reports as exactly that rather than as
+            // a healthy reading. It is NOT a default that stands in for a good outcome.
+            string newsEventsLoadStatus = null,
+            // P2-113. The registry to inventory, defaulting to the real one. Production never
+            // passes it. It exists because P2-113 emptied the set of rules with no evaluator --
+            // which is the goal -- and SIX tests of the unevaluated-rule machinery were written
+            // to scan that set, so all six became unfalsifiable in the same commit that earned
+            // it. The machinery still has to work for the next rule declared without an
+            // evaluator, and the only way to keep proving that at zero real instances is to hand
+            // it a synthetic one. A seam for a test is cheaper than six gates that cannot fail.
+            IList<GuardRuleDefinition> rules = null)
         {
             var snapshot = new GuardSnapshot();
             snapshot.TakenUtc = DateTime.UtcNow;
@@ -661,6 +732,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // guarded because the cost is a line and the failure is silent.
             if (accounts == null) accounts = new List<RiskGuardAddOn.AccountStateSnapshot>();
 
+            // P2-113: the real registry unless a caller names another. See the parameter's note.
+            if (rules == null) rules = Rules;
+
             foreach (var account in accounts)
             {
                 var accountRules = new GuardAccountRules();
@@ -673,7 +747,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 snapshot.Accounts.Add(accountRules);
             }
 
-            foreach (var def in Rules)
+            foreach (var def in rules)
             {
                 if (def == null)
                     continue;
@@ -726,6 +800,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             context.Account = account;
                             context.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot>(accounts);
                             context.NewsEventCount = newsEventCount;
+                            context.NewsEventsLoadStatus = newsEventsLoadStatus;
                             reading = def.Evaluator(context);
                         }
                         catch (Exception ex)

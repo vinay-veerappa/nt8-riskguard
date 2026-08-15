@@ -264,7 +264,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 mode,
                 isArmed,
                 GetAccountSnapshots(),
-                PropFirmProtectionSuite.Instance.NewsEventCount);
+                PropFirmProtectionSuite.Instance.NewsEventCount,
+                PropFirmProtectionSuite.Instance.NewsEventsLoadStatus);
         }
         private string _logDir;
         private string _logFile;
@@ -6184,9 +6185,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class PerInstrumentRiskConfig
     {
+        // Only MaxContracts is enforced. Per-instrument blocking is intentionally
+        // not a property here; blocking has exactly one mechanism: BlockedInstruments.
+        // See P2-78.
         public int MaxContracts { get; set; } = 10;
-        public bool IsBlocked { get; set; } = false;
-        public double StopOffsetTicks { get; set; } = 40;
     }
 
     // P1-39: every List property below carries ObjectCreationHandling.Replace. Json.NET's

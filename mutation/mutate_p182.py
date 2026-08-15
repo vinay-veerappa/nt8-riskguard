@@ -93,12 +93,19 @@ MUTANTS = [
      'public bool EnablePeakEquityProtection { get; set; } = false;'),
 
     # ---- make the gate's premise disappear rather than fail ----
-    (RULES,
-     "the news shield reports one piece of evidence it does not have. It stops being INERT,\n"
-     "     drops out of the CNE/INERT scan, and its default is no longer checked by anything --\n"
-     "     the registry header's 'do-nothing evaluator' hazard, aimed at P1-82",
-     '                    : R(null, null, c.NewsEventCount,',
-     '                    : R(null, null, c.NewsEventCount + 1,'),
+    #
+    # ⚠️ RETIRED 2026-08-15, and retired rather than repointed because it was a DUPLICATE. Its
+    # find-string was `: R(null, null, c.NewsEventCount,` at 20 spaces of indent, and the line it
+    # matched sits at 28 -- a SUBSTRING match, on the same line as the "+1 on the healthy branch"
+    # mutant thirty lines below, producing a byte-identical mutated file. Two entries, one edit:
+    # this battery's count has overstated its coverage by one since the day it was written.
+    #
+    # Nothing found that. It surfaced only because P2-113 added a second rule reporting the same
+    # count, which took the substring from one match to two and made check_anchors.py refuse it.
+    # The general lesson, and it applies to every battery here: AN ANCHOR THAT IS A SUBSTRING OF A
+    # LONGER LINE CAN SILENTLY BE THE SAME ANCHOR AS ANOTHER. A mutant list is an inventory, and
+    # this repo has now been caught three times trusting a hand-maintained one. Anchor on whole
+    # lines including their indent.
 
     # ---- P1-86: turning the switch off must not downgrade the defect ----
     (RULES,
@@ -116,16 +123,25 @@ MUTANTS = [
     (RULES,
      "the zero-event branch reports Off instead of a zero-evidence reading. Same downgrade,\n"
      "     reached without touching the ordering -- Disabled either way",
+     # Re-anchored 2026-08-15 by P2-113, which rewrote the note this branch carries. The BRANCH is
+     # what the mutant is about and it is unchanged; only its text moved.
      '                        ? R(null, null, 0,\n'
-     '                            "NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "',
+     '                            "NO NEWS EVENTS ARE LOADED, so this cannot fire. "',
      '                        ? Off("no news events loaded")\n'
-     '                            .Also("NO NEWS EVENTS ARE LOADED, so this can never fire. The file path is "'),
+     '                            .Also("NO NEWS EVENTS ARE LOADED, so this cannot fire. "'),
 
     (RULES,
-     "the INERT note stops naming P2-25. The row is still red and the operator still cannot\n"
-     "     find out WHY -- 'refused' without the culprit is the defect UI7 closed, told here",
-     '"stored in the config and nothing ever opens it. (P2-25)")',
-     '"stored in the config and nothing ever opens it.")'),
+     # ⚠️ REPOINTED by P2-113, and the reason is the ticket. This mutant used to delete '(P2-25)'
+     # from the note, on the argument that a red row must name its culprit. That argument was
+     # right and its instance went bad: P2-25 CLOSED, and a note blaming a fixed defect for the
+     # operator's empty event list is worse than one blaming nothing. The requirement survives in
+     # its correct form -- the row must state the CONDITION -- so the mutant now deletes that.
+     "the INERT note stops stating the condition. The row is still red and the operator still\n"
+     "     cannot find out WHY -- 'refused' without the culprit is the defect UI7 closed, told\n"
+     "     here. ⚠️ It used to delete a TICKET NUMBER from this note; P2-113 is what a pinned\n"
+     "     ticket number becomes once the ticket closes",
+     '                            "NO NEWS EVENTS ARE LOADED, so this cannot fire. "\n',
+     '                            ""\n'),
 
     (RULES,
      "the shield reports one event when it has none. It leaves the INERT band entirely and\n"

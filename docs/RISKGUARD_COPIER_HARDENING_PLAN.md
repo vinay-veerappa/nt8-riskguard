@@ -1584,7 +1584,7 @@ against — which is also why the rule could be introduced with zero migration r
 
 ---
 
-### P1-77. The Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere — HONESTLY REPORTED, IMPLEMENTATION DEFERRED 2026-08-13
+### P1-77. The Consistency Rule Shield is configurable, enabled by default, and evaluated nowhere — ✅ CLOSED 2026-08-15 (session 43, §5.59: `EvaluateConsistencyCap`)
 
 *(found 2026-08-13 by auditing the operator's feature list against the source rather than
 against the config schema — §5.17.)*
@@ -1653,7 +1653,7 @@ nowhere.
 
 ---
 
-### P2-78. `PerInstrumentRiskConfig` carries two fields nothing reads — OPEN
+### P2-78. `PerInstrumentRiskConfig` carries two fields nothing reads — ✅ CLOSED 2026-08-15 (session 43, §5.60)
 
 *(found in the same audit, §5.17.)*
 
@@ -1670,6 +1670,83 @@ Same class as `P1-77` above and `P1-23`. Cheapest correct fix is deletion; if `I
 wanted, it belongs in the `:1706` check next to `BlockedInstruments`.
 
 **Where**: `addons/RiskGuardAddOn.cs:5435-5440`.
+
+✅ **CLOSED 2026-08-15 (session 43).** Both fields deleted; `MaxContracts` is the only member of
+the type and the only one anything reads. The registry note that warned about them went in the same
+change — a note describing fields the config no longer has is the same defect one turn later.
+
+---
+
+### P2-113. The inventory reported the news events file as read by nothing, for two days after something started reading it — ✅ CLOSED 2026-08-15 (session 43, §5.61)
+
+*(found 2026-08-15 while closing out `P1-77`/`P1-81`, by asking what the ONE remaining
+`ConfiguredNotEvaluated` row on the live box actually was. Not by a test and not by CI — the suite
+was green throughout, and it is green under the defect, because nothing compares a rule's stated
+reason against the code it describes.)*
+
+**What was measured**, off the deployed box, before any code was written:
+
+```
+nt_riskguard_inventory ->  "ConfiguredNotEvaluated": 97
+                           [ { "rule": "News events file", "accounts": 97 } ]
+```
+
+97 rows per poll, one per account, reporting `PropFirm.LocalNewsEventsFilePath` as configured and
+evaluated by nothing, with a stated reason beginning **"NO CODE READS THIS … the path is stored but
+nothing ever opens it"**. `PropFirmProtectionSuite.LoadNewsEventsFromDisk` has opened it since
+**`P2-25` closed in session 34** — called from `UpdateConfig`, which `McpBridgeAddOn.cs:245` calls
+at startup. A second copy of the same sentence sat in the news shield's own zero-event note, which
+is also operator-facing.
+
+⚠️ **This is `F-9`'s class in the PESSIMISTIC direction, and that is not the harmless one.** Every
+other ticket against this registry defends against a row reading *greener* than the truth. This one
+read redder. The cost arrives by the same mechanism at one remove: a red row that is wrong is
+exactly how an operator learns to discount red rows, and there were 97 of them on every poll.
+
+⚠️ **Nothing re-reads a reason.** `UnevaluatedReason` is prose written once, at the moment a gap is
+found, and it describes *the codebase* rather than the operator's box. It cannot go stale loudly. A
+registry that records why a field is unevaluated inherits the obligation to notice when it becomes
+evaluated, and this one had no mechanism for that at all.
+
+**The fix is not the corrected sentence.** Deleting the false claim would have left the row
+reporting nothing. What the rule reports now is the thing nobody could previously see: **whether
+the operator's news file actually loaded**. Every failure in that loader is silent —
+
+| what the operator has | what happened before | what the row says now |
+|---|---|---|
+| `[]` in the file | parses perfectly, loads zero events | *"loaded and is EMPTY, so the shield cannot fire"* |
+| malformed JSON | swallowed by a bare `catch { }` | *"could not be read (JsonReaderException: …)"* |
+| a path that does not exist | `File.Exists` false, method returns | *"the configured news events file does not exist: …"* |
+| no path configured | — | *"no news events file configured"* → `Disabled`, not red |
+
+**Weigh the quiet failure above the loud one** (§5.54, again): the empty file is the worst of the
+four, because it is the only one that looks like a success at every other surface. The `catch`
+stays — a bad news file must not stop the guard loading — and stops being silent.
+
+**Three things worth reusing:**
+
+1. **Closing the last instance of a state can disarm the machinery that reports it.** `P1-77`,
+   `P1-81` and this ticket between them gave *every* registered rule an evaluator, so
+   `Rules.Where(r => r.Evaluator == null)` is now empty — and `All` over an empty sequence is true.
+   Six gates were written against that population, each carrying an explicit `expected.Count > 0`
+   so it could not pass vacuously, and all six **failed loudly in the commit that emptied it**.
+   That is the good outcome. They keep their subject and get an instance synthetically
+   (`RulesPlusOneUnevaluated()`, plus a `rules` parameter on `BuildSnapshot` that production never
+   passes). Deleting them would have retired six checks as a side effect of earning the right to.
+2. **A test can pin a lie as firmly as it pins a truth.** `TestP186_…` *required* the shield's note
+   to contain the string `"P2-25"`. That was correct when written and became a gate holding a false
+   sentence in place. A note must state the **condition**, never a ticket number.
+3. **An anchor that is a substring of a longer line can silently be the same anchor as another.**
+   Adding a second rule reporting the same evidence count took `mutate_p182`'s
+   `: R(null, null, c.NewsEventCount,` from one match to two — and revealed it had been producing a
+   **byte-identical mutated file** to another entry thirty lines below since the day it was
+   written. Two entries, one edit; that battery's count had overstated its coverage by one, and
+   only `check_anchors.py` refusing a 2-match anchor surfaced it. Anchor on whole lines.
+
+**Where**: `addons/GuardRules.cs` (the rule, the shield's note, the header),
+`addons/PropFirmProtectionSuite.cs` (`NewsEventsLoadStatus` and the loader),
+`addons/RiskGuardAddOn.cs` (the seam that carries it into the snapshot).
+**Battery**: `mutation/mutate_p2113.py`.
 
 ---
 
@@ -1779,7 +1856,7 @@ executable harness (`P2-27`), with a positive clause so deleting the method cann
 
 ---
 
-### P1-81. The prop suite's `ArmedForLive` arms nothing — OPEN
+### P1-81. The prop suite's `ArmedForLive` arms nothing — ✅ CLOSED 2026-08-15 (session 43, §5.59)
 
 *(found 2026-08-13 while classifying every config leaf for the `UI3` rule registry. It was found
 by the act of having to state, for one field, what reads it — which is the whole argument for the

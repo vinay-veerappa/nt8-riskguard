@@ -44,7 +44,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ⚠️ NOT to be confused with CopierRelationship.ArmedForLive, which is LOAD-BEARING:
         // `rel.IsEnabled && !rel.ArmedForLive` is what puts a copier relationship in Shadow.
         // Same name, different type, opposite consequence.
-        public bool EnableNewsShield { get; set; } = false; // P2-25: the news-shield rule is inert (no loader populates _newsEvents). Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
+        // P2-113: this comment used to read "the news-shield rule is inert (no loader populates
+        // _newsEvents) ... re-enable after implementing the rule". THAT LOADER HAS EXISTED SINCE
+        // P2-25 CLOSED -- LoadNewsEventsFromDisk, called from UpdateConfig. The default stays
+        // false, but for the ordinary reason and not the old one: a protection the operator did
+        // not ask for should not switch itself on. Turning it on with a populated
+        // LocalNewsEventsFilePath now genuinely shields.
+        public bool EnableNewsShield { get; set; } = false;
         public int NewsBufferMinutesBefore { get; set; } = 2;
         public int NewsBufferMinutesAfter { get; set; } = 2;
         public string LocalNewsEventsFilePath { get; set; } = "";
@@ -57,7 +63,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ($0.50 on MNQ) makes any retrace a >=100% giveback and flattens the position seconds
         // after entry. Set to 0 for the old, purely proportional behaviour.
         public double MinPeakGainDollars { get; set; } = 50.0;
-        public bool EnableConsistencyCap { get; set; } = false; // P1-77: the consistency-cap rule is never evaluated. Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
+        // P2-113, second instance in this file. This comment read "the consistency-cap rule is
+        // never evaluated ... re-enable after implementing the rule" -- FALSE since P1-77 closed,
+        // which is when EvaluateConsistencyCap was written. Found by looking for the news shield's
+        // defect at the next switch down; there was no need to look far, because THE SENTENCE HAD
+        // BEEN COPIED. A comment that records the state of a defect is a claim with no owner: the
+        // ticket that closes the defect has no reason to visit the config file it was quarantined
+        // in. Say what the DEFAULT is for, not what is missing.
+        //
+        // Still false by default, for the ordinary reason: a protection the operator did not ask
+        // for should not switch itself on. Turning it on with an EvaluationTargetProfit set now
+        // genuinely caps the day.
+        public bool EnableConsistencyCap { get; set; } = false;
         public double MaxDailyProfitPctOfTarget { get; set; } = 0.35;
     }
 
@@ -98,23 +115,55 @@ namespace NinjaTrader.NinjaScript.AddOns
         // that was missing -- without it, _newsEvents is always empty and the news
         // shield can never fire. Called from UpdateConfig when a config with a
         // non-empty path is applied, and can be called directly to refresh.
+        /// <summary>
+        /// P2-113. Why the loader's OUTCOME is recorded rather than discarded: every failure
+        /// below is silent. A path that does not exist returns, a malformed file is swallowed by
+        /// the catch, and a file holding `[]` parses perfectly. All three leave `_newsEvents`
+        /// empty, and an empty event list is indistinguishable from "the shield is off" at every
+        /// surface that reads it -- so the operator's only signal that their news file never
+        /// loaded is the absence of a protection they believe they configured.
+        ///
+        /// The catch stays: a bad news file must not stop the guard loading. What changes is that
+        /// it stops being SILENT. This string is what the rule inventory reports.
+        /// </summary>
+        public string NewsEventsLoadStatus { get; private set; } = "no news events file configured";
+
         public void LoadNewsEventsFromDisk(string filePath)
         {
-            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+            if (string.IsNullOrEmpty(filePath))
+            {
+                NewsEventsLoadStatus = "no news events file configured";
+                return;
+            }
+            if (!File.Exists(filePath))
+            {
+                NewsEventsLoadStatus = "the configured news events file does not exist: " + filePath;
+                return;
+            }
             try
             {
                 string json = File.ReadAllText(filePath);
                 var events = JsonConvert.DeserializeObject<List<EconomicNewsEvent>>(json);
-                if (events != null)
+                if (events == null)
                 {
-                    lock (_lock)
-                    {
-                        _newsEvents.Clear();
-                        _newsEvents.AddRange(events);
-                    }
+                    NewsEventsLoadStatus = "the news events file parsed to nothing: " + filePath;
+                    return;
                 }
+                lock (_lock)
+                {
+                    _newsEvents.Clear();
+                    _newsEvents.AddRange(events);
+                }
+                NewsEventsLoadStatus = events.Count == 0
+                    ? "the news events file loaded and is EMPTY, so the shield cannot fire: " + filePath
+                    : string.Format("{0} news event(s) loaded from {1}", events.Count, filePath);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Deliberately still swallowed -- and deliberately no longer silent.
+                NewsEventsLoadStatus = "the news events file could not be read (" + ex.GetType().Name
+                    + ": " + ex.Message + "): " + filePath;
+            }
         }
 
         public void UpdateConfig(PropFirmProtectionConfig config, bool confirmLive = false)

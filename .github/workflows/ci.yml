@@ -363,6 +363,15 @@ jobs:
           # an alarm that is permanently muted is as useless as one that never stops.
           - { label: P2-108, battery: mutate_p2108.py }
 
+          # P2-113, ~170s. The inventory reported PropFirm.LocalNewsEventsFilePath as read by
+          # nothing -- 97 rows per poll, measured -- for two days after P2-25 gave it a loader.
+          # F-9's class in the PESSIMISTIC direction, which is not the harmless one: a red row that
+          # is wrong is how an operator learns to discount red rows. Group 1 restores the loader's
+          # silence and group 2 stops the registry reporting what the loader learned. Mutant 3 is
+          # the one to know: a well-formed EMPTY news file reporting as a healthy load, which is
+          # the only one of the four failures that looks like a success at every other surface.
+          - { label: P2-113, battery: mutate_p2113.py }
+
           # P1-83, 176s. Config that is stored, settable, and read by nothing. The gate is a class
           # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
           # excluding the declaration, `X = something.X` clone/serialize lines, and the field-name
