@@ -237,6 +237,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestStress_S9_RestartMidTrade();
             TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock();
             TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher();
+            TestP1_77_TheConsistencyCapFiresOnTheDayItWouldVoidTheAccount();
+            TestP1_77_ALosingDayCannotBreachAPROFITCap();
+            TestP1_77_AnUncomputableCapDoesNotFireOnEVERYTHING();
+            TestP1_77_TheRuleIsREGISTEREDWithAnEvaluatorNotJustDeclared();
+            TestP1_77_TheREGISTRYEvaluatorActuallyEvaluates();
+            TestP1_77_NoEvaluationTargetReportsINERTNotEnforcing();
             TestP1_81_ThePropSuiteHasNoSecondArmingFlag();
             TestP1_81_TheRegistryNoLongerAdvertisesIt();
             TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow();
@@ -2314,16 +2320,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                 })
                 : null;
 
+            // ⚠️ THIS ASSERTION WAS INVERTED BY P1-77, and the original is worth reading: it
+            // asserted `consistency.Evaluator == null`, i.e. it PINNED THE DEFECT as correct
+            // behaviour. That was right at the time -- the point of UI3 was that the registry
+            // must report honestly, and the honest report of a rule with no evaluator is
+            // CONFIGURED-not-EVALUATED. But it means the suite defended the gap, exactly as
+            // P1-87 found a test asserting an unrecognised StopGuard action was fine.
+            //
+            // The cap now HAS an evaluator, so the contrast this test exists to draw is between
+            // an EVALUATED rule and an INERT one, which is the same distinction a static check
+            // cannot make.
             Assert(found
-                   // P1-77: no evaluator at all, and it says so
-                   && consistency.Evaluator == null
-                   && !string.IsNullOrWhiteSpace(consistency.UnevaluatedReason)
+                   // P1-77: it has a real evaluator now, and therefore no UnevaluatedReason
+                   && consistency.Evaluator != null
+                   && string.IsNullOrWhiteSpace(consistency.UnevaluatedReason)
                    // P2-25: HAS an evaluator, and reports zero evidence -- which is INERT
                    && news.Evaluator != null
                    && newsReading != null && newsReading.EvidenceCount == 0
                    && GuardRuleRegistry.DeriveState(news, newsReading, true, false) == GuardRuleState.Inert,
-                "the consistency cap reports CONFIGURED-not-EVALUATED and the news shield reports "
-                + "INERT with zero evidence -- the distinction a static check cannot make");
+                "the consistency cap now EVALUATES and the news shield still reports INERT with "
+                + "zero evidence -- the distinction a static check cannot make");
         }
 
         private static void TestUi3_AnEmptyCollectionCanNeverReportEnforcing()
@@ -15426,6 +15442,227 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is the guard on that and it must stay green THROUGHOUT.
         // ================================================================================
 
+        // ================================================================================
+        // P1-77. The Consistency Rule Shield: configurable, enabled by default, evaluated
+        // NOWHERE. `EnableConsistencyCap` and `MaxDailyProfitPctOfTarget` appear at exactly
+        // two sites each -- the declaration and the JSON parser. There is no evaluator.
+        //
+        // It matters more than an unimplemented feature because it is not ABSENT: it is
+        // present, enabled, and inert. An operator reading the config -- or an agent reading
+        // it over the API -- is told the consistency rule is on with a 35% cap. Prop-firm
+        // consistency rules are an ACCOUNT-FAILURE condition: exceeding the cap on one day
+        // can void an evaluation no matter how good the rest of the account looks. So the
+        // failure mode is believing you are covered against the one rule that silently
+        // disqualifies you.
+        //
+        // ⚠️ THE ACTION IS NOT FLATTEN. Hitting a profit cap is not a risk event, and
+        // flattening a winner to enforce a consistency rule REALISES the very P&L the rule is
+        // about -- it would cause the breach it exists to prevent. The rule refuses new
+        // ENTRIES and lets open positions run.
+        // ================================================================================
+
+        private static void TestP1_77_TheConsistencyCapFiresOnTheDayItWouldVoidTheAccount()
+        {
+            Console.WriteLine("\n[TEST] P1-77: the consistency cap actually evaluates something");
+
+            var suite = new PropFirmProtectionSuite();
+            var cfg = new PropFirmProtectionConfig
+            {
+                EnableConsistencyCap = true,
+                MaxDailyProfitPctOfTarget = 0.35,
+                EvaluationTargetProfit = 3000.0,
+            };
+
+            // 35% of a 3000 target is 1050.
+            Assert(!suite.EvaluateConsistencyCap(1049.99, cfg),
+                "a day just under the cap does not breach");
+            Assert(suite.EvaluateConsistencyCap(1050.0, cfg),
+                "a day exactly AT the cap breaches -- the firm's rule is >=, and being one cent "
+                + "under is not a margin anyone should rely on");
+            Assert(suite.EvaluateConsistencyCap(2000.0, cfg),
+                "and a day well over it breaches");
+        }
+
+        private static void TestP1_77_ALosingDayCannotBreachAPROFITCap()
+        {
+            Console.WriteLine("\n[TEST] P1-77: THE NEGATIVE HALF -- what must never fire");
+
+            var suite = new PropFirmProtectionSuite();
+            var cfg = new PropFirmProtectionConfig
+            {
+                EnableConsistencyCap = true,
+                MaxDailyProfitPctOfTarget = 0.35,
+                EvaluationTargetProfit = 3000.0,
+            };
+
+            // ⚠️ A rule that fires on everything passes every positive test above. P3-30's audit
+            // shipped reporting three findings against a correctly protected account behind three
+            // green positive-only acceptance tests, and that is the shape being defended here.
+            Assert(!suite.EvaluateConsistencyCap(-500.0, cfg),
+                "a LOSING day does not breach a profit cap -- the sign is the whole point, and "
+                + "getting it wrong would refuse entries on exactly the days you are trying to "
+                + "trade back");
+            Assert(!suite.EvaluateConsistencyCap(0.0, cfg),
+                "and neither does a flat day");
+
+            cfg.EnableConsistencyCap = false;
+            Assert(!suite.EvaluateConsistencyCap(99999.0, cfg),
+                "and the rule is OFF when the flag is off -- a switch that does nothing is the "
+                + "defect this ticket exists to end, in the other direction");
+        }
+
+        private static void TestP1_77_AnUncomputableCapDoesNotFireOnEVERYTHING()
+        {
+            Console.WriteLine("\n[TEST] P1-77: no evaluation target means no cap, not a cap of zero");
+
+            var suite = new PropFirmProtectionSuite();
+            var cfg = new PropFirmProtectionConfig
+            {
+                EnableConsistencyCap = true,
+                MaxDailyProfitPctOfTarget = 0.35,
+                EvaluationTargetProfit = 0.0,
+            };
+
+            // ⚠️ THE TRAP. 35% of a zero target is zero, so a naive `pnl >= cap` breaches on ANY
+            // profit at all -- on every account that has no evaluation target set, which is most
+            // of the 96. That is the P1-40 shape: a proportional test with no floor, firing on a
+            // single tick. An uncomputable rule must report NOTHING rather than EVERYTHING.
+            Assert(!suite.EvaluateConsistencyCap(0.01, cfg),
+                "a zero evaluation target means the cap CANNOT be computed, so it does not fire "
+                + "-- 35% of nothing is not a cap of nothing");
+            Assert(!suite.EvaluateConsistencyCap(50000.0, cfg),
+                "not even on a huge day");
+
+            cfg.EvaluationTargetProfit = -1.0;
+            Assert(!suite.EvaluateConsistencyCap(100.0, cfg),
+                "and a negative target is uncomputable too, not an inverted rule");
+        }
+
+        private static void TestP1_77_TheRuleIsREGISTEREDWithAnEvaluatorNotJustDeclared()
+        {
+            Console.WriteLine("\n[TEST] P1-77: the inventory must stop calling it ConfiguredNotEvaluated");
+
+            // The whole defect is that the config advertises a rule the inventory correctly
+            // reports as ConfiguredNotEvaluated against all 96 accounts. Implementing the
+            // evaluator without registering it would fix the behaviour and leave the report
+            // lying -- F-9's shape, where what a rule REPORTS disagrees with what it DOES.
+            var rule = GuardRuleRegistry.Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableConsistencyCap");
+            Assert(rule != null,
+                "the consistency cap is a registered rule");
+            Assert(rule != null && rule.Evaluator != null,
+                "and it HAS AN EVALUATOR -- the registry derives ConfiguredNotEvaluated from a "
+                + "null Evaluator, so this one field is what decides whether the inventory keeps "
+                + "reporting the rule red against all 96 accounts");
+            Assert(rule != null && rule.UnevaluatedReason == null,
+                "and it no longer carries an UnevaluatedReason, which is REQUIRED only while "
+                + "there is no evaluator -- leaving both would be a rule that runs and reports "
+                + "that it does not");
+        }
+
+        private static void TestP1_77_TheREGISTRYEvaluatorActuallyEvaluates()
+        {
+            Console.WriteLine("\n[TEST] P1-77: the delegate the INVENTORY calls, not just the suite method");
+
+            // ⚠️ THIS TEST EXISTS BECAUSE A MUTANT SURVIVED. `mutate_ui3` neuters the registry
+            // evaluator so it always takes its `disabled` branch -- the rule then reports a tidy
+            // "consistency cap disabled" forever, evaluates nobody, and looks answered. Every
+            // P1-77 test above passed under that mutant, because they all drive
+            // PropFirmProtectionSuite.EvaluateConsistencyCap directly and never touch the
+            // delegate.
+            //
+            // The delegate is the half that matters for the REPORT: nt_riskguard_inventory, the
+            // /api/riskguard/inventory payload and the UI all read the rule through
+            // GuardRuleDefinition.Evaluator. A working suite method behind a gutted delegate is
+            // F-9 exactly -- what a rule DOES disagreeing with what it REPORTS -- and it is the
+            // same "second reader of the same state" shape as P1-100 and P1-105.
+            var rule = GuardRuleRegistry.Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableConsistencyCap");
+            Assert(rule != null && rule.Evaluator != null, "the cap has a registry evaluator");
+            if (rule == null || rule.Evaluator == null) return;
+
+            var cfg = new PropFirmProtectionConfig
+            {
+                EnableConsistencyCap = true,
+                MaxDailyProfitPctOfTarget = 0.35,
+                EvaluationTargetProfit = 3000.0,
+            };
+
+            var enabled = rule.Evaluator(new GuardRuleContext
+            {
+                AccountName = "Ui3Acct",
+                Config = new RiskConfig(),
+                PropConfig = cfg,
+                Account = new RiskGuardAddOn.AccountStateSnapshot { RealizedPnL = 1200.0 },
+            });
+
+            Assert(enabled != null, "it returns a reading");
+            Assert(enabled != null && enabled.EvidenceCount == 1,
+                "with EVIDENCE -- an account was actually examined. A neutered evaluator that "
+                + "always answers 'disabled' reports zero evidence, and that is the difference "
+                + "this test exists to see");
+            Assert(enabled != null && enabled.Limit.HasValue && Math.Abs(enabled.Limit.Value - 1050.0) < 0.001,
+                "and the LIMIT it reports is the computed cap, 35% of 3000 = 1050 -- not the raw "
+                + "target, and not null");
+            Assert(enabled != null && enabled.CurrentValue.HasValue
+                   && Math.Abs(enabled.CurrentValue.Value - 1200.0) < 0.001,
+                "and the CURRENT value is the account's realised PnL, so an operator can see how "
+                + "close they are rather than only whether they have breached");
+
+            // The genuinely disabled case must still read as disabled -- the negative half again.
+            cfg.EnableConsistencyCap = false;
+            var disabled = rule.Evaluator(new GuardRuleContext
+            {
+                AccountName = "Ui3Acct",
+                Config = new RiskConfig(),
+                PropConfig = cfg,
+                Account = new RiskGuardAddOn.AccountStateSnapshot { RealizedPnL = 1200.0 },
+            });
+            // ⚠️ NOT EvidenceCount. `Off()` sets EvidenceCount = 1 by design in this registry --
+            // "the operator turned it off" is itself an evidenced fact, not an absence of one.
+            // The discriminator between a genuinely disabled cap and a NEUTERED evaluator is
+            // DisabledByConfig, and the enabled case above is what proves the mutant cannot hide:
+            // a gutted evaluator answers Off for an ENABLED cap, and Off carries no limit and no
+            // current value.
+            Assert(disabled != null && disabled.DisabledByConfig,
+                "a genuinely disabled cap reports DisabledByConfig");
+            Assert(enabled != null && !enabled.DisabledByConfig,
+                "and an ENABLED one does not -- which is exactly what an evaluator stuck on its "
+                + "disabled branch cannot get right");
+        }
+
+        private static void TestP1_77_NoEvaluationTargetReportsINERTNotEnforcing()
+        {
+            Console.WriteLine("\n[TEST] P1-77: ~90 accounts have no evaluation target and must not go red");
+
+            var rule = GuardRuleRegistry.Rules
+                .FirstOrDefault(r => r.ConfigPath == "PropFirm.EnableConsistencyCap");
+            if (rule == null || rule.Evaluator == null) { Assert(false, "the cap has an evaluator"); return; }
+
+            // Most of the 96 accounts have never been given an EvaluationTargetProfit. 35% of
+            // zero is zero, so a careless implementation reports every one of them as breaching
+            // the moment they make a cent -- P1-40's shape at 96x scale.
+            var reading = rule.Evaluator(new GuardRuleContext
+            {
+                AccountName = "NoTarget",
+                Config = new RiskConfig(),
+                PropConfig = new PropFirmProtectionConfig
+                {
+                    EnableConsistencyCap = true,
+                    MaxDailyProfitPctOfTarget = 0.35,
+                    EvaluationTargetProfit = 0.0,
+                },
+                Account = new RiskGuardAddOn.AccountStateSnapshot { RealizedPnL = 5000.0 },
+            });
+
+            Assert(reading != null && reading.EvidenceCount == 0,
+                "an account with no evaluation target contributes ZERO evidence, so the rule "
+                + "reports INERT rather than enforcing a cap of nothing against it");
+            Assert(reading != null && !reading.Limit.HasValue,
+                "and reports NO limit rather than a limit of 0 -- a displayed cap of $0 would "
+                + "read as 'you may not make any money today'");
+        }
+
         private static void TestP1_81_ThePropSuiteHasNoSecondArmingFlag()
         {
             Console.WriteLine("\n[TEST] P1-81: the prop suite's dead ArmedForLive is gone");
@@ -17495,20 +17732,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine("\n[TEST] TestOptionC_PropProtectionSingletonIntegration");
             var cfg = new PropFirmProtectionConfig
             {
-                ArmedForLive = true,
                 EnableNewsShield = true,
                 EnableProfitTargetLock = true,
                 EvaluationTargetProfit = 2500.0,
                 MaxPeakGivebackPct = 0.25
             };
 
-            // Test Arming Gate: confirmLive = false must force ArmedForLive = false
+            // ⚠️ P1-81: this used to set ArmedForLive and then assert that the confirmLive gate
+            // disarmed it. Both are gone, and THIS TEST IS WHY THE FIELD SURVIVED SO LONG: it
+            // exercised the arming gate thoroughly and proved it worked, which reads as coverage.
+            // What it never asked was whether ANY RULE CONSULTED the flag it was so carefully
+            // gating. Nothing did. A test that proves a control is well-guarded is not a test
+            // that the control controls anything -- and a green one is what makes the dead field
+            // look load-bearing to the next reader.
+            //
+            // What remains is the part that was always real: config round-trips through
+            // UpdateConfig and the rules that DO work still fire.
             PropFirmProtectionSuite.Instance.UpdateConfig(cfg, confirmLive: false);
-            Assert(PropFirmProtectionSuite.Instance.Config.ArmedForLive == false, "ArmedForLive forced to false when confirmLive is false");
-
-            cfg.ArmedForLive = true;
-            PropFirmProtectionSuite.Instance.UpdateConfig(cfg, confirmLive: true);
-            Assert(PropFirmProtectionSuite.Instance.Config.ArmedForLive == true, "ArmedForLive enabled when confirmLive is true");
+            Assert(PropFirmProtectionSuite.Instance.Config.EvaluationTargetProfit == 2500.0,
+                "the config round-trips through UpdateConfig");
+            Assert(PropFirmProtectionSuite.Instance.Config.EnableProfitTargetLock,
+                "and the flags that DO gate a real rule survive the round trip");
 
             bool locked = PropFirmProtectionSuite.Instance.EvaluateProfitTargetLock(2600.0);
             Assert(locked == true, "PnL 2600 reaches 2500 target lock threshold");
@@ -20515,29 +20759,41 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             try
             {
-                // Arm it the way the bridge's `set` branch does: explicit confirmation.
-                var armed = new PropFirmProtectionConfig { ArmedForLive = true, EvaluationTargetProfit = 4200.0 };
-                suite.UpdateConfig(armed, true);
-                Assert(suite.Config.ArmedForLive, "armed in memory, with confirmLive");
+                // ⚠️ P1-81 STRUCTURALLY REMOVED THIS DEFECT'S MECHANISM, and that is worth
+                // stating rather than deleting the test. P1-75 was: LoadFromDisk cannot pass
+                // confirmLive, so UpdateConfig's arming gate fired on every reload and silently
+                // DISARMED the prop suite -- correct for startup, catastrophic on a read path.
+                // The field that gate protected (ArmedForLive) turned out to arm nothing at all
+                // and was deleted, so the gate went with it. There is no longer a field a reload
+                // can silently drop.
+                //
+                // The test is kept and inverted: it now asserts the invariant the fix bought,
+                // which is that a save/reload round trip loses NOTHING. If someone reintroduces
+                // a confirmLive-gated field, this goes red and P1-75 is back.
+                var cfgToPersist = new PropFirmProtectionConfig
+                {
+                    EvaluationTargetProfit = 4200.0,
+                    EnableProfitTargetLock = true,
+                    EnableConsistencyCap = true,
+                    MaxDailyProfitPctOfTarget = 0.35,
+                };
+                suite.UpdateConfig(cfgToPersist, true);
+                Assert(suite.Config.EvaluationTargetProfit == 4200.0, "config applied in memory");
 
                 suite.SaveToDisk(file);
                 Assert(File.Exists(file), "and persisted");
-                string onDisk = File.ReadAllText(file);
-                Assert(onDisk.IndexOf("\"ArmedForLive\": true", StringComparison.OrdinalIgnoreCase) >= 0
-                       || onDisk.IndexOf("\"ArmedForLive\":true", StringComparison.OrdinalIgnoreCase) >= 0,
-                    "the FILE says armed -- so a reload is not restoring a disarmed state, it is discarding an armed one");
 
-                // Exactly what the bridge's read branch did.
+                // Exactly what the bridge's read branch did, and what used to disarm the suite.
                 suite.LoadFromDisk(file);
 
-                Assert(suite.Config.ArmedForLive == false,
-                    "P1-75: a reload DISARMED it. UpdateConfig's gate fires because LoadFromDisk "
-                    + "cannot pass confirmLive -- correct for startup, catastrophic for a read path. "
-                    + "The remedy is that no READ calls LoadFromDisk (bridge PropLimits + copier "
-                    + "get_groups), NOT relaxing this gate.");
                 Assert(suite.Config.EvaluationTargetProfit == 4200.0,
-                    "the rest of the config survived, which is why this is easy to miss: only the "
-                    + "one field that decides whether anything is ENFORCED was lost");
+                    "P1-75: a reload preserves the evaluation target");
+                Assert(suite.Config.EnableProfitTargetLock,
+                    "and the profit-target lock stays enabled across the round trip");
+                Assert(suite.Config.EnableConsistencyCap && suite.Config.MaxDailyProfitPctOfTarget == 0.35,
+                    "and so does the consistency cap and its threshold -- a reload no longer "
+                    + "silently drops the setting that decides whether anything is ENFORCED, "
+                    + "because P1-81 deleted the only field that behaved that way");
             }
             finally
             {

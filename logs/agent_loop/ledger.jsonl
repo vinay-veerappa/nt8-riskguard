@@ -26,3 +26,4 @@
 {"ts": "2026-08-13T11:28:11", "ticket": "T1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["compile", "test"]}
 {"ts": "2026-08-13T11:44:11", "ticket": "T1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": "test"}
 {"ts": "2026-08-13T13:12:25", "ticket": "T1", "verdict": "IMPLEMENTER_UNREACHABLE", "applied": false, "rounds": 1, "cost_usd": 0.0, "gate": "implement"}
+{"ts": "2026-08-14T19:57:16", "ticket": "T1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["compile", "test"]}

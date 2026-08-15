@@ -504,21 +504,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
 
             // -- prop-firm suite: the ones with NO evaluator. Each is a finding. --------
+            // P1-77: these two were the top of the "NO evaluator" block for the life of the
+            // addon -- configured, enabled by default, and evaluated NOWHERE. They now have a
+            // real evaluator (PropFirmProtectionSuite.EvaluateConsistencyCap) and move up here.
+            // ⚠️ The evidence count is 0 when there is no evaluation target, which is what makes
+            // the rule report INERT rather than Enforcing on the ~90 accounts that have none --
+            // 35% of a zero target is zero, and a cap of zero breaches on any profit at all.
             new GuardRuleDefinition {
                 Name = "Consistency / daily-profit cap", ConfigPath = "PropFirm.EnableConsistencyCap",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "NO CODE READS THIS. It has never capped anything -- the "
-                    + "setting exists in the file and in the parser, and nowhere else. It is "
-                    + "meant to cover a condition that FAILS a funded evaluation account. It "
-                    + "now defaults OFF (P1-82) so the config file stops asserting a cap that "
-                    + "does not exist, but that changes nothing about the rule: turning it on "
-                    + "still does nothing. (P1-77)"
+                Evaluator = c => c.PropConfig == null || !c.PropConfig.EnableConsistencyCap
+                    ? Off("consistency cap disabled")
+                    : R(c.Account == null ? (double?)null : c.Account.RealizedPnL,
+                        c.PropConfig.EvaluationTargetProfit > 0
+                            ? c.PropConfig.EvaluationTargetProfit * c.PropConfig.MaxDailyProfitPctOfTarget
+                            : (double?)null,
+                        (c.Account != null && c.PropConfig.EvaluationTargetProfit > 0) ? 1 : 0,
+                        c.PropConfig.EvaluationTargetProfit > 0
+                            ? "refuses new ENTRIES only -- flattening a winner would realise the "
+                              + "very P&L the cap is about (P1-77)"
+                            : "no EvaluationTargetProfit set, so the cap cannot be computed and "
+                              + "does not fire (P1-77)")
             },
             new GuardRuleDefinition {
                 Name = "Consistency cap threshold", ConfigPath = "PropFirm.MaxDailyProfitPctOfTarget",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Session,
-                UnevaluatedReason = "NO CODE READS THIS. It is the threshold for the cap above, "
-                    + "which is itself evaluated nowhere. (P1-77)"
+                Evaluator = c => c.PropConfig == null || !c.PropConfig.EnableConsistencyCap
+                    ? Off("consistency cap disabled")
+                    : R(c.PropConfig.MaxDailyProfitPctOfTarget, null,
+                        c.PropConfig.EvaluationTargetProfit > 0 ? 1 : 0,
+                        "share of EvaluationTargetProfit allowed in one session")
             },
             new GuardRuleDefinition {
                 Name = "News events file", ConfigPath = "PropFirm.LocalNewsEventsFilePath",

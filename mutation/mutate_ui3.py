@@ -117,19 +117,32 @@ MUTANTS = [
      '                    : R(null, c.Config.Sizing.MaxContractsAggregate, 1)'),
 
     # ---- THE "just fill in the null" mutant ----
-    ("the consistency cap gets a DO-NOTHING evaluator, which is exactly the instinct the\n"
-     "     header of this file warns against: it converts an honest red row into a green\n"
-     "     one without enforcing anything",
-     '                UnevaluatedReason = "NO CODE READS THIS. It has never capped anything -- the "',
-     '                Evaluator = c => R(null, null, 1),\n'
-     '                UnevaluatedReason = "P1-77. EnableConsistencyCap appears at "'),
+    # P1-77 REPOINTED THIS ONTO THE REAL EVALUATOR. It used to ADD a do-nothing evaluator to a
+    # rule that had none; the cap now HAS a working one, so the same hazard is NEUTERING it --
+    # strictly stronger, because the row keeps looking answered while the rule evaluates nothing
+    # and the config goes on advertising a 35% cap. Repointed, not retired.
+    ("the consistency cap's evaluator always takes its DISABLED branch, so the rule reports a\n"
+     "     tidy 'disabled' forever and never evaluates a single account -- an honest-looking row\n"
+     "     over a cap that enforces nothing",
+     # ⚠️ The anchor carries the R(...) line as well, because the cap and its THRESHOLD entry
+     # share an identical evaluator opening -- two matches, which check_anchors.py rejects. A
+     # mutant that could land on either of two rules is not evidence about the one it names.
+     '                Evaluator = c => c.PropConfig == null || !c.PropConfig.EnableConsistencyCap\n'
+     '                    ? Off("consistency cap disabled")\n'
+     '                    : R(c.Account == null ? (double?)null : c.Account.RealizedPnL,',
+     '                Evaluator = c => true || c.PropConfig == null || !c.PropConfig.EnableConsistencyCap\n'
+     '                    ? Off("consistency cap disabled")\n'
+     '                    : R(c.Account == null ? (double?)null : c.Account.RealizedPnL,'),
 
     # ---- the completeness gate itself ----
     ("a rule is DELETED from the registry, leaving its config field classified by nothing.\n"
      "     This is how P1-77, P2-25 and P2-78 all reached production, so the gate that\n"
      "     catches it must be proven to fire",
-     '                Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLive",',
-     '                Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLiveTYPO",'),
+     # P1-81 DELETED the "Prop suite armed" entry this used to typo -- together with the config
+     # leaf it classified, which is the correct way for a registry entry to disappear. Repointed
+     # onto a rule that still exists; the gate under test is the COMPLETENESS one, not that entry.
+     '                Name = "News events file", ConfigPath = "PropFirm.LocalNewsEventsFilePath",',
+     '                Name = "News events file", ConfigPath = "PropFirm.LocalNewsEventsFilePathTYPO",'),
 
     ("a non-rule loses its REASON, so the escape hatch becomes a way to make an\n"
      "     inconvenient field go quiet without saying why",
@@ -138,8 +151,14 @@ MUTANTS = [
 
     ("an unevaluated rule loses its stated reason, so a red row cannot tell the operator\n"
      "     WHY it is red -- which is the only thing that makes it actionable",
-     '                UnevaluatedReason = "NO CODE READS THIS. It is the threshold for the cap above, "\n'
-     '                    + "which is itself evaluated nowhere. (P1-77)"',
+     # P1-77 gave the cap threshold a real evaluator, so it is no longer an unevaluated rule and
+     # cannot demonstrate a missing reason. Repointed onto the news events file, which still
+     # legitimately has none -- the rule this mutant is ABOUT is "an unevaluated rule", not that
+     # particular one.
+     '                UnevaluatedReason = "NO CODE READS THIS, and it is WHY the news shield below can "\n'
+     '                    + "never fire: the path is stored but nothing ever opens it, so the event list "\n'
+     '                    + "is always empty. Loading this one file is what would make the shield real. "\n'
+     '                    + "(P2-25)"',
      '                UnevaluatedReason = null'),
 ]
 

@@ -29,7 +29,21 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class PropFirmProtectionConfig
     {
-        public bool ArmedForLive { get; set; } = false; // MUST default to false for safety
+        // P1-81: `ArmedForLive` WAS HERE and is deleted, not deprecated. It defaulted to
+        // false "for safety" and had its own confirmLive gate, and NO PROP RULE EVER READ IT --
+        // the news shield, the profit-target lock and the peak-equity giveback are all reached
+        // through the GUARD's mode and arming. So it had two readings and both were false:
+        // "the prop rules are off until I arm this" (they are not) and "arming this turns them
+        // on" (it does not).
+        //
+        // Deleted rather than wired up because this system should have ONE arming answer and the
+        // guard's own mode is it. A second flag the prop rules must ALSO satisfy creates a state
+        // where the operator has armed the guard, believes the prop rules are live, and a
+        // separate switch silently holds them off -- P3-34's defect inverted.
+        //
+        // ⚠️ NOT to be confused with CopierRelationship.ArmedForLive, which is LOAD-BEARING:
+        // `rel.IsEnabled && !rel.ArmedForLive` is what puts a copier relationship in Shadow.
+        // Same name, different type, opposite consequence.
         public bool EnableNewsShield { get; set; } = false; // P2-25: the news-shield rule is inert (no loader populates _newsEvents). Default OFF so the config does not assert protection that does not exist. Re-enable after implementing the rule.
         public int NewsBufferMinutesBefore { get; set; } = 2;
         public int NewsBufferMinutesAfter { get; set; } = 2;
@@ -107,11 +121,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (config == null) return;
 
-            // Safety Gate: Disarm ArmedForLive unless confirmLive == true is explicitly passed
-            if (config.ArmedForLive && !confirmLive)
-            {
-                config.ArmedForLive = false;
-            }
+            // P1-81: the "Safety Gate" that disarmed ArmedForLive was here. It went with the flag
+            // -- a gate on a value nothing reads protects nothing. `confirmLive` is deliberately
+            // left in the signature: changing a public method signature is a separate decision
+            // from deleting a dead field, and bundling the two would hide one inside the other.
 
             lock (_lock)
             {
@@ -146,6 +159,51 @@ namespace NinjaTrader.NinjaScript.AddOns
             var cfg = config ?? Config;
             if (cfg == null || !cfg.EnableProfitTargetLock) return false;
             return currentRealizedPnL >= cfg.EvaluationTargetProfit;
+        }
+
+        /// <summary>
+        /// P1-77. The consistency cap: has the day's realised profit exceeded the share of the
+        /// evaluation target the firm allows in one day?
+        ///
+        /// ⚠️ THIS RULE EXISTED AS CONFIG AND NOTHING ELSE. `EnableConsistencyCap` (default TRUE)
+        /// and `MaxDailyProfitPctOfTarget` (0.35) appeared at exactly two sites each — the
+        /// declaration and the JSON parser — for the life of the addon. An operator reading the
+        /// config, or an agent reading it over the API, was told the consistency rule was on with
+        /// a 35% cap. It had never capped anything. A prop consistency breach is an
+        /// ACCOUNT-FAILURE condition: exceed it once and the evaluation is void however good the
+        /// rest of the account looks, so the failure mode was believing you were covered against
+        /// the one rule that silently disqualifies you.
+        ///
+        /// ⚠️ THE ACTION IS NOT FLATTEN, and that is not a preference. Hitting a profit cap is not
+        /// a risk event, and flattening a winner to enforce a consistency rule REALISES the very
+        /// P&amp;L the rule is about — it would cause the breach it exists to prevent. This returns
+        /// a breach so the caller can refuse new ENTRIES; open positions run.
+        ///
+        /// ⚠️ AN UNCOMPUTABLE CAP RETURNS FALSE, NOT TRUE. 35% of a zero evaluation target is
+        /// zero, and a naive `pnl >= cap` then breaches on any profit at all — on every account
+        /// with no target set, which is most of the 96. That is `P1-40`'s shape (a proportional
+        /// test with no floor, firing on a single tick) and `P3-30`'s (a detector that fires on
+        /// everything). A rule that cannot be computed must report NOTHING.
+        /// </summary>
+        /// <param name="dayRealizedPnL">The account's realised P&amp;L for the session, in dollars.</param>
+        public bool EvaluateConsistencyCap(double dayRealizedPnL, PropFirmProtectionConfig config = null)
+        {
+            var cfg = config ?? Config;
+            if (cfg == null || !cfg.EnableConsistencyCap) return false;
+
+            // No target, no cap. See the note above: this is the branch that stops the rule
+            // firing on every account that has never been given an evaluation target.
+            if (cfg.EvaluationTargetProfit <= 0) return false;
+
+            // A losing or flat day cannot breach a PROFIT cap. Guarded explicitly rather than
+            // left to the comparison, because the comparison alone is correct only while the cap
+            // is positive, and that is a second thing to be true rather than one.
+            if (dayRealizedPnL <= 0) return false;
+
+            double cap = cfg.EvaluationTargetProfit * cfg.MaxDailyProfitPctOfTarget;
+            if (cap <= 0) return false;
+
+            return dayRealizedPnL >= cap;
         }
 
         public bool EvaluatePeakEquityGiveback(double peakOpenGain, double currentUnrealized, PropFirmProtectionConfig config = null)
@@ -207,7 +265,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (jObj == null) return new PropFirmProtectionConfig();
             return new PropFirmProtectionConfig
             {
-                ArmedForLive = jObj["ArmedForLive"] != null ? (bool)jObj["ArmedForLive"] : (jObj["armedForLive"] != null ? (bool)jObj["armedForLive"] : false), // Default false
+                // P1-81: ArmedForLive is deliberately IGNORED rather than rejected. An operator's
+                // prop_limits.json still carries the key and must keep parsing -- absent,
+                // present-and-unknown and present-and-malformed are different inputs (P3-111),
+                // and only one of them is a caller error worth refusing.
                 EnableNewsShield = jObj["EnableNewsShield"] != null ? (bool)jObj["EnableNewsShield"] : (jObj["enableNewsShield"] != null ? (bool)jObj["enableNewsShield"] : (jObj["newsShield"] != null ? (bool)jObj["newsShield"] : false)),
                 NewsBufferMinutesBefore = jObj["NewsBufferMinutesBefore"] != null ? (int)jObj["NewsBufferMinutesBefore"] : (jObj["newsBufferMinutesBefore"] != null ? (int)jObj["newsBufferMinutesBefore"] : 2),
                 NewsBufferMinutesAfter = jObj["NewsBufferMinutesAfter"] != null ? (int)jObj["NewsBufferMinutesAfter"] : (jObj["newsBufferMinutesAfter"] != null ? (int)jObj["newsBufferMinutesAfter"] : 2),
