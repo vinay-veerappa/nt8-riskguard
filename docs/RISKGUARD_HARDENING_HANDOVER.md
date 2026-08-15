@@ -9259,3 +9259,68 @@ that had been invisible behind a green flag.
 ⚠️ **Still not measurable, and say so**: `P2-112`'s stop-MOVE half. The market is closed, so nothing
 fills, so `Account.Change()` is still unexercised on the ATM path. It needs one filled contract on
 an open market — with `breakevenTriggerTicks: 0` that is the *only* remaining requirement.
+
+---
+
+## 5.66 A battery that passed 9/9 locally scored 2/9 in CI — a local worktree is not a fresh checkout
+
+**Session 44.** `mutate_p2112.py` was green locally, `check_anchors.py` printed **334/0**, and CI
+failed the `P2-112` job on **two consecutive pushes** with seven of nine anchors reporting
+`[SKIP] anchor matched 0 times`. The two that matched were exactly the two **single-line** anchors.
+
+### The cause
+
+`ORIGINALS = {p: open(p, encoding='utf-8', newline='').read() ...}`.
+
+`newline=''` hands back the file's **real** line endings. Every `.cs` blob in this repo is **CRLF**,
+so a fresh checkout gives CRLF, while the anchors are written with `'\n'`. Every multi-line anchor
+therefore matches nothing. **Exactly one battery of 32 read that way** — this one. I had copied
+`newline=''` off the *restore* line, where it is correct (it stops Python translating on the way
+OUT), onto the *read*, where it silently decouples the battery from its own anchors.
+
+### ⚠️ Why it passed locally, which is the part worth carrying
+
+**Earlier battery runs had already rewritten the worktree copy to LF.** Every battery reads
+universally and writes with `newline=''`, so restoring a file normalises it. My working tree had
+been through several runs; CI has only ever seen a fresh checkout. Proven rather than argued —
+`git clone --depth 1` into a temp dir, then match the anchors both ways:
+
+```
+fresh checkout CRLF lines in target: 1011
+anchors matching with newline='' (the bug): 2 / 9      <- exactly CI's number
+anchors matching universal (the fix)      : 9 / 9
+```
+
+⚠️ **`git show HEAD:<file>` lied about this and cost twenty minutes.** It reported the blobs as LF
+because it applies the eol filter. **`git cat-file blob` is the raw bytes** and reported all three
+addon files as fully CRLF. When a question is about bytes, use the plumbing command.
+
+### ⚠️ And `check_anchors.py` was validating a different string
+
+It reads targets with **universal newlines**, so it matched anchors against `'\n'` text and reported
+them fine — while the battery, reading with `newline=''`, would search CRLF text. **The gate and the
+battery disagreed about the input, so the gate's 334/0 was true about a string no battery searches.**
+
+Remedy, and it is the class rather than the instance: `check_anchors.py` now **refuses any battery
+that reads its ORIGINALS with `newline=''`**, because that is precisely the condition under which
+its own evidence stops being about the same text. Watched failing on the real defect before the
+defect was fixed (`326 anchor(s) checked, 1 broken`), then green at **334/0**.
+
+**This is [[state-the-region-a-gate-inspects]] with a new axis: not the region, the DECODING.** Two
+readers of one file that differ only in how they translate line endings are two different readers,
+and the one with the gate attached was not the one doing the work.
+
+### The side effect that made this possible, recorded but deliberately NOT changed
+
+Every battery reads universally (`'\n'`) and writes with `newline=''` (verbatim), so **restoring a
+file rewrites it from CRLF to LF**. That is the fleet convention, it is why a worktree drifts away
+from a fresh checkout, and it is invisible in `git status` because `core.autocrlf` normalises the
+comparison. Changing 32 batteries to preserve endings would be a larger and riskier edit than the
+problem justifies — the committed blob stays CRLF either way. **Know that running a battery mutates
+your worktree's line endings**, and do not use the worktree as evidence about a checkout.
+
+⚠️ **`_battery.finish` did its job**: a `(ANCHOR)` skip is scored a survivor and failed the build
+rather than passing quietly. The cost was two red CI runs, not a false green — which is the
+arrangement working. But it is the second time this session that **a check run before the last edit
+was a check on something else**; the first was `check_next_list_ids.py`, run before the status edit
+and not after.

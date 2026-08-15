@@ -20,7 +20,14 @@ import ast
 import glob
 import io
 import os
+import re
 import sys
+
+# A READ that pins newline='' -- i.e. `open(..., ...).read()` carrying newline='' with no 'w'/'a'
+# mode. Deliberately narrow: the WRITE half (`open(path, 'w', ..., newline='')`) is correct and
+# every battery does it. See the block in main() for what this defends.
+READS_WITH_RAW_NEWLINES = re.compile(
+    r"open\((?![^)]*['\"][wa])[^)]*newline=''[^)]*\)\s*\.\s*read\(\)")
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -70,9 +77,35 @@ def main():
     checked = 0
     for battery in sorted(glob.glob(os.path.join(REPO, 'mutation', 'mutate_*.py'))):
         name = os.path.basename(battery)
-        tree = ast.parse(io.open(battery, encoding='utf-8').read())
+        battery_src = io.open(battery, encoding='utf-8').read()
+        tree = ast.parse(battery_src)
         consts = paths_in(tree, battery)
         mutants = mutants_in(tree)
+
+        # ⚠️ THIS GATE READS THE TARGET WITH UNIVERSAL NEWLINES (below), so every anchor it
+        # verifies is matched against text whose line endings are '\n'. A battery that reads its
+        # ORIGINALS with `newline=''` gets the file's REAL endings instead -- CRLF in this repo --
+        # and its multi-line anchors then match NOTHING, while this gate goes on reporting them ok.
+        #
+        # Measured 2026-08-15: mutate_p2112.py was the only battery of 32 to do that. Locally it
+        # scored 9/9 and this gate printed 334/0, because earlier battery runs had already rewritten
+        # the worktree copy to LF. On a FRESH CHECKOUT -- which is all CI ever has -- 7 of its 9
+        # anchors matched 0 times and scored as survivors. A LOCAL WORKTREE IS NOT A FRESH CHECKOUT,
+        # and the two disagreed precisely because the gate and the battery read the file differently.
+        #
+        # So this is not a style rule: it is the condition under which this gate's evidence is
+        # about the same string the battery will search. Fail loudly rather than validate a
+        # different string. (Writing with newline='' is correct and untouched -- it stops Python
+        # translating on the way OUT. Only the READ is banned.)
+        if READS_WITH_RAW_NEWLINES.search(battery_src):
+            bad += 1
+            checked += 1
+            print("%-24s x reads its ORIGINALS with newline='' -- this gate matches anchors "
+                  "against\n%-24s   universal-newline text, so it would validate a string the "
+                  "battery never searches.\n%-24s   Drop newline='' from the READ (keep it on the "
+                  "write)." % (name, '', ''))
+            continue
+
         if mutants is None or not isinstance(mutants, (ast.List, ast.Tuple)):
             print('%-24s SKIPPED -- no literal MUTANTS list to read' % name)
             continue

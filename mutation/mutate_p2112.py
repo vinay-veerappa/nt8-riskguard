@@ -154,7 +154,19 @@ MUTANTS = [
      '            return false;'),
 ]
 
-ORIGINALS = {p: open(p, encoding='utf-8', newline='').read() for p in {m[0] for m in MUTANTS}}
+# ⚠️ NO `newline=''` ON THIS READ, and it is not a style choice. With it, Python hands back the
+# file's REAL line endings -- CRLF in this repo, in every fresh checkout -- while the anchors above
+# are written with '\n'. Every multi-line anchor then matches NOTHING and scores a false survivor.
+#
+# This battery shipped with it and passed 9/9 locally, because earlier battery runs had already
+# rewritten the worktree copy to LF. CI, which only ever has a fresh checkout, scored 2/9 -- the two
+# single-line anchors -- and the other seven printed `[SKIP] anchor matched 0 times`.
+# A LOCAL WORKTREE IS NOT A FRESH CHECKOUT. mutation/check_anchors.py now refuses this outright,
+# because it reads the target with universal newlines and would otherwise be validating a string
+# no battery ever searches.
+#
+# The WRITE below keeps newline='', which is correct: it stops Python translating on the way out.
+ORIGINALS = {p: open(p, encoding='utf-8').read() for p in {m[0] for m in MUTANTS}}
 
 
 def restore():
