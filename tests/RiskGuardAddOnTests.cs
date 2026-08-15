@@ -237,6 +237,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestStress_S9_RestartMidTrade();
             TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock();
             TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher();
+            TestP1_81_ThePropSuiteHasNoSecondArmingFlag();
+            TestP1_81_TheRegistryNoLongerAdvertisesIt();
+            TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow();
+            TestP1_81_TheCOPIERSArmedForLiveIsUntouched();
             TestP2_108_AFindingIsLoggedOnceWhileObserving();
             TestP2_108_SuppressionIsAnnouncedExactlyOnce();
             TestP2_108_TheRecordClearsOnTheCONDITIONNotATimer();
@@ -15403,6 +15407,100 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 30/60/90/120s -- one per 10s, indefinitely -- with ACTION_SUPPRESSED 0 throughout,
         // which is the proof that P2-107's DispatchActions never sees this path.
         // ================================================================================
+
+        // ================================================================================
+        // P1-81. `PropFirmProtectionConfig.ArmedForLive` is a control that controls nothing.
+        // It defaults false "for safety", has its own confirmLive gate, is parsed from
+        // prop_limits.json -- and NO prop rule consults it. The three that work (news shield,
+        // profit-target lock, peak-equity giveback) are gated by the GUARD's mode and arming.
+        //
+        // So the flag has two readings and both are false: "the prop rules are off until I arm
+        // this" (they are not) and "arming this turns them on" (it does not). The remedy chosen
+        // is DELETION -- this system should have ONE arming answer, and the guard's own mode is
+        // it. Making the prop rules consult a second flag adds a way to be half-armed.
+        //
+        // ⚠️ THE TRAP, AND IT IS THE WHOLE REASON THESE TESTS EXIST IN THIS SHAPE: a field of the
+        // SAME NAME lives on the copier's relationship type and is LOAD-BEARING --
+        // `rel.IsEnabled && !rel.ArmedForLive` is what puts a relationship in Shadow. Deleting by
+        // name would silently arm every shadow relationship for live copying. The last test below
+        // is the guard on that and it must stay green THROUGHOUT.
+        // ================================================================================
+
+        private static void TestP1_81_ThePropSuiteHasNoSecondArmingFlag()
+        {
+            Console.WriteLine("\n[TEST] P1-81: the prop suite's dead ArmedForLive is gone");
+
+            var prop = typeof(PropFirmProtectionConfig).GetProperty("ArmedForLive");
+            Assert(prop == null,
+                "PropFirmProtectionConfig no longer declares ArmedForLive -- a control that "
+                + "controls nothing is worse than an absent one, because an operator reads it as "
+                + "the thing that arms the prop rules and it is not");
+        }
+
+        private static void TestP1_81_TheRegistryNoLongerAdvertisesIt()
+        {
+            Console.WriteLine("\n[TEST] P1-81: and the rule registry stops reporting it");
+
+            var names = GuardRuleRegistry.Rules.Select(r => r.Name).ToList();
+            Assert(!names.Contains("Prop suite armed"),
+                "the rule registry no longer carries a 'Prop suite armed' entry -- it was one of "
+                + "the four ConfiguredNotEvaluated rules the inventory reports against all 96 "
+                + "accounts, and deleting the field must delete its advertisement too");
+
+            var paths = GuardRuleRegistry.Rules.Select(r => r.ConfigPath)
+                .Concat(GuardRuleRegistry.NonRules.Select(r => r.ConfigPath)).ToList();
+            Assert(!paths.Contains("PropFirm.ArmedForLive"),
+                "and no registry entry points at the PropFirm.ArmedForLive config path");
+        }
+
+        private static void TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow()
+        {
+            Console.WriteLine("\n[TEST] P1-81: an existing prop_limits.json is still readable");
+
+            // ⚠️ Deleting a parsed field must not break every config file already on disk. The
+            // operator's prop_limits.json still contains the key; the parser must ignore it, not
+            // throw. This is the same reasoning as P3-111: absent, present-and-unknown, and
+            // present-and-malformed are different inputs.
+            var json = "{\"ArmedForLive\": true, \"EvaluationTargetProfit\": 3000.0, "
+                     + "\"EnableProfitTargetLock\": true}";
+            bool threw = false;
+            PropFirmProtectionConfig parsed = null;
+            try
+            {
+                parsed = new PropFirmProtectionSuite().ParseConfig(
+                    Newtonsoft.Json.Linq.JObject.Parse(json));
+            }
+            catch (Exception) { threw = true; }
+
+            Assert(!threw,
+                "a prop_limits.json still carrying ArmedForLive parses without throwing -- the "
+                + "key is ignored, not rejected");
+            Assert(parsed != null && parsed.EvaluationTargetProfit == 3000.0,
+                "and the fields that DO exist still parse, so ignoring the dead key did not "
+                + "swallow the live ones");
+        }
+
+        private static void TestP1_81_TheCOPIERSArmedForLiveIsUntouched()
+        {
+            Console.WriteLine("\n[TEST] P1-81: THE GUARD ON THE FIX -- the copier's flag is load-bearing");
+
+            // ⚠️ THIS MUST BE GREEN BEFORE AND AFTER. A field of the same name on the copier's
+            // relationship type decides whether a relationship is Shadow or Live:
+            // `rel.IsEnabled && !rel.ArmedForLive` -> Shadow. Deleting ArmedForLive BY NAME rather
+            // than by TYPE would arm every shadow relationship for live copying -- turning a
+            // documentation cleanup into the most expensive defect in this repo.
+            var rel = typeof(CopierRelationship).GetProperty("ArmedForLive");
+            Assert(rel != null,
+                "CopierRelationship STILL declares ArmedForLive -- it is what puts a relationship "
+                + "in Shadow, and this deletion is scoped to the prop suite's dead copy only");
+            Assert(rel != null && rel.PropertyType == typeof(bool),
+                "and it is still a bool");
+
+            var relationship = new CopierRelationship { IsEnabled = true, ArmedForLive = false };
+            Assert(relationship.IsEnabled && !relationship.ArmedForLive,
+                "an enabled, unarmed relationship is still the Shadow shape -- the predicate the "
+                + "copier reads is intact");
+        }
 
         private static void TestP2_108_AFindingIsLoggedOnceWhileObserving()
         {

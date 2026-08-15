@@ -528,14 +528,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "is always empty. Loading this one file is what would make the shield real. "
                     + "(P2-25)"
             },
-            new GuardRuleDefinition {
-                Name = "Prop suite armed", ConfigPath = "PropFirm.ArmedForLive",
-                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
-                UnevaluatedReason = "THIS SWITCH DOES NOTHING. No prop-firm rule checks it before "
-                    + "acting -- they are gated by the GUARD's mode and arming instead. So turning "
-                    + "it on does not enable them, and turning it off does not disable them. "
-                    + "(P1-81)"
-            },
+            // P1-81: the "Prop suite armed" entry was HERE and is gone with the field it
+            // advertised. It reported `PropFirm.ArmedForLive` as a ConfiguredNotEvaluated rule
+            // against all 96 accounts on every inventory poll -- correctly, because the switch
+            // did nothing. The remedy was to delete the switch rather than wire it up: this
+            // system should have ONE arming answer and the guard's own mode is it. A second flag
+            // the prop rules must ALSO satisfy creates a state where the operator has armed the
+            // guard, believes the prop rules are live, and a separate switch silently holds them
+            // off -- P3-34's defect inverted.
         };
 
         private static readonly List<GuardNonRule> _nonRules = new List<GuardNonRule>

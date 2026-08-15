@@ -1,0 +1,40 @@
+{
+  "plan": "docs/RISKGUARD_COPIER_HARDENING_PLAN.md",
+  "note": "Session 42. ONE ticket: P1-81, delete the prop suite's dead ArmedForLive. The four acceptance tests were written BY HAND FIRST and three of them are RED at the 1546/3 baseline; the fourth (TestP1_81_TheCOPIERSArmedForLiveIsUntouched) is deliberately GREEN NOW AND MUST STAY GREEN -- it is the guard on the fix, not a target.\n\nREAD THIS BEFORE TOUCHING ANYTHING. A property of the SAME NAME, ArmedForLive, exists on TWO unrelated types:\n\n  1. PropFirmProtectionConfig.ArmedForLive  (addons/PropFirmProtectionSuite.cs:32)  -- DEAD. Nothing reads it. THIS is what the ticket deletes.\n  2. CopierRelationship.ArmedForLive        (addons/TradeCopierEngine.cs:290)       -- LOAD-BEARING. `rel.IsEnabled && !rel.ArmedForLive` at TradeCopierEngine.cs:1078 is what puts a copier relationship into SHADOW. Deleting or altering it would ARM EVERY SHADOW RELATIONSHIP FOR LIVE COPYING on accounts including a funded 50K.\n\nDo not edit addons/TradeCopierEngine.cs. Do not search-and-replace by name. Work by TYPE, from the regions given.\n\nGuardRules.cs also mentions armedForLive at :965 -- that is the COPIER relationship being serialised into the copier snapshot (`r.RelationshipId` is right beside it). Leave it. The GuardRules region in this ticket is the REGISTRY ENTRY at :532 only, which advertises the dead prop flag as a rule and must go with it.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P1-81: the prop suite's ArmedForLive arms nothing -- delete it, and delete its registry advertisement",
+      "defect": "`PropFirmProtectionConfig.ArmedForLive` defaults to false with the comment \"MUST default to false for safety\" and is guarded by its own confirmLive gate. Both are careful, and both are pointless: NO PROP RULE CONSULTS IT. The three that work -- the news shield, the profit-target lock and the peak-equity giveback -- are reached through the guard's own mode and armed state and never check this flag. Its only other appearance is the JSON parser.\n\nSo it has two readings and both are false: read as 'the prop rules are off until I arm this' they are not, because they act on the guard's arming; read as 'arming this turns the prop rules on' it does not do that either. It is a control that controls nothing, and it is worse than an absent one because an operator's mental model of what arms what is wrong BECAUSE this exists.\n\nIt is also one of the four ConfiguredNotEvaluated rules the live inventory reports against all 96 accounts every poll.",
+      "spec": "DELETE the prop suite's dead arming flag and everything that advertises it.\n\n1. addons/PropFirmProtectionSuite.cs -- remove the `ArmedForLive` property declaration from PropFirmProtectionConfig.\n\n2. addons/PropFirmProtectionSuite.cs -- remove the confirmLive safety gate that exists ONLY to disarm it (the `if (config.ArmedForLive && !confirmLive) { config.ArmedForLive = false; ... }` block). If `confirmLive` becomes an unused parameter as a result, LEAVE THE PARAMETER IN PLACE and say so in a comment -- changing a public signature is out of scope for this ticket.\n\n3. addons/PropFirmProtectionSuite.cs -- remove the `ArmedForLive` assignment from ParseConfig. The key must be IGNORED, not rejected: an operator's prop_limits.json still contains it and must keep parsing. Do not add validation that throws on unknown keys.\n\n4. addons/GuardRules.cs is ALREADY DONE and is NOT in your regions -- the registry entry advertising this flag has been removed by hand, because neither `decl` (161 lines) nor `indent` (1 line) could scope a single element of a collection initialiser. Do not touch that file.\n\nWrite a comment at the deletion site recording WHY it went: the system should have ONE arming answer and the guard's own mode is it; a second flag adds a way to be half-armed. Reference P1-81 and P3-34.\n\nDO NOT: touch addons/TradeCopierEngine.cs; rename anything; default the flag to false instead of deleting it (that keeps the lie and makes it quieter); or 'fix' this by having a UI display it, which propagates the false model to a second surface.",
+      "context": "The alternative remedy -- make the prop rules consult it -- was considered and rejected. The prop rules are already gated by the guard's mode and arming, which is real and tested. Adding a second flag they must ALSO satisfy creates a state where an operator has armed the guard and believes the prop rules are live while a separate switch silently holds them off. That is P3-34's defect (the copier acting regardless of guard mode) inverted, and this repo has spent two tickets establishing that one arming answer is correct.\n\nP1-77 is a DIFFERENT defect on the same page and is being fixed separately and concurrently: that one is a rule that does not exist. This one is a control that does not control.\n\n⚠️ THE REGISTRY GATE IS ALREADY RED AND YOUR CHANGE IS WHAT FIXES IT. The GuardRules registry entry for PropFirm.ArmedForLive has been removed by hand, which makes the UI3 completeness gate fail with '1 unclassified: PropFirm.ArmedForLive' -- because a config LEAF still exists that nothing classifies. Deleting the property is what closes that. The two must move together, and the gate is what proves it. Do NOT satisfy it by re-adding the registry entry.",
+      "expect_green": [
+        "PropFirmProtectionConfig no longer declares ArmedForLive",
+        "all 55 risk-config leaves are classified"
+      ],
+      "regions": [
+        {
+          "id": "PropConfigDeclaration",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "public bool ArmedForLive { get; set; } = false; // MUST default to false for safety",
+          "kind": "line",
+          "note": "The dead declaration on PropFirmProtectionConfig. kind=line: it is a property declaration with no brace body of interest. Emit the replacement for this line only -- i.e. remove it, optionally leaving the explanatory comment. ⚠️ An IDENTICAL line exists in addons/TradeCopierEngine.cs on the copier's relationship type and is LOAD-BEARING. This region is scoped to PropFirmProtectionSuite.cs; do not generalise the edit."
+        },
+        {
+          "id": "PropConfirmLiveGate",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "if (config.ArmedForLive && !confirmLive)",
+          "kind": "decl",
+          "note": "The gate that exists only to disarm the dead flag. Remove the gate. If `confirmLive` becomes unused, keep the parameter and comment that the signature is deliberately unchanged."
+        },
+        {
+          "id": "PropParser",
+          "file": "addons/PropFirmProtectionSuite.cs",
+          "anchor": "ArmedForLive = jObj[\"ArmedForLive\"] != null",
+          "kind": "line",
+          "note": "The parser assignment. Remove it. The JSON key must be silently ignored so existing prop_limits.json files keep parsing -- TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow is green now and must stay green."
+        }
+      ]
+    }
+  ]
+}
