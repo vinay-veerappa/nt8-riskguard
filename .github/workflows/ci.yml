@@ -354,6 +354,15 @@ jobs:
           # only the negative half catches it, and it fails 5 of them.
           - { label: P2-38, battery: mutate_p238.py }
 
+          # P2-108, ~200s. The FSM audit's findings were LogEvents with no action behind them, so
+          # nothing bounded them. MEASURED on the box under Market Replay: NAKED_POSITION at
+          # 3/6/9/12 over 30/60/90/120s -- one per 10s indefinitely -- with ACTION_SUPPRESSED 0
+          # throughout, which is the proof P2-107's DispatchActions never sees this path.
+          # Mutant 5 is the one to know: it never clears the record, so a finding suppressed once
+          # stays suppressed for the life of the process. THE OPPOSITE DEFECT and the worse one --
+          # an alarm that is permanently muted is as useless as one that never stops.
+          - { label: P2-108, battery: mutate_p2108.py }
+
           # P1-83, 176s. Config that is stored, settable, and read by nothing. The gate is a class
           # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
           # excluding the declaration, `X = something.X` clone/serialize lines, and the field-name

@@ -90,8 +90,14 @@ MUTANTS = [
     ("`|| !hasFsm` goes back on the ORPHAN_STOP condition, so a stop correctly covering a\n"
      "     LIVE position is reported as an orphan -- a name that means the opposite of the\n"
      "     situation, and a duplicate of the NAKED_POSITION already emitted for it",
-     '                        if (!hasPosition)\n                        {\n                            LogEvent(accountName, "ORPHAN_STOP",',
-     '                        if (!hasPosition || !hasFsm)\n                        {\n                            LogEvent(accountName, "ORPHAN_STOP",'),
+     # P2-108 REPOINTED THIS ANCHOR. The finding is no longer logged inline -- it is recorded and
+     # emitted at the end of the pass through AuditFindingThrottle -- so the old find-string
+     # (`if (!hasPosition) { LogEvent(...ORPHAN_STOP...)`) stopped matching. REPOINTED, NOT
+     # RETIRED: the mutant still expresses exactly the same defect (a stop correctly covering a
+     # LIVE position reported as an orphan), it just attacks the condition rather than the log
+     # call. `check_anchors.py` caught this in the same commit that broke it.
+     '                        if (!hasPosition)\n                        {\n                            firedKeys.Add(orphanKey);',
+     '                        if (!hasPosition || !hasFsm)\n                        {\n                            firedKeys.Add(orphanKey);'),
 
     ("the coverage comparison is inverted to `covered > positionQty`. A partially covered\n"
      "     position -- P0-55's exact shape -- stops being reported, and a fully covered one\n"

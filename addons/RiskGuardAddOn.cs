@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.25.0";
+        public const string Version = "1.26.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -3116,6 +3116,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public long PositionQuantity;
         }
 
+        // P2-108. Survives across audit passes by design -- a per-pass instance would have no
+        // memory and the throttle would do nothing while every test of it passed.
+        private readonly AuditFindingThrottle _auditThrottle = new AuditFindingThrottle();
+
         private void RunGuardAudit()
         {
             var fsmSnapshot = new Dictionary<string, FsmAuditSnapshot>();
@@ -3134,6 +3138,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                     };
                 }
             }
+
+            // P2-108. Findings are collected across the whole pass and emitted at the end, through
+            // AuditFindingThrottle. Collected rather than logged inline because the throttle needs
+            // BOTH sets to work: which ACCOUNTS were examined, and what fired. A finding on an
+            // examined account that did not fire has resolved, and that is what clears its record
+            // -- with no timer involved.
+            var examinedAccounts = new List<string>();
+            var firedKeys = new List<string>();
+            var findingText = new Dictionary<string, string>();
+            var findingAccount = new Dictionary<string, string>();
+            var findingType = new Dictionary<string, string>();
 
             try
             {
@@ -3182,6 +3197,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                             workingStopsByInstrument[instrument] = 1;
                     }
 
+                    // ⚠️ RECORDED HERE, after this account's positions AND orders have been
+                    // enumerated without throwing. This is what lets a CLOSED position clear its
+                    // own record: there is no position left to iterate, so nothing key-scoped
+                    // would ever be marked resolved. Recording the account instead is the fix,
+                    // and it was found by driving the box, not by the suite.
+                    examinedAccounts.Add(accountName);
+
                     foreach (var posKv in positionsByInstrument)
                     {
                         string instrument = posKv.Key;
@@ -3195,8 +3217,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                         {
                             long gap = Math.Max(0, positionQty - covered);
                             string stateName = hasFsm ? fsm.State.ToString() : "MISSING";
-                            LogEvent(accountName, "NAKED_POSITION",
-                                $"{instrument}: position={positionQty}, fsmState={stateName}, covered={covered}, gap={gap}");
+                            // P2-108: the finding is RECORDED here and logged (or withheld) at
+                            // the end of the pass. Logging inline is what made this one line every
+                            // 10 seconds, forever, on a path DispatchActions never sees.
+                            string nakedKey = AuditFindingThrottle.KeyFor("NAKED_POSITION", accountName, instrument);
+                            firedKeys.Add(nakedKey);
+                            findingText[nakedKey] = $"{instrument}: position={positionQty}, fsmState={stateName}, covered={covered}, gap={gap}";
+                            findingAccount[nakedKey] = accountName;
+                            findingType[nakedKey] = "NAKED_POSITION";
                         }
                     }
 
@@ -3211,10 +3239,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // over a LIVE position is not an orphan whatever the FSM knows about it;
                         // the untracked-position case is already reported as NAKED_POSITION above,
                         // so keying this on !hasFsm double-reported it under a name that is wrong.
+                        string orphanKey = AuditFindingThrottle.KeyFor("ORPHAN_STOP", accountName, instrument);
                         if (!hasPosition)
                         {
-                            LogEvent(accountName, "ORPHAN_STOP",
-                                $"{instrument}: workingStopCount={stopKv.Value}, hasPosition={hasPosition}, hasFsm={hasFsm}");
+                            firedKeys.Add(orphanKey);
+                            findingText[orphanKey] = $"{instrument}: workingStopCount={stopKv.Value}, hasPosition={hasPosition}, hasFsm={hasFsm}";
+                            findingAccount[orphanKey] = accountName;
+                            findingType[orphanKey] = "ORPHAN_STOP";
                         }
                     }
 
@@ -3224,12 +3255,42 @@ namespace NinjaTrader.NinjaScript.AddOns
                             continue;
                         if (fsm.State != GuardFsmState.Protected)
                             continue;
+                        string divKey = AuditFindingThrottle.KeyFor("FSM_DIVERGENCE", accountName, fsm.Instrument);
                         if (!workingStopsByInstrument.ContainsKey(fsm.Instrument))
                         {
-                            LogEvent(accountName, "FSM_DIVERGENCE",
-                                $"{fsm.Instrument}: FSM claims Protected but no working stop order");
+                            firedKeys.Add(divKey);
+                            findingText[divKey] = $"{fsm.Instrument}: FSM claims Protected but no working stop order";
+                            findingAccount[divKey] = accountName;
+                            findingType[divKey] = "FSM_DIVERGENCE";
                         }
                     }
+                }
+
+                // P2-108. One decision point for all three findings.
+                //
+                // ⚠️ The budget is re-read from the MODE every pass and never cached: 1 while
+                // observing, 6 while acting. In `shadow` the guard's product IS the observation
+                // and it is complete after one line -- the 1 is the fix, not a tuning value.
+                int auditBudget = AuditFindingThrottle.BudgetFor(IsActingMode());
+                var admitted = _auditThrottle.Admit(examinedAccounts, firedKeys, auditBudget);
+                var admittedSet = new HashSet<string>(admitted, StringComparer.OrdinalIgnoreCase);
+
+                foreach (string key in admitted)
+                {
+                    LogEvent(findingAccount[key], findingType[key], findingText[key]);
+                }
+
+                // ⚠️ SUPPRESSION IS ANNOUNCED, EXACTLY ONCE. Silently withholding a true finding
+                // trades a screaming alarm for a silent one, which is the same defect inverted:
+                // the operator could not tell "resolved" from "still true and no longer mentioned".
+                foreach (string key in firedKeys)
+                {
+                    if (admittedSet.Contains(key)) continue;
+                    if (!_auditThrottle.FirstSuppression(key, auditBudget)) continue;
+                    LogEvent(findingAccount[key], "AUDIT_FINDING_SUPPRESSED",
+                        $"{findingType[key]} for {findingText[key]} is STILL TRUE and will stop " +
+                        $"being logged after {auditBudget} line(s) in {(IsActingMode() ? "live" : "observing")} " +
+                        "mode. It will report again the moment the condition resolves and recurs.");
                 }
             }
             catch (Exception ex)

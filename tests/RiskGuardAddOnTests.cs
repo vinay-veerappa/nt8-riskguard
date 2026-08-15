@@ -237,6 +237,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestStress_S9_RestartMidTrade();
             TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock();
             TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher();
+            TestP2_108_AFindingIsLoggedOnceWhileObserving();
+            TestP2_108_SuppressionIsAnnouncedExactlyOnce();
+            TestP2_108_TheRecordClearsOnTheCONDITIONNotATimer();
+            TestP2_108_AKeyNotEVALUATEDKeepsItsCount();
+            TestP2_108_TheKeyCarriesTheFindingTypeNotJustTheSubject();
+            TestP2_108_ArmingToLiveReAdmitsWhatShadowExhausted();
+            TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount();
+            TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne();
             TestP2_29_TheSourceGatesReadTheWholeAddonTree();
             TestP1_12_NoDiskWriteHappensUnderTheStateLock();
             TestP1_12_PositionChangeDefersThePersistToTheSweep();
@@ -15389,6 +15397,224 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// Without this, deleting the glob back to a single name would silently re-arm the exact
         /// vacuous-pass failure that produced the helper.
         /// </summary>
+        // ================================================================================
+        // P2-108. The audit's findings were LogEvents with no action behind them, so nothing
+        // bounded them. Measured live under Market Replay: NAKED_POSITION at 3/6/9/12 over
+        // 30/60/90/120s -- one per 10s, indefinitely -- with ACTION_SUPPRESSED 0 throughout,
+        // which is the proof that P2-107's DispatchActions never sees this path.
+        // ================================================================================
+
+        private static void TestP2_108_AFindingIsLoggedOnceWhileObserving()
+        {
+            Console.WriteLine("\n[TEST] P2-108: one line per finding in shadow, not one every 10 seconds");
+
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var key = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var accounts = new[] { "Playback101" };
+            var fired = new[] { key };
+
+            Assert(budget == 1,
+                "the observing budget is ONE -- in shadow the guard's product IS the observation, "
+                + "and it is complete after a single line. Not a tuning value");
+
+            Assert(t.Admit(accounts, fired, budget).Count == 1, "the first pass logs it");
+
+            int logged = 0;
+            for (int i = 0; i < 12; i++) logged += t.Admit(accounts, fired, budget).Count;
+            Assert(logged == 0, string.Format(
+                "and the next 12 passes -- the measured 120 seconds -- log NOTHING (got {0}). "
+                + "Before this, that was 12 more lines", logged));
+        }
+
+        private static void TestP2_108_SuppressionIsAnnouncedExactlyOnce()
+        {
+            Console.WriteLine("\n[TEST] P2-108: going quiet is itself reported, once");
+
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var key = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var one = new[] { key };
+            var acct = new[] { "Playback101" };
+
+            t.Admit(acct, one, budget);
+            Assert(!t.FirstSuppression(key, budget),
+                "nothing is announced while the finding is still being logged");
+
+            t.Admit(acct, one, budget);
+            Assert(t.FirstSuppression(key, budget),
+                "the pass that crosses the budget says so ONCE -- silently withholding a true "
+                + "finding trades a screaming alarm for a silent one, which is this defect inverted");
+
+            for (int i = 0; i < 5; i++)
+            {
+                t.Admit(acct, one, budget);
+                Assert(!t.FirstSuppression(key, budget), "and never again while it stays true");
+            }
+        }
+
+        private static void TestP2_108_TheRecordClearsOnTheCONDITIONNotATimer()
+        {
+            Console.WriteLine("\n[TEST] P2-108: attach a stop and the alarm re-arms immediately");
+
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var key = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var accounts = new[] { "Playback101" };
+
+            t.Admit(accounts, new[] { key }, budget);
+            Assert(t.Admit(accounts, new[] { key }, budget).Count == 0, "exhausted");
+
+            var none = new string[0];
+            t.Admit(accounts, none, budget);
+            Assert(t.TrackedCount == 0,
+                "the record is GONE once the condition resolves -- not aged out, not expired on a "
+                + "timer. A time-based expiry re-admits while the finding is still TRUE, which is "
+                + "the same defect on a slower clock (P2-101)");
+
+            Assert(t.Admit(accounts, new[] { key }, budget).Count == 1,
+                "so the NEXT naked position on that instrument reports immediately. A throttle "
+                + "that stays latched after the condition clears is a muted alarm");
+        }
+
+        private static void TestP2_108_AKeyNotEVALUATEDKeepsItsCount()
+        {
+            Console.WriteLine("\n[TEST] P2-108: not looking is not the same as finding nothing");
+
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var key = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var one = new[] { key };
+            var acct = new[] { "Playback101" };
+
+            t.Admit(acct, one, budget);
+            Assert(t.Admit(acct, one, budget).Count == 0, "exhausted");
+
+            // A pass that examined NO accounts -- a disconnected provider, a connection blip.
+            t.Admit(new string[0], new string[0], budget);
+            Assert(t.TrackedCount == 1,
+                "a key whose ACCOUNT was not examined keeps its count. Clearing on absence would "
+                + "let a connection blip re-admit the entire backlog, which is the defect "
+                + "returning through the door marked recovery");
+
+            // ⚠️ BUT AN EXAMINED ACCOUNT WITH NOTHING WRONG DOES CLEAR IT, and this is the case
+            // that was missing. The original design cleared on EVALUATED KEYS, which the audit
+            // only builds from OPEN positions -- so a position CLOSING, the commonest way a naked
+            // position resolves, left the record forever and muted the alarm permanently. Eight
+            // tests and 8/8 mutants passed; the deployed box caught it.
+            t.Admit(new[] { "Playback101" }, new string[0], budget);
+            Assert(t.TrackedCount == 0,
+                "examining the account and finding nothing DOES clear it -- including when the "
+                + "position closed and there is no longer any key to evaluate");
+        }
+
+        private static void TestP2_108_TheKeyCarriesTheFindingTypeNotJustTheSubject()
+        {
+            Console.WriteLine("\n[TEST] P2-108: one finding resolving must not clear another's record");
+
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var naked = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var orphan = AuditFindingThrottle.KeyFor("ORPHAN_STOP", "Playback101", "MNQ SEP26");
+
+            Assert(naked != orphan,
+                "two findings about the SAME account and instrument are different keys");
+
+            var both = new[] { naked, orphan };
+            var acctList = new[] { "Playback101" };
+            t.Admit(acctList, both, budget);
+            Assert(t.Admit(acctList, both, budget).Count == 0, "both exhausted");
+
+            t.Admit(acctList, new[] { orphan }, budget);
+            Assert(t.Admit(acctList, new[] { orphan }, budget).Count == 0,
+                "ORPHAN_STOP stays suppressed. If the key were account+instrument only, the naked "
+                + "position resolving would clear it and the throttle would do NOTHING -- while "
+                + "every single-finding test above still passed (P2-107's producer-scope lesson)");
+            Assert(t.Admit(acctList, new[] { naked }, budget).Count == 1,
+                "and NAKED_POSITION, having resolved and recurred, reports again");
+        }
+
+        private static void TestP2_108_ArmingToLiveReAdmitsWhatShadowExhausted()
+        {
+            Console.WriteLine("\n[TEST] P2-108: the budget is re-read from the mode, never cached");
+
+            Assert(AuditFindingThrottle.BudgetFor(true) == 6, "acting allows 6");
+            Assert(AuditFindingThrottle.BudgetFor(false) == 1, "observing allows 1");
+            Assert(AuditFindingThrottle.BudgetFor(true) > AuditFindingThrottle.BudgetFor(false),
+                "and acting is strictly more, because a finding that persists while the guard is "
+                + "trying to remediate means remediation is FAILING, which is worth repeating");
+
+            var t = new AuditFindingThrottle();
+            var key = AuditFindingThrottle.KeyFor("NAKED_POSITION", "Playback101", "MNQ SEP26");
+            var one = new[] { key };
+            var acct = new[] { "Playback101" };
+
+            t.Admit(acct, one, AuditFindingThrottle.BudgetFor(false));
+            Assert(t.Admit(acct, one, AuditFindingThrottle.BudgetFor(false)).Count == 0,
+                "shadow exhausts after one");
+
+            Assert(t.Admit(acct, one, AuditFindingThrottle.BudgetFor(true)).Count == 1,
+                "arming to live re-admits a key shadow had exhausted -- the budget is a property "
+                + "of the CURRENT mode, not of the record");
+        }
+
+        private static void TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount()
+        {
+            Console.WriteLine("\n[TEST] P2-108: THE NEGATIVE HALF -- nothing is logged when nothing is wrong");
+
+            // A throttle that admits everything passes every positive test above: each one
+            // asserts that the FIRST pass logs. Only this can tell the difference. Same reason
+            // P3-30's audit shipped firing on correctly protected accounts behind three green
+            // positive-only acceptance tests.
+            var t = new AuditFindingThrottle();
+            int budget = AuditFindingThrottle.BudgetFor(false);
+            var accounts = new[] { "Playback101", "Sim101" };
+
+            for (int i = 0; i < 20; i++)
+            {
+                var admitted = t.Admit(accounts, new string[0], budget);
+                Assert(admitted.Count == 0, i == 0
+                    ? "a healthy pass logs nothing at all"
+                    : "and stays silent across 20 passes");
+            }
+            Assert(t.TrackedCount == 0, "and keeps no records for findings that never fired");
+        }
+
+        private static void TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne()
+        {
+            Console.WriteLine("\n[TEST] P2-108: the CLASS -- all three findings, not the one that was measured");
+
+            // The ticket names NAKED_POSITION. The audit emits three findings from the same loop
+            // on the same timer, all unbounded. Fixing only the measured one leaves two identical
+            // defects one foreach apart, which is how P1-90 reached eight sites.
+            // AllAddonCode(), not a named file: P2-29 measured a source gate passing vacuously
+            // because a refactor moved the code it named to the file next door.
+            string code = AllAddonCode();
+            string quote = "\"";
+
+            foreach (var finding in new[] { "NAKED_POSITION", "ORPHAN_STOP", "FSM_DIVERGENCE" })
+            {
+                Assert(code.Contains("AuditFindingThrottle.KeyFor(" + quote + finding + quote),
+                    string.Format("{0} goes through the throttle", finding));
+            }
+
+            var auditBody = System.Text.RegularExpressions.Regex.Match(code,
+                @"private void RunGuardAudit\(\)(.*?)\n        \}",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            Assert(auditBody.Success, "the audit is locatable");
+            if (auditBody.Success)
+            {
+                foreach (var finding in new[] { "NAKED_POSITION", "ORPHAN_STOP", "FSM_DIVERGENCE" })
+                {
+                    Assert(!auditBody.Groups[1].Value.Contains(
+                            "LogEvent(accountName, " + quote + finding + quote),
+                        string.Format(
+                            "{0} is NOT logged inline -- logging inside the loop is what made this "
+                            + "one line every 10 seconds", finding));
+                }
+            }
+        }
+
         private static void TestP2_29_TheSourceGatesReadTheWholeAddonTree()
         {
             Console.WriteLine("\n[TEST] P2-29: source gates inspect the addon TREE, not one named file");

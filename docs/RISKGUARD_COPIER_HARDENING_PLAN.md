@@ -3054,7 +3054,80 @@ already solved its own half.
 
 ---
 
-### P2-108. `NAKED_POSITION` repeats every 10 seconds on a path `P2-107` does not cover, because it is a LOG and not an action — OPEN, found live 2026-08-14
+### P2-108. `NAKED_POSITION` repeats every 10 seconds on a path `P2-107` does not cover, because it is a LOG and not an action — ✅ CLOSED 2026-08-15 (session 42), reproduced AND fixed AND re-validated under Market Replay
+
+**Reproduced with the number it was filed with**, a session later, on a different account. Position
+with no stop on `Playback101`, guard in `shadow`, sampled every 30s:
+
+| t | NAKED_POSITION | ACTION_SUPPRESSED |
+|---|---|---|
+| +30s | 3 | 0 |
+| +60s | 6 | 0 |
+| +90s | 9 | 0 |
+| +120s | **12** | **0** |
+
+⚠️ **`ACTION_SUPPRESSED = 0` is the load-bearing measurement.** It proves `P2-107`'s
+`GuardActionDeduplicator` never sees this path rather than assuming it: these are `LogEvent` calls
+with no action behind them, and `DispatchActions` cannot reach them.
+
+⚠️ **THE CLASS IS BIGGER THAN THE TICKET.** The audit emits **three** findings from one loop on one
+timer — `NAKED_POSITION`, `ORPHAN_STOP`, `FSM_DIVERGENCE` — all unbounded. Fixing only the measured
+one would have left two identical defects one `foreach` apart. All three now route through
+`AuditFindingThrottle`, and a source gate keeps them there.
+
+**After the fix, the identical 120-second test:**
+
+| | before | after |
+|---|---|---|
+| `NAKED_POSITION` | **12** | **1** |
+| `AUDIT_FINDING_SUPPRESSED` | 0 | **1** |
+
+⚠️ **AND THE RE-ARM IS THE HALF THAT MATTERS.** Fires once → announces going quiet once → silent →
+**position closed → record cleared → new naked position fires again**. Without that last leg the
+"fix" is just a permanently muted alarm, which is the defect inverted rather than cured.
+
+### ⚠️ THE SUITE COULD NOT SEE THE DEFECT IN THE FIX. THE BOX COULD.
+
+The throttle first cleared records keyed on **evaluated findings**. The audit builds those keys by
+iterating an account's **open positions** — so when a naked position resolves the way it resolves
+almost every time, *the position closes*, there is no position left to iterate, the key is never
+evaluated, and **the record lives forever**. The alarm mutes itself permanently on the commonest
+recovery path.
+
+**Eight unit tests and 8/8 mutants passed under it** — including one that specifically asserted
+"a key that was not evaluated keeps its count", which is correct for a disconnected account and
+exactly backwards for a closed position. Nothing in the suite ever closed a position. It was found
+by closing and re-opening one on the deployed box and watching `NAKED_POSITION` fail to return.
+
+**The correction is scope**: clearing is keyed on the **ACCOUNT the audit examined**, not on the
+individual finding. That keeps what the key scope was reaching for — a pass that examined no
+accounts clears nothing, so a connection blip cannot re-admit the backlog — while making a closed
+position resolve properly. Mutant 9 is that defect, and it exists because the box found it.
+
+**Four things in the design, three of them `P2-101`/`P2-107` restated because those tickets paid
+for them:** the record clears on the **CONDITION**, never on a timer; the budget is **re-read from
+the mode every pass** (**1** observing, 6 acting — and *the 1 is the fix, not a tuning value*,
+because in shadow the product IS the observation); the key carries the **finding type** so one
+finding resolving cannot clear another's record; and **suppression is announced exactly once**, so
+the operator can tell "resolved" from "still true and no longer mentioned".
+
+**Evidence**: suite **1487 → 1541/0**; `mutate_p2108.py` **9/9**; anchors **315/0**; **30**
+batteries wired; `nt_compile` **0 errors**; `sync_nt8 --verify` **ALL IN SYNC (11 files)**.
+⚠️ `mutate_p330`'s ORPHAN_STOP anchor was **repointed, not retired** — `check_anchors.py` caught it
+in the same commit that broke it.
+
+⚠️ **The battery crashed printing its own output** (`⚠️` to a cp1252 console) **between applying a
+mutant and restoring it, leaving a LIVE MUTANT in the tree** that `git diff` did not show because
+the file was still untracked. `check_batteries_pin_encoding.py` pins the *subprocess* encoding;
+this was the battery's own `stdout`. Fixed with `sys.stdout.reconfigure`. **Re-run the suite after
+any battery that does not reach its restore line.**
+
+---
+
+<details>
+<summary>The entry as originally filed, 2026-08-14</summary>
+
+### P2-108 (as filed). `NAKED_POSITION` repeats every 10 seconds
 
 **Where**: the guard audit (`P3-30`'s detector), which calls `LogEvent` directly rather than
 raising a `GuardAction`. `DispatchActions` therefore never sees it.
@@ -3081,6 +3154,8 @@ it must not be a third mechanism**: that is the mistake `P2-107` exists to stop 
 ⚠️ Note the shape of the discovery: it was found by **driving the deployed box**, in the validation
 run of the fix for its own predecessor — exactly as `P2-107` was found in `P2-101`'s. Third time in
 three sessions that the validation run produced the next defect.
+
+</details>
 
 ---
 
