@@ -10720,7 +10720,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Close trade 1
             state.UpdatePosition(account, mnq, MarketPosition.Flat, 0, 0, 0, config);
             Assert(state.TradesToday == 1, "TradesToday stays 1 after close.");
-            System.Threading.Thread.Sleep(1050);
+
+            // ⚠️ THIS USED TO Thread.Sleep(1050) TO OUTLAST A 1000ms DEBOUNCE. Driving the clock
+            // asserts the boundary rather than waiting past it, and removes a race with a loaded
+            // CI runner. The debounce exists so a multi-contract or split fill counts as ONE
+            // trade; re-entering after it has elapsed must count as a second.
+            var clock = DateTime.UtcNow;
+            state.UtcNow = () => clock;
+
+            // NEGATIVE CONTROL the sleeping version could not express: strictly INSIDE the
+            // debounce window, a re-entry must NOT count. Without it, "counts a second trade"
+            // passes for a debounce that never suppresses anything -- which is the split-fill
+            // over-count the debounce was added to stop.
+            clock = clock.AddMilliseconds(900);
+            state.UpdatePosition(account, mnq, MarketPosition.Long, 2, 18050, 0, config);
+            Assert(state.TradesToday == 1,
+                "at 900ms the re-entry is still the SAME trade lifecycle -- the debounce holds");
+            state.UpdatePosition(account, mnq, MarketPosition.Flat, 0, 0, 0, config);
+
+            clock = clock.AddMilliseconds(1050);
 
             // Trade 2: enter Long again
             state.UpdatePosition(account, mnq, MarketPosition.Long, 2, 18100, 0, config);
@@ -22794,12 +22812,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Console.WriteLine("\n[TEST] P3-31: a stale ledger entry (never settled) is cleared after a timeout");
 
+            // ⚠️ THIS USED TO Thread.Sleep(2200) AGAINST A 2-SECOND TIMEOUT, and the clock is
+            // injected now for two reasons, in this order:
+            //
+            //  1. EVIDENCE. "after 2.2 real seconds, something had expired" cannot test the
+            //     BOUNDARY, needs padding precisely because it is racing a loaded runner, and
+            //     is flaky by construction. A driven clock asserts the three cases that matter.
+            //  2. SPEED. This sleep and one other were 3.25s of a 6.4s suite, and CI runs the
+            //     suite ~660 times -- once per mutant -- so they were ~36 minutes of every
+            //     full mutation run.
+            var clock = new DateTime(2026, 8, 15, 12, 0, 0, DateTimeKind.Utc);
             var ledger = new InFlightLedger(timeoutSeconds: 2);
+            ledger.UtcNow = () => clock;
+
             ledger.Register("F1", "MNQ 03-26", "COPIER_STOP");
             Assert(ledger.Count == 1, "one entry after Register");
 
-            // Wait past the timeout
-            System.Threading.Thread.Sleep(2200);
+            // NEGATIVE CONTROL, which the sleeping version could not express: strictly BEFORE
+            // the timeout the entry must survive. Without it, "expires" passes for a ledger
+            // that purges everything on sight -- and a ledger that forgets an in-flight submit
+            // immediately is how the duplicate leg P3-31 exists to prevent comes back.
+            clock = clock.AddMilliseconds(1999);
+            ledger.PurgeExpired();
+            Assert(ledger.Count == 1, "at 1.999s the entry SURVIVES -- it is still in flight");
+
+            clock = clock.AddMilliseconds(201);   // 2.2s total, the old sleep's margin
             ledger.PurgeExpired();
             Assert(ledger.Count == 0, "zero entries after timeout -- a crashed submit must not permanently suppress Create");
         }

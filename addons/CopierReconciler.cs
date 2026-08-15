@@ -165,6 +165,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Dictionary<string, DateTime> _entries
             = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// ⚠️ THE CLOCK IS INJECTABLE, and the reason is evidence before speed. The expiry test
+        /// used to `Thread.Sleep(2200)` against a 2-second timeout, which asserts "after 2.2 real
+        /// seconds, something had expired". That is a weaker claim than it looks: it cannot test
+        /// the BOUNDARY (does 1.999s expire? does exactly 2.0?), it is inherently flaky on a
+        /// loaded runner, and the margin has to be padded for exactly that reason.
+        ///
+        /// The speed is the second benefit, and it is not small: that sleep plus one other cost
+        /// 3.25s of a 6.4s suite, and CI pays the suite ~660 times -- once per mutant -- so two
+        /// sleeps were roughly 36 minutes of every full mutation run.
+        ///
+        /// Defaults to the real clock, so production behaviour is unchanged and no caller had to
+        /// be touched.
+        /// </summary>
+        internal Func<DateTime> UtcNow = () => DateTime.UtcNow;
+
         internal InFlightLedger(int timeoutSeconds = 30)
         {
             _timeoutSeconds = timeoutSeconds;
@@ -183,7 +199,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (string.IsNullOrEmpty(accountName) || string.IsNullOrEmpty(legName)) return;
             lock (_lock)
             {
-                _entries[Key(accountName, instrumentFullName, legName)] = DateTime.UtcNow;
+                _entries[Key(accountName, instrumentFullName, legName)] = UtcNow();
             }
         }
 
@@ -209,7 +225,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (_entries.TryGetValue(Key(accountName, instrumentFullName, legName), out var ts))
                 {
-                    if (_timeoutSeconds <= 0 || (DateTime.UtcNow - ts).TotalSeconds < _timeoutSeconds)
+                    if (_timeoutSeconds <= 0 || (UtcNow() - ts).TotalSeconds < _timeoutSeconds)
                         return true;
                     _entries.Remove(Key(accountName, instrumentFullName, legName));
                 }
@@ -220,7 +236,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal void PurgeExpired()
         {
             if (_timeoutSeconds <= 0) return;
-            var now = DateTime.UtcNow;
+            var now = UtcNow();
             lock (_lock)
             {
                 var expired = new List<string>();

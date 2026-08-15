@@ -148,6 +148,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Session and Overtrading
         public DateTime LastSessionDate { get; set; } = DateTime.MinValue;
         public int TradesToday { get; set; } = 0;
+
+        /// <summary>
+        /// ⚠️ INJECTABLE CLOCK, AND ALL FOUR READS IN THIS CLASS GO THROUGH IT. Routing only the
+        /// one a test needed would give AccountState TWO clocks -- a fake one for the debounce
+        /// and the real one for the cooldown and the transition stamps -- and "a second reader of
+        /// the same state that nobody compared" is the single most repeated defect shape in this
+        /// repo (P1-100, P2-98/P1-99, P1-105). A half-injected clock is that shape by construction.
+        ///
+        /// Added because the trade-count test slept 1050ms to clear a 1000ms debounce. Driving the
+        /// clock lets it assert the BOUNDARY instead of outlasting it, and CI runs this suite once
+        /// per mutant (~660 times per full run), so the sleep was minutes of every run.
+        ///
+        /// Defaults to the real clock: production behaviour is unchanged and no caller moved.
+        /// </summary>
+        internal Func<DateTime> UtcNow = () => DateTime.UtcNow;
         public int ConsecutiveLosses { get; set; } = 0;
         public DateTime CooldownUntil { get; set; } = DateTime.MinValue;
         public double LastRealizedPnL { get; set; } = 0.0; // To track delta for consec losses
@@ -229,7 +244,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 && ConsecutiveLosses >= config.Overtrading.MaxConsecutiveLosses
                 && config.Overtrading.CooldownMinutes > 0)
             {
-                CooldownUntil = DateTime.UtcNow.AddMinutes(config.Overtrading.CooldownMinutes);
+                CooldownUntil = UtcNow().AddMinutes(config.Overtrading.CooldownMinutes);
             }
         }
 
@@ -265,7 +280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Treat a flip as a close of the old trade followed by a new entry.
             if ((position == MarketPosition.Flat && wasNonFlat) || isFlip)
             {
-                pState.LastFlatTransition = DateTime.UtcNow;
+                pState.LastFlatTransition = UtcNow();
                 stateChanged = true;
 
                 // P1-16: the trade is over -- judge it once, on its net realized result.
@@ -285,7 +300,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // --- OPEN side: a new entry begins (flat->nonflat, or the new leg of a flip) ---
             if ((isNonFlat && !wasNonFlat) || isFlip)
             {
-                pState.LastNonFlatTransition = DateTime.UtcNow;
+                pState.LastNonFlatTransition = UtcNow();
 
                 // A flip closes the old position and opens a new opposite leg in one
                 // update. Reset the per-open-position peak-giveback tracking so the
@@ -301,7 +316,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // Only increment TradesToday if this is a genuine new trade lifecycle
                 // (either a flip, or position was flat for > 1000ms, or initial entry).
                 bool isGenuineNewTrade = isFlip || pState.LastFlatTransition == DateTime.MinValue ||
-                                         (DateTime.UtcNow - pState.LastFlatTransition).TotalMilliseconds > 1000;
+                                         (UtcNow() - pState.LastFlatTransition).TotalMilliseconds > 1000;
 
                 if (isGenuineNewTrade)
                 {
