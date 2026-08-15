@@ -8736,7 +8736,7 @@ re-validates `P1-105` on a genuinely FILLED position for the first time.
 ### Order from here
 
 1. **`P2-108`** — reproduced with a measured before; fix it and re-drive the same 120s sample.
-   Per `P2-101`: bound it by an attempt COUNT the alarm also reads, clear on the CONDITION not a
+   Per `P2-101` (closed): bound it by an attempt COUNT the alarm also reads, clear on the CONDITION not a
    timer, and **1 outside an acting mode is the fix, not a tuning value**.
 2. **`P2-112`** (⚠️ its fix touches `Account.Change()`), **`P3-110`**.
 3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
