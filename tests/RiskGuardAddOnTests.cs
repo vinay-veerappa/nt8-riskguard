@@ -265,6 +265,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows();
             TestP2_112_WithNoDispatcherTheSweepStillRuns();
             TestP2_112_WhenThereIsADispatcherTheSweepIsNotAlsoRunInline();
+            TestP2_112_TheProductionMarshalReportsFailureWhenThereIsNoDispatcher();
             TestP2_112_TheNoDispatcherFallbackIsAnnouncedOnce();
             TestP2_78_TheDeadPerInstrumentFieldsAreGone();
             TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
@@ -7405,6 +7406,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 | System.Reflection.BindingFlags.NonPublic);
         }
 
+        /// <summary>
+        /// Clears the process-wide "already announced" flag. It is STATIC in production because the
+        /// condition is process-wide -- there is one WPF application object, not one per manager --
+        /// so an earlier test in the same run consumes the single announcement. Resetting by
+        /// reflection keeps that out of the production type: a `#if TESTING` reset hook would be a
+        /// second entry point production never takes, which is the arrangement that hid P2-112.
+        /// </summary>
+        private static void P2112ResetAnnouncement()
+        {
+            var f = typeof(DynamicAtmManager).GetField("_noDispatcherAnnounced",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            Assert(f != null,
+                "the once-per-session flag is STATIC, so the announcement really is once per "
+                + "PROCESS rather than once per manager -- the log line claims 'once per session' "
+                + "and an instance field would make that true only by leaning on the Lazy<> "
+                + "singleton, an invariant enforced somewhere else");
+            if (f != null) f.SetValue(null, 0);
+        }
+
         /// <summary>Drives the REAL private MonitorTick the Timer calls, not MonitorTickCore.</summary>
         private static void P2112DriveMonitorTick(DynamicAtmManager atm)
         {
@@ -7484,6 +7504,53 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         /// <summary>
+        /// A SOURCE gate, and it is labelled one because it proves less than the three tests above.
+        ///
+        /// It exists because shrinking the `#if` reduced P2-27's residue here but did not remove it:
+        /// TryMarshal's production body lives behind `#else`, so no test build compiles those four
+        /// lines and NO TEST CAN EVER REACH THEM. The mutation battery measured exactly that -- a
+        /// mutant flipping the null branch to `return true` (the caller then believes the work is on
+        /// the UI thread and skips it, which is P2-112 restored one level down) survived every one
+        /// of 1722 tests, and it survived because it is unkillable by construction rather than
+        /// because a test is missing. Read what a mutant DOES before calling it a coverage gap.
+        ///
+        /// So the evidence for those four lines is this gate, `nt_compile`, and the live drive --
+        /// and saying which is which is the point. This is a PRESENCE gate, which fails loudly when
+        /// pointed at the wrong text; the absence half of the same concern is TestP1_13_..., which
+        /// reads the whole tree because absence gates pass silently when they look nowhere.
+        /// </summary>
+        private static void TestP2_112_TheProductionMarshalReportsFailureWhenThereIsNoDispatcher()
+        {
+            Console.WriteLine("\n[TEST] P2-112: the #else TryMarshal body reports FAILURE when there is no dispatcher (source gate)");
+
+            var dir = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(AddonSourcePath()), "DynamicAtmManager.cs"));
+            Assert(File.Exists(dir), "DynamicAtmManager.cs is readable at " + dir);
+            var raw = File.ReadAllText(dir);
+
+            // Comments are stripped, or the prose above the seam explaining `return false` would
+            // satisfy this gate by describing it. A gate that its own documentation can pass is
+            // not a gate.
+            var code = System.Text.RegularExpressions.Regex.Replace(raw, @"//[^\r\n]*", "");
+            code = System.Text.RegularExpressions.Regex.Replace(code, @"/\*.*?\*/", "",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            Assert(code.Contains("if (dispatcher == null) return false;"),
+                "the production TryMarshal reports FAILURE when Application.Current has no "
+                + "Dispatcher, so MonitorTick runs the sweep itself. Returning true here would move "
+                + "P2-112's fail-open into a return VALUE, where the shape TestP1_13_... bans -- a "
+                + "bare early return -- no longer appears and the gate cannot see it.");
+
+            Assert(!code.Contains("if (dispatcher == null) return true;"),
+                "and it does not report success on the path where there is nothing to marshal to");
+
+            // Positive control: the file really does contain the seam this gate is about, so a
+            // rename cannot make both assertions above vacuously satisfiable by an empty search.
+            Assert(code.Contains("TryMarshal"),
+                "positive control: the searched text actually contains the TryMarshal seam");
+        }
+
+        /// <summary>
         /// P2-108's lesson at a new site. The fallback is worth announcing exactly once; announcing
         /// it every 5 seconds forever is an alarm that is always on, which is off.
         /// </summary>
@@ -7508,11 +7575,25 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             seam.SetValue(atm, new Func<Action, bool>(_ => false));
 
+            // An earlier P2-112 test already took the fallback path and consumed the single
+            // process-wide announcement. Without this reset the count below is 0 and the test
+            // passes for a reason that has nothing to do with the mechanism it is about.
+            P2112ResetAnnouncement();
+
             var events = new List<string>();
+            var second = new DynamicAtmManager();
+            seam.SetValue(second, new Func<Action, bool>(_ => false));
+
             RiskGuardAddOn.LogEventObserver = (a, evt) => events.Add(evt);
             try
             {
                 for (int i = 0; i < 5; i++) P2112DriveMonitorTick(atm);
+
+                // A SECOND manager. The message says "once per session", and the condition is
+                // process-wide -- there is one WPF application object, not one per manager. With an
+                // instance-scoped flag this line announces again and the message is a lie, which is
+                // the finding the review panel got right (the other two it upheld were wrong).
+                P2112DriveMonitorTick(second);
             }
             finally
             {
@@ -7522,8 +7603,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             int announced = events.Count(e => e == "ATM_MONITOR_NO_DISPATCHER");
             Assert(announced == 1,
-                "the no-dispatcher fallback is announced exactly once across 5 sweeps (got "
-                + announced + "). Silence is the defect; a line every 5 seconds forever is P2-108.");
+                "the no-dispatcher fallback is announced exactly once across 5 sweeps AND a second "
+                + "manager (got " + announced + "). Silence is the defect that started this; a line "
+                + "every 5 seconds forever is P2-108, and one per manager makes 'once per session' "
+                + "a claim the code does not keep.");
         }
 
         // ------------------------------------------------------------------

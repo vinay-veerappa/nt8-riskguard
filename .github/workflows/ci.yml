@@ -390,6 +390,17 @@ jobs:
           # the only one of the four failures that looks like a success at every other surface.
           - { label: P2-113, battery: mutate_p2113.py }
 
+          # P2-112, ~215s. The 5-second ATM sweep that moves breakeven stops returned early forever
+          # when Application.Current had no Dispatcher -- P1-13's fail-open at a subsystem P1-13
+          # never inspected, found only when P2-29 widened that gate to the whole addon tree.
+          # Mutants sit on three axes: do the work, do it ONCE, and say so ONCE. Mutant 2 is the one
+          # to know and it changes no production behaviour at all -- it puts the control flow back
+          # behind `#if TESTING`, which is how this survived: the branch holding the defect existed
+          # in NO test build, so the ten ATM tests drove a body the shipped assembly does not
+          # contain. Mutant 7 is the review panel's one correct finding of three. Mutant 9 is a
+          # DECLARED survivor: it rewrites the `#else` body, which no test build compiles.
+          - { label: P2-112, battery: mutate_p2112.py }
+
           # P1-83, 176s. Config that is stored, settable, and read by nothing. The gate is a class
           # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
           # excluding the declaration, `X = something.X` clone/serialize lines, and the field-name

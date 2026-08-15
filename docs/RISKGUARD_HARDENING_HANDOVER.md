@@ -9078,8 +9078,7 @@ Suite **1697 → 1705/0**. 31 batteries, both encoding halves pinned, anchors **
 
 ### Order from here
 
-1. **`P2-112`** — ⚠️ its fix touches `Account.Change()`, so it wants a live market (§5.55). Market
-   Replay (§5.56) now supplies one, so this is no longer blocked on the clock.
+1. ✅ **`P2-112` closed in session 44** — see §5.64.
 2. **`P3-110`** (narrowed — §5.51).
 3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
 
@@ -9091,3 +9090,93 @@ it would not see it either.
 
 ⚠️ **Provider31 is still disconnected** from the replay session. Reconnect and **re-verify guard
 arming** before treating any funded-account reading as meaningful.
+
+---
+
+## 5.64 `P2-112` closed — and the thing that made it survive was never the logic
+
+**Session 44, v1.29.0.** The 5-second ATM sweep that moves breakeven stops returned early forever
+when `Application.Current` had no `Dispatcher`. `P1-13`'s fail-open verbatim, at a subsystem `P1-13`
+never inspected, found only when `P2-29` widened that gate from one file to the addon tree.
+
+**The fix is four lines of control flow. The reason it lasted is one preprocessor directive.** The
+entire dispatch decision sat behind `#if TESTING`, so the ten existing ATM tests drove
+`MonitorTickCore()` — a body the shipped assembly does not contain — and **the branch holding the
+defect existed in no test build at all.** So the `#if` was shrunk to wrap only the WPF lookup
+(`TryMarshal`, a `Func<Action, bool>`); the control flow now compiles into both builds and the tests
+drive both branches through that seam, by **reflection into the real private `MonitorTick`** rather
+than through a new `#if TESTING` hook. A hook would have been a second door production never takes,
+which is the arrangement that hid this.
+
+⚠️ **The entry's own suggested remedy was not implementable, and reading the code is what showed it.**
+It said *"marshal only the `Account.Change()`"*. `Application.Current == null` means there is no WPF
+application object and therefore **no UI thread anywhere in the process** — there is nothing to
+marshal to. The choice is between running the sweep on the timer thread and not running it. It is
+also safe in the way that matters: the race worth fearing is with a UI-thread broker call, and this
+path only executes when no UI thread exists.
+
+### The agent loop: `MAX_ROUNDS_EXHAUSTED`, and that was the right answer
+
+Round 2 passed **every** gate — static, compile, `1720/0` with all four acceptance tests green,
+lock-scope — and the panel returned `REVISE` on `deepseek-v4-flash=REJECT(4)`. Rounds 3 and 4 acted
+on it and got **worse**: round 3 reverted the whole region and regressed 3 tests; round 4 failed
+static. The harness exported round 2 as *"the last candidate that passed every gate"*. **That is the
+tool working. `NOT_CONVERGING` / `MAX_ROUNDS_EXHAUSTED` means arbitrate by hand, not that the patch
+is bad.**
+
+**Of the arbiter's three upheld findings, exactly one was real — and I had missed it.**
+
+| # | ruling | actually |
+|---|---|---|
+| 1 | tests never drive the production dispatcher branch | **wrong** — the tests *assign* `TryMarshal`, so `_ => false` is only a default. Read the addon, not the test file |
+| 2 | fallback runs broker calls on a timer thread; *"fail safe (disable the monitor) or marshal to a safe thread"* | **wrong, and it recommends the defect** — "disable the monitor" **is** `return;`. Also self-contradictory: the race it describes needs a UI thread this path exists because there isn't one |
+| 3 | the once-per-session flag is instance-scoped | ✅ **right** |
+
+⚠️ **Finding 3 is worth carrying.** The flag guards a message that says *"once per session"*, and
+instance scope made that true only by leaning on the `Lazy<>` singleton three hundred lines up — an
+invariant enforced somewhere else, which is how **a log line starts describing something it did not
+observe**. Now `static`, and **driven negative before being believed**: with an instance field the
+second manager announces again and the test reports `got 2`.
+
+### The battery caught its author, for the third recorded time
+
+A mutant flipping `TryMarshal`'s null branch to `return true` — the caller then believes the work is
+on the UI thread and skips it, `P2-112` restored one level down — **survived all 1722 tests**. Not a
+coverage gap: it lives behind `#else`, which no test build compiles, so it is **unkillable by
+construction**. **Read what a mutant DOES before calling it a missing test** (`P1-99`, then
+`P3-111`, now this). Covered by a **labelled** source gate plus `nt_compile`, and the label is the
+point — those four lines can never be executed by any test, and a source gate proves less. It
+strips comments before searching, because the prose above the seam explains `return false` and **a
+gate its own documentation can satisfy is not a gate**.
+
+⚠️ `tools/check_expected_survivors.py` **fired on the battery's first draft**: I hand-rolled the
+expected-survivor bookkeeping rather than calling `_battery.finish(survivors, MUTANTS)`. A second
+implementation of a verdict is a second thing to drift, and the gate exists because that already
+happened once.
+
+### ⚠️ The live half was NOT completed, and the reason is a new defect
+
+The entry required an ATM breakeven move re-driven live. **It could not be**, and the blocker is
+`P2-115`, filed the same hour: **the market data feed is down.** Measured on a Friday with futures
+open — `MNQ 09-26` and `NQ 09-26` frozen at `2026-08-07T01:45` with `volume: 0`, `ES 09-26` never
+subscribed. A breakeven trigger needs price to *move*. **Say which half was measured** (`P1-106`'s
+rule): the suite, the battery, the gates, the compile and the deploy are all green and verified; the
+breakeven trigger under a moving market is **deferred and named**.
+
+### 🆕 `P2-115` — `feedConnected` is `Account.All.Count > 0`
+
+Found while answering *"does Provider31 need market data or just a broker connection?"*. The health
+endpoint's `feedConnected` is `accountCount > 0` (`nt8-mcp-bridge/addons/McpBridgeAddOn.cs:447`) — a
+running NT8 always has Simulator accounts, so **the field has exactly one reachable value**. It is
+not a weak measurement of the feed; it is not a measurement of the feed.
+
+⚠️ **It misled the agent investigating it, in writing, within five minutes.** I read
+`feedConnected: true` beside 90 accounts at `cashValue: 0` and stated that market data was connected
+and only the account half was missing. The code half of that answer was right and independently
+sourced; the observational half came from this field and was wrong. **That is the consequence
+argument** — it is the field consulted precisely when someone is about to trust a price.
+
+**And the answer to the original question, which the code settles independently**: a **broker
+connection** is what is needed. The guard's entire input is broker-pushed account items —
+`CashValue`, `RealizedProfitLoss` (`RiskGuardAddOn.cs:210`, `:776`, `:5239`). Market data enters
+only via `UnrealizedProfitLoss`, and only while a position is open.

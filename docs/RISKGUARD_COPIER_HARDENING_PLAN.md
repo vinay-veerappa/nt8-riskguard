@@ -1739,6 +1739,72 @@ to kill it — killing it is what causes this.
 
 ---
 
+### P2-115. `nt_health`'s `feedConnected` is `Account.All.Count > 0` — a market-data flag that can never be false — OPEN, found 2026-08-15 while answering a question about what a broker reconnection would buy
+
+**Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs:447`
+
+```csharp
+accountCount = Account.All != null ? Account.All.Count : 0;
+connectedToFeed = accountCount > 0;
+```
+
+**The field has exactly ONE reachable value.** A running NT8 always reports at least the Simulator
+accounts, so `feedConnected` is `true` on every call, forever, on every box. It is not a weak
+measurement of the data feed; it is not a measurement of the data feed at all. It is a constant
+wearing the name of the one thing an agent checks before trusting a price.
+
+**Measured, 2026-08-15 14:20 UTC — a Friday, with the futures market OPEN:**
+
+| what | reported |
+|---|---|
+| `nt_health` | `feedConnected: true` |
+| `nt_quote MNQ 09-26` | last `29533.75`, time **`2026-08-07T01:45:06`**, volume `0` |
+| `nt_quote NQ 09-26` | last `29532.25`, time **`2026-08-07T01:45:25`**, volume `0` |
+| `nt_quote ES 09-26` | last `0`, time `0001-01-01`, volume `0` |
+
+Eight days stale on two instruments and never subscribed on the third, while the health endpoint
+reported the feed connected. Provider31 is disconnected and it was the data feed as well as the
+broker, so **both halves went at once** — and nothing on any surface says so.
+
+⚠️ **THIS DEFECT MISLED THE AGENT INVESTIGATING IT, IN WRITING, WITHIN FIVE MINUTES.** Asked whether
+a Provider31 reconnection needed market data or only a broker connection, I read `feedConnected:
+true` beside 90 accounts reporting `cashValue: 0` and stated that market data was connected and only
+the account half was missing. The code half of that answer was right and independently sourced; the
+observational half was wrong, and wrong *because* it was drawn from this field. That is the whole
+consequence argument: this is the field consulted precisely when someone is about to trust a price.
+
+**Band**: `P2`. It is a read, and a read cannot move a stop — but **weigh the quiet failure above
+the loud one** (`P3-111`). A well-formed `true` is the worst possible answer here, because the
+honest one is available for free and the caller has no other way to ask.
+
+**Fix**: report what is actually known, and let it be false. `Connection.Connections` carries real
+per-connection status, and the instrument subscriptions carry a last-tick time. At minimum
+`feedConnected` must be capable of being `false`, and the field should be renamed or split if it
+cannot be made to mean what it says — `accounts` is already reported separately one line above, so
+today it is the same number twice with one of them mislabelled.
+
+⚠️ **Second half, recorded here rather than filed separately because it is one reader's problem**:
+`nt_quote` returns an eight-day-old price with **no staleness signal**. The evidence is in the
+payload — `time` is right there and `volume: 0` — but nothing flags it, so a caller that reads
+`last` and not `time` gets a number that looks exactly like a live one. Fixing `feedConnected`
+without giving `nt_quote` a staleness flag leaves the trap one call further down.
+
+⚠️ **Reachability is TOTAL and it is not conditional on Provider31.** With the broker reconnected
+this field will still be `true` always; it will merely stop being noticeably wrong. **Do not close
+this by reconnecting the feed.**
+
+**The rest of the payload was swept before banding this, and it comes out well** — which is what
+makes the one bad field worth fixing rather than distrusting the whole surface. `/api/riskguard/version`
+computes `loaded`, `mode`, `isArmed` and `guarding` from the live instance (`McpBridgeAddOn.cs:483`),
+and `P1-47` added the arm state there for exactly this reason. Two smaller notes, neither a defect:
+`status = "ok"` is also a constant, but defensibly so — an unreachable endpoint returns no payload
+at all, so the constant carries its meaning in being *received*. And `guarding` is character-for-character
+the same expression as `isArmed`, so the health payload reports one fact under two names, the same
+shape as `accounts` and `feedConnected` being the same number. Collapse or differentiate it when
+this is fixed; do not file it separately.
+
+---
+
 ### P2-113. The inventory reported the news events file as read by nothing, for two days after something started reading it — ✅ CLOSED 2026-08-15 (session 43, §5.61)
 
 *(found 2026-08-15 while closing out `P1-77`/`P1-81`, by asking what the ONE remaining
@@ -5181,7 +5247,7 @@ more than one anchor. The tooling to do it safely now exists and is proven (`che
 
 ---
 
-### P2-112. `DynamicAtmManager.MonitorTick` fails open with no dispatcher — the ATM breakeven loop silently never runs — OPEN, found 2026-08-15 by widening `P1-13`'s gate to the addon tree
+### P2-112. `DynamicAtmManager.MonitorTick` fails open with no dispatcher — the ATM breakeven loop silently never runs — ✅ CLOSED 2026-08-15 (session 44, v1.29.0, §5.64)
 
 **Where**: `addons/DynamicAtmManager.cs:507`
 
@@ -5223,6 +5289,77 @@ both-directions construction as `tools/check_no_dead_safety_machinery.py`.
 rather than the whole tick — i.e. run `MonitorTickCore` inline and marshal only the
 `Account.Change()`, or fall back to inline with a one-shot warning. Then delete the allowance in
 the same commit and re-drive an ATM breakeven move live.
+
+#### ✅ What shipped, and the three things in it worth reusing
+
+**The `#if` SHRANK; it did not move.** `TryMarshal` is a `Func<Action, bool>` whose contract is
+*"true if I have taken ownership and will run this on the UI thread; false if there is no
+dispatcher and YOU must run it."* Only the WPF lookup is behind the directive. The control flow —
+marshal if you can, otherwise do the work here, and say so once — is compiled into **both** builds,
+and the tests drive both branches through the seam. **This was not cosmetic: it is why the defect
+lasted.** The whole dispatch decision had been behind `#if TESTING`, so the ten existing ATM tests
+drove `MonitorTickCore()`, a body the shipped assembly does not contain, and the branch holding the
+defect existed in **no test build at all**.
+
+**The tests reach the real private `MonitorTick` by REFLECTION, deliberately.** A `#if TESTING`
+entry point would have been a second door production never takes — which is precisely the
+arrangement that hid this. `MonitorTickForTest()` already existed and is exactly that shape; it
+stays for the P0-67 tests, but nothing new was built on it.
+
+**There was nothing to marshal TO, and that settles the design.** `Application.Current == null`
+means the process has no WPF application object and therefore no UI thread anywhere, so
+*"marshal only the `Account.Change()`"* — this entry's own suggested remedy, written before the
+code was read — is not implementable. The choice is between running the sweep on the timer thread
+and not running it, and not running it is the defect. It is also safe in the way that matters: the
+race worth fearing is with a **UI-thread** broker call, and on this path no UI thread exists to
+make one.
+
+⚠️ **REACHABILITY, the measurement this entry demanded — and it could NOT be completed as written.**
+The plan required an ATM breakeven move re-driven live. **The market data feed is down** (see
+`P2-115`, filed the same hour): `MNQ 09-26` and `NQ 09-26` are frozen at `2026-08-07T01:45` with
+`volume: 0`, and `ES 09-26` has never been subscribed — on a Friday with futures open. A breakeven
+trigger needs price to *move*, so the live half is **deferred, and named** rather than quietly
+skipped. What *was* measured live is recorded in §5.64. **Say which half was measured; do not let
+one green stand for both** (`P1-106`'s rule).
+
+⚠️ **THE REVIEW PANEL UPHELD THREE FINDINGS AND ONLY ONE WAS REAL — but that one was real, and I
+had missed it.** The announcement flag was instance-scoped while the message it guards says *"once
+per session"*, which today is true only by leaning on the `Lazy<>` singleton three hundred lines
+up: an invariant enforced somewhere else, which is how a log line starts describing something it
+did not observe. Now `static`, driven negative before being believed (with an instance field a
+second manager announces again and the test reports `got 2`). The other two were wrong in an
+instructive way — one claimed the tests never drive the production dispatcher branch, having read
+the addon and **not the test file**; the other recommended *"fail safe (disable the monitor)"*,
+which **is `return;`, the defect itself**, and rested on a race requiring a UI thread that this
+path exists precisely because there isn't one. **The panel's value here was one finding in three,
+and the loop's own rounds 3 and 4 acting on the other two made the patch worse** — round 3 reverted
+the entire region and regressed 3 tests. `MAX_ROUNDS_EXHAUSTED` exported round 2, the last candidate
+that passed every gate, which is the harness working: *arbitrate by hand; it does not mean the
+patch is bad.*
+
+⚠️ **AND THE BATTERY CAUGHT ITS AUTHOR AGAIN, for the third recorded time.** A mutant flipping
+`TryMarshal`'s null branch to `return true` survived all 1722 tests — not a coverage gap, but
+**unkillable by construction**: it lives behind `#else`, which no test build compiles. **Read what a
+mutant DOES before calling it a missing test** (`P1-99`, then `P3-111`, now this). Covered instead
+by a **labelled source gate**, plus `nt_compile` — and the label matters, because a source gate
+proves less and the four lines it guards can never be executed by any test.
+`TestP2_112_TheProductionMarshalReportsFailureWhenThereIsNoDispatcher` strips comments before
+searching, because the prose above the seam explains `return false` and **a gate its own
+documentation can satisfy is not a gate**.
+
+⚠️ **`tools/check_expected_survivors.py` fired on this battery's first draft.** I hand-rolled the
+expected-survivor bookkeeping instead of calling `_battery.finish(survivors, MUTANTS)`, which is the
+one definition that reads expectations out of `MUTANTS` itself and fails in both directions. A
+second implementation of a verdict is a second thing to drift.
+
+**Evidence**: suite **1705 → 1722/0** (+5 tests); `mutation/mutate_p2112.py` **8/8 with 1 declared
+survivor**; `check_anchors.py` **334/0**; all seven gates green; 32 batteries wired into CI;
+`nt_compile` **errorCount 0**; `sync_nt8.py --verify` clean. The `P1-13` whole-tree gate is
+**unexempted again** — its own second assertion, that the allowance was still needed, failed in the
+same commit the defect did, which is the both-directions construction working exactly as designed.
+
+**Where**: `addons/DynamicAtmManager.cs`, `tests/RiskGuardAddOnTests.cs` (4 new tests + the
+un-exempted `TestP1_13_...`), `mutation/mutate_p2112.py`, `.github/workflows/ci.yml`.
 
 ---
 

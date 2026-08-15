@@ -494,19 +494,71 @@ namespace NinjaTrader.NinjaScript.AddOns
             _monitorTimer = new Timer(MonitorTick, null, 5000, 5000);
         }
 
+        /// <summary>
+        /// P2-112. Takes ownership of `work` and returns TRUE if it will be run on the UI thread;
+        /// returns FALSE if there is no dispatcher, in which case THE CALLER MUST RUN IT.
+        ///
+        /// The `#if` is deliberately this small. Before P2-112 the whole of MonitorTick was
+        /// `#if TESTING MonitorTickCore(); #else <the dispatcher branch> #endif`, so the branch
+        /// holding the defect existed in no test build at all and the ten ATM tests drove a body
+        /// the shipped assembly does not contain -- P2-27's shape, at the loop that moves stops.
+        /// Only the WPF lookup needs the platform, so only the WPF lookup is behind the directive;
+        /// the control flow below is compiled into both builds and the tests drive both branches
+        /// through this seam.
+        ///
+        /// `return false` here is NOT the fail-open shape TestP1_13_... bans. That shape is a bare
+        /// `return;` that abandons the work. This returns to a caller that then does it.
+        /// </summary>
+#if TESTING
+        internal Func<Action, bool> TryMarshal = _ => false;
+#else
+        internal Func<Action, bool> TryMarshal = work =>
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null) return false;
+            dispatcher.InvokeAsync(() => work());
+            return true;
+        };
+#endif
+
+        // STATIC, because the message below says "once per session" and the condition really is
+        // process-wide: there is one WPF application object, not one per manager. Instance scope
+        // would make that claim true only by leaning on the Lazy<> singleton above -- an invariant
+        // enforced somewhere else, which is how a log line starts describing something it did not
+        // observe. Reset by reflection in the P2-112 tests; production never writes it twice.
+        private static int _noDispatcherAnnounced;
+
         private void MonitorTick(object _)
         {
             try
             {
-                // Marshal the entire monitoring logic to the NT8 UI dispatcher.
-                // NT8 Account/Order/Position objects are NOT thread-safe.
-#if TESTING
+                // NT8 Account/Order/Position objects are NOT thread-safe, so the sweep goes to the
+                // UI dispatcher whenever there is one. That path is unchanged by P2-112.
+                if (TryMarshal(MonitorTickCore))
+                    return;
+
+                // P2-112. There is no dispatcher, and this used to `return`. That was P1-13's
+                // fail-open verbatim at a subsystem P1-13 never inspected: the 5-second sweep
+                // returned immediately FOREVER, so breakeven stops never moved, trailing never
+                // advanced, refused moves were never even detected -- and nothing logged a word.
+                //
+                // There is nothing to marshal TO. `Application.Current == null` means the process
+                // has no WPF application object and therefore no UI thread anywhere, so the choice
+                // is between doing the sweep on this thread and not doing it. Not doing it is the
+                // defect. Running here is safe in the way that matters: the race worth fearing is
+                // with a UI-thread broker call, and on this path no UI thread exists to make one.
+                //
+                // ONCE. A line every 5 seconds for the life of the process is P2-108 verbatim, and
+                // an alarm that is always on is off. The fallback is announced, not narrated.
+                if (System.Threading.Interlocked.Exchange(ref _noDispatcherAnnounced, 1) == 0)
+                {
+                    RiskGuardAddOn.LogFromComponent("", "ATM_MONITOR_NO_DISPATCHER",
+                        "Dynamic ATM monitor has no WPF dispatcher; the sweep will run on the timer thread. " +
+                        "Breakeven and trailing stop moves will still be attempted, but NinjaTrader broker objects are not thread-safe. " +
+                        "An unusual stop move failure may be related to this fallback. This message is logged once per session.");
+                }
+
                 MonitorTickCore();
-#else
-                var dispatcher = System.Windows.Application.Current?.Dispatcher;
-                if (dispatcher == null) return;
-                dispatcher.InvokeAsync(() => MonitorTickCore());
-#endif
             }
             catch (Exception ex)
             {
