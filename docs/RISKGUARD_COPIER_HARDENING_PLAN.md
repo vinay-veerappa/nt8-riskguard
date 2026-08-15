@@ -3084,7 +3084,46 @@ three sessions that the validation run produced the next defect.
 
 ---
 
-### P1-102. There is no MCP tool to READ or CLEAR a lockout, so an account frozen by the guard cannot be recovered by the agent that is driving it — OPEN, found 2026-08-14
+### P1-102. There is no MCP tool to READ or CLEAR a lockout, so an account frozen by the guard cannot be recovered by the agent that is driving it — ✅ CLOSED 2026-08-15 (session 42), live-validated end to end under Market Replay
+
+**`nt_lockout` exists**, and building it exposed a second defect in the handler it calls.
+
+⚠️ **`HandleLockout` ANSWERED SUCCESS TO ANYTHING.** It ended with an unconditional status read,
+so every unrecognised action fell through. Measured on the box before the fix:
+
+    action:"lock"  ->  {"success":true,"action":"lock","account":"Playback101","isLockedOut":false}
+
+The most obvious thing a caller would send, answered *"I locked it, and it is not locked"*, with
+`success: true`. That is `P1-88`'s shape (an unrecognised action reported as a write) and `F-9`'s
+general form (what a surface REPORTS disagreeing with what it DOES). It also **blocked this
+ticket**: the MCP `action` enum is pinned to the addon's own whitelist (`P1-72`'s remedy, after
+that enum drifted twice) and **there was no whitelist to pin to** — the addon accepted every
+string by construction. Now an explicit `LockoutActions` array, and an unknown action is REFUSED
+by name with the valid set.
+
+⚠️ **The unlock branch returned a hard-coded `isLockedOut = false`** — a claim the unlock worked,
+made without asking. It re-reads `IsAccountLocked` now and reports what it found. Third site of
+*report the outcome, not the call*, after `P1-105` and `P0-104`.
+
+⚠️ **`lock` is deliberately absent and must stay absent.** A lockout imposed by a tool has no rule
+behind it and no recorded authority for `P2-92`'s clause to read.
+
+⚠️ **THE WRAPPER HANDLER WAS BROKEN AND 53 GREEN SCHEMA TESTS COULD NOT SEE IT.** Written as
+`ntFetch(path, { method, body })` — a `fetch()`-shaped options object — where the real signature is
+positional `ntFetch(endpoint, method, body)`. **Schema tests validate the advertised shape, not the
+call.** Caught only by driving the MCP server over stdio, the technique that validated `P2-103`.
+
+**Live-validated** on the raw route AND through the MCP server: `lock` refused naming the valid
+set; `status` a clean read; `unlock` success with `error: null` after re-reading the enforcer; a
+typo account refused naming **97** accounts; an omitted account on a write that REMOVES protection
+refused. Suite **302 → 310**, wrapper **51 → 53**, `nt_compile` **0 errors**.
+
+---
+
+<details>
+<summary>The entry as originally filed, 2026-08-14</summary>
+
+### P1-102 (as filed). There is no MCP tool to READ or CLEAR a lockout
 
 **Where**: `nt8-mcp-bridge/mcp/lib/tools.js`. The bridge has
 `POST /api/lockout` with `action` of `status` | `unlock` | `reset` | `clear`, hardened by `P1-90`'s
@@ -3111,6 +3150,8 @@ a new tool must not re-open it from the other side — no `default:` on `account
 this was done by hand the unlock was confirmed by re-sending an unfillable limit order and watching it
 be accepted, because `F-9`'s lesson is that what a rule REPORTS can disagree with what it DOES in
 either direction. The tool's test must assert the same way.
+
+</details>
 
 ---
 

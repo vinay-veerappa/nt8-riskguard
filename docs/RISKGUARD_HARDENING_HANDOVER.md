@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **122 IDs — 109 closed, 13 open**, re-derived 2026-08-15 (session 42, after `P2-29`/`P2-112`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P2-112` new, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **`P2-29` is now PARTIALLY CLOSED and it opened `P2-112`** — so the run continues after all: **five sessions** in which doing one piece of work produced the next defect. This time the producer was a **pure code move**, which found a source gate that had been disarmed by the relocation and, on being widened to the region it always claimed to cover, immediately hit a real `P1-13` instance nobody had inspected (§5.55). ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
+| **Do next** | 🆕 **`P2-108`** — REPRODUCED LIVE under Market Replay (§5.57): NAKED_POSITION at 3/6/9/**12** over 30/60/90/120s, one per 10s indefinitely, with `ACTION_SUPPRESSED` **0** throughout. ✅ `P1-102` closed 2026-08-15 (§5.57), and the `action: "lock"` half closed with it, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3348,7 +3348,8 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-102` — nothing on the box can IMPOSE a lockout on an open position
+> ### Do next: `P2-108` — an alarm that repeats every 10s and cannot be suppressed
+> ### (✅ `P1-102` closed 2026-08-15 — §5.57)
 >
 > **Updated session 41 (2026-08-14).** Every block below this one is struck through and
 > kept for the order it forced, not for its contents. ✅ `P1-105` closed in session 41 — see
@@ -3370,7 +3371,7 @@ the *order* they forced is the reusable part.
 > ✅ **`P1-106` closed in session 39** (section 5.47) — a lockout now admits an order that
 > strictly reduces the position, and refuses a bracket even when its entry would. Refusal half
 > live-validated; the admit half rests on an 8/8 battery, because **nothing on the box can impose
-> a lockout on an account that holds a position** (section 5.47, and it enlarges `P1-102`).
+> a lockout on an account that holds a position** (section 5.47; `P1-102` is now closed, §5.57).
 >
 > ✅ **`P2-107` closed in session 40** (section 5.48) — the outbound de-duplication now lives in
 > `GuardActionDeduplicator` behind one `DispatchActions` that all five emission sites use, the
@@ -3388,7 +3389,7 @@ the *order* they forced is the reusable part.
 > named the one defect of four that is LOUD.
 > Weigh by §5.6's consequence rule, not by band letter — `P1-90` (closed) was a `P0` on
 > consequence. ⚠️ **And weigh by whether the evidence is OBTAINABLE now**: ✅ `P2-109` (closed) was
-> taken ahead of `P1-102` on a Friday evening because it needed no market, while `P1-102`'s live
+> taken ahead of `P1-102` (closed) on a Friday evening because it needed no market, while its live
 > half needs an account holding a position.
 
 > ### ~~Do next: `P1-99` — the copier's SIZING GRAIN~~ (session 36, superseded)
@@ -8649,7 +8650,7 @@ it was previously refused as live — the enforcer, not the report — then canc
 
 ### Order from here
 
-1. **Drive a replay session** — **`P1-102`** first, then **`P2-108`**.
+1. **`P2-108`** — REPRODUCED LIVE (§5.57) and ready to fix. ✅ `P1-102` closed.
    ⚠️ Re-verify guard arming after reconnecting Provider31.
 
    ⚠️ **`P1-102` is where `P1-106` (closed) left its unvalidated admission half, and
@@ -8658,8 +8659,87 @@ it was previously refused as live — the enforcer, not the report — then canc
    a remainder hiding
    under a closed one is invisible to every count."* Exactly right: `P1-106` is CLOSED with only
    its **refusal** half measured, because nothing on this box can impose a lockout on an account
-   holding a position. That blocker is already recorded as enlarging `P1-102`, so the replay run
+   holding a position. That blocker was recorded as enlarging `P1-102` (closed §5.57), so the replay run
    validates both at once and is tracked under the ID that is actually open. **A closed ticket
    cannot carry an open remainder** — the count stops being true the moment it does.
 2. **`P2-112`** (⚠️ its fix touches `Account.Change()`; wants a live market), **`P3-110`**.
 3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
+
+---
+
+## 5.57 `P1-102` closed under Market Replay, and `P2-108` reproduced with the number it was filed with
+
+**Session 42, continued.** Market Replay went from "would that work?" to a closed `P1` and a
+reproduced `P2` in one sitting. **Replay is now the answer to "the market is shut."**
+
+### It works, end to end
+
+A market order on `Playback101` **filled**: long 2 MNQ SEP26 @ 29480.375. Order → fill → position,
+with the guard watching. That is the capability the whole position-dependent backlog was waiting on.
+
+⚠️ **The replay data is NOT what was on disk an hour earlier.** NT8 downloaded `MNQ 09-26` for
+**2026-08-13 and 2026-08-14** on demand — a real recent session — where the only file present
+before was `MNQ 12-25` for 2025-12-01, an expired contract. **Check what replay actually serves;
+do not plan around the directory listing.**
+
+### ⚠️ `P2-108` REPRODUCED LIVE, with hard numbers
+
+Position with no stop, guard in `shadow`. Sampled every 30s:
+
+| t | NAKED_POSITION | SHADOW_ACTION | ACTION_SUPPRESSED |
+|---|---|---|---|
+| +30s | 3 | 0 | 0 |
+| +60s | 6 | 0 | 0 |
+| +90s | 9 | 0 | 0 |
+| +120s | **12** | 0 | **0** |
+
+Perfectly linear — **one per 10 seconds, indefinitely** — and **12-in-120s is the exact figure the
+ticket was filed with**. ⚠️ **The load-bearing number is `ACTION_SUPPRESSED = 0`**: it proves
+`DispatchActions` never sees this path, so `P2-107`'s deduplicator cannot help. `NAKED_POSITION` is
+a `LogEvent` with no action behind it, precisely as filed. **Fix not attempted yet — this is the
+next item, and it now has a measured before.**
+
+### `P1-102` closed, and building the tool exposed a second defect
+
+`POST /api/lockout` existed with **no `nt_` tool reaching it**. Worse, measured before the fix:
+
+    action:"lock"  ->  {"success":true,"action":"lock","account":"Playback101","isLockedOut":false}
+
+`HandleLockout` ended with an **unconditional status read**, so every unrecognised action fell
+through to `success: true`. The most obvious thing a caller would send was answered *"I locked it,
+and it is not locked."* `P1-88`'s shape; `F-9`'s general form. It also **blocked the ticket**: an
+MCP `action` enum is pinned to the addon's whitelist (`P1-72`), and **there was no whitelist** —
+the addon accepted every string by construction.
+
+Also fixed: the unlock branch returned a **hard-coded `isLockedOut = false`**, a claim made without
+asking. It re-reads the enforcer now. **Third site of *report the outcome, not the call*** after
+`P1-105` and `P0-104`. And `lock` stays absent — a lockout imposed by a tool has no rule behind it
+and no recorded authority for `P2-92`'s clause to read.
+
+### ⚠️ 53 green wrapper tests could not see a broken handler
+
+`nt_lockout` was written as `ntFetch(path, { method, body })` — a `fetch()`-shaped options object —
+where the real signature is positional `ntFetch(endpoint, method, body)`. Every other POST handler
+in the file contradicts it. **Schema tests validate the advertised shape, not the call**, so all 53
+passed. Caught only by **driving the MCP server over stdio**, the same technique that validated
+`P2-103`. *Add an end-to-end drive to every wrapper change; the schema test is not one.*
+
+### Evidence
+
+Bridge harness **302 → 310**, wrapper **51 → 53**, `nt_compile` **0 errors**,
+`deploy.py` core pin **v1.25.0**. Live: `lock` refused naming the valid set; `status` a clean read;
+`unlock` success with `error: null` after re-reading; typo account refused naming **97**;
+omitted account on a protection-removing write refused. Position closed afterwards via
+`nt_close_position` — `positionsMatched: 1`, `positionsStillOpen: []` — which incidentally
+re-validates `P1-105` on a genuinely FILLED position for the first time.
+
+### Order from here
+
+1. **`P2-108`** — reproduced with a measured before; fix it and re-drive the same 120s sample.
+   Per `P2-101`: bound it by an attempt COUNT the alarm also reads, clear on the CONDITION not a
+   timer, and **1 outside an acting mode is the fix, not a tuning value**.
+2. **`P2-112`** (⚠️ its fix touches `Account.Change()`), **`P3-110`**.
+3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
+
+⚠️ **Provider31 is still disconnected** — the replay session took the connection. Reconnect and
+**re-verify guard arming** before treating any funded-account reading as meaningful.
