@@ -256,6 +256,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount();
             TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne();
             TestP2_29_TheSourceGatesReadTheWholeAddonTree();
+            TestP2_78_TheDeadPerInstrumentFieldsAreGone();
+            TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
+            TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist();
             TestP1_12_NoDiskWriteHappensUnderTheStateLock();
             TestP1_12_PositionChangeDefersThePersistToTheSweep();
             TestP1_14_SecondBufferedStopDoesNotOverwriteTheFirst();
@@ -15972,6 +15975,114 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(code.Contains("RiskGuardWindow"),
                 "including the WPF dashboard, which P2-29 moved to its own file and which "
                 + "mutate_p187's WarnOnly mutant SURVIVED against until this helper existed");
+        }
+
+        /// <summary>
+        /// P2-78. `PerInstrumentRiskConfig` offered TWO ways to block an instrument and only one
+        /// of them worked. `IsBlocked: true` on a per-instrument entry reads exactly like the way
+        /// to block that instrument; nothing anywhere consults it. `StopOffsetTicks` appears only
+        /// at its own declaration.
+        ///
+        /// Asserted over the TREE, not one named file: an absence gate that names a file starts
+        /// passing the moment the code moves next door (P2-29, measured).
+        /// </summary>
+        private static void TestP2_78_TheDeadPerInstrumentFieldsAreGone()
+        {
+            Console.WriteLine("\n[TEST] P2-78: PerInstrumentRiskConfig carries no field that nothing reads");
+
+            var code = AllAddonCode();
+
+            // Scope the check to the class body and SAY SO. A bare tree-wide search for
+            // "IsBlocked" would also fire on any future, legitimately-read member of that name
+            // on some other type -- which is a gate that would get itself deleted rather than
+            // obeyed. State the region a gate inspects (four gates in this repo have been caught
+            // proving nothing by not doing that).
+            // ⚠️ The obvious regex for a class body -- \{(.*?)\} -- is WRONG here and was measured
+            // wrong: the first '}' in this class is the one closing `{ get; set; }` on the FIRST
+            // property, so the captured "body" was `public int MaxContracts { get; set; ` and this
+            // gate passed on the unfixed code. It has to close on the class's own brace at its own
+            // indent. Fifth gate in this repo caught inspecting a region other than the one it
+            // named, and the only reason it was caught is that a test written to be RED was GREEN.
+            var body = System.Text.RegularExpressions.Regex.Match(code,
+                "class PerInstrumentRiskConfig\\s*\\{(.*?)\\r?\\n    \\}",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            Assert(body.Success, "PerInstrumentRiskConfig is locatable in the addon tree");
+            if (!body.Success) return;
+
+            var members = body.Groups[1].Value;
+
+            // Positive control on the REGION, not on the code under test: this string spans the
+            // accessor list's closing brace, so it can only be present if the capture ran past
+            // the brace that truncated it before. Without this the gate can silently re-narrow.
+            Assert(members.Contains("MaxContracts { get; set; }"), string.Format(
+                "the captured region is the whole class body, not the first property's accessor "
+                + "list -- region read: <<{0}>>", members.Trim().Replace("\r", "").Replace("\n", " ")));
+
+            Assert(!members.Contains("IsBlocked"), string.Format(
+                "PerInstrumentRiskConfig no longer declares IsBlocked -- the config offered two "
+                + "ways to block an instrument and this was the one that did nothing. Class body "
+                + "read: {0}", members.Trim().Replace("\r", "").Replace("\n", " ")));
+
+            Assert(!members.Contains("StopOffsetTicks"),
+                "PerInstrumentRiskConfig no longer declares StopOffsetTicks -- it appeared only "
+                + "at its own declaration");
+
+            // The positive half. Deleting until the class is empty would pass both assertions
+            // above; MaxContracts is the one field that IS enforced (RiskGuardAddOn.cs:1881) and
+            // it must survive.
+            Assert(members.Contains("MaxContracts"),
+                "MaxContracts survives -- it is the only member of this type the guard reads");
+        }
+
+        /// <summary>
+        /// P2-78, the guard on the fix. GREEN NOW AND MUST STAY GREEN. Deleting the dead field
+        /// must not disturb the blocking that actually works, and the one member of this type
+        /// that IS read must stay the only one read.
+        /// </summary>
+        private static void TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments()
+        {
+            Console.WriteLine("\n[TEST] P2-78: blocking still runs through BlockedInstruments, and only MaxContracts is read");
+
+            var code = AllAddonCode();
+
+            Assert(code.Contains("_config.BlockedInstruments.Contains(instRoot)"),
+                "the real blocking path still consults BlockedInstruments -- this is the ONE way "
+                + "to block an instrument, and P2-78 exists because a second one appeared to");
+
+            // Every member read off a PerInstrumentRiskConfig value. If a future edit starts
+            // reading a second one, this fires -- which is the invariant, not the deletion.
+            var reads = System.Text.RegularExpressions.Regex.Matches(code, @"perInstCap\.(\w+)");
+            Assert(reads.Count > 0, "the per-instrument cap is read somewhere (positive control)");
+            foreach (System.Text.RegularExpressions.Match m in reads)
+                Assert(m.Groups[1].Value == "MaxContracts", string.Format(
+                    "the only member read off a per-instrument cap is MaxContracts (found '{0}')",
+                    m.Groups[1].Value));
+        }
+
+        /// <summary>
+        /// P2-78. The registry's note is OPERATOR-FACING -- it is served over
+        /// /api/riskguard/inventory and rendered by nt_riskguard_inventory. A note warning that
+        /// two fields are read by nothing is correct today and becomes a lie about fields that
+        /// no longer exist the moment they are deleted. F-9's class: the reporter must be derived
+        /// from the enforcer, not maintained beside it.
+        /// </summary>
+        private static void TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist()
+        {
+            Console.WriteLine("\n[TEST] P2-78: the inventory note does not describe deleted fields");
+
+            var reading = GuardRuleRegistry.Rules
+                .FirstOrDefault(r => r.Name == "Per-instrument contract caps");
+            Assert(reading != null, "the per-instrument cap rule is registered");
+            if (reading == null) return;
+
+            var ctx = new GuardRuleContext { Config = new RiskConfig() };
+            ctx.Config.InstrumentLimits["NQ"] = new PerInstrumentRiskConfig { MaxContracts = 2 };
+            var note = reading.Evaluator(ctx).Note ?? "";
+
+            foreach (var dead in new[] { "IsBlocked", "StopOffsetTicks" })
+                Assert(!note.Contains(dead), string.Format(
+                    "the operator-facing note does not name '{0}', a field the config no longer "
+                    + "has. Note read: {1}", dead, note));
         }
 
         // P1-13, fail-open half. This one is asserted against the SOURCE TEXT, which needs

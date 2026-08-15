@@ -340,13 +340,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Name = "Per-instrument contract caps", ConfigPath = "InstrumentLimits",
                 EvidenceLabel = "instruments with a configured cap",
                 Source = GuardRuleSource.InstrumentLimit, Scope = GuardRuleScope.PerOrder,
-                // WARNING: Only MaxContracts is read. IsBlocked and StopOffsetTicks on the SAME object
-                // have zero references anywhere -- P2-78 -- so a per-instrument `IsBlocked: true`
-                // looks exactly like the way to block one instrument and does nothing.
+                // P2-78: this type used to carry two more fields that nothing read, and the note
+                // below warned about them. They are GONE, so the warning goes with them -- a note
+                // describing fields the config no longer has is the same defect one turn later.
+                // The note now states the positive fact, which stays true however the type changes:
+                // there is exactly ONE way to block an instrument.
                 Evaluator = c => R(null, null,
                     c.Config.InstrumentLimits == null ? 0 : c.Config.InstrumentLimits.Count,
-                    "only MaxContracts is enforced; IsBlocked and StopOffsetTicks on the same "
-                    + "object are read by nothing (P2-78) -- use BlockedInstruments to block")
+                    "caps the size of an instrument; it does not block it -- "
+                    + "use BlockedInstruments to block")
             },
 
             // -- trading windows --------------------------------------------------------
