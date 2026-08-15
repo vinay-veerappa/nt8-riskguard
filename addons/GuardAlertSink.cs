@@ -49,8 +49,35 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             "NAKED_POSITION", "ORPHAN_STOP", "FSM_DIVERGENCE", "BLACKLIST_CANCEL",
             "PER_INSTRUMENT_CAP_CANCEL", "COPIER_QUARANTINED", "FILL_NOT_MEASURED",
-            "LOCKOUT_STUCK", "ARMED_ON_START", "DISARMED",
+            "LOCKOUT_STUCK", "DISARMED",
         };
+
+        /// <summary>
+        /// ⚠️ `ARMED_ON_START` WAS A WARNING AND IT PRODUCED THE EXACT FLOOD THIS COMPONENT
+        /// EXISTS TO PREVENT. Measured live 2026-08-15, within an hour of the relay going up:
+        /// SIXTEEN identical "guard armed on start" alerts delivered to the channel.
+        ///
+        /// Two separate things were wrong and only one is about severity:
+        ///
+        ///  1. THE BUDGET RESETS ON AN ASSEMBLY RELOAD, because it lives in this instance and
+        ///     NT8 constructs a new AddOn on every recompile. A second agent was compiling in
+        ///     the bridge repo at the time, and `nt_compile` rebuilds the WHOLE Custom
+        ///     assembly -- so sixteen reloads each spent a fresh "1 of 1". Recorded as a known
+        ///     limitation rather than silently tolerated: within one session a repeating
+        ///     condition is still suppressed correctly, which is the case that matters in
+        ///     production, where recompiles are rare and a genuine restart IS news.
+        ///
+        ///  2. AND ARMING IS NOT A RISK CONDITION. It is a lifecycle statement -- the guard
+        ///     came up and is watching, which is the GOOD outcome. Pushing it at `warning`
+        ///     meant every reload notified the operator of nothing having gone wrong. It is
+        ///     `info` now, below the shipped floor, and an operator who wants start-up
+        ///     confirmation can lower the floor to get it.
+        ///
+        /// ⚠️ `DISARMED` DELIBERATELY STAYS A WARNING. The symmetry is tempting and wrong: a
+        /// guard that stopped guarding is a change in protection, and it is exactly the thing
+        /// you want to hear about while assuming you are covered.
+        /// </summary>
+        private const string ArmedOnStartIsInfoNotWarning = "ARMED_ON_START";
 
         /// <summary>
         /// ⚠️ AN UNKNOWN EVENT TYPE IS `info`, NOT `critical`. The opposite default reads as

@@ -4502,7 +4502,7 @@ evaluated nowhere.
 | 3 | **Tilt detection + cool-off + PIN disarm** | **Absent.** Backlog `F-3`. |
 | 4 | **Intra-execution slippage guard** (market→limit, cancel remainder) | **Detection exists, the RESPONSE does not.** Backlog `F-4`. |
 | 5 | **Pure reconciler + in-flight ledger** | **Copier half shipped and live-validated; ledger absent.** Already `P3-31` + `P3-30`'s remaining half. |
-| 6 | **Discord / Telegram push alerts** | **Absent, and there is no outbound HTTP at all.** Backlog `F-6`. |
+| 6 | **Discord / Telegram push alerts** | ✅ **DISCORD SHIPPED 2026-08-15 and live-validated** — see §5.70. Still true that there is **no outbound HTTP in this addon**, and that is now the design rather than a gap: the guard decides and writes `alerts_outbox.jsonl`, a Python relay delivers. **Telegram is `NOT_IMPLEMENTED`**, refused by name. |
 | 7 | **Block specific instruments** | ✅ **EXISTS and enforced.** |
 | 8 | **Max contracts per instrument** | ✅ **EXISTS and enforced — at the POSITION level, which is the right one.** |
 
@@ -9081,8 +9081,26 @@ Suite **1697 → 1705/0**. 31 batteries, both encoding halves pinned, anchors **
 ### Order from here
 
 1. ✅ **`P2-112` closed in session 44** — see §5.64.
-2. **`P3-110`** (narrowed — §5.51).
-3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
+2. ✅ **`F-6` shipped in session 45** — Discord push alerts, live-validated; see §5.70.
+3. **`P2-29`**'s remainder — the `partial class` split of `RiskGuardAddOn.cs`. ⚠️ **Take this
+   BEFORE the remaining features (`F-4`, `F-3`, `F-1`)**, not after: it cuts apart the file
+   every one of them would be written into, and `F-6` has just added an outbox queue, a sink
+   field and an emission block to it.
+4. **`P3-110`** (narrowed — §5.51), then the architectural **`P3-33`**.
+
+⚠️ **Separately: several CLOSED entries have a half that has never been observed on the box**,
+each needing one filled contract and therefore a market (futures reopen Sunday 18:00 ET).
+They are written up in **§5.70** (alert suppression of a recurring condition; the STALE-guard
+heartbeat), **§5.64** (the stop-move half) and **§5.62** (the lockout *admit* half — only the
+refusal is live-validated, because nothing on this box can impose a lockout on an account
+that already holds a position).
+
+**These are deliberately NOT listed above as work-to-do**, and `check_next_list_ids.py`
+refused the first draft of this section for naming their closed IDs there. The gate is
+right, and its reasoning is the one to keep: *a remainder hiding under a closed entry is
+invisible to every count*. **So if any of these turns out to be more than a confirmation
+run, it gets its own ID** — an unvalidated half is not the same thing as an open defect,
+but it must not be allowed to become one silently.
 
 🆕 **`nt8-mcp-bridge` now has an agent-loop profile** (`agent/nt8_bridge.py`, profile
 `nt8-bridge`), so `F-16` and `P3-110` are reachable by the loop for the first time. Its protected
@@ -9525,3 +9543,118 @@ maintained only by someone choosing to redo it.
 **The cheap fix is not another gate but a habit**: the count row now records the command that
 produces it, and the derivation above is reproducible in one paste. Anything that cannot be
 re-derived in a paste will drift again.
+
+----
+
+## 5.70 `F-6` — push alerts, built by NOT building the transport, and the flood it produced on day one
+
+The operator's feature list has asked for Discord/Telegram push alerts since 2026-08-13
+(§5.17 item 6: *"Absent, and there is no outbound HTTP at all."*). It is now shipped and
+live-validated with the market shut, in two commits plus a fix.
+
+### The design decision, which was to write less code
+
+The plan was a C# transport inside the AddOn: background thread, bounded queue, hard
+timeout, 429 backoff. Reading the delivery code that already exists in `tvDownloadOHLC`
+(`scripts/libs_py/discord`, ~2,000 lines) killed that plan, and the reasons are worth
+keeping because they are the argument for looking before building:
+
+* a **1900**-character cap rather than 2000, for JSON code-point expansion
+* the ~**5 msg / 2 s** per-webhook rate limit
+* `Retry-After` read from the **429 header** rather than guessed
+* capped exponential backoff on 429/5xx, embed→text fallback
+* delivery **telemetry**, which exists there because *"operators had logs to read but no
+  aggregate counters"* — this repo's own "a green that can never be red", already learned
+
+So the seam moved. **The guard DECIDES** (`GuardAlertSink`, 11/11 mutants) and appends to
+`alerts_outbox.jsonl`; **a separate Python process delivers**
+(`scripts/riskguard/alert_relay.py`). No NT8 thread ever touches a socket, which deletes the
+entire hazard class the C# transport was being designed around — the same reasoning that
+made the bridge's connect path refuse a bare `Dispatcher.Invoke`.
+
+⚠️ **A separate FILE, not another `LogEvent` line.** Emitting the decision through
+`LogEvent` would re-enter the sink from inside itself. A separate outbox makes that
+recursion structurally impossible rather than guarded against, and the relay then parses
+only DECIDED alerts instead of re-implementing the filter on the far side, where it would
+drift from this one.
+
+⚠️ **There is no webhook URL in this process at all.** The addon publishes its config over
+HTTP on :7890, so a secret stored here is a secret published. The URL lives with the relay,
+in `discord_webhooks.json`, and never enters NT8 — strictly better than redacting it on the
+way out, because there is nothing to redact.
+
+### ⚠️ The feature produced the exact flood it was built to prevent, within the hour
+
+Sixteen identical `ARMED_ON_START` alerts reached the channel. **Two things were wrong and
+only one is about severity:**
+
+1. **The budget resets on an assembly reload**, because it lives in the sink instance and
+   NT8 constructs a new AddOn on every recompile. A second agent was compiling in the
+   bridge repo at the time, and `nt_compile` rebuilds the **whole** Custom assembly — so
+   sixteen reloads each spent a fresh "1 of 1". Recorded as a **known limitation**: within
+   one session a repeating condition is still suppressed correctly, which is the case that
+   matters in production, where recompiles are rare and a genuine restart IS news.
+
+2. **Arming is not a risk condition.** It is a lifecycle statement — the guard came up and
+   is watching, the GOOD outcome — so pushing it at `warning` notified the operator, on
+   every reload, that nothing had gone wrong. It is `info` now, below the shipped floor.
+
+⚠️ **`DISARMED` deliberately stays a warning.** The symmetry is tempting and wrong: a guard
+that stopped guarding is a change in protection, and it is exactly what you need to hear
+while assuming you are still covered.
+
+Live-validated after the fix: a reload at 21:55 produced **no** outbox entry while
+`interventions.jsonl` kept recording at 21:55:09. **The audit record still has everything;
+the phone does not.**
+
+### Four more defects, three of them mine
+
+⚠️ **The severity floor was fail-OPEN.** `RankOf` answers 0 for any unrecognised string and
+the test was `severity < floor`, so a floor of `"warn"`, `"Warning "` or `"off"` ranked 0,
+nothing was below it, and **every event in the audit stream** became a push. `MinSeverity`
+is hand-edited JSON, so a typo is the *expected* input. `FloorRankOf` falls back to
+`warning`; `info` still works because it is a RECOGNISED name. `Enabled` is a separate gate
+for the same reason — there is deliberately no `"none"` rank to smuggle through.
+
+⚠️ **`Encoding.UTF8` writes a BOM, and it cost the first alert of the first outbox.** The
+file began `EF BB BF {"timestamp_utc"…`, the relay's `json.loads` refused the line, and the
+first record of every new outbox was lost — the first record being, by construction, the one
+announcing that something started going wrong. Now `new UTF8Encoding(false)`.
+**It surfaced in one run only because the consumer LOGS what it skips**; a relay that
+quietly ignored the line would have dropped it forever and reported itself healthy.
+
+⚠️ **`KeyOf` had no separator**, so account `AB` + event `C` shared a budget with account
+`A` + event `BC`. Found by writing the battery, not by reading the line, and not by ten
+green tests.
+
+⚠️ **And in `tvDownloadOHLC`:** `load_webhook_url(key)` returned `None` with no `repo_root`,
+while the **deprecated shim it replaces** derives the root from `__file__` — so *following
+the deprecation notice silently broke webhook lookup*, and the sender then skipped with
+`False`. Two readers of the same state that nobody had compared. The test asserting the old
+behaviour was **inverted, not deleted** (it was not wrong about the code, it pinned the
+defect), and the real regression guard is the new test that both APIs answer identically.
+
+### The relay must RUN, and that is now the operator-facing risk
+
+`launch/start_alert_relay.bat` restarts the relay on any exit **except code 2**, which is
+its "this is configuration and restarting cannot fix it" signal (no webhook, unknown
+transport) — without that distinction the keep-alive loop becomes an infinite respawn that
+looks busy and delivers nothing. `launch/register_alert_relay_task.ps1` registers it at
+logon and **refuses to register a task that cannot work** (missing webhooks file or absent
+channel), because Task Scheduler reports "last run: success" for a process that exited
+immediately.
+
+⚠️ **Verify by the HEARTBEAT, not by the task state.** The relay posts a periodic liveness
+message that also reports the guard's own freshness from `heartbeat.txt`, so *relay down*
+and *NT8 down* are distinguishable rather than merged into one silence. This is the answer
+to the failure the architecture introduces: **you cannot detect silence**, but you can
+detect a missing heartbeat.
+
+### Not validated live
+
+* suppression of a **repeating** condition (needs one that recurs — `NAKED_POSITION` needs a
+  fill, so this waits for the market)
+* the **STALE-guard** heartbeat path
+* SMS-on-critical via `email_notify.py` (built into the plan, not yet wired)
+* **Telegram is `NOT_IMPLEMENTED`** and refused BY NAME — an advertised transport that does
+  nothing is `P1-72`, which has regressed twice.

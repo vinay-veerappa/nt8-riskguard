@@ -429,6 +429,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF6_TheWebhookUrlIsRedactedButStillRecognisable();
             TestF6_ARefusalAlwaysCarriesAReason();
             TestF6_AMistypedSeverityFloorFailsCLOSEDNotOpen();
+            TestF6_ArmingIsNotARiskConditionButDisarmingIs();
             // Second round: five mutants that survived the first battery, all of them in parts
             // the first thirteen never touched. The handler one is the P3-30 shape.
             TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced();
@@ -5876,6 +5877,45 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "'info' is a RECOGNISED name and still selects the permissive floor");
             Assert(!new GuardAlertSink().Consider("A", "NAKED_POSITION", "m", "live", true, "critical").Send,
                 "and 'critical' still filters warnings out");
+        }
+
+        private static void TestF6_ArmingIsNotARiskConditionButDisarmingIs()
+        {
+            Console.WriteLine("\n[TEST] F-6: ARMED_ON_START is info; DISARMED stays a warning");
+
+            // ⚠️ THE MEASURED INCIDENT. Within an hour of the relay going live, SIXTEEN
+            // identical "guard armed on start" alerts reached the channel -- the exact flood
+            // this component was built to prevent, produced BY this component.
+            //
+            // The budget did not fail: it lives in the sink instance, NT8 builds a new AddOn on
+            // every recompile, and a second agent was compiling in the bridge repo (nt_compile
+            // rebuilds the WHOLE Custom assembly). Sixteen reloads, sixteen fresh budgets.
+            //
+            // The severity DID fail. Arming is a lifecycle statement -- the guard came up and is
+            // watching, the GOOD outcome -- so at `warning` every reload notified the operator
+            // that nothing had gone wrong.
+            Assert(GuardAlertSink.SeverityOf("ARMED_ON_START") == "info",
+                "arming is a lifecycle statement, not a risk condition, so it sits below the "
+                + "shipped 'warning' floor. Got " + GuardAlertSink.SeverityOf("ARMED_ON_START"));
+
+            Assert(!new GuardAlertSink()
+                    .Consider("SYSTEM", "ARMED_ON_START", "up", "shadow", true, "warning").Send,
+                "so it is NOT pushed at the default floor -- the 16-alert incident, reduced");
+
+            Assert(new GuardAlertSink()
+                    .Consider("SYSTEM", "ARMED_ON_START", "up", "shadow", true, "info").Send,
+                "but an operator who WANTS start-up confirmation can lower the floor and get it. "
+                + "Reclassifying must not make it unreachable");
+
+            // ⚠️ THE ASYMMETRY IS THE POINT, and it is the assertion worth keeping. Treating
+            // arm/disarm as a matched pair is tempting and wrong: a guard that STOPPED guarding
+            // is a change in protection, and it is precisely what you need to hear while
+            // assuming you are still covered.
+            Assert(GuardAlertSink.SeverityOf("DISARMED") == "warning",
+                "DISARMED stays a warning -- it is not the mirror image of arming");
+            Assert(new GuardAlertSink()
+                    .Consider("SYSTEM", "DISARMED", "off", "shadow", true, "warning").Send,
+                "and it IS pushed at the default floor");
         }
 
         private static void TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack()
