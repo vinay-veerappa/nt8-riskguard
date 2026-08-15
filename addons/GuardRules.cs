@@ -616,6 +616,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardNonRule { ConfigPath = "FirmMirror.FirmProfiles", Reason = "the per-firm value tables the two firm rules resolve against" },
             new GuardNonRule { ConfigPath = "FirmMirror.ResolvedAccountSize", Reason = "P2-95: transient carrier populated by ResolveEffectiveFirmConfig from FirmProfile.AccountSize; not serialized, not user-configured" },
             new GuardNonRule { ConfigPath = "AuditIntervalSeconds", Reason = "P3-30: the period of the guard-side audit timer; not a rule, it is the clock the audit runs on" },
+            new GuardNonRule { ConfigPath = "Alerts.Enabled", Reason = "F-6: whether decided alerts are written to the outbox for the relay to deliver. It gates NOTIFICATION only -- it can never stop a rule evaluating, locking out or flattening, and a reader must not mistake it for one" },
+            new GuardNonRule { ConfigPath = "Alerts.MinSeverity", Reason = "F-6: the severity floor for the push outbox. Not a trading limit; an unrecognised value falls back to 'warning' rather than to the lowest rank, because rank 0 would push the entire audit stream" },
             new GuardNonRule { ConfigPath = "FirmMirror.DailyResetHourUtc", Reason = "the session boundary the firm rules reset on" },
             new GuardNonRule { ConfigPath = "FirmMirror.DailyResetMinuteUtc", Reason = "the session boundary the firm rules reset on" },
             new GuardNonRule { ConfigPath = "FirmMirror.TrailingDD.Enabled", Reason = "reported through the firm trailing-drawdown rule's Disabled state" },

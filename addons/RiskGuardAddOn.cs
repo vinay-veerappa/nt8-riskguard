@@ -374,6 +374,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Async Logging (Fix 11)
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _logQueue = new System.Collections.Concurrent.ConcurrentQueue<string>();
 
+        // F-6. The push-alert OUTBOX: events this guard has decided are worth telling a human
+        // about, drained to `alerts_outbox.jsonl` beside interventions.jsonl.
+        //
+        // ⚠️ NO HTTP HAPPENS IN THIS PROCESS, DELIBERATELY. A webhook POST from an NT8 callback
+        // thread can block on a slow or wedged remote host, and this addon shares its process with
+        // the platform that manages real positions -- the same reasoning that made the bridge's
+        // connect path refuse a bare `Dispatcher.Invoke`. Delivery is a separate Python process
+        // (`scripts/riskguard/alert_relay.py` in tvDownloadOHLC) which already carries hard-won
+        // Discord behaviour this would otherwise have to reimplement in C#: the 1900-char cap
+        // rather than 2000 (JSON code-point expansion), the ~5 msg / 2s per-webhook rate limit,
+        // `Retry-After` read from the 429 header rather than guessed, capped exponential backoff,
+        // and delivery telemetry.
+        //
+        // ⚠️ AND A SEPARATE FILE, NOT ANOTHER LogEvent LINE. Emitting the decision through
+        // LogEvent would re-enter the sink from inside itself; a separate outbox makes recursion
+        // structurally impossible rather than guarded against, and it means the relay parses only
+        // decided alerts instead of re-implementing the filter on the far side, where it would
+        // drift from this one.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _alertQueue = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        private readonly GuardAlertSink _alertSink = new GuardAlertSink();
+        private string _alertOutboxFile;
+
         // Per-account and aggregate state models
         private readonly Dictionary<string, AccountState> _accountStates = new Dictionary<string, AccountState>();
         private readonly List<string> _subscribedAccounts = new List<string>();
@@ -407,6 +429,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
 
                 _logFile = Path.Combine(_logDir, "interventions.jsonl");
+                _alertOutboxFile = Path.Combine(_logDir, "alerts_outbox.jsonl");
                 _stateFile = Path.Combine(_logDir, "state.json");
                 _configFile = Path.Combine(_logDir, "config.json");
                 _heartbeatFile = Path.Combine(_logDir, "heartbeat.txt");
@@ -2307,6 +2330,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 if (logsToWrite != null && logsToWrite.Count > 0)
                     WriteFileOutsideLock("log", () => File.AppendAllLines(_logFile, logsToWrite, Encoding.UTF8));
+
+                // F-6. The alert outbox drains here for the same reason the log does: outside the
+                // lock, in a `finally`, so a rule that threw does not cost us lines that exist
+                // nowhere else (`P1-12`). Drained separately from the log so a failure to write
+                // one cannot swallow the other.
+                var alertsToWrite = new List<string>();
+                string alertLine;
+                while (_alertQueue.TryDequeue(out alertLine)) alertsToWrite.Add(alertLine);
+                // ⚠️ `Encoding.UTF8` WRITES A BOM, and on a JSONL file that is a defect. Measured
+                // live 2026-08-15, first run: the outbox began `EF BB BF {"timestamp_utc"...`, the
+                // relay's `json.loads` refused the line, and THE FIRST ALERT OF EVERY NEW OUTBOX
+                // WAS LOST -- the first alert being, by construction, the one announcing that
+                // something started going wrong. `new UTF8Encoding(false)` is UTF-8 without the
+                // byte-order mark.
+                //
+                // It was caught only because the consumer LOGS what it skips. A relay that had
+                // quietly ignored an unparseable line would have dropped that alert forever and
+                // reported itself healthy, which is the exact failure this feature exists to
+                // prevent, reintroduced at the seam between its two halves.
+                if (alertsToWrite.Count > 0 && _alertOutboxFile != null)
+                    WriteFileOutsideLock("alerts",
+                        () => File.AppendAllLines(_alertOutboxFile, alertsToWrite,
+                                                  new UTF8Encoding(false)));
 
                 WritePersistedState(stateToWrite);
             }
@@ -5175,6 +5221,45 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 string logLine = logEntry.ToString(Formatting.None);
                 _logQueue.Enqueue(logLine);
+
+                // F-6. Ask the sink whether a human should be told. Enqueues onto a SEPARATE
+                // queue and never calls LogEvent, so this cannot re-enter itself.
+                //
+                // ⚠️ WRAPPED, because the alert path must never be able to cost us the audit
+                // record. The log line is already enqueued above; a throw here would lose nothing
+                // written, but it would propagate into whatever rule was mid-evaluation. A
+                // notifier that can break the guard is a worse trade than a missed notification.
+                try
+                {
+                    var alertsCfg = _config != null ? _config.Alerts : null;
+                    // ⚠️ DISABLED IS A SEPARATE GATE, not a severity floor. There is deliberately
+                    // no "none" rank: an unknown floor string falls back to "warning"
+                    // (FloorRankOf), so smuggling "off" through MinSeverity would push MORE, not
+                    // less -- the fail-open this component exists to avoid.
+                    var decision = (alertsCfg == null || alertsCfg.Enabled)
+                        ? _alertSink.Consider(account, eventType,
+                            data != null ? data.ToString(Formatting.None) : null,
+                            _mode, _isArmed,
+                            alertsCfg != null ? alertsCfg.MinSeverity : "warning")
+                        : null;
+                    if (decision != null && decision.Send)
+                    {
+                        var alert = new JObject
+                        {
+                            { "timestamp_utc", DateTime.UtcNow.ToString("o") },
+                            { "account", account },
+                            { "eventType", eventType },
+                            { "severity", decision.Severity },
+                            { "title", decision.Title },
+                            { "body", decision.Body },
+                            // The relay reports what it DELIVERED against what was decided, so
+                            // both sides can be compared rather than assumed to agree.
+                            { "decision", decision.Reason }
+                        };
+                        _alertQueue.Enqueue(alert.ToString(Formatting.None));
+                    }
+                }
+                catch { }
             }
             catch
             {
@@ -6227,6 +6312,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Dictionary<string, PerInstrumentRiskConfig> InstrumentLimits { get; set; } = new Dictionary<string, PerInstrumentRiskConfig>(StringComparer.OrdinalIgnoreCase);
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<string> BlockedInstruments { get; set; } = new List<string>();
+        public AlertsConfig Alerts { get; set; } = new AlertsConfig();
         public SizingConfig Sizing { get; set; } = new SizingConfig();
         public OvertradingConfig Overtrading { get; set; } = new OvertradingConfig();
         public StopGuardConfig StopGuard { get; set; } = new StopGuardConfig();
@@ -6316,6 +6402,25 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string Basis { get; set; } = "realized";
         public double Amount { get; set; } = 1500.0;
         public double Buffer { get; set; } = 200.0;
+    }
+
+    /// <summary>
+    /// F-6. What the guard decides to push, and nothing about HOW it is delivered.
+    ///
+    /// ⚠️ THERE IS NO WEBHOOK URL HERE, ON PURPOSE. This addon publishes its config over HTTP on
+    /// :7890 (`/api/riskguard/config`, and `nt_riskguard_inventory` reads the same structures), so
+    /// a secret stored here is a secret published. The URL lives with the RELAY, in
+    /// tvDownloadOHLC's `discord_webhooks.json`, and never enters this process at all -- which is
+    /// strictly better than redacting it on the way out, because there is nothing to redact.
+    /// </summary>
+    public class AlertsConfig
+    {
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>"critical", "warning" or "info". An UNRECOGNISED value falls back to
+        /// "warning" rather than to the lowest rank -- see GuardAlertSink.FloorRankOf, where
+        /// treating a typo as rank 0 would have pushed the entire audit stream.</summary>
+        public string MinSeverity { get; set; } = "warning";
     }
 
     public class SizingConfig

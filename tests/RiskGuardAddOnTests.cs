@@ -428,6 +428,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestF6_AnArmedLiveAlertDoesNotSayWOULD();
             TestF6_TheWebhookUrlIsRedactedButStillRecognisable();
             TestF6_ARefusalAlwaysCarriesAReason();
+            TestF6_AMistypedSeverityFloorFailsCLOSEDNotOpen();
             // Second round: five mutants that survived the first battery, all of them in parts
             // the first thirteen never touched. The handler one is the P3-30 shape.
             TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced();
@@ -5844,6 +5845,37 @@ namespace NinjaTrader.NinjaScript.AddOns
             var blank = sink.Consider("A", "", "m", "live", true, "info");
             Assert(!blank.Send && !string.IsNullOrWhiteSpace(blank.Reason),
                 "and a blank eventType is refused with a reason rather than pushed unattributable");
+        }
+
+        private static void TestF6_AMistypedSeverityFloorFailsCLOSEDNotOpen()
+        {
+            Console.WriteLine("\n[TEST] F-6: a mistyped severity floor does not push the entire audit stream");
+
+            // ⚠️ FOUND WHILE WIRING THE SINK UP, not by review and not by the ten tests above.
+            // The floor comparison was `RankOf(severity) < RankOf(minSeverity)`, and RankOf
+            // answers 0 for any string it does not recognise -- so a floor of "warn", "Warning "
+            // or "WARNING\n" ranks 0, nothing is below it, and EVERY event in the audit stream
+            // becomes a push. MinSeverity is hand-edited JSON, so a typo is the expected input,
+            // and the consequence is precisely the muted channel this component exists to prevent.
+            foreach (var typo in new[] { "warn", "Warning ", "WARNINGS", "hi", "0", "none", "off" })
+            {
+                var sink = new GuardAlertSink();
+                var d = sink.Consider("A", "SOMETHING_ROUTINE", "m", "live", true, typo);
+                Assert(!d.Send,
+                    "an unrecognised floor '" + typo + "' falls back to 'warning', so an info "
+                    + "event is still filtered. Falling back to rank 0 would push everything.");
+            }
+
+            // The negative control: the fallback must not become a blanket refusal either.
+            Assert(new GuardAlertSink().Consider("A", "NAKED_POSITION", "m", "live", true, "warn").Send,
+                "and a WARNING event still passes under that same mistyped floor -- the fallback "
+                + "is 'warning', not 'refuse everything'");
+
+            // And the recognised names keep working, including the permissive one.
+            Assert(new GuardAlertSink().Consider("A", "ROUTINE", "m", "live", true, "info").Send,
+                "'info' is a RECOGNISED name and still selects the permissive floor");
+            Assert(!new GuardAlertSink().Consider("A", "NAKED_POSITION", "m", "live", true, "critical").Send,
+                "and 'critical' still filters warnings out");
         }
 
         private static void TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack()

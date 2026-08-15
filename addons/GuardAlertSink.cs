@@ -75,6 +75,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             return 0;
         }
 
+        /// <summary>
+        /// The FLOOR's rank, which is deliberately not `RankOf`.
+        ///
+        /// ⚠️ FOUND WHILE WIRING THIS UP, and it was fail-OPEN. `RankOf` answers 0 for any string
+        /// it does not recognise, and the floor test is `severity &lt; floor` -- so a floor of
+        /// `"Warning "`, `"warn"`, `"WARNING\n"` or any typo ranks 0, nothing is below it, and
+        /// EVERY event in the audit stream is pushed. The config value is hand-edited JSON, so a
+        /// typo is the expected input, and the failure is the exact one this whole component
+        /// exists to prevent: a channel so loud it gets muted.
+        ///
+        /// An unrecognised floor therefore falls back to the shipped default rather than to zero.
+        /// `info` is still selectable because it is a RECOGNISED name.
+        /// </summary>
+        private static int FloorRankOf(string minSeverity)
+        {
+            if (string.IsNullOrWhiteSpace(minSeverity)) return 1;
+            string s = minSeverity.Trim();
+            if (string.Equals(s, "critical", StringComparison.OrdinalIgnoreCase)) return 2;
+            if (string.Equals(s, "warning", StringComparison.OrdinalIgnoreCase)) return 1;
+            if (string.Equals(s, "info", StringComparison.OrdinalIgnoreCase)) return 0;
+            return 1;
+        }
+
         // The budget record, keyed by ACCOUNT + EVENT TYPE. `P2-107` established both halves of
         // this: the scope must carry the producer as well as the account (or one producer's
         // silence clears another's records), and the record clears when the CONDITION RESOLVES,
@@ -130,7 +153,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return d;
             }
 
-            if (RankOf(d.Severity) < RankOf(minSeverity))
+            if (RankOf(d.Severity) < FloorRankOf(minSeverity))
             {
                 d.Reason = "severity '" + d.Severity + "' is below the configured floor '"
                          + (minSeverity ?? "warning") + "'";
