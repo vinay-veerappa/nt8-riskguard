@@ -1763,8 +1763,15 @@ wearing the name of the one thing an agent checks before trusting a price.
 | `nt_quote ES 09-26` | last `0`, time `0001-01-01`, volume `0` |
 
 Eight days stale on two instruments and never subscribed on the third, while the health endpoint
-reported the feed connected. Provider31 is disconnected and it was the data feed as well as the
-broker, so **both halves went at once** — and nothing on any surface says so.
+reported the feed connected.
+
+⚠️ **The CAUSE was found half an hour later and it makes this SHARPER, not weaker.** The connection
+log reads `Connection status: Connected, Connection: Playback` — NT8 is on the session-42 replay
+connection, **with no replay running**, which is exactly what §5.56 warned would displace Provider31.
+So the box has **no tradeable market at all**: three ATM orders placed on Sim101 sat at
+`OrderState.Initialized` and were never routed. And through all of that `feedConnected` said `true`.
+The defect is not "the field is wrong while Provider31 is off" — it is that **the field cannot
+distinguish a live feed from a dormant Playback connection, because it never looks at either.**
 
 ⚠️ **THIS DEFECT MISLED THE AGENT INVESTIGATING IT, IN WRITING, WITHIN FIVE MINUTES.** Asked whether
 a Provider31 reconnection needed market data or only a broker connection, I read `feedConnected:
@@ -5314,13 +5321,32 @@ and not running it, and not running it is the defect. It is also safe in the way
 race worth fearing is with a **UI-thread** broker call, and on this path no UI thread exists to
 make one.
 
-⚠️ **REACHABILITY, the measurement this entry demanded — and it could NOT be completed as written.**
-The plan required an ATM breakeven move re-driven live. **The market data feed is down** (see
-`P2-115`, filed the same hour): `MNQ 09-26` and `NQ 09-26` are frozen at `2026-08-07T01:45` with
-`volume: 0`, and `ES 09-26` has never been subscribed — on a Friday with futures open. A breakeven
-trigger needs price to *move*, so the live half is **deferred, and named** rather than quietly
-skipped. What *was* measured live is recorded in §5.64. **Say which half was measured; do not let
-one green stand for both** (`P1-106`'s rule).
+✅ **REACHABILITY IS NOW MEASURED, and it was the half of this entry nobody had done.**
+`ATM_MONITOR_NO_DISPATCHER` appears **0 times in the whole of `interventions.jsonl`** after
+deploying v1.29.0 and driving the monitor. With the NT8 GUI running, `Application.Current` is
+non-null, the dispatcher path is taken, and the fallback never fires — so the defect was **latent,
+not active**, confirmed by observation rather than assumed. That is what the `P2` band rested on and
+it had never been checked.
+
+✅ **And the sweep demonstrably RUNS on the deployed build.** A `DrawdownShield` bracket placed on
+Sim101 came back `"Bracket registered for breakeven/trailing monitoring"` and was **gone from
+`nt_atm_bracket_status` thirty seconds later**, with nothing else having touched it. The only code
+that removes a bracket is `MonitorTickCore`'s `toRemove` path, so the 5-second timer fired and the
+sweep executed.
+
+⚠️ **WHAT WAS *NOT* VALIDATED, stated plainly: the breakeven stop MOVE.** The entry never filled —
+all three orders sat at `OrderState.Initialized` — because **NT8 is connected to `Playback` with no
+replay running**, which is the session-42 replay connection §5.56 warned would displace Provider31.
+So `Account.Change()`, the call site whose semantics made this entry defer in the first place, is
+**still unexercised on this path**. **Say which half was measured; do not let one green stand for
+both** (`P1-106`'s rule). To finish it: start a replay (or reconnect Provider31), place the same
+`breakevenTriggerTicks: 0` bracket, and read `ATM_STOP_MOVE_REQUESTED` → `ATM_STOP_MOVE_CONFIRMED`
+or `ATM_STOP_CHANGE_IGNORED`.
+
+⚠️ **A 0-tick breakeven trigger is the technique worth keeping**: `ShouldTriggerBreakeven` is
+`ticksGain >= BreakevenTriggerTicks`, so `0` fires on the first sweep at the fill price. That makes
+the breakeven path drivable **without a moving market** — the blocker this entry recorded for a
+month was never really the market, it was the *fill*.
 
 ⚠️ **THE REVIEW PANEL UPHELD THREE FINDINGS AND ONLY ONE WAS REAL — but that one was real, and I
 had missed it.** The announcement flag was instance-scoped while the message it guards says *"once

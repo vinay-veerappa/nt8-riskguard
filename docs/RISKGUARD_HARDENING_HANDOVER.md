@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **122 IDs — 109 closed, 13 open**, re-derived 2026-08-15 (session 42, after `P2-29`/`P2-112`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P2-112` new, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **`P2-29` is now PARTIALLY CLOSED and it opened `P2-112`** — so the run continues after all: **five sessions** in which doing one piece of work produced the next defect. This time the producer was a **pure code move**, which found a source gate that had been disarmed by the relocation and, on being widened to the region it always claimed to cover, immediately hit a real `P1-13` instance nobody had inspected (§5.55). ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P2-112`** (⚠️ its fix touches `Account.Change()`, so it wants a live market — §5.55). ✅ `P2-108` closed 2026-08-15 (§5.58): 12-in-120s → **1**, re-arm verified, and the defect IN THE FIX was found by the box after 8 tests and 8/8 mutants passed. ✅ `P1-102` closed (§5.57), **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
+| **Do next** | 🆕 **`P2-115`** — `nt_health`'s `feedConnected` is `Account.All.Count > 0`, so it can NEVER be false; it misled this agent in writing within five minutes (§5.64). ✅ `P2-112` closed 2026-08-15 (§5.64): reachability finally MEASURED at **0** fallbacks, but ⚠️ **the breakeven stop MOVE is still unexercised** — NT8 is on a dormant `Playback` connection, so the entry never filled. ✅ `P2-108` closed 2026-08-15 (§5.58): 12-in-120s → **1**, re-arm verified, and the defect IN THE FIX was found by the box after 8 tests and 8/8 mutants passed. ✅ `P1-102` closed (§5.57), **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3348,7 +3348,8 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-112` — the ATM breakeven loop that silently never runs
+> ### Do next: `P2-115` — `feedConnected` is a market-data flag that can never be false
+> ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
 > ### (✅ `P1-102` closed 2026-08-15 — §5.57)
 >
@@ -9154,14 +9155,32 @@ expected-survivor bookkeeping rather than calling `_battery.finish(survivors, MU
 implementation of a verdict is a second thing to drift, and the gate exists because that already
 happened once.
 
-### ⚠️ The live half was NOT completed, and the reason is a new defect
+### Live: the reachability half is DONE; the stop-move half is not
 
-The entry required an ATM breakeven move re-driven live. **It could not be**, and the blocker is
-`P2-115`, filed the same hour: **the market data feed is down.** Measured on a Friday with futures
-open — `MNQ 09-26` and `NQ 09-26` frozen at `2026-08-07T01:45` with `volume: 0`, `ES 09-26` never
-subscribed. A breakeven trigger needs price to *move*. **Say which half was measured** (`P1-106`'s
-rule): the suite, the battery, the gates, the compile and the deploy are all green and verified; the
-breakeven trigger under a moving market is **deferred and named**.
+✅ **Reachability, which this entry demanded and nobody had ever measured**:
+`ATM_MONITOR_NO_DISPATCHER` occurs **0 times in the whole of `interventions.jsonl`** after deploying
+v1.29.0 and driving the monitor. With the GUI running the dispatcher is non-null and the fallback
+never fires — the defect was **latent, not active**, which is what the `P2` band rested on.
+
+✅ **The sweep runs on the deployed build.** A `DrawdownShield` bracket on Sim101 came back
+*"registered for breakeven/trailing monitoring"* and was **gone thirty seconds later**; the only
+code that removes a bracket is `MonitorTickCore`'s `toRemove` path.
+
+⚠️ **NOT validated: the breakeven stop MOVE.** The entry never filled — all three orders sat at
+`OrderState.Initialized` — because **NT8 is on the `Playback` connection with no replay running**,
+which is §5.56's warning arriving. So `Account.Change()`, the call site that made this entry defer
+in the first place, is **still unexercised here**. To finish: start a replay or reconnect
+Provider31, place the same bracket, read `ATM_STOP_MOVE_REQUESTED` → `ATM_STOP_MOVE_CONFIRMED` or
+`ATM_STOP_CHANGE_IGNORED`.
+
+⚠️ **`breakevenTriggerTicks: 0` is the technique to keep.** `ShouldTriggerBreakeven` is
+`ticksGain >= BreakevenTriggerTicks`, so `0` fires on the first sweep at the fill price. The
+breakeven path is drivable **without a moving market** — this entry's recorded blocker was never
+really the market, it was the *fill*.
+
+⚠️ Incidentally confirmed on the way past: `nt_close_position` answered `nothing_to_close` with
+`positionsMatched: 0` and `cancelledOrdersCount: 3`. That is `P1-105`'s fix behaving — it did not
+claim a close it had not made.
 
 ### 🆕 `P2-115` — `feedConnected` is `Account.All.Count > 0`
 
@@ -9169,6 +9188,13 @@ Found while answering *"does Provider31 need market data or just a broker connec
 endpoint's `feedConnected` is `accountCount > 0` (`nt8-mcp-bridge/addons/McpBridgeAddOn.cs:447`) — a
 running NT8 always has Simulator accounts, so **the field has exactly one reachable value**. It is
 not a weak measurement of the feed; it is not a measurement of the feed.
+
+⚠️ **The cause of the stale quotes turned up later and makes it sharper.** NT8 is on the session-42
+`Playback` connection **with no replay running** — §5.56's warning arriving — so the box has no
+tradeable market at all, and three ATM orders sat at `Initialized` and were never routed. Through
+all of it `feedConnected` said `true`. The defect is not *"wrong while Provider31 is off"*; it is
+that **the field cannot tell a live feed from a dormant Playback connection, because it looks at
+neither.** Reconnecting anything will not close it.
 
 ⚠️ **It misled the agent investigating it, in writing, within five minutes.** I read
 `feedConnected: true` beside 90 accounts at `cashValue: 0` and stated that market data was connected
