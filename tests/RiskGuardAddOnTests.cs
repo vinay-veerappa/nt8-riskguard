@@ -237,6 +237,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestStress_S9_RestartMidTrade();
             TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock();
             TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher();
+            TestP2_29_TheSourceGatesReadTheWholeAddonTree();
             TestP1_12_NoDiskWriteHappensUnderTheStateLock();
             TestP1_12_PositionChangeDefersThePersistToTheSweep();
             TestP1_14_SecondBufferedStopDoesNotOverwriteTheFirst();
@@ -11001,15 +11002,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             // WarnOnly had been and why it went. A check that forbids DESCRIBING the defect it
             // prevents is a check that gets the description deleted instead, which is how the
             // reason for a fix gets lost. Same rule and same helper shape as Ui2WindowCode.
-            var path = Path.GetFullPath(Path.Combine(
-                Path.GetDirectoryName(P184ThisFile()), "..", "addons", "RiskGuardAddOn.cs"));
-            var code = File.Exists(path)
-                ? string.Join("\n", File.ReadAllText(path).Split('\n')
-                    .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }))
-                : null;
+            // ⚠️ P2-29: this read `addons/RiskGuardAddOn.cs` BY NAME, and the dropdown it forbids
+            // moved to RiskGuardWindow.cs when the WPF dashboard was split out. The gate then
+            // searched a file the string could no longer be in and PASSED -- measured, by
+            // mutate_p187's WarnOnly mutant surviving where it had always been killed. An absence
+            // assertion pointed at the wrong file finds nothing because it is looking nowhere.
+            var code = AllAddonCode();
 
-            Assert(code != null && !code.Contains("WarnOnly"),
-                "no code in the guard offers WarnOnly, an action it has never implemented");
+            Assert(!code.Contains("WarnOnly"),
+                "no code ANYWHERE in the addon tree offers WarnOnly, an action the guard has "
+                + "never implemented -- including the UI file the combo box now lives in");
         }
 
         private static void TestStopGuardNoActionWhenStopPresent()
@@ -15308,6 +15310,82 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Path.GetDirectoryName(thisFile), "..", "addons", "RiskGuardAddOn.cs"));
         }
 
+        /// <summary>
+        /// EVERY addon source, concatenated, with comments stripped. For source gates that assert
+        /// a pattern is ABSENT.
+        ///
+        /// ⚠️ WHY THIS EXISTS, measured. P2-29 moved the ~720-line WPF dashboard out of
+        /// RiskGuardAddOn.cs into RiskGuardWindow.cs -- a pure relocation, no behaviour change,
+        /// suite 1469/0 before and after. `mutate_p187.py`'s WarnOnly mutant then **SURVIVED**,
+        /// because the gate that killed it read `RiskGuardAddOn.cs` BY NAME and the dropdown it
+        /// forbids had moved to the file next door. Nothing else noticed: `check_anchors.py`
+        /// verifies the BATTERY can still find its target, which is a different question from
+        /// whether the TEST can, and the suite stayed green throughout.
+        ///
+        /// ⚠️ AND NOTE WHICH DIRECTION IS DANGEROUS. A gate asserting a pattern is PRESENT fails
+        /// loudly when pointed at the wrong file. A gate asserting a pattern is ABSENT **passes
+        /// vacuously** -- it finds nothing, because it is looking nowhere. Moving code breaks the
+        /// two in opposite directions and only one of them tells you. Absence gates read the tree.
+        ///
+        /// This is the same remedy as `tools/check_bridge_parses.py` and `BridgeTests.csproj` in
+        /// the sibling repo, both of which stopped being hand-typed file lists in the same week:
+        /// state the REGION a check inspects, and make that region the whole thing it is about.
+        /// </summary>
+        private static string AllAddonCode(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            var dir = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons"));
+            var files = Directory.GetFiles(dir, "*.cs");
+            // A gate whose corpus is empty proves nothing while printing a pass. Refuse instead.
+            if (files.Length == 0)
+                throw new InvalidOperationException("no addon sources found under " + dir);
+            var sb = new StringBuilder();
+            foreach (var f in files.OrderBy(f => f))
+            {
+                sb.AppendLine("// ==== " + Path.GetFileName(f) + " ====");
+                // Comments stripped: the seams' own doc comments quote the defective patterns
+                // verbatim, and a check that forbids DESCRIBING the bug it prevents is a check
+                // that gets the description deleted instead.
+                foreach (var l in File.ReadAllText(f).Split('\n'))
+                {
+                    int i = l.IndexOf("//");
+                    sb.AppendLine(i >= 0 ? l.Substring(0, i) : l);
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// P2-29. The gate on the gates: every addon source is reachable by <see cref="AllAddonCode"/>,
+        /// and the corpus it builds is big enough to be the real tree rather than one stray file.
+        /// Without this, deleting the glob back to a single name would silently re-arm the exact
+        /// vacuous-pass failure that produced the helper.
+        /// </summary>
+        private static void TestP2_29_TheSourceGatesReadTheWholeAddonTree()
+        {
+            Console.WriteLine("\n[TEST] P2-29: source gates inspect the addon TREE, not one named file");
+
+            var code = AllAddonCode();
+            var dir = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(AddonSourcePath()), ""));
+            var files = Directory.GetFiles(dir, "*.cs");
+
+            Assert(files.Length >= 9, string.Format(
+                "the addon tree has all its sources ({0} found) -- a shrinking corpus is how an "
+                + "absence gate starts passing vacuously", files.Length));
+
+            foreach (var f in files)
+                Assert(code.Contains("==== " + Path.GetFileName(f) + " ===="), string.Format(
+                    "{0} is part of the corpus every absence gate searches", Path.GetFileName(f)));
+
+            // The specific relocation that exposed this: the window's code must be reachable from
+            // a gate even though it no longer lives in RiskGuardAddOn.cs.
+            Assert(code.Contains("RiskGuardWindow"),
+                "including the WPF dashboard, which P2-29 moved to its own file and which "
+                + "mutate_p187's WarnOnly mutant SURVIVED against until this helper existed");
+        }
+
         // P1-13, fail-open half. This one is asserted against the SOURCE TEXT, which needs
         // justifying: the branch it protects lives under `#if !TESTING` and therefore cannot be
         // executed by this suite at all. That is precisely the P1-47 shape -- code the test build
@@ -15328,22 +15406,55 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(File.Exists(path), string.Format("The addon source is readable at {0}", path));
             var source = File.ReadAllText(path);
 
-            // Comments are stripped first. The seam's own doc comment quotes the defective
-            // pattern verbatim -- that documentation is worth keeping, and a check that forbids
-            // describing the bug it prevents is a check that gets the comment deleted instead.
-            var code = string.Join("\n", source
-                .Split('\n')
-                .Select(l => { int i = l.IndexOf("//"); return i >= 0 ? l.Substring(0, i) : l; }));
+            // ⚠️ P2-29: the ABSENCE half reads the whole addon tree, not this one file. The
+            // fail-open shape is exactly as fatal in RiskGuardWindow.cs as it is here, and after
+            // the WPF split a gate naming a single file would have stopped looking at the code
+            // most likely to contain a dispatcher check. Comments are stripped by AllAddonCode,
+            // for the reason recorded there.
+            var code = AllAddonCode();
 
             // The exact fail-open shape, tolerant of whitespace and of `Dispatcher`/`disp` naming.
             var failOpen = new System.Text.RegularExpressions.Regex(
                 @"if\s*\(\s*\w*[dD]ispatcher\w*\s*==\s*null\s*\)\s*return\s*;");
-            var hits = failOpen.Matches(code);
-            Assert(hits.Count == 0,
+
+            // ⚠️ WIDENING THIS GATE TO THE TREE FOUND A REAL ONE, IMMEDIATELY. `P1-13` was closed
+            // against the guard's own handlers and the gate then read only RiskGuardAddOn.cs, so
+            // `DynamicAtmManager.MonitorTick` -- which has the identical fail-open, on the 5-second
+            // loop that moves ATM stops to breakeven -- was never inspected. Filed as **P2-112**,
+            // not fixed here: MonitorTickCore calls `Account.Change()`, so "run the work inline"
+            // (P1-13's remedy) puts a broker call on a Timer thread, and that call site is one the
+            // handover records as needing verification ON SETTLE. That is a change to make with a
+            // live market, not on a Friday night behind a green suite.
+            //
+            // The allowance is BY FILE and carries the ID, and it is asserted in BOTH directions:
+            // a new instance anywhere fails, AND the allowance failing to be needed fails too, so
+            // it cannot outlive the defect and quietly widen the exemption. Same construction as
+            // tools/check_no_dead_safety_machinery.py, for the same reason.
+            const string KnownFailOpenFile = "DynamicAtmManager.cs";   // P2-112
+            var perFile = code.Split(new[] { "// ==== " }, StringSplitOptions.RemoveEmptyEntries);
+            var offenders = new List<string>();
+            int allowedHits = 0;
+            foreach (var chunk in perFile)
+            {
+                var fileName = chunk.Substring(0, Math.Max(0, chunk.IndexOf(" ====")));
+                int n = failOpen.Matches(chunk).Count;
+                if (n == 0) continue;
+                if (fileName == KnownFailOpenFile) { allowedHits += n; continue; }
+                offenders.Add(string.Format("{0} ({1})", fileName, n));
+            }
+
+            Assert(offenders.Count == 0,
                 string.Format(
-                    "{0} guard path(s) still return early when there is no dispatcher. Each one is a "
-                    + "silent, total protection outage that reports itself as armed.",
-                    hits.Count));
+                    "{0} unaccounted guard path(s) still return early when there is no dispatcher: "
+                    + "{1}. Each one is a silent, total protection outage that reports itself as "
+                    + "armed.",
+                    offenders.Count,
+                    offenders.Count == 0 ? "none" : string.Join(", ", offenders)));
+
+            Assert(allowedHits > 0,
+                "and the P2-112 allowance for " + KnownFailOpenFile + " is still NEEDED. If this "
+                + "fails, the defect was fixed and the exemption must be deleted in the same "
+                + "commit -- an allowance that outlives its defect silently widens the gate");
 
             // And the seam is genuinely the single funnel, not a helper nobody calls.
             int wired = System.Text.RegularExpressions.Regex.Matches(source, @"RunGuardWork\(").Count;

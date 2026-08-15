@@ -54,14 +54,27 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
+# P2-29 REPOINTED ONE ANCHOR HERE. The settings dropdown moved to its own file when the ~720-line
+# WPF dashboard left RiskGuardAddOn.cs; the find-string did not change, the FILE did. That made
+# every entry below a 4-tuple, because a battery with two file constants and no explicit target
+# per mutant has no unambiguous default -- and check_anchors.py refuses what it cannot read
+# rather than printing `ok` over it.
+#
+# The anchor was REPOINTED, NOT RETIRED. It is the only mutant defending a UI surface from
+# offering an action the guard has never implemented, which is how "WarnOnly" reached a config
+# file in the first place. Deleting it because a refactor moved the line would have traded a
+# defect's only guard for the convenience of not editing this file.
+WINDOW = os.path.join(REPO, 'addons', 'RiskGuardWindow.cs')
 
 MUTANTS = [
-    ("the else branch goes back to `else if (== \"Flatten\")`, so every other spelling emits\n"
+    (GUARD,
+     "the else branch goes back to `else if (== \"Flatten\")`, so every other spelling emits\n"
      "     NO ACTION for a position with no stop -- the defect, restored",
      '                else\n                {\n                    // P1-87.',
      '                else if (_config.StopGuard.OnMissing == "Flatten")\n                {\n                    // P1-87.'),
 
-    ("the else branch STAYS but stops adding the action. The shape of the fix survives and\n"
+    (GUARD,
+     "the else branch STAYS but stops adding the action. The shape of the fix survives and\n"
      "     the behaviour does not -- a reviewer skimming the diff sees an else and moves on",
      '                    actions.Add(new GuardAction\n'
      '                    {\n'
@@ -72,25 +85,29 @@ MUTANTS = [
      '                        AccountName = account.Name,\n'
      '                        ActionType = GuardActionType.FlattenPosition,'),
 
-    ("the fallback gets its own RuleId. Everything passes, and one outcome is now split\n"
+    (GUARD,
+     "the fallback gets its own RuleId. Everything passes, and one outcome is now split\n"
      "     across two names in a log that is grepped by RuleId -- so one of them is\n"
      "     unfindable after the fact",
      '                        RuleId = "MISSING_STOP_FLATTEN"',
      '                        RuleId = "MISSING_STOP_UNRECOGNISED_ACTION"'),
 
-    ("the preflight check is removed. The position is still protected, so every dispatch\n"
+    (GUARD,
+     "the preflight check is removed. The position is still protected, so every dispatch\n"
      "     test stays green -- and the operator is never told the action they configured is\n"
      "     not the one in force",
      '            if (onMissing != "AutoStop" && onMissing != "Flatten")',
      '            if (false)'),
 
-    ("preflight still refuses, but the message drops the offending value. Correct and\n"
+    (GUARD,
+     "preflight still refuses, but the message drops the offending value. Correct and\n"
      "     useless: 'unrecognised value' without the value is not actionable, which is UI7's\n"
      "     finding told in another place",
      'result.Fail("STOP_GUARD_ON_MISSING", $"Unrecognised StopGuard.OnMissing value \'{onMissing}\'");',
      'result.Fail("STOP_GUARD_ON_MISSING", "Unrecognised StopGuard.OnMissing value");'),
 
-    ("WarnOnly goes back in the settings dropdown. Nothing breaks at runtime now that\n"
+    (WINDOW,
+     "WarnOnly goes back in the settings dropdown. Nothing breaks at runtime now that\n"
      "     preflight catches it -- but a surface is again OFFERING an action the guard has\n"
      "     never implemented, which is how it reached a config file to begin with",
      '            _onMissingCombo.Items.Add("Flatten");',
@@ -111,7 +128,18 @@ def run():
     return m.group(0) if m else 'NO RESULT LINE'
 
 
-ORIGINAL = open(GUARD, encoding='utf-8').read()
+# P2-29: two target files now, so the originals are a dict keyed by path. Restoring ALL of them
+# after every mutant, not just the one touched: a battery killed mid-run leaves a live mutant in
+# the tree, and the suite then fails naming a feature nobody edited.
+ORIGINALS = {}
+for _target, _, _, _ in MUTANTS:
+    if _target not in ORIGINALS:
+        ORIGINALS[_target] = open(_target, encoding='utf-8').read()
+
+
+def restore():
+    for _path, _text in ORIGINALS.items():
+        open(_path, 'w', encoding='utf-8', newline='').write(_text)
 
 print('=== baseline ===')
 baseline = run()
@@ -127,12 +155,13 @@ if int(m.group(2)) != 0:
     sys.exit(2)
 
 survivors = []
-for name, old, new in MUTANTS:
-    if ORIGINAL.count(old) != 1:
-        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINAL.count(old)))
+for target, name, old, new in MUTANTS:
+    original = ORIGINALS[target]
+    if original.count(old) != 1:
+        print('  [SKIP] %s: anchor matched %d times' % (name, original.count(old)))
         survivors.append(name + ' (ANCHOR)')
         continue
-    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL.replace(old, new))
+    open(target, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
     res = run()
     mm = re.search(r'Failed = (\d+)', res)
     killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
@@ -140,10 +169,10 @@ for name, old, new in MUTANTS:
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)
-    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+    restore()
 
-open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
-print('\nrestored original;', run())
+restore()
+print('\nrestored originals;', run())
 print('\nSURVIVORS:', survivors if survivors else 'none')
 
 sys.exit(1 if survivors else 0)

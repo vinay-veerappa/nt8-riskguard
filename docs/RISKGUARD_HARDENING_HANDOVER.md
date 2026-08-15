@@ -246,7 +246,7 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **121 IDs — 109 closed, 12 open**, re-derived 2026-08-14 (session 42, after `P3-111`) from the plan's per-entry status tokens: **110** banded entries (**11 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **Session 42 closed `P3-111` and opened NOTHING** — the first session in five to break the run in which validating one fix produced the next defect. ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
+| **Defects** | **122 IDs — 109 closed, 13 open**, re-derived 2026-08-15 (session 42, after `P2-29`/`P2-112`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P2-112` new, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **`P2-29` is now PARTIALLY CLOSED and it opened `P2-112`** — so the run continues after all: **five sessions** in which doing one piece of work produced the next defect. This time the producer was a **pure code move**, which found a source gate that had been disarmed by the relocation and, on being widened to the region it always claimed to cover, immediately hit a real `P1-13` instance nobody had inspected (§5.55). ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
 | **Do next** | 🆕 **`P1-102`** (larger than filed: nothing on the box can *impose* a lockout on an account holding a position, and `action: "lock"` silently answers `isLockedOut: false` — §5.47). Then **`P2-108`**, **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
@@ -8490,3 +8490,91 @@ Harness **233 assertions / 46 tests → 302 / 56**; wrapper **51/0**; `mutate_p3
    18:00 ET.
 2. **`P2-108`**, then **`P3-110`** (narrowed — §5.51).
 3. The architectural **`P2-29`** / **`P3-33`**.
+
+---
+
+## 5.55 `P2-29` partially closed — a pure code move disarmed a source gate, and widening it found a real defect
+
+**Session 42.** The WPF dashboard (`RiskGuardWindow` + `CardControls`, 724 lines) moved out of
+`RiskGuardAddOn.cs` into `addons/RiskGuardWindow.cs`. **7,058 → 6,334 lines.** A relocation of two
+independent top-level types: no `partial` keyword, no member reshuffled, no behaviour change.
+
+⚠️ **The entry's own size claim was wrong** — it said 4,108 lines with the window at `:3389-4096`,
+measured 7,058 with it at `:6338-7057`. **A size claim decays silently; re-measure before quoting.**
+
+### ⚠️ The finding: a MOVE silently disarmed a source gate, and only the battery noticed
+
+`mutate_p187.py`'s WarnOnly mutant **SURVIVED** after the move, where it had always been killed.
+The test that kills it asserts `!code.Contains("WarnOnly")` over `addons/RiskGuardAddOn.cs`
+**read by name**, and the settings dropdown it forbids had moved to the file next door. The gate
+searched a file the string could no longer be in and **passed**.
+
+Three things about how it was and was not caught:
+
+* **The suite was 1469/0 throughout.** It could not have told you.
+* **`check_anchors.py` did NOT catch it.** That gate asks whether the BATTERY can still find its
+  target — a different question from whether the TEST can. It correctly reported the one broken
+  *anchor* (repointed to the new file, and the battery converted to 4-tuples so it can address two
+  files) and said nothing about the gate, because nothing inspects a test's file paths.
+* **The mutation battery caught it, and only the battery.** This is the clearest instance yet of
+  why the batteries are the evidence standard here: a refactor that every other check called clean
+  had removed a defence, and the only thing that noticed was re-running a mutant.
+
+### ⚠️ ABSENCE gates and PRESENCE gates break in opposite directions
+
+**A source gate asserting a pattern is PRESENT fails loudly when pointed at the wrong file. One
+asserting a pattern is ABSENT passes vacuously** — it finds nothing because it is looking nowhere.
+Only one of the two tells you. **Absence gates must read the tree, not a named file.**
+
+`AllAddonCode()` now concatenates every `addons/*.cs` with comments stripped, **refuses an empty
+corpus**, and is what all absence gates search. `TestP2_29_TheSourceGatesReadTheWholeAddonTree` is
+the gate on the gates. Same remedy as `check_bridge_parses.py` and `BridgeTests.csproj` in the
+sibling repo the same week — **state the REGION a check inspects, and make it the whole thing the
+check is about**. Fifth and sixth instances of that class in two sessions.
+
+### ⚠️ Widening the `P1-13` gate to the tree found a real defect immediately — `P2-112`
+
+`DynamicAtmManager.cs:507` has `P1-13`'s fail-open verbatim:
+
+```csharp
+var dispatcher = System.Windows.Application.Current?.Dispatcher;
+if (dispatcher == null) return;
+```
+
+`P1-13` was closed against the guard's own handlers and its gate then read only
+`RiskGuardAddOn.cs`, so **this site was never inspected by anything**. With `Application.Current`
+null, the 5-second ATM monitor returns immediately forever: breakeven stops never move, trailing
+never advances, nothing logs. **Filed, not fixed** — `MonitorTickCore` calls `Account.Change()`, so
+`P1-13`'s "run inline" remedy would put a broker call on a `Timer` thread, and that call site needs
+verification **on settle** against a live market. ⚠️ **Reachability was NOT measured** and is part
+of closing it; this box runs the GUI, so it is latent rather than active.
+
+Held green by an **ID-bearing allowance that fails in BOTH directions**: the gate exempts
+`DynamicAtmManager.cs` by name with the ID, **and asserts the exemption is still needed**, so it
+cannot outlive the defect and quietly widen the gate. Same construction as
+`check_no_dead_safety_machinery.py`. **That is the honest way to widen a gate that finds something
+you cannot fix tonight** — narrowing it back to pass would have deleted the finding.
+
+⚠️ **`check_next_list_ids.py` also failed on its own marker set**: it strips `✅⚠️~*` and not `🔶`,
+so a heading written `-- 🔶 PARTIALLY CLOSED ...` parsed as having no status and the entry read as
+missing entirely. Loud, not silent, and fixed by stripping every marker the doc actually uses.
+
+### Evidence
+
+Suite **1469/0 → 1482/0** (501 → 502 tests); `mutate_p187` **survivor → SURVIVORS: none**;
+`check_anchors.py` **301/0**; all seven core gates green; `nt_compile` **errorCount 0** with a
+byte-identical warning set; `sync_nt8.py --verify` **ALL IN SYNC (10 files)**; the running guard
+read back **shadow / armed / 96 accounts / 2,304 rule rows** — unchanged.
+
+### Remainder
+
+Splitting `RiskGuardAddOn` itself into `{Core,Fsm,Rules,Actions,FirmMirror,Persistence}` partials.
+Genuinely different work — moving members of one class, not relocating independent types — and it
+would break far more than one anchor. **The tooling to do it safely now exists and is proven.**
+
+### Order from here
+
+1. **`P1-102`** — ⚠️ live half needs an account **holding a position**; futures reopen Sunday 18:00 ET.
+2. **`P2-108`**, then **`P2-112`** (⚠️ its fix touches `Account.Change()`, so it wants a live
+   market too), then **`P3-110`** (narrowed — §5.51).
+3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.

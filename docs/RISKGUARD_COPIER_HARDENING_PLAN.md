@@ -4843,13 +4843,93 @@ is what makes it testable at all.
 > `"requested": {}` alongside the complete, unchanged live config. **The MCP tool most likely to be
 > reached for as a read was itself a destructive write.**
 
-### P2-29. Single-file size / complexity — OPEN
-`RiskGuardAddOn.cs` is 4,108 lines including a ~700-line WPF window (`RiskGuardWindow`,
-`:3389-4096`); `McpBridgeAddOn.cs` is 5,452. V12 solved the same problem by splitting one
-`partial class` across 71 files by concern and gating complexity in CI.
-**Fix**: split into `RiskGuardAddOn.{Core,Fsm,Rules,Actions,FirmMirror,Persistence,Ui}.cs` as
-`partial class`, and move `RiskGuardWindow`/`CardControls` to their own files. Optionally port
-`scripts/complexity_audit.py` from the baseline repo as a pre-commit metric.
+### P2-29. Single-file size / complexity — PARTIALLY CLOSED 2026-08-15 (session 42): the WPF dashboard is out and verified; the `partial class` split of `RiskGuardAddOn` itself is the recorded remainder
+
+⚠️ **The sizes in the original entry were wrong and nothing had measured them since.** It said
+`RiskGuardAddOn.cs` was 4,108 lines with the window at `:3389-4096`. Measured 2026-08-15:
+**7,058 lines**, window at `:6338-7057`. A size claim decays silently; re-measure before quoting.
+
+**What landed.** `RiskGuardWindow` + `CardControls` moved verbatim to `addons/RiskGuardWindow.cs`
+(724 lines). `RiskGuardAddOn.cs` **7,058 → 6,334**. This is a **move, not a rewrite**: both are
+their own top-level types, so no `partial` keyword was needed and no member could be reshuffled.
+Suite **1469/0 before and after**; `nt_compile` **errorCount 0** with a byte-identical warning set;
+`sync_nt8.py --verify` **ALL IN SYNC (10 files)**; the running guard read back **shadow / armed /
+96 accounts / 2,304 rule rows**, unchanged.
+
+⚠️ **THE FINDING, AND IT IS THE REASON THIS TICKET IS WORTH MORE THAN TIDINESS: A PURE CODE MOVE
+SILENTLY DISARMED A SOURCE GATE.** `mutate_p187.py`'s WarnOnly mutant **SURVIVED** after the move,
+where it had always been killed. The test that kills it asserts `!code.Contains("WarnOnly")` over
+`addons/RiskGuardAddOn.cs` **read by name** — and the settings dropdown it forbids had moved to the
+file next door. The gate searched a file the string could no longer be in and **passed**.
+
+* **`check_anchors.py` did NOT catch it.** That gate verifies the BATTERY can still find its
+  target — a different question from whether the TEST can. It correctly reported the one broken
+  anchor and said nothing about the gate, because nothing inspects a test's file paths.
+* **The mutation battery caught it, and only the battery.** The suite was 1469/0 throughout.
+* ⚠️ **AND THE TWO DIRECTIONS ARE NOT SYMMETRIC.** A source gate asserting a pattern is **PRESENT**
+  fails loudly when pointed at the wrong file. One asserting a pattern is **ABSENT** *passes
+  vacuously* — it finds nothing because it is looking nowhere. **Absence gates must read the tree.**
+
+**Remedy**: `AllAddonCode()` concatenates every `addons/*.cs` with comments stripped, refuses an
+empty corpus, and is what all absence gates now search. `TestP2_29_TheSourceGatesReadTheWholeAddonTree`
+is the gate on the gates. Same remedy as `check_bridge_parses.py` and `BridgeTests.csproj` in the
+sibling repo, both of which stopped being hand-typed file lists the same week — **state the REGION
+a check inspects, and make it the whole thing the check is about**.
+
+⚠️ **WIDENING THE P1-13 GATE TO THE TREE FOUND A REAL DEFECT IMMEDIATELY** — filed as **`P2-112`**
+below. Nothing needed registering for the new file: `sync_nt8.py` and `tests/RiskGuardTests.csproj`
+both already glob `addons/*.cs`.
+
+**Remainder (deliberately NOT done here)**: splitting `RiskGuardAddOn` itself into
+`{Core,Fsm,Rules,Actions,FirmMirror,Persistence}` partials. That is a genuinely different change —
+it moves members of one class rather than relocating independent types — and it would break far
+more than one anchor. The tooling to do it safely now exists and is proven (`check_anchors.py` +
+`AllAddonCode()` + the batteries). Optionally port `scripts/complexity_audit.py` as a CI metric.
+
+---
+
+### P2-112. `DynamicAtmManager.MonitorTick` fails open with no dispatcher — the ATM breakeven loop silently never runs — OPEN, found 2026-08-15 by widening `P1-13`'s gate to the addon tree
+
+**Where**: `addons/DynamicAtmManager.cs:507`
+
+```csharp
+var dispatcher = System.Windows.Application.Current?.Dispatcher;
+if (dispatcher == null) return;
+dispatcher.InvokeAsync(() => MonitorTickCore());
+```
+
+**This is `P1-13` verbatim, at a subsystem that ticket never looked at.** `P1-13` was closed
+against the guard's own event handlers, and its gate then read only `RiskGuardAddOn.cs` — so this
+site was never inspected by anything. With `Application.Current` null (early startup before the WPF
+app object exists, or a headless NT8), the 5-second monitor returns immediately, **forever**:
+breakeven stops never move, trailing never advances, and nothing anywhere logs a word. A protection
+feature that is silently absent while every surface reports healthy.
+
+⚠️ **NOT FIXED IN THE COMMIT THAT FOUND IT, deliberately.** `P1-13`'s remedy was *run the work
+inline* (`RunGuardWork(label, work) => work()`), justified because `_stateLock` already protects
+the guard's state and broker calls marshal at the `ProcessAction` boundary. **That justification
+does not transfer here**: `MonitorTickCore` calls `Account.Change()` directly, so running inline
+puts a broker call on a `Timer` thread — and `Account.Change()` is the call site whose semantics
+the handover records as needing verification **on settle** (a second change in flight reverts the
+order; on Simulator it is discarded while NT8 echoes your price back). That is a change to make
+against a live market, not behind a green suite on a Friday night.
+
+⚠️ **Reachability is the mitigating factor and it was NOT measured.** This box runs the NT8 GUI, so
+`Application.Current` is normally non-null; the defect is latent rather than active. **Nothing here
+establishes how often it is null**, and that measurement is part of closing this.
+
+**Band**: `P2` on consequence — one subsystem's protection silently absent, where `P1-13` was all of
+them — with low measured reachability. **Weigh by §5.6, not by the letter.**
+
+**Held green by an ID-bearing allowance**, not by narrowing the gate back: `TestP1_13_...` now
+searches the whole tree, exempts `DynamicAtmManager.cs` by name with this ID, **and asserts the
+exemption is still NEEDED** — so it cannot outlive the defect and quietly widen the gate. Same
+both-directions construction as `tools/check_no_dead_safety_machinery.py`.
+
+**Fix**: give the ATM monitor the same treatment the guard got, with the broker call marshalled
+rather than the whole tick — i.e. run `MonitorTickCore` inline and marshal only the
+`Account.Change()`, or fall back to inline with a one-shot warning. Then delete the allowance in
+the same commit and re-drive an ATM breakeven move live.
 
 ---
 

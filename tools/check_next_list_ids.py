@@ -99,7 +99,11 @@ def entry_status(rest):
     (`P1-72`'s is eight lines long), so reading the tail lands somewhere in the prose.
     """
     for seg in SEPARATOR.split(rest)[1:]:
-        tail = seg.strip().lstrip('✅⚠️~* ').rstrip('~* ').strip()
+        # 🔶 is the doc's own marker for "partially done" and was NOT in this set, so a heading
+        # written `-- 🔶 PARTIALLY CLOSED ...` parsed as having no status at all and the entry
+        # read as missing. Caught on P2-29 in session 42. Strip every marker the doc actually
+        # uses, not the subset that happened to appear first.
+        tail = seg.strip().lstrip('✅⚠️🔶🆕~* ').rstrip('~* ').strip()
         upper = tail.upper()
         for pre in PARTIAL_PREFIXES:
             if upper.startswith(pre) and any(t in upper for t in CLOSED_TOKENS):
