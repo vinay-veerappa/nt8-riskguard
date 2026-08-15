@@ -1739,7 +1739,7 @@ to kill it — killing it is what causes this.
 
 ---
 
-### P2-115. `nt_health`'s `feedConnected` is `Account.All.Count > 0` — a market-data flag that can never be false — OPEN, found 2026-08-15 while answering a question about what a broker reconnection would buy
+### P2-115. `nt_health`'s `feedConnected` is `Account.All.Count > 0` — a market-data flag that can never be false — ✅ CLOSED 2026-08-15 (session 44, §5.67)
 
 **Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs:447`
 
@@ -1805,6 +1805,61 @@ market closed). `feedConnected` is still `true` — as it was with a dormant Pla
 no market at all. **The field did not change value when the thing it names changed completely**,
 which is the cheapest possible demonstration that it measures nothing. Everything else did change:
 `MNQ 09-26` went from a frozen `29533.75` to a live book at `30151.75 / 30155` on 1,925,425 volume.
+
+#### ✅ What shipped
+
+`addons/BridgeFeedStatus.cs` — `IsMarketDataConnected(names, providers, statuses)` over **three
+plain string arrays**. The shape is the point: it names **no NinjaTrader type**, so it lands in the
+set the harness can *execute* rather than the set it can only read as text. TRUE requires an entry
+that is BOTH connected AND non-simulated; `Connected`, `Simulator` and `Playback` are **exact,
+case-insensitive** matches; null, blank and unrecognised all fail closed; the arrays clamp to the
+shortest length.
+
+⚠️ **THE ARBITER RECOMMENDED SHIP ON A PATCH THAT WOULD NOT COMPILE.** It upheld **0 of 4** findings
+— the documented pattern — and the patch contained `a.Provider?.ToString()` and
+`a.Connection?.Status?.ToString()`. **`Provider` and `ConnectionStatus` are enums**, so `?.` on them
+is `CS0023`; the addon already writes `account.Provider.ToString()` with no `?.` at `:1771` and
+`:4590`. Every gate was green — static ok, compile ok, 314 passed, all 6 acceptance tests green,
+lock-scope clean — and **none of them could see it, because `McpBridgeAddOn.cs` is in no test
+build.** That is `P2-27` arriving exactly where this repo's agent-loop profile warns it will, and
+`check_bridge_parses.py` says so in its own output: *"This is NOT a compile — run nt_compile before
+calling a bridge change done."* Fixed by hand, along with the patch's `Print(...)`, which is
+`NinjaScriptBase`'s method and not this file's convention (`NinjaTrader.Code.Output.Process`).
+
+⚠️ **The battery went 5/10 and FOUR of the five were gaps in tests written the same hour**:
+`return true` on **null** arrays (every assertion passed a real one — **an empty array is not a null
+array**); a **blank provider** admitted as real; the **shortest-length clamp** removed with nothing
+ragged in the suite; and a source gate asserting the class is **mentioned** rather than that its
+answer is **assigned** — the third time that exact gap has been found here after `P1-105` and
+`P2-109`, and the comment directly beneath it *already said* a value that is computed is not a value
+that is used. The fifth was the author's: a **case-sensitive** `Contains("Connected")` mutant, which
+`"Disconnected"` does not match, so it never expressed its own defect (fourth instance of *read what
+a mutant DOES*). ⚠️ And the re-run left **one** survivor for the same reason — the ragged test made
+*providers* the shortest array, so removing the **statuses** clamp changed nothing. **Each clamp
+needs the array it guards to be the one that would overrun.** Now **10/10**.
+
+⚠️ **Mutant 5 is the one to carry: a bare `return false`.** Every requirement in this ticket is
+about a TRUE that cannot become false, so a constant `false` satisfies all of them and ships a
+health endpoint reporting a permanent outage on a working box. **A status field needs both
+directions, not just the one its defect was in.**
+
+**Evidence**: bridge harness **311 → 324/0**, MCP wrapper **54/0**, `mutation/mutate_p2115.py`
+**10/10** and wired into CI (7 batteries), all four bridge gates green, `nt_compile` **errorCount
+0**, `deploy.py` clean.
+
+⚠️ **WHICH HALF IS MEASURED.** The class has four executed assertions in both directions. The
+**wiring** has a source gate, a clean compile, and a live `feedConnected: true` with the broker
+attached — which is a **positive control only, because `true` is what the defect produced too**.
+Showing `false` live requires disconnecting the operator's broker and was not done. Say which half
+was measured; do not let one green stand for both.
+
+**Follow-up, deliberately not done here**: a `connections` detail list on the payload. It is a
+contract change for every client of `/api/health` and belongs with a decision about the wrapper
+schema. Also unresolved: `guarding` is character-for-character `isArmed` on
+`/api/riskguard/version` — one fact under two names.
+
+**Where**: `nt8-mcp-bridge/addons/BridgeFeedStatus.cs` (new), `addons/McpBridgeAddOn.cs`,
+`tests/BridgeSourceTests.cs`, `mutation/mutate_p2115.py`, `.github/workflows/ci.yml`.
 
 **The rest of the payload was swept before banding this, and it comes out well** — which is what
 makes the one bad field worth fixing rather than distrusting the whole surface. `/api/riskguard/version`

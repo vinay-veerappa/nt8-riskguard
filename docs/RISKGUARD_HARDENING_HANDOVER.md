@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **122 IDs — 109 closed, 13 open**, re-derived 2026-08-15 (session 42, after `P2-29`/`P2-112`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P2-112` new, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **`P2-29` is now PARTIALLY CLOSED and it opened `P2-112`** — so the run continues after all: **five sessions** in which doing one piece of work produced the next defect. This time the producer was a **pure code move**, which found a source gate that had been disarmed by the relocation and, on being widened to the region it always claimed to cover, immediately hit a real `P1-13` instance nobody had inspected (§5.55). ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
-| **Do next** | 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). Then 🆕 **`P2-115`** — `feedConnected` is `Account.All.Count > 0`, so it can NEVER be false; it did not change value when the connection changed completely. ✅ `P2-112` closed 2026-08-15 (§5.64): reachability finally MEASURED at **0** fallbacks, but ⚠️ **the breakeven stop MOVE is still unexercised** — NT8 is on a dormant `Playback` connection, so the entry never filled. ✅ `P2-108` closed 2026-08-15 (§5.58): 12-in-120s → **1**, re-arm verified, and the defect IN THE FIX was found by the box after 8 tests and 8/8 mutants passed. ✅ `P1-102` closed (§5.57), **`P3-110`** (⚠️ **narrowed by live measurement the same day — the hazard as filed does NOT reproduce**; both stop types rest in `Accepted`, which the panic path already cancels, so weigh it near-last), then the architectural **`P2-29`** / **`P3-33`**. ✅ `P2-107` closed in session 40 (§5.48). ✅ **`P1-105` closed in session 41 (§5.49)** — `nt_close_position` reported `positionClosed: true` having submitted nothing; the report is now derived from an order-set observation plus a bounded position re-read, through **one scope predicate both passes call**. ⚠️ Its battery went **15/18** and **two of the three survivors were SOURCE gates that passed under the mutant** — they asserted a value is *computed*, not that it is *used*. | §5.6, §5.49, and `python tools/check_next_list_ids.py` |
+| **Do next** | 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3349,7 +3349,7 @@ and `P?-65` together and makes the redesign testable.
 the *order* they forced is the reusable part.
 
 > ### Do next: `P2-116` — 88 of 89 prop accounts report as protected when the guard has no equity for them
-> ### (then `P2-115` — `feedConnected` is a market-data flag that can never be false)
+> ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
 > ### (✅ `P1-102` closed 2026-08-15 — §5.57)
@@ -9324,3 +9324,85 @@ rather than passing quietly. The cost was two red CI runs, not a false green —
 arrangement working. But it is the second time this session that **a check run before the last edit
 was a check on something else**; the first was `check_next_list_ids.py`, run before the status edit
 and not after.
+
+---
+
+## 5.67 `P2-115` closed — the arbiter recommended SHIP on code that would not compile
+
+**Session 44.** `/api/health`'s `feedConnected` was `Account.All.Count > 0`: true on every running
+NT8, forever. Measured `true` against a **dormant Playback connection with no tradeable market at
+all**, and `true` again an hour later with a real broker on a live MNQ book. **It did not change
+value when the thing it names changed completely.**
+
+Now `addons/BridgeFeedStatus.cs` — `IsMarketDataConnected(names, providers, statuses)` over three
+plain string arrays. That shape is the design: it names **no NinjaTrader type**, so it lands in the
+set the harness can *execute* rather than the set it can only read as text.
+
+### ⚠️ The headline: every gate was green and the patch had two compile errors
+
+The loop returned `ARBITER_SHIP` with **0 of 4** findings upheld — the documented pattern — on a
+patch containing `a.Provider?.ToString()` and `a.Connection?.Status?.ToString()`. **`Provider` and
+`ConnectionStatus` are enums**, so `?.` is `CS0023`; the addon already writes
+`account.Provider.ToString()` at `:1771` and `:4590`. Static ok, compile ok, 314 passed, all six
+acceptance tests green, lock-scope clean — **and not one of them could see it, because
+`McpBridgeAddOn.cs` is in no test build.**
+
+That is `P2-27` arriving exactly where this repo's agent-loop profile header warns it will, and
+`check_bridge_parses.py` prints the caveat in its own output: *"This is NOT a compile — type errors
+are out of scope by design. Run nt_compile before calling a bridge change done."* **Read the caveat
+your own gate prints.** Also fixed by hand: the patch's `Print(...)`, which is `NinjaScriptBase`'s
+method, not this file's `NinjaTrader.Code.Output.Process` convention.
+
+### The battery went 5/10, and four were gaps in tests written the same hour
+
+| survivor | why the tests missed it |
+|---|---|
+| `return true` on **null** arrays | every assertion passed a real array — **an empty array is not a null array** |
+| a **blank provider** admitted as real | every assertion passed a *named* provider |
+| the **shortest-length clamp** removed | nothing in the suite was ragged |
+| the source gate | it asserted the class is **mentioned**, not that its answer is **assigned** |
+
+⚠️ **The fourth is the third instance of that exact gap** (`P1-105`, `P2-109`, now here) — and the
+comment directly beneath the assertion *already said* a value that is computed is not a value that
+is used. **I wrote the warning and shipped the weaker check anyway.**
+
+⚠️ **The fifth survivor was the author's**: a **case-sensitive** `Contains("Connected")` mutant.
+`"Disconnected"` does not contain `"Connected"` with a capital C, so it never expressed its own
+defect and no test could have killed it. Fourth instance of *read what a mutant DOES before calling
+it a missing test*.
+
+⚠️ **And the re-run still left one**, for a reason worth keeping: the ragged test made *providers*
+the shortest array, so removing the **statuses** clamp changed nothing. **Each clamp needs the array
+it guards to be the one that would overrun.** Now **10/10**.
+
+⚠️ **Mutant 5 is the one to carry: a bare `return false`.** Every requirement here is about a TRUE
+that cannot become false, so a constant `false` satisfies all of them and ships a permanent-outage
+report on a working box. **A status field needs both directions, not only the one its defect was
+in.**
+
+### Evidence, and which half is NOT measured
+
+Bridge harness **311 → 324/0**, MCP wrapper **54/0**, battery **10/10** and wired into CI (7
+batteries), all four bridge gates green, `nt_compile` **errorCount 0**.
+
+⚠️ **The class has four executed assertions in both directions. The WIRING has a source gate, a
+clean compile, and a live `feedConnected: true` — a positive control ONLY, because `true` is what
+the defect produced too.** Showing `false` live needs the operator's broker disconnected and was not
+done. Say which half was measured.
+
+### 🆕 And the tool itself had to be fixed first — `agent-loop` v0.6.7
+
+The first run died with *"baseline test run produced no parseable result summary"*, which reads as
+*the consumer's output is malformed*. The real cause was `agent-loop`'s own `gates._run`:
+`subprocess.run(..., text=True)` with no encoding decodes as **cp1252** on Windows, and this
+harness prints two `⚠️` assertion messages. One byte `0x8F` killed the reader thread. **This repo
+had never once been runnable by the loop and nothing said so.**
+
+Ten capture sites pinned with `encoding='utf-8', errors='replace'`, plus an **AST gate** that walks
+every capture — it found **two sites a grep had missed**, one a `tasklist` **liveness probe** that
+could throw. Three things the fix taught, all now in the test: **`U+26A0` alone does not reproduce
+it** (its bytes are all defined in cp1252 — it is the variation selector `U+FE0F` that carries the
+undecodable `8F`); **the unpinned form does not RAISE in the caller** (the reader thread dies and
+`stdout` is silently `None`, which is why it is invisible from outside); and `selftest.py` carries a
+**BOM**, so the gate reads `utf-8-sig` and **fails on any file it cannot parse rather than skipping
+it**. Suite 633 → **636**. That is the **third repo** in this encoding class, after both consumers.
