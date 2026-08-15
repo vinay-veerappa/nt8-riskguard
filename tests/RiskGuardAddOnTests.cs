@@ -263,6 +263,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened();
             TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus();
             TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows();
+            TestP2_112_WithNoDispatcherTheSweepStillRuns();
+            TestP2_112_WhenThereIsADispatcherTheSweepIsNotAlsoRunInline();
+            TestP2_112_TheNoDispatcherFallbackIsAnnouncedOnce();
             TestP2_78_TheDeadPerInstrumentFieldsAreGone();
             TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
             TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist();
@@ -7368,6 +7371,159 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(!bracket.BreakevenTriggered,
                 "And breakeven is NOT marked done: marking it would permanently suppress the move on "
                 + "a bracket whose stop is missing, which is the worst of the two failures.");
+        }
+
+        // ------------------------------------------------------------------
+        // P2-112. `MonitorTick` returned early when `Application.Current` had no Dispatcher, which
+        // is P1-13's fail-open verbatim at a subsystem P1-13 never inspected: the 5-second sweep
+        // that moves breakeven stops and advances trailing stops silently never ran, forever, and
+        // nothing logged a word.
+        //
+        // ⚠️ THE DEFECT LIVED WHERE NO TEST BUILD COULD SEE IT. The whole of MonitorTick was
+        // `#if TESTING MonitorTickCore(); #else <the dispatcher branch> #endif`, so the ten ATM
+        // tests drove a body the production assembly does not contain. That is P2-27's shape and it
+        // is why these tests assert the SEAM exists before they assert anything about behaviour: if
+        // the platform lookup is not separated from the control flow, there is nothing here to test.
+        //
+        // These reach `MonitorTick` by reflection deliberately, rather than through a new
+        // `#if TESTING` hook. A hook would be a second entry point that production never takes --
+        // the very arrangement that hid this -- so the tests drive the real private method that the
+        // real Timer calls.
+        // ------------------------------------------------------------------
+
+        private const string P2112SeamField = "TryMarshal";
+
+        /// <summary>
+        /// Returns the TryMarshal seam field, or null if the production code still has no seam --
+        /// which is the pre-fix state and is what makes these tests RED rather than absent.
+        /// </summary>
+        private static System.Reflection.FieldInfo P2112Seam()
+        {
+            return typeof(DynamicAtmManager).GetField(P2112SeamField,
+                System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic);
+        }
+
+        /// <summary>Drives the REAL private MonitorTick the Timer calls, not MonitorTickCore.</summary>
+        private static void P2112DriveMonitorTick(DynamicAtmManager atm)
+        {
+            var m = typeof(DynamicAtmManager).GetMethod("MonitorTick",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert(m != null, "MonitorTick is reachable -- it is the method the 5-second Timer calls, "
+                + "and driving MonitorTickCore instead would test a path the Timer never takes");
+            m.Invoke(atm, new object[] { null });
+        }
+
+        /// <summary>
+        /// THE defect. With no dispatcher there is nothing to marshal TO -- a headless NT8 has no
+        /// WPF application object at all -- so the only choice is between doing the sweep on the
+        /// timer thread and not doing it. Not doing it was the shipped behaviour.
+        /// </summary>
+        private static void TestP2_112_WithNoDispatcherTheSweepStillRuns()
+        {
+            Console.WriteLine("\n[TEST] P2-112: with no dispatcher the ATM sweep runs anyway, instead of returning forever");
+
+            var seam = P2112Seam();
+            Assert(seam != null,
+                "DynamicAtmManager exposes a TryMarshal seam, so the dispatcher lookup is separated "
+                + "from the control flow. Before P2-112 the entire dispatch decision sat behind "
+                + "#if TESTING, so the branch holding the defect existed in no test build.");
+            if (seam == null) return;
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // No dispatcher available. This is early startup before the WPF app object exists, or a
+            // headless NT8.
+            seam.SetValue(atm, new Func<Action, bool>(_ => false));
+
+            P2112DriveMonitorTick(atm);
+
+            Assert(bracket.BreakevenTriggered,
+                "the breakeven move was requested with no dispatcher present. Before P2-112 this "
+                + "returned early, so breakeven stops never moved and trailing never advanced -- a "
+                + "protection feature silently absent while every surface reported armed.");
+        }
+
+        /// <summary>
+        /// The negative half, and the one that stops the cheap fix. Deleting the dispatcher and
+        /// always running inline passes the test above -- and puts every Account.Change() on a Timer
+        /// thread on the box that actually has a UI, where NT8's broker objects are not thread-safe.
+        /// A detector needs a negative test; so does a fallback.
+        /// </summary>
+        private static void TestP2_112_WhenThereIsADispatcherTheSweepIsNotAlsoRunInline()
+        {
+            Console.WriteLine("\n[TEST] P2-112: a working dispatcher still gets the sweep, and it is NOT run twice");
+
+            var seam = P2112Seam();
+            Assert(seam != null,
+                "DynamicAtmManager still exposes the TryMarshal seam for the marshalled case");
+            if (seam == null) return;
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // A dispatcher IS available: it accepts the work and will run it on the UI thread later.
+            // It deliberately does NOT invoke `work` here -- that is what InvokeAsync does.
+            int accepted = 0;
+            seam.SetValue(atm, new Func<Action, bool>(_ => { accepted++; return true; }));
+
+            P2112DriveMonitorTick(atm);
+
+            Assert(accepted == 1,
+                "the sweep was handed to the dispatcher exactly once (got " + accepted + ")");
+            Assert(!bracket.BreakevenTriggered,
+                "and it was NOT ALSO run on the timer thread. Running inline unconditionally would "
+                + "pass the no-dispatcher test while putting Account.Change() on a Timer thread on "
+                + "every box that has a UI -- NT8 Account/Order/Position objects are not thread-safe.");
+        }
+
+        /// <summary>
+        /// P2-108's lesson at a new site. The fallback is worth announcing exactly once; announcing
+        /// it every 5 seconds forever is an alarm that is always on, which is off.
+        /// </summary>
+        private static void TestP2_112_TheNoDispatcherFallbackIsAnnouncedOnce()
+        {
+            Console.WriteLine("\n[TEST] P2-112: the no-dispatcher fallback is announced ONCE, not every 5 seconds");
+
+            var seam = P2112Seam();
+            Assert(seam != null, "DynamicAtmManager still exposes the TryMarshal seam for the announcement");
+            if (seam == null) return;
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // LogFromComponent is a no-op without an Instance, so the announcement is unobservable
+            // unless one exists. AtmSetup deliberately clears it.
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            seam.SetValue(atm, new Func<Action, bool>(_ => false));
+
+            var events = new List<string>();
+            RiskGuardAddOn.LogEventObserver = (a, evt) => events.Add(evt);
+            try
+            {
+                for (int i = 0; i < 5; i++) P2112DriveMonitorTick(atm);
+            }
+            finally
+            {
+                RiskGuardAddOn.LogEventObserver = null;
+                RiskGuardAddOn.SetInstanceForTest(null);
+            }
+
+            int announced = events.Count(e => e == "ATM_MONITOR_NO_DISPATCHER");
+            Assert(announced == 1,
+                "the no-dispatcher fallback is announced exactly once across 5 sweeps (got "
+                + announced + "). Silence is the defect; a line every 5 seconds forever is P2-108.");
         }
 
         // ------------------------------------------------------------------
@@ -16546,42 +16702,47 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // ⚠️ WIDENING THIS GATE TO THE TREE FOUND A REAL ONE, IMMEDIATELY. `P1-13` was closed
             // against the guard's own handlers and the gate then read only RiskGuardAddOn.cs, so
-            // `DynamicAtmManager.MonitorTick` -- which has the identical fail-open, on the 5-second
-            // loop that moves ATM stops to breakeven -- was never inspected. Filed as **P2-112**,
-            // not fixed here: MonitorTickCore calls `Account.Change()`, so "run the work inline"
-            // (P1-13's remedy) puts a broker call on a Timer thread, and that call site is one the
-            // handover records as needing verification ON SETTLE. That is a change to make with a
-            // live market, not on a Friday night behind a green suite.
+            // `DynamicAtmManager.MonitorTick` -- which had the identical fail-open, on the 5-second
+            // loop that moves ATM stops to breakeven -- was never inspected. Filed as `P2-112` and
+            // held green for one session by an ID-bearing per-file allowance that asserted it was
+            // still NEEDED, so it could not outlive the defect and quietly widen the gate.
             //
-            // The allowance is BY FILE and carries the ID, and it is asserted in BOTH directions:
-            // a new instance anywhere fails, AND the allowance failing to be needed fails too, so
-            // it cannot outlive the defect and quietly widen the exemption. Same construction as
-            // tools/check_no_dead_safety_machinery.py, for the same reason.
-            const string KnownFailOpenFile = "DynamicAtmManager.cs";   // P2-112
+            // ✅ `P2-112` IS FIXED, so THE ALLOWANCE IS GONE and this gate is unexempted again. The
+            // allowance's own second assertion is what required that: it failed the moment the
+            // defect did, in the same commit. That is the construction working, and it is why an
+            // exemption must always assert its own necessity (same shape as
+            // tools/check_no_dead_safety_machinery.py).
+            //
+            // ⚠️ Note for anyone reading DynamicAtmManager: its TryMarshal seam contains
+            // `if (dispatcher == null) return false;`, which this regex deliberately does NOT match
+            // and which is NOT this shape. It returns to a caller that then does the work. The shape
+            // being banned is a bare `return;` that abandons it.
             var perFile = code.Split(new[] { "// ==== " }, StringSplitOptions.RemoveEmptyEntries);
             var offenders = new List<string>();
-            int allowedHits = 0;
             foreach (var chunk in perFile)
             {
                 var fileName = chunk.Substring(0, Math.Max(0, chunk.IndexOf(" ====")));
                 int n = failOpen.Matches(chunk).Count;
                 if (n == 0) continue;
-                if (fileName == KnownFailOpenFile) { allowedHits += n; continue; }
                 offenders.Add(string.Format("{0} ({1})", fileName, n));
             }
 
+            // POSITIVE CONTROL on the pattern itself. Without this, a regex that had rotted -- or a
+            // corpus split that stopped yielding chunks -- would report zero offenders forever and
+            // read exactly like a clean tree. State the region a gate inspects, and prove it can
+            // still see something.
+            Assert(failOpen.IsMatch("if (dispatcher == null) return;"),
+                "positive control: the fail-open regex still matches the shape it exists to ban");
+            Assert(perFile.Length >= 6,
+                string.Format("positive control: the corpus split yielded {0} addon files to search",
+                    perFile.Length));
+
             Assert(offenders.Count == 0,
                 string.Format(
-                    "{0} unaccounted guard path(s) still return early when there is no dispatcher: "
-                    + "{1}. Each one is a silent, total protection outage that reports itself as "
-                    + "armed.",
-                    offenders.Count,
+                    "no guard path returns early when there is no dispatcher, anywhere in the addon "
+                    + "tree (offenders: {0}). Each one is a silent, total protection outage that "
+                    + "reports itself as armed.",
                     offenders.Count == 0 ? "none" : string.Join(", ", offenders)));
-
-            Assert(allowedHits > 0,
-                "and the P2-112 allowance for " + KnownFailOpenFile + " is still NEEDED. If this "
-                + "fails, the defect was fixed and the exemption must be deleted in the same "
-                + "commit -- an allowance that outlives its defect silently widens the gate");
 
             // And the seam is genuinely the single funnel, not a helper nobody calls.
             int wired = System.Text.RegularExpressions.Regex.Matches(source, @"RunGuardWork\(").Count;
