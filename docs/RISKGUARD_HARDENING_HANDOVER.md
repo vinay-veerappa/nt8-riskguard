@@ -9017,6 +9017,65 @@ tool; restoring made it pass. A detector that has never been seen to fire is not
 
 Wrapper tests **53 → 54**.
 
+## 5.63 `P2-114` — CI went red on the `P2-113` push, and both failures were this session's own lessons landing on me
+
+The `P2-78`/`P2-113` code was deployed and live-validated before its CI evidence existed. Both
+later pushes then failed the 15-minute matrix, on **two different batteries**, for **two unrelated
+reasons** — and each was a lesson written down earlier the same day.
+
+### Failure 1 — `mutate_p182` crashed printing its own output
+
+`UnicodeEncodeError: 'charmap' codec can't encode characters in position 201-202`. A repointed
+mutant description had gained a `⚠️`, and `mutate_p182.py` has no `sys.stdout.reconfigure`.
+
+⚠️ **It passed locally and crashed on the runner**, on identical input. And it raised **between
+applying a mutant and restoring it**, so everything after that point in the run proved nothing.
+
+⚠️ **`tools/check_batteries_pin_encoding.py` DID NOT EXIST IN THIS REPO** — it lives in
+`nt8-mcp-bridge`, while §0 cited it as protecting these batteries. **Fourth per-repo gate gap**
+after `check_anchors.py`, `check_ci_runs_every_battery.py` and `check_bridge_parses.py`. Porting it
+was one `cp`, and on arrival it failed **56 subprocess captures across 29 batteries**: this repo had
+never pinned *either* half, and had survived only because the C# suite's output happens to be ASCII
+today. One non-ASCII character in any `Console.WriteLine` would have killed **every battery at
+once**.
+
+⚠️ **And the gate had only ever checked HALF the hazard, which is its own lesson restated.** Its
+docstring said *"every battery must pin an explicit encoding on its subprocess captures"* and it
+enforced exactly that sentence. The sentence was the bug — the hazard is *the battery's encoding
+assumptions*, of which the subprocess capture is one:
+
+| half | codec direction | when it fails | consequence |
+|---|---|---|---|
+| DECODE — `subprocess.run(capture_output=True, text=True)` | child → battery | **before** the first mutant | `stdout` is `None`, battery dies having proven nothing |
+| ENCODE — the battery's own `print()` | battery → console | **between** applying a mutant and restoring it | **a live mutant left in the working tree** |
+
+The encode half is strictly worse. Both are now required of **every** battery, not only of ones
+that currently carry a non-ASCII character — *a conditional requirement would be satisfied by the
+very edit that breaks it*. **State the hazard a gate is for, then check every surface it has**:
+[[state-the-region-a-gate-inspects]] applied to a hazard rather than to a file.
+
+✅ Driven negative twice before being believed: removing the pin fails it, and **so does a half-pin**
+(`encoding='utf-8'` with no `errors='replace'`), which is the shape that still crashes.
+
+### Failure 2 — a `mutate_ui4` mutant SURVIVED, and §5.61 predicted it
+
+*"rules with no evaluator are omitted from each ACCOUNT's inventory"* — the per-account loop turned
+into `i < 0`. It had been killed for the life of the battery **by real unevaluated rules happening
+to exist**. `P1-77` + `P1-81` + `P2-113` removed its subject, and a mutant with nothing to corrupt
+survives.
+
+⚠️ **That is §5.61's lesson at a SEVENTH gate, and it is the one I missed.** I converted the six
+*tests* that scanned that population and did not ask whether the *batteries* did too. The six failed
+**loudly**, because each carried an explicit `Count > 0`; this one went **quiet**, and quiet is how
+a battery stops being evidence.
+
+**When a fix empties a population, the mutation batteries are gates against it as well as the
+tests.** Closed by `TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows`, which drives the
+synthetic registry with two accounts and asserts **both** surfaces — the per-account rows and the
+fleet list are filled by two different loops and the battery has a mutant for each.
+
+Suite **1697 → 1705/0**. 31 batteries, both encoding halves pinned, anchors **325/0**.
+
 ### Order from here
 
 1. **`P2-112`** — ⚠️ its fix touches `Account.Change()`, so it wants a live market (§5.55). Market

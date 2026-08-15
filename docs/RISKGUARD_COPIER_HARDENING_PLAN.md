@@ -1677,6 +1677,68 @@ change — a note describing fields the config no longer has is the same defect 
 
 ---
 
+### P2-114. Two mutation batteries stopped being evidence, in two different ways — ✅ CLOSED 2026-08-15 (session 43, §5.63)
+
+*(found by `gh run list` after the `P2-113` push. The code it guards was already deployed and
+live-validated; both failures were in the batteries, not the addon.)*
+
+**Two unrelated causes, and each was a lesson written down earlier the same day.**
+
+#### (a) A battery crashed printing its own output, leaving a LIVE MUTANT
+
+`mutate_p182.py` raised `UnicodeEncodeError: 'charmap' codec can't encode characters in position
+201-202` on the GitHub windows runner, **while passing locally on identical input**. A repointed
+mutant description had gained a `⚠️`. It raised **between applying a mutant and restoring it**, so
+everything after that point proved nothing.
+
+⚠️ **`tools/check_batteries_pin_encoding.py` did not exist in this repo** — it lives in
+`nt8-mcp-bridge`, while §0 cited it as protecting these batteries. **Fourth per-repo gate gap.**
+Porting it was one `cp`, and on arrival it failed **56 subprocess captures across 29 batteries**:
+this repo had never pinned *either* half, and survived only because the C# suite's output happens
+to be ASCII today. One non-ASCII `Console.WriteLine` would have killed **every battery at once**.
+
+⚠️ **The gate had only ever checked half the hazard.** Its docstring said *"every battery must pin
+an explicit encoding on its subprocess captures"* and it enforced exactly that sentence. **The
+sentence was the bug** — the hazard is the battery's *encoding assumptions*, of which the
+subprocess capture is one surface:
+
+| half | direction | when it fails | consequence |
+|---|---|---|---|
+| DECODE — `subprocess.run(capture_output=True, text=True)` | child → battery | **before** the first mutant | `stdout` is `None`; the battery dies having proven nothing |
+| ENCODE — the battery's own `print()` | battery → console | **between** applying a mutant and restoring it | **a live mutant left in the working tree** |
+
+Both are now required of **every** battery, not only of ones that currently carry a non-ASCII
+character — *a conditional requirement would be satisfied by the very edit that breaks it*. A
+half-pin (`encoding='utf-8'` with no `errors='replace'`) is rejected, because that shape still
+crashes. ✅ Driven negative on both before being believed.
+
+#### (b) A `mutate_ui4` mutant SURVIVED, because its subject had been fixed away
+
+*"rules with no evaluator are omitted from each ACCOUNT's inventory"* — the per-account loop turned
+into `i < 0`. It had been killed for the life of the battery **by real unevaluated rules happening
+to exist**. `P1-77` + `P1-81` + `P2-113` gave every rule an evaluator, and a mutant with nothing to
+corrupt survives.
+
+⚠️ **That is §5.61's own lesson at a seventh gate, and the one instance of it I missed.** I
+converted the six *tests* that scanned that population and never asked whether the *batteries* did
+too. The six failed **loudly**, because each carried an explicit `expected.Count > 0`; this one went
+**quiet**, and quiet is how a battery stops being evidence. **When a fix empties a population, the
+mutation batteries are gates against it as well as the tests — re-run them, not just the suite.**
+
+#### (c) A third route to the same live mutant, and it was mine
+
+Two batteries were launched concurrently. They rewrite **the same source files**, so one's restore
+overwrote the other's mid-flight state and left `snapshot.IsArmed = true` in `GuardRules.cs`. That
+is [[mutation-battery-killed-leaves-a-mutant]] arriving without anyone stopping anything. **Run
+batteries one at a time**, and the correct response to a battery that is mid-run is to *wait*, not
+to kill it — killing it is what causes this.
+
+**Where**: `tools/check_batteries_pin_encoding.py` (ported + extended), all 31 `mutation/mutate_*.py`,
+`tests/RiskGuardAddOnTests.cs` (`TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows`),
+`.github/workflows/ci.yml`.
+
+---
+
 ### P2-113. The inventory reported the news events file as read by nothing, for two days after something started reading it — ✅ CLOSED 2026-08-15 (session 43, §5.61)
 
 *(found 2026-08-15 while closing out `P1-77`/`P1-81`, by asking what the ONE remaining

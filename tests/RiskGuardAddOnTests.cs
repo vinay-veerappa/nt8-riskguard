@@ -262,6 +262,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2_113_AConfiguredPathThatLoadedNothingIsNotReportedAsHealthy();
             TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened();
             TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus();
+            TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows();
             TestP2_78_TheDeadPerInstrumentFieldsAreGone();
             TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
             TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist();
@@ -3208,6 +3209,60 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "real rule is in that state"
             });
             return list;
+        }
+
+        /// <summary>
+        /// P2-114. A rule nothing evaluates must appear on EVERY ACCOUNT'S ROWS, not only in the
+        /// fleet-level `UnevaluatedRules` list — an operator looking at one account is the case
+        /// this whole state exists for.
+        ///
+        /// ⚠️ WHY THIS TEST IS NEW RATHER THAN OLD. `mutate_ui4`'s mutant for exactly this — the
+        /// per-account loop turned into `i &lt; 0` — SURVIVED in CI, on the push that closed
+        /// `P2-113`. It had been killed for the life of the battery by real unevaluated rules
+        /// happening to exist. Giving every rule an evaluator removed its subject, and a mutant
+        /// with nothing to corrupt survives.
+        ///
+        /// That is §5.61's lesson at a SEVENTH gate. The six that failed loudly did so because
+        /// each carried an explicit `Count &gt; 0`; this one had no such guard, so it went quiet
+        /// instead — and quiet is how a battery stops being evidence. **When a fix empties a
+        /// population, the mutation batteries are gates against it too.**
+        /// </summary>
+        private static void TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows()
+        {
+            Console.WriteLine("\n[TEST] P2-114: a rule nothing evaluates is shown on EVERY account, not just fleet-wide");
+
+            var registry = RulesPlusOneUnevaluated();
+            var accounts = new List<RiskGuardAddOn.AccountStateSnapshot> {
+                Ui4Account("P2114AccA"),
+                Ui4Account("P2114AccB")
+            };
+
+            var snap = GuardRuleRegistry.BuildSnapshot(
+                Ui4Config(), new PropFirmProtectionConfig(), "live", true, accounts, 0,
+                null, registry);
+
+            Assert(snap.Accounts.Count == 2, "both accounts are in the snapshot (control)");
+
+            foreach (var acct in snap.Accounts)
+            {
+                var row = acct.Rules.FirstOrDefault(r => r.ConfigPath == "synthetic.unevaluated");
+                Assert(row != null, string.Format(
+                    "{0} carries the unevaluated rule among its OWN rows -- the fleet list is not "
+                    + "a substitute, because an operator inspecting one account never sees it",
+                    acct.AccountName));
+                if (row == null) continue;
+
+                Assert(row.State == GuardRuleState.ConfiguredNotEvaluated, string.Format(
+                    "and it reads ConfiguredNotEvaluated there (got {0})", row.State));
+                Assert(!string.IsNullOrWhiteSpace(row.Note),
+                    "and it carries its reason, because a red row with no cause is noise");
+            }
+
+            // Both surfaces, not one. The fleet list and the per-account rows are filled by two
+            // different loops and the battery has a mutant for each.
+            Assert(snap.UnevaluatedRules.Any(r => r.ConfigPath == "synthetic.unevaluated"),
+                "and it is ALSO in the fleet-level list, for the operator who never opens an "
+                + "account");
         }
 
         private static void TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates()

@@ -99,6 +99,24 @@ jobs:
       - name: A declared EXPECTED SURVIVOR does not make a battery unpassable
         run: python tools/check_expected_survivors.py
 
+      # ...and a battery that is wired in and can pass must also be able to RUN TO ITS RESTORE
+      # LINE. Two encoding hazards, opposite directions, both Windows-only:
+      #
+      #   DECODE -- subprocess.run(capture_output=True, text=True) uses the LOCALE codec (cp1252
+      #     here and on the runners). One non-ASCII character in a test name makes stdout None and
+      #     the battery dies before its first mutant.
+      #   ENCODE -- the battery's own print(). One non-ASCII character in a MUTANT DESCRIPTION
+      #     raises UnicodeEncodeError AFTER a mutant is applied and BEFORE it is restored, leaving
+      #     A LIVE MUTANT in the working tree.
+      #
+      # ⚠️ This gate existed in nt8-mcp-bridge and NOT HERE, while the handover cited it as
+      # protecting these batteries -- the fourth per-repo gate gap. On being ported it failed 56
+      # subprocess captures across 29 batteries: this repo had never pinned either half and had
+      # only survived because the C# suite's output happens to be ASCII today. The encode half
+      # then fired for real in CI on mutate_p182.py (P2-114).
+      - name: Every mutation battery pins BOTH encodings and can reach its restore line
+        run: python tools/check_batteries_pin_encoding.py
+
       # P2-24's class, made mechanical. Safety machinery that is written and never called
       # passes every other gate here -- it compiles, its own tests call it directly so the
       # suite is green, and the config surface advertising it looks configured. Session 34

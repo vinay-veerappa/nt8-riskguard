@@ -60,6 +60,13 @@ import re
 import subprocess
 import sys
 
+# P2-114: the battery's OWN stdout. A non-ASCII character in a mutant DESCRIPTION raises
+# UnicodeEncodeError inside print() on a cp1252 console -- and it raises BETWEEN applying a
+# mutant and restoring it, which leaves a LIVE MUTANT in the source tree. Measured in CI on
+# mutate_p182.py, 2026-08-15. The subprocess encoding below is the OTHER half.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 COPIER = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 
@@ -141,12 +148,14 @@ MUTANTS = [
 def run():
     build = subprocess.run(
         ['dotnet', 'build', 'RiskGuardTests.csproj', '-v', 'q', '--nologo'],
-        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
+        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True,
+                       encoding='utf-8', errors='replace')
     if build.returncode != 0:
         return 'BUILD FAILED'
     res = subprocess.run(
         ['dotnet', 'run', '--project', 'RiskGuardTests.csproj', '--no-build'],
-        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True)
+        cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True,
+                       encoding='utf-8', errors='replace')
     m = re.search(r'Passed = \d+, Failed = \d+', res.stdout)
     return m.group(0) if m else 'NO RESULT LINE'
 
