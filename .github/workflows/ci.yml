@@ -24,6 +24,35 @@
 # 11m48s (31775541688), both all-green. Quote the RANGE, not either number -- the 4-minute
 # spread is runner availability and it is not controllable from here.
 #
+# ⚠️ RE-MEASURED 2026-08-15 (session 45), run 31911413509, at 33 batteries. The band above
+# was measured at 24 and is now STALE ON THE LOW END -- adding batteries adds queue, not
+# just compute, and the header's own instruction is to re-measure whenever one is added:
+#
+#   wall clock            16m36s        (was quoted 11m48s-15m36s at 24 batteries)
+#   jobs                  34            = 1 checks + 33 batteries
+#   checks job            96s
+#   battery compute SUM   11,395s       (189.9 min)
+#   QUEUED                20 of 33      worst wait 375s, i.e. 6.25 min behind a slot
+#   longest battery       UI4 609s      (P2-107 591s, UI3 528s, UI2 524s close behind)
+#   per-job overhead      31s           checkout 5s + setup-dotnet 25s + setup-python 0s
+#
+# ⚠️ THE FLOOR IS NOT THE LONGEST BATTERY ANY MORE, IT IS total_compute / SLOTS. With 33
+# jobs against ~20 concurrent slots, 20 of them wait. checks + UI4 = 11.8 min is the
+# floor only if nothing queues; the real floor is 11,395s / 20 + checks = ~11.4 min.
+# So ~5 of the 16.5 minutes is pure queueing, and it grows with every battery added.
+#
+# ⚠️ AND THE SLOTS ARE ACCOUNT-WIDE, NOT REPO-WIDE. `nt8-mcp-bridge` CI was running
+# against the same allowance today. A run that looks slow may be contending with the
+# sibling repo, which is invisible from inside this workflow -- check both before
+# concluding anything about this one.
+#
+# ⚠️ AND THE TESTS ARE NO LONGER THE CHEAP HALF. The note above says "none of it was the
+# tests", measured when the suite was 1328 tests / 5.3s locally. Measured now at 1774
+# tests: `dotnet build` 4.4s, `--no-restore` 3.6s, and the TEST RUN 6.4s -- the suite is
+# now the LARGER half of every mutant cycle. Any future attempt to make this faster
+# should attack the suite's own runtime first; "the tests are not the problem" is a
+# statement with a date on it.
+#
 # That is 7.4x, and it is SLOWER than the 10 min the arithmetic predicted (setup + UI4's
 # 553s). Two things the sequential timings could not show: every battery runs 10-20%
 # slower as one of 24 concurrent jobs (UI4 553s -> 618s), and runner PROVISIONING is not
