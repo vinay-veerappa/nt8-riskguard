@@ -401,6 +401,16 @@ jobs:
           # DECLARED survivor: it rewrites the `#else` body, which no test build compiles.
           - { label: P2-112, battery: mutate_p2112.py }
 
+          # F-6, push alerts. The mutants split into LOUD and QUIET, and the QUIET ones are the
+          # point: a budget that never refills, a floor that refuses everything, a severity table
+          # that classifies nothing -- each of them passes every "the repeat was suppressed" test,
+          # because suppression is exactly what those tests assert. They die only to the NEGATIVE
+          # controls, which is why half the F-6 tests are negative controls (P3-30 shipped a
+          # detector behind three positive-only acceptance tests that matched nothing at all).
+          # Mutant 9 is the honesty one: dropping [WOULD] tells the operator by push notification
+          # that an account was flattened while the guard was in shadow and touched nothing.
+          - { label: F-6, battery: mutate_f6.py }
+
           # P1-83, 176s. Config that is stored, settable, and read by nothing. The gate is a class
           # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
           # excluding the declaration, `X = something.X` clone/serialize lines, and the field-name

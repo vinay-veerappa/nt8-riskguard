@@ -416,6 +416,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2107_AnAccountThatProducedNothingClearsItsOwnRecord();
             TestP2107_AnActionOutsideTheDeclaredScopeIsDispatchedNotDropped();
             TestP2107_TheOperatorsPanicButtonIsNotDeduplicated();
+
+            // - F-6 -----------------------------------------------------------------------------
+            TestF6_ARepeatingConditionAlertsOnceAndThenGoesQuiet();
+            TestF6_ButItStillAlertsWhenTheConditionRECURS();
+            TestF6_ACriticalBreachGetsThreeBecauseDeepeningIsNews();
+            TestF6_AnUnknownEventTypeIsInfoNotCritical();
+            TestF6_TheSeverityFloorIsHonouredAndIsNotAGagOnEverything();
+            TestF6_TwoAccountsAndTwoEventTypesAreIndependent();
+            TestF6_AShadowAlertSaysWOULDAndNeverClaimsAnActionHappened();
+            TestF6_AnArmedLiveAlertDoesNotSayWOULD();
+            TestF6_TheWebhookUrlIsRedactedButStillRecognisable();
+            TestF6_ARefusalAlwaysCarriesAReason();
             // Second round: five mutants that survived the first battery, all of them in parts
             // the first thirteen never touched. The handler one is the P3-30 shape.
             TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced();
@@ -5637,6 +5649,201 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n = 0;
             foreach (var d in decisions) if (d.Admit) n++;
             return n;
+        }
+
+        // - F-6: push alerts, the decision half -------------------------------------------------
+        //
+        // ⚠️ THE DANGEROUS FAILURE HERE IS NOT SILENCE, IT IS VOLUME. A sink that forwards every
+        // audited event produces a muted channel, which looks exactly like coverage and is worse
+        // than no alerts. So half of these are NEGATIVE controls: a sink that never sends passes
+        // every "it suppressed the repeat" test, and `P3-30` shipped a detector behind three
+        // positive-only acceptance tests that matched nothing at all.
+
+        private static void TestF6_ARepeatingConditionAlertsOnceAndThenGoesQuiet()
+        {
+            Console.WriteLine("\n[TEST] F-6: NAKED_POSITION every 10s alerts ONCE, not 180 times");
+
+            // The measured instance: `P2-108`'s NAKED_POSITION repeated every 10s, 180 lines in
+            // one log, while shadow could not attach the stop it named. That stream is what this
+            // feature would have pushed to a phone.
+            var sink = new GuardAlertSink();
+            int sent = 0;
+            for (int i = 0; i < 180; i++)
+                if (sink.Consider("Sim101", "NAKED_POSITION", "no stop attached",
+                                  "shadow", true, "warning").Send) sent++;
+
+            Assert(sent == 1,
+                "180 evaluations of one unresolved condition produce ONE alert -- the second "
+                + "identical message carries nothing the first did not. Got " + sent + ".");
+        }
+
+        private static void TestF6_ButItStillAlertsWhenTheConditionRECURS()
+        {
+            Console.WriteLine("\n[TEST] F-6: NEGATIVE CONTROL -- the budget is not a permanent gag");
+
+            // ⚠️ THE TEST THAT MAKES THE ONE ABOVE MEAN ANYTHING. A sink whose Consider() returned
+            // false forever passes every suppression test in this file. What separates a budget
+            // from a gag is that resolving the condition gives it back -- and leaving that half
+            // out would mean the FIRST daily-loss breach of the week is the only one you are ever
+            // told about, including the one three days later.
+            var sink = new GuardAlertSink();
+
+            Assert(sink.Consider("Sim101", "NAKED_POSITION", "m", "shadow", true, "warning").Send,
+                "the first occurrence alerts");
+            Assert(!sink.Consider("Sim101", "NAKED_POSITION", "m", "shadow", true, "warning").Send,
+                "the repeat is suppressed");
+
+            sink.NoteResolved("Sim101", "NAKED_POSITION");
+
+            Assert(sink.Consider("Sim101", "NAKED_POSITION", "m", "shadow", true, "warning").Send,
+                "and once the condition RESOLVES the next occurrence is news again. A budget that "
+                + "never refills is a gag, and it fails silently -- the operator cannot tell the "
+                + "difference between a quiet system and a broken sink.");
+        }
+
+        private static void TestF6_ACriticalBreachGetsThreeBecauseDeepeningIsNews()
+        {
+            Console.WriteLine("\n[TEST] F-6: a critical breach may repeat 3 times, a warning once");
+
+            // PEAK_GIVEBACK_BREACH re-fires only on a DEEPER giveback (its own latch, since
+            // v1.0.0 -- see the P2-107 exemplar note), so its repeats are genuinely worsening
+            // levels and are exactly what an operator wants to watch escalate.
+            var sink = new GuardAlertSink();
+            int sent = 0;
+            for (int i = 0; i < 10; i++)
+                if (sink.Consider("Sim101", "DAILY_LOSS_BREACH", "deeper", "live", true, "warning").Send)
+                    sent++;
+
+            Assert(sent == 3, "a critical event's budget is 3, got " + sent);
+            Assert(GuardAlertSink.BudgetFor("warning") == 1,
+                "and a warning's is 1 -- the 1 is the fix, not a tuning value (P2-101, P2-107)");
+        }
+
+        private static void TestF6_AnUnknownEventTypeIsInfoNotCritical()
+        {
+            Console.WriteLine("\n[TEST] F-6: an unclassified event is info, so new log lines do not page anyone");
+
+            Assert(GuardAlertSink.SeverityOf("SOME_EVENT_ADDED_NEXT_TUESDAY") == "info",
+                "an unknown eventType is info. Defaulting it loud reads as fail-safe and is not: "
+                + "this repo adds event types constantly, so the channel would be muted within a "
+                + "week and the muting would be invisible");
+            Assert(GuardAlertSink.SeverityOf("DAILY_LOSS_BREACH") == "critical",
+                "a known breach is still critical");
+            Assert(GuardAlertSink.SeverityOf(null) == "info", "and null does not throw");
+        }
+
+        private static void TestF6_TheSeverityFloorIsHonouredAndIsNotAGagOnEverything()
+        {
+            Console.WriteLine("\n[TEST] F-6: the floor filters BELOW it and passes AT it");
+
+            var sink = new GuardAlertSink();
+            Assert(!sink.Consider("A", "SOMETHING_ROUTINE", "m", "live", true, "warning").Send,
+                "an info event is below a 'warning' floor and is not pushed");
+
+            // The negative control for the floor itself: a floor implemented as "refuse
+            // everything" passes the assertion above.
+            Assert(sink.Consider("A", "NAKED_POSITION", "m", "live", true, "warning").Send,
+                "but a warning event AT the floor IS pushed -- otherwise the floor is just an off "
+                + "switch that reports itself as a filter");
+            Assert(sink.Consider("A", "SOMETHING_ROUTINE", "m", "live", true, "info").Send,
+                "and lowering the floor to info admits the info event");
+        }
+
+        private static void TestF6_TwoAccountsAndTwoEventTypesAreIndependent()
+        {
+            Console.WriteLine("\n[TEST] F-6: the budget scope carries the account AND the event type");
+
+            // P2-107's lesson at a new surface: a scope missing either half means one condition's
+            // budget silences another's, and every single-account single-rule test still passes.
+            var sink = new GuardAlertSink();
+
+            Assert(sink.Consider("A", "NAKED_POSITION", "m", "live", true, "warning").Send, "A/naked sends");
+            Assert(!sink.Consider("A", "NAKED_POSITION", "m", "live", true, "warning").Send, "A/naked repeats are held");
+            Assert(sink.Consider("B", "NAKED_POSITION", "m", "live", true, "warning").Send,
+                "a DIFFERENT account with the same condition is not silenced by A's budget");
+            Assert(sink.Consider("A", "ORPHAN_STOP", "m", "live", true, "warning").Send,
+                "and a different condition on the SAME account is not silenced either");
+
+            sink.NoteResolved("A", "NAKED_POSITION");
+            Assert(!sink.Consider("B", "NAKED_POSITION", "m", "live", true, "warning").Send,
+                "resolving A's condition does NOT refill B's budget -- one account's silence must "
+                + "not clear another's record");
+        }
+
+        private static void TestF6_AShadowAlertSaysWOULDAndNeverClaimsAnActionHappened()
+        {
+            Console.WriteLine("\n[TEST] F-6: a shadow alert says WOULD -- it is read at 3am and acted on");
+
+            // ⚠️ THE HONESTY REQUIREMENT. `P2-92` made shadow observation-only, so an alert
+            // reading "FLATTENED" while nothing was flattened is a false statement about a real
+            // account, delivered to a phone, to someone who cannot check. `P1-105` is the same
+            // lesson on a return value.
+            var sink = new GuardAlertSink();
+            var d = sink.Consider("Sim101", "DAILY_LOSS_BREACH", "limit hit", "shadow", true, "warning");
+
+            Assert(d.Send, "it is still pushed -- observing is exactly when you want to be told");
+            Assert(d.Title.Contains("[WOULD]"), "the title says WOULD, got: " + d.Title);
+            Assert(d.Body.Contains("nothing was done"),
+                "and the body states plainly that the account was not touched");
+
+            var disarmed = new GuardAlertSink()
+                .Consider("Sim101", "DAILY_LOSS_BREACH", "limit hit", "live", false, "warning");
+            Assert(disarmed.Title.Contains("[WOULD]"),
+                "a DISARMED guard in live mode also says WOULD -- the mode alone does not mean it acted");
+        }
+
+        private static void TestF6_AnArmedLiveAlertDoesNotSayWOULD()
+        {
+            Console.WriteLine("\n[TEST] F-6: NEGATIVE CONTROL -- an acting guard does not hedge");
+
+            // A title that ALWAYS says WOULD is exactly as useless as one that never does: the
+            // word stops distinguishing anything, and the operator learns to ignore it.
+            var d = new GuardAlertSink()
+                .Consider("Sim101", "DAILY_LOSS_BREACH", "limit hit", "live", true, "warning");
+
+            Assert(!d.Title.Contains("[WOULD]"),
+                "armed + live is the one case where the guard really acted, got: " + d.Title);
+            Assert(!d.Body.Contains("nothing was done"), "and the body does not hedge either");
+        }
+
+        private static void TestF6_TheWebhookUrlIsRedactedButStillRecognisable()
+        {
+            Console.WriteLine("\n[TEST] F-6: the webhook URL is a credential and this addon publishes its config");
+
+            // ⚠️ `/api/riskguard/config` echoes config over HTTP on :7890, and
+            // `nt_riskguard_inventory` reads the same structures. A secret this feature introduces
+            // must not walk out of the door it opened.
+            string url = "https://discord.com/api/webhooks/123456789/aBcDeFgHiJkLmNoPqRsT";
+            string red = GuardAlertSink.Redact(url);
+
+            Assert(!red.Contains("aBcDeFgHiJkLmNoPqRsT"), "the secret path is not echoed, got: " + red);
+            Assert(!red.Contains("123456789"), "nor the webhook id, got: " + red);
+            Assert(red.Contains("discord.com"),
+                "but the host survives -- an operator must be able to tell WHICH webhook is "
+                + "configured without being shown it");
+            Assert(GuardAlertSink.Redact("") == "(unset)", "blank is reported as unset, not as a secret");
+            Assert(GuardAlertSink.Redact(null) == "(unset)", "and null does not throw");
+        }
+
+        private static void TestF6_ARefusalAlwaysCarriesAReason()
+        {
+            Console.WriteLine("\n[TEST] F-6: every refusal says why -- a silent drop is unanswerable");
+
+            var sink = new GuardAlertSink();
+            sink.Consider("A", "NAKED_POSITION", "m", "live", true, "warning");
+
+            var suppressed = sink.Consider("A", "NAKED_POSITION", "m", "live", true, "warning");
+            Assert(!suppressed.Send && !string.IsNullOrWhiteSpace(suppressed.Reason)
+                   && suppressed.Reason.Contains("budget"),
+                "a suppressed alert names the budget, got: " + suppressed.Reason);
+
+            var floored = sink.Consider("A", "ROUTINE_THING", "m", "live", true, "critical");
+            Assert(!floored.Send && floored.Reason.Contains("floor"),
+                "a floored alert names the floor, got: " + floored.Reason);
+
+            var blank = sink.Consider("A", "", "m", "live", true, "info");
+            Assert(!blank.Send && !string.IsNullOrWhiteSpace(blank.Reason),
+                "and a blank eventType is refused with a reason rather than pushed unattributable");
         }
 
         private static void TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack()
