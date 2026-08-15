@@ -9406,3 +9406,80 @@ undecodable `8F`); **the unpinned form does not RAISE in the caller** (the reade
 `stdout` is silently `None`, which is why it is invisible from outside); and `selftest.py` carries a
 **BOM**, so the gate reads `utf-8-sig` and **fails on any file it cannot parse rather than skipping
 it**. Suite 633 → **636**. That is the **third repo** in this encoding class, after both consumers.
+
+---
+
+## 5.68 `F-17` — connection control, and the negative half that arrived on its own
+
+**Session 44, at the operator's request** while confirming `P2-116`: *"you should be able to check
+the broker disconnect. In fact I think this is a good addition to the MCP."* Both halves of that
+turned out to be one piece of work.
+
+### ✅ `P2-116` is CONFIRMED, and the confirmation is recorded rather than assumed
+
+*"There is only one live account and the rest 88 are dormant evals."* So **no account is going
+unwatched** — the guard is not failing to protect 88 live accounts, it is correctly holding no
+reading for 88 dormant ones. The defect is entirely in the REPORTING, and the `P2` band stands.
+⚠️ **Do not let the confirmation shrink the fix**: *"they are dormant"* is a fact about the
+broker's population today, not about the code. The day an eval is funded its rows look identical to
+the 87 beside it **and identical to how they looked while it was dormant**.
+
+### 🆕 `nt_connection`, and `addons/BridgeConnectionPlan.cs`
+
+`status | connect | disconnect`, over `GET/POST /api/connection`. Every row carries
+`countsTowardMarketData` from **the same predicate `feedConnected` uses**, so the detail view and
+the flag cannot disagree about the same connection — the `F-9` rule, applied before it could bite.
+
+⚠️ **`disconnect` is destructive and is refused by default.** It severs the path by which a position
+is managed, which is `P1-106`'s family exactly. `WouldStrand` names what it would abandon, and
+reports **positions and working orders separately** — a resting stop stays live at the broker after
+the connection drops and can then be neither moved nor cancelled. `confirmDisruptive` is the
+deliberate override.
+
+### ✅ And it completed `P2-115` without the disconnect ever being performed
+
+| when | state | reading |
+|---|---|---|
+| 14:20 | dormant Playback, no market | **old** code → `true` (defect) |
+| 14:54 | live broker | **new** code → `true` (positive control) |
+| 16:49 | broker dropped on its own | **new** code → **`false`** (negative control) |
+
+`accounts: 97` identical throughout. ⚠️ **The reading I had refused to take arrived for free.**
+Showing `false` meant disconnecting the operator's live broker, so it was declined and written up
+as unmeasured — and then the market closed and the box produced the state anyway. **When a
+measurement is blocked on an action you should not take, say so and keep watching.**
+
+### ⚠️ Four defects, all found by compiling and driving the box, none by reading
+
+* **`/api/connections` already existed** — returning OCO capability flags. Two unrelated concepts
+  under one plural noun, caught only as `CS0152`.
+* **`Connect` is STATIC and takes options** (`CS7036`, then `CS0176`); `Disconnect` is an instance
+  method. The two halves of one API are not symmetric.
+* ⚠️ **`Connection.Connections` returns ZERO rows from the AddOn's HTTP thread** — the very
+  enumeration NinjaTrader's own `@BarTimer` indicator performs. The endpoint answered
+  `count: 0, marketDataConnected: false` on a box with a live broker attached: **a false negative of
+  exactly the kind `P2-115` exists to remove, one endpoint away.** Now sourced from the accounts'
+  own `Connection` references, which persist across a disconnect.
+* ⚠️ **Grouping by `Options.Name` merged a live broker connection into a dormant one** and reported
+  the dormant one's status for both — while `/api/health` said the opposite in the same breath.
+  Two answers, and the report was the wrong one. **Reference identity is the only key that cannot
+  do that**, the same rule `BridgeFlattenPlan` uses to tell its own order from someone else's.
+
+### ⚠️ The battery beat a source gate for the FOURTH time — in the gate written to avoid the first three
+
+| the gate asserted | the mutant that beat it |
+|---|---|
+| `P1-105` | the resolver is **called** | keep the call, ignore the answer |
+| `P2-109` | same shape at the next site | — |
+| `P2-115` | the class is **mentioned** | keep the call, hardcode the flag |
+| `F-17` | the refusal is **returned near the call** | neuter the condition to `if (false)` — the `return` stays in the text, unreachable |
+
+**A regex over source text cannot see reachability.** On a guarded return **the condition is the
+load-bearing part**, and it is the only thing a mutant has to touch. The gate now asserts the
+condition names both `strands` and `confirmDisruptive`, keeps the return assertion alongside it
+(either alone is satisfiable without the other), and carries a **negative control that must FAIL on
+the mutant's own shape** — a positive control only proves the regex still matches something.
+
+**Evidence**: harness **324 → 345/0**, wrapper **54/0** (the exact-count gate fired 55 → 56 as
+designed, its fourth catch), `mutate_f17.py` **10/10** wired into CI (**8** batteries), anchors
+**84/0**, all four bridge gates green, `nt_compile` **errorCount 0**.

@@ -1847,11 +1847,24 @@ directions, not just the one its defect was in.**
 **10/10** and wired into CI (7 batteries), all four bridge gates green, `nt_compile` **errorCount
 0**, `deploy.py` clean.
 
-⚠️ **WHICH HALF IS MEASURED.** The class has four executed assertions in both directions. The
-**wiring** has a source gate, a clean compile, and a live `feedConnected: true` with the broker
-attached — which is a **positive control only, because `true` is what the defect produced too**.
-Showing `false` live requires disconnecting the operator's broker and was not done. Say which half
-was measured; do not let one green stand for both.
+✅ **BOTH HALVES ARE NOW MEASURED, and the negative one arrived while `F-17` was being built.**
+The broker dropped on its own with the market closed, giving the discriminating reading this entry
+had been unable to obtain:
+
+| when | state of the box | reading |
+|---|---|---|
+| 14:20 | dormant Playback, no tradeable market | **old** code → `feedConnected: true` — the defect |
+| 14:54 | live broker attached, MNQ 30151.75/30155 | **new** code → `true` — positive control |
+| 16:49 | broker disconnected | **new** code → **`false`** — negative control |
+
+`accounts: 97` was identical at all three readings, so the field moved with the connection and not
+with the account count. Confirmed independently: the funded account's equity went to `0` and only
+the six Simulator accounts still reported any. **The field now moves with the thing it names.**
+
+⚠️ **The negative half was NOT obtained by planning for it.** It was refused deliberately — showing
+`false` meant disconnecting the operator's live broker — and then the market closed and the box
+produced the state for free. **When a measurement is blocked on an action you should not take, say
+so and keep watching; the system may perform it for you.**
 
 **Follow-up, deliberately not done here**: a `connections` detail list on the payload. It is a
 contract change for every client of `/api/health` and belongs with a decision about the wrapper
@@ -4085,9 +4098,21 @@ ZERO known accounts is not enforcing anything, and would otherwise read as green
 reasoning was never carried to the per-account equity rules** — [[a-second-reader-of-the-same-state]]
 at a fourth site.
 
-**Band**: `P2`. **Not** `P1`, and the reason is the measurement above: because `AccountItemUpdate`
-never fires for these accounts the enforcer never runs, so there is **no spurious flatten** — the
-failure is confined to reporting. ⚠️ **Check that before down-banding it, though**: if a blank
+✅ **THE OPERATOR HAS CONFIRMED THE POPULATION, 2026-08-15**: *"there is only one live account and
+the rest 88 are dormant evals."* That settles the question the entry was filed with and it settles
+the band. **No account is going unwatched** — the guard is not failing to protect 88 live accounts,
+it is correctly holding no reading for 88 dormant ones. **The defect is entirely in the REPORTING**,
+and it is still worth fixing for exactly the reason `F-9` was: the operator cannot tell, from the
+surface built to answer it, which of the 89 identical-looking rows is the one that matters.
+
+⚠️ **Do not let the confirmation shrink the fix.** *"They are dormant"* is true today and is a fact
+about the broker's population, not about the code — the day an eval is funded, its rows look
+identical to the 87 beside it and identical to what they looked like while it was dormant. The row
+must say *why* it cannot evaluate, or the next reader re-derives this whole investigation.
+
+**Band**: `P2`, now confirmed rather than assumed. The reason is the measurement above: because
+`AccountItemUpdate` never fires for these accounts the enforcer never runs, so there is **no
+spurious flatten** — the failure is confined to reporting. ⚠️ **Check that before down-banding it, though**: if a blank
 account ever *did* receive one equity push, `PeakEquity` would jump from `0` to that value in the
 same call, and the very next tick could satisfy `currentPnL < PeakEquity - 1500` legitimately. The
 band rests on "the enforcer never runs", which is an observation about today, not an invariant.
