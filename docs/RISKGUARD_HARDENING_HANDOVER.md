@@ -246,7 +246,7 @@ not. The command that checks it is in the last column.
 | | | How to re-check |
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **122 IDs — 109 closed, 13 open**, re-derived 2026-08-15 (session 42, after `P2-29`/`P2-112`) from the plan's per-entry status tokens: **110** banded entries (**12 open**: `P1-102`, `P2-108`, `P3-110` narrowed, `P2-112` new, `P1-77` deferred, `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13`, `P2-27` PARTIALLY CLOSED with a recorded remainder) + **3** untriaged `P?-` (all closed) + **8** `F-` findings (`F-16` open). ⚠️ **`P2-29` is now PARTIALLY CLOSED and it opened `P2-112`** — so the run continues after all: **five sessions** in which doing one piece of work produced the next defect. This time the producer was a **pure code move**, which found a source gate that had been disarmed by the relocation and, on being widened to the region it always claimed to cover, immediately hit a real `P1-13` instance nobody had inspected (§5.55). ⚠️ And `P3-111` closed as a **`P2`**: it was banded `P3` because the defect it NAMED throws a 500, and the three it did not name are silent. **Weigh the quiet failure above the noisy one** (§5.54) | `python tools/check_next_list_ids.py` prints the entry counts; the open list is its own output |
+| **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
 | **Do next** | 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
@@ -3155,7 +3155,7 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 > |---|---|---|
 > | banded `Pn-m` entries in the plan | **106** | the grep above |
 > | untriaged `P?-64`, `P?-65`, `P?-66` | **3** | §5.2 — all three CLOSED, and listed as open work until session 39 |
-> | `F-9`…`F-16` findings | **8** | filed here and never given a plan entry. `F-1`…`F-8` are FEATURES (§5.17), not defects |
+> | `F-9`…`F-17` findings | **9** | filed here and never given a plan entry. `F-1`…`F-8` are FEATURES (§5.17), not defects |
 > | **§0's total** | **117** | 103 closed, 14 open |
 >
 > That composition was **not written down anywhere** until session 36, so `107` in §0 and `98` from
@@ -3169,7 +3169,7 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 |---|---|---|
 | Banded entries in the plan | **106** | the `grep` above. **13 open**: `P1-106`, `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13` and `P2-27` marked PARTIALLY CLOSED with a recorded remainder |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. **All three are CLOSED** (`P?-66` in §5.13, `P?-64`/`P?-65` in §5.21). ⚠️ They were listed as outstanding work in every ordering block until session 39 |
-| `F-` findings | **8** | `F-9`…`F-16`, **all closed** as of 2026-08-15 (`F-16` in §5.62). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), **not defects**, and are deliberately excluded |
+| `F-` findings | **9** | `F-9`…`F-17`, **all closed** as of 2026-08-15 (`F-16` in §5.62; **`F-17`** — connection visibility and control — in §5.68). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), **not defects**, and are deliberately excluded |
 | **Total IDs** | **117** | **103 closed, 14 open** |
 
 ⚠️ **The table that stood here said 90 / 93 / 14 / 79 and contradicted the composition table
@@ -9483,3 +9483,45 @@ the mutant's own shape** — a positive control only proves the regex still matc
 **Evidence**: harness **324 → 345/0**, wrapper **54/0** (the exact-count gate fired 55 → 56 as
 designed, its fourth catch), `mutate_f17.py` **10/10** wired into CI (**8** batteries), anchors
 **84/0**, all four bridge gates green, `nt_compile` **errorCount 0**.
+
+---
+
+## 5.69 The §0 defect count was hand-patched, and listed six closed defects as open
+
+**Session 44, found by the operator asking "are the documents updated?"** — which is a better gate
+than any I had pointed at this.
+
+§0's `Defects` row read **122 IDs — 109 closed, 13 open** and named `P1-77`, `P1-81`, `P2-78`,
+`P1-102`, `P2-108` and `P2-112` among the open. **All six are closed**, four of them in the two
+sessions immediately before. The row had been *patched* each session rather than re-derived, which
+is exactly the failure its own neighbouring note warns about: **a half-updated summary is worse
+than an obviously stale one, because the timestamp at the top vouches for every row.**
+
+### Re-derived, and how
+
+| | |
+|---|---|
+| banded plan entries | **115** — 108 closed, **7** open |
+| open | `P2-116`, `P3-110` (narrowed), `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders |
+| untriaged `P?-` | **3**, all closed |
+| `F-` findings | **9** (`F-9`…`F-17`), all closed |
+| **total** | **127 IDs — 120 closed, 7 open** |
+
+⚠️ **A `grep CLOSED` GETS THIS WRONG, and I wrote one before catching myself.** Headings legitimately
+use `FIXED`, `RESOLVED`, `SUPERSEDED`, `HALF CLOSED` and `PARTIALLY CLOSED`, so a substring scan
+reported `P0-96`, `P0-67`, `P0-68` and the whole `P1-69`…`P1-76` block as OPEN when every one is
+closed. **Derive it with `check_next_list_ids.py`'s own `entry_status`**, which is the function the
+gate already trusts — importing that is the difference between a number and a guess. This is
+[[closures-do-not-propagate-backwards]]'s own rule (*never detect status by substring*) applied to
+the counting rather than to the ordering.
+
+### ⚠️ Why the gate did NOT catch it
+
+`check_next_list_ids.py` was green throughout, correctly: it polices *the ordering lists* against
+*entry status*, and both were consistent. **It has never audited the §0 count**, which is a third
+surface nothing reads. The ordering lists are maintained by the act of doing work; the count is
+maintained only by someone choosing to redo it.
+
+**The cheap fix is not another gate but a habit**: the count row now records the command that
+produces it, and the derivation above is reproducible in one paste. Anything that cannot be
+re-derived in a paste will drift again.
