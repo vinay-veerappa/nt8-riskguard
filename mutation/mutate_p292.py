@@ -90,6 +90,12 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
+# P2-29: one anchor below moved to RiskGuardModels.cs when the independent top-level
+# types left RiskGuardAddOn.cs (a MOVE, not a rewrite -- they are their own types, not
+# members of RiskGuardAddOn). This battery was single-file; every mutant now names its
+# own file, because a battery that GUESSES which file holds an anchor is exactly the
+# ambiguity check_anchors.py exists to remove.
+MODELS = os.path.join(REPO, 'addons', 'RiskGuardModels.cs')
 
 MUTANTS = [
     # P1-100 moved the predicate these two defend out of CanTrade and into `LockoutBinds`,
@@ -97,65 +103,76 @@ MUTANTS = [
     # call it. The anchors were repointed there rather than retired: the invariant did not
     # change, only its address, and `check_anchors.py` is what noticed. Both mutants are now
     # strictly stronger, because a single edit here regresses all three readers at once.
-    ("the shared predicate stops consulting the authority -- the defect, restored. Every\n"
+    (GUARD,
+     "the shared predicate stops consulting the authority -- the defect, restored. Every\n"
      "     lockout bites in every mode, so a shadow breach halts the copier, every strategy\n"
      "     and (since P1-100) every order the bridge places",
      '            if (state.LockoutWasShadowOnly) return false;',
      '            if (false) return false;'),
 
-    ("THE WRONG FIX: the shared predicate consults the CURRENT mode instead of the stored\n"
+    (GUARD,
+     "THE WRONG FIX: the shared predicate consults the CURRENT mode instead of the stored\n"
      "     authority. Looks equivalent; it is not. An operator locked out in live escapes by\n"
      "     switching to shadow, which is FR-30 / P1-4's bypass through a different setting",
      '            if (state.LockoutWasShadowOnly) return false;',
      '            if (!IsActingMode()) return false;'),
 
-    ("the authority sense is INVERTED in the helper: shadow breaches enforce and live breaches\n"
+    (GUARD,
+     "the authority sense is INVERTED in the helper: shadow breaches enforce and live breaches\n"
      "     do not. One character, maximally wrong",
      'st.LockoutWasShadowOnly = !IsActingMode();',
      'st.LockoutWasShadowOnly = IsActingMode();'),
 
-    ("the helper hardcodes 'acting' -- what a hasty revert or a bad merge produces. Shadow\n"
+    (GUARD,
+     "the helper hardcodes 'acting' -- what a hasty revert or a bad merge produces. Shadow\n"
      "     lockouts bite again and nothing else looks different",
      'st.LockoutWasShadowOnly = !IsActingMode();',
      'st.LockoutWasShadowOnly = false;'),
 
-    ("the helper hardcodes 'shadow only', so a LIVE breach no longer stops trading. Same size\n"
+    (GUARD,
+     "the helper hardcodes 'shadow only', so a LIVE breach no longer stops trading. Same size\n"
      "     of edit as the mutant above, opposite direction, and this one removes protection from a\n"
      "     funded account",
      'st.LockoutWasShadowOnly = !IsActingMode();',
      'st.LockoutWasShadowOnly = true;'),
 
-    ("the authority stops being WRITTEN to the persisted state. Nothing fails in memory; it is\n"
+    (GUARD,
+     "the authority stops being WRITTEN to the persisted state. Nothing fails in memory; it is\n"
      "     lost across every restart, and each restored lockout reads as enforced. That is the\n"
      "     fail-closed direction, so this is the mutant most likely to survive on safety",
      'LockoutWasShadowOnly = state.LockoutWasShadowOnly',
      'LockoutWasShadowOnly = false'),
 
-    ("the persisted DTO field defaults to TRUE, inverting fail-closed for every state file that\n"
+    (MODELS,
+     "the persisted DTO field defaults to TRUE, inverting fail-closed for every state file that\n"
      "     predates it: absence would read as 'shadow only' and RELEASE the lockout. P1-54's lesson\n"
      "     in the other direction",
      'public bool LockoutWasShadowOnly { get; set; }\n    }',
      'public bool LockoutWasShadowOnly { get; set; } = true;\n    }'),
 
-    ("LockAccount is gated on the mode too -- the cheapest way to satisfy a naive reading of\n"
+    (GUARD,
+     "LockAccount is gated on the mode too -- the cheapest way to satisfy a naive reading of\n"
      "     'gate every lockout site'. A lockout the operator explicitly asked for evaporates in\n"
      "     shadow",
      'state.LockoutWasShadowOnly = false;',
      'state.LockoutWasShadowOnly = !IsActingMode();'),
 
-    ("LockAccount stops clearing the authority, so a manual lockout on an account that already\n"
+    (GUARD,
+     "LockAccount stops clearing the authority, so a manual lockout on an account that already\n"
      "     breached in SHADOW inherits the shadow authority and is silently ignored. The one\n"
      "     finding the review panel got right out of the four it upheld",
      'state.LockoutWasShadowOnly = false;',
      ''),
 
-    ("the rehydration path stops restoring the authority. Fail-closed, so it survives on safety,\n"
+    (GUARD,
+     "the rehydration path stops restoring the authority. Fail-closed, so it survives on safety,\n"
      "     and it means a restart PROMOTES a shadow observation into an enforced lockout -- a\n"
      "     phantom lockout with no breach behind it",
      'state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;',
      ''),
 
-    ("the SHADOW_LOCKOUT log line goes. Nothing breaks, and the shadow session -- whose whole\n"
+    (GUARD,
+     "the SHADOW_LOCKOUT log line goes. Nothing breaks, and the shadow session -- whose whole\n"
      "     purpose is to record what the guard WOULD have done, and which MinShadowSessions gates\n"
      "     arming on -- records nothing. P1-71's class",
      'LogEvent(st.AccountName, "SHADOW_LOCKOUT"',
@@ -178,7 +195,7 @@ def run():
     return m.group(0) if m else 'NO RESULT LINE'
 
 
-ORIGINAL = open(GUARD, encoding='utf-8').read()
+ORIGINALS = {p: open(p, encoding='utf-8').read() for p in (GUARD, MODELS)}
 
 print('=== baseline ===')
 baseline = run()
@@ -194,12 +211,12 @@ if int(m.group(2)) != 0:
     sys.exit(2)
 
 survivors = []
-for name, old, new in MUTANTS:
-    if ORIGINAL.count(old) != 1:
-        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINAL.count(old)))
+for path, name, old, new in MUTANTS:
+    if ORIGINALS[path].count(old) != 1:
+        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINALS[path].count(old)))
         survivors.append(name + ' (ANCHOR)')
         continue
-    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL.replace(old, new))
+    open(path, 'w', encoding='utf-8', newline='').write(ORIGINALS[path].replace(old, new))
     res = run()
     mm = re.search(r'Failed = (\d+)', res)
     killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
@@ -207,9 +224,9 @@ for name, old, new in MUTANTS:
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)
-    open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+    [open(q, 'w', encoding='utf-8', newline='').write(t) for q, t in ORIGINALS.items()]
 
-open(GUARD, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+[open(q, 'w', encoding='utf-8', newline='').write(t) for q, t in ORIGINALS.items()]
 print('\nrestored original;', run())
 print('\nSURVIVORS:', survivors if survivors else 'none')
 

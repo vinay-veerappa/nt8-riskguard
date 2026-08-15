@@ -72,32 +72,43 @@ import _battery
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 ADDON = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
+# P2-29: one anchor below moved to RiskGuardModels.cs when the independent top-level
+# types left RiskGuardAddOn.cs (a MOVE, not a rewrite -- they are their own types, not
+# members of RiskGuardAddOn). This battery was single-file; every mutant now names its
+# own file, because a battery that GUESSES which file holds an anchor is exactly the
+# ambiguity check_anchors.py exists to remove.
+MODELS = os.path.join(REPO, 'addons', 'RiskGuardModels.cs')
 
 MUTANTS = [
-    ("the SHIPPED DEFECT: the flatten retry loses its budget and streams forever while the\n"
+    (ADDON,
+     "the SHIPPED DEFECT: the flatten retry loses its budget and streams forever while the\n"
      "     position stays open -- which in shadow is always",
      '                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(5)\n'
      '                        && stateModel.LockoutPhaseAttempts < LockoutPhaseAttemptBudget())',
      '                    if (DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(5))'),
 
-    ("THE PARTIAL FIX: one budget for every mode. The log stops growing without limit -- the\n"
+    (ADDON,
+     "THE PARTIAL FIX: one budget for every mode. The log stops growing without limit -- the\n"
      "     visible symptom -- and shadow still emits six identical observations where the first is\n"
      "     the whole product",
      '            return IsActingMode() ? 6 : 1;',
      '            return 6;'),
 
-    ("the budget is ZERO, the fail-OPEN direction: the quietest possible loop, and a live lockout\n"
+    (ADDON,
+     "the budget is ZERO, the fail-OPEN direction: the quietest possible loop, and a live lockout\n"
      "     that flattens nothing",
      '            return IsActingMode() ? 6 : 1;',
      '            return 0;'),
 
-    ("entering a phase no longer resets the count, so PendingFlatten inherits the cancel phase's\n"
+    (ADDON,
+     "entering a phase no longer resets the count, so PendingFlatten inherits the cancel phase's\n"
      "     spent budget and the position never gets a flatten attempt",
      '            stateModel.CurrentLockoutPhase = phase;\n'
      '            stateModel.LockoutPhaseAttempts = 0;',
      '            stateModel.CurrentLockoutPhase = phase;'),
 
-    ("EXPECTED SURVIVOR: the count survives an unlock. UNKILLABLE BY CONSTRUCTION, and the\n"
+    (MODELS,
+     "EXPECTED SURVIVOR: the count survives an unlock. UNKILLABLE BY CONSTRUCTION, and the\n"
      "     reason is worth reading rather than testing around: every route back into a phase\n"
      "     goes through EnterLockoutPhase, which resets the count on entry, so a lockout can\n"
      "     never observe a stale one whatever ResetLockoutPhase does. Those two lines stay\n"
@@ -109,12 +120,14 @@ MUTANTS = [
      '            LockoutPhaseAttempts = 0;',
      '            InitialLockoutFlattened = false;'),
 
-    ("the give-up warning never records that it fired, so it repeats every sweep: the original\n"
+    (ADDON,
+     "the give-up warning never records that it fired, so it repeats every sweep: the original\n"
      "     defect moved from the retry to the alarm about the retry",
      '                stateModel.LockoutStuckLogged = true;',
      '                stateModel.LockoutStuckLogged = false;'),
 
-    ("the UNREACHABLE stuck condition returns -- keyed on an interval the retry resets every 5s,\n"
+    (ADDON,
+     "the UNREACHABLE stuck condition returns -- keyed on an interval the retry resets every 5s,\n"
      "     so the one alarm that would tell an operator the position is not closing never fires",
      '            bool exhausted = stateModel.LockoutPhaseAttempts >= LockoutPhaseAttemptBudget();',
      '            bool exhausted = DateTime.UtcNow > stateModel.LastLockoutFlattenAttempt.AddSeconds(30);'),
@@ -136,7 +149,7 @@ def run():
     return m.group(0) if m else 'NO RESULT LINE'
 
 
-ORIGINAL = open(ADDON, encoding='utf-8').read()
+ORIGINALS = {p: open(p, encoding='utf-8').read() for p in (ADDON, MODELS)}
 
 print('=== baseline ===')
 baseline = run()
@@ -152,12 +165,12 @@ if int(m.group(2)) != 0:
     sys.exit(2)
 
 survivors = []
-for name, old, new in MUTANTS:
-    if ORIGINAL.count(old) != 1:
-        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINAL.count(old)))
+for path, name, old, new in MUTANTS:
+    if ORIGINALS[path].count(old) != 1:
+        print('  [SKIP] %s: anchor matched %d times' % (name, ORIGINALS[path].count(old)))
         survivors.append(name + ' (ANCHOR)')
         continue
-    open(ADDON, 'w', encoding='utf-8', newline='').write(ORIGINAL.replace(old, new))
+    open(path, 'w', encoding='utf-8', newline='').write(ORIGINALS[path].replace(old, new))
     res = run()
     mm = re.search(r'Failed = (\d+)', res)
     killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
@@ -165,8 +178,8 @@ for name, old, new in MUTANTS:
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)
-    open(ADDON, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+    [open(q, 'w', encoding='utf-8', newline='').write(t) for q, t in ORIGINALS.items()]
 
-open(ADDON, 'w', encoding='utf-8', newline='').write(ORIGINAL)
+[open(q, 'w', encoding='utf-8', newline='').write(t) for q, t in ORIGINALS.items()]
 print('\nrestored original;', run())
 _battery.finish(survivors, MUTANTS)

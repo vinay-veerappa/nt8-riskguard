@@ -56,22 +56,27 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 COPIER = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
+# P2-29: the config DTOs moved to RiskGuardModels.cs (a MOVE, not a rewrite -- they are
+# their own top-level types, not members of RiskGuardAddOn). check_anchors.py caught all
+# four of these in the same commit; they are REPOINTED, never retired, because the
+# subject is unchanged -- the default they defend is the same default.
+MODELS = os.path.join(REPO, 'addons', 'RiskGuardModels.cs')
 
 MUTANTS = [
     # ---- R5: the deadline whose penalty is being taken out of the trade ----
-    (GUARD,
+    (MODELS,
      "the stop-attach deadline goes back to 3 seconds while OnMissing is still Flatten --\n"
      "     enter by hand, reach for the mouse, get flattened on a day nothing was wrong",
      'public int StopAttachSeconds { get; set; } = 15;',
      'public int StopAttachSeconds { get; set; } = 3;'),
 
-    (GUARD,
+    (MODELS,
      "the deadline goes to 14 seconds. Nobody would query that in review, and it must still\n"
      "     fail -- otherwise the test pins 'not 3' rather than 'long enough to place a stop'",
      'public int StopAttachSeconds { get; set; } = 15;',
      'public int StopAttachSeconds { get; set; } = 14;'),
 
-    (GUARD,
+    (MODELS,
      "OnMissing becomes AutoStop. The R5 test is CONDITIONAL on the action and goes quiet by\n"
      "     design, so this asks whether anything else notices -- if it survives, the condition\n"
      "     is an escape hatch and any deadline can be justified by changing the consequence",
@@ -105,7 +110,7 @@ MUTANTS = [
      '        public bool IsQuarantined { get; set; } = false;'),
 
     # ---- the arming precondition ----
-    (GUARD,
+    (MODELS,
      "MinShadowSessions goes back to 0, which does not relax the arming gate -- it switches\n"
      "     it off, because RunPreflight short-circuits at `> 0`",
      'public int MinShadowSessions { get; set; } = 5;',
@@ -135,7 +140,7 @@ def run():
     return m.group(0) if m else 'NO RESULT LINE'
 
 
-ORIGINALS = {path: open(path, encoding='utf-8').read() for path in (GUARD, COPIER)}
+ORIGINALS = {path: open(path, encoding='utf-8').read() for path in (GUARD, COPIER, MODELS)}
 
 print('=== baseline ===')
 baseline = run()

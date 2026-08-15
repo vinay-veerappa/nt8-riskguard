@@ -5403,7 +5403,34 @@ a check inspects, and make it the whole thing the check is about**.
 below. Nothing needed registering for the new file: `sync_nt8.py` and `tests/RiskGuardTests.csproj`
 both already glob `addons/*.cs`.
 
-**Remainder (deliberately NOT done here)**: splitting `RiskGuardAddOn` itself into
+**Step 1 of the remainder landed 2026-08-15 (session 45).** The 26 independent top-level
+types that sat at the bottom of the file — `GuardActionType`, `GuardAction`, `AccountState`,
+`PositionState`, `PositionGuardFsm`, `PersistedStateData` and the config DTOs — moved to
+`addons/RiskGuardModels.cs` (942 lines). **`RiskGuardAddOn.cs` 6,502 → 5,612.** Same operation
+as the window: independent types, so no `partial` keyword and no member reshuffled.
+
+⚠️ **THE PREDICTED BLAST RADIUS WAS REAL AND THE GATE CAUGHT ALL OF IT.** `check_anchors.py`
+reported **6 broken anchors** across three batteries the moment the move landed — the config
+defaults (`StopAttachSeconds`, `OnMissing`, `MinShadowSessions`) and two persisted-DTO fields
+had moved out from under `mutate_p184`, `mutate_p292` and `mutate_p2101`. All six were
+**repointed, never retired**: the subject is unchanged and the defect each defends is the same.
+
+⚠️ **AND AN ANCHOR THAT RESOLVES IS NOT A MUTANT THAT DIES.** `check_anchors.py` asks whether
+the BATTERY can find its target, which is a different question from whether the TEST can kill
+it — that distinction is what let `mutate_p187`'s WarnOnly mutant survive silently last time.
+So all three batteries were **re-run**, not merely re-checked: `p184` no survivors, `p292` no
+survivors, `p2101` every mutant dead except the one declared unreachable, surviving exactly as
+declared.
+
+⚠️ **Two of the three batteries were SINGLE-FILE** (3-tuples with one implicit path) and had
+nowhere to say which file a mutant targets. They are 4-tuples now, the shape `mutate_p184.py`
+already used, because the alternative is a battery that GUESSES which of two files holds an
+anchor — and a gate that guesses is the thing this repo keeps catching.
+
+Live: `nt_compile` **errorCount 0**, `sync_nt8.py --verify` **ALL IN SYNC (13 files)**, and the
+running guard read back **shadow / armed / 97 accounts / 2,231 rule rows / 0 Enforcing**.
+
+**Remainder (still NOT done)**: splitting `RiskGuardAddOn` itself into
 `{Core,Fsm,Rules,Actions,FirmMirror,Persistence}` partials. That is a genuinely different change —
 it moves members of one class rather than relocating independent types — and it would break far
 more than one anchor. The tooling to do it safely now exists and is proven (`check_anchors.py` +
