@@ -3169,7 +3169,7 @@ grep -oE "^### ~?~?(P[0-9]\?*-[0-9]+)\." docs/RISKGUARD_COPIER_HARDENING_PLAN.md
 |---|---|---|
 | Banded entries in the plan | **106** | the `grep` above. **13 open**: `P1-106`, `P2-107`, `P1-105`, `P1-102`, `P2-103`, `P1-77` (deferred), `P2-78`, `P1-81`, `P2-29`, `P3-33`, plus `P0-9`, `P1-13` and `P2-27` marked PARTIALLY CLOSED with a recorded remainder |
 | Awaiting a band letter | **3** | `P?-64`, `P?-65`, `P?-66` — §5.2. **All three are CLOSED** (`P?-66` in §5.13, `P?-64`/`P?-65` in §5.21). ⚠️ They were listed as outstanding work in every ordering block until session 39 |
-| `F-` findings | **8** | `F-9`…`F-16`. Only **`F-16`** (MCP tool schema conformance, 52 tools) is open. ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), **not defects**, and are deliberately excluded |
+| `F-` findings | **8** | `F-9`…`F-16`, **all closed** as of 2026-08-15 (`F-16` in §5.62). ⚠️ `F-1`…`F-8` are the operator's FEATURE list (§5.17), **not defects**, and are deliberately excluded |
 | **Total IDs** | **117** | **103 closed, 14 open** |
 
 ⚠️ **The table that stood here said 90 / 93 / 14 / 79 and contradicted the composition table
@@ -4593,7 +4593,7 @@ not be renumbered into it.
 | ~~F-7~~ | ~~Block instruments~~ | — | **Exists** (§5.17). |
 | ~~F-8~~ | ~~Max contracts per instrument~~ | — | **Exists**, position-level (§5.17). |
 | **F-9**…**F-15** | UI-adjacent features from the design pass | see [UI_REDESIGN_DESIGN.md](UI_REDESIGN_DESIGN.md) §9 | firm mapping, flatten-group, session lock, reconciler events, fill-timeout, adopt the gatekeeper, `CanTrade` reason channel. Each holds a marked slot in the layout |
-| **F-16** | **MCP tool schema conformance** | extract the tool schema/dispatch table out of `nt-mcp-server.js`, then ONE sweep over all 52 tools | **52 tools, 1 tested.** Not 51 test files — the four session-21 defects were all **schema** defects, so one conformance sweep covers the class. ⚠️ Importing `nt-mcp-server.js` starts its stdin loop and hangs the test; that is why extraction comes first. See the §5.19 addendum |
+| **F-16** | **MCP tool schema conformance** | ✅ **CLOSED 2026-08-15 (session 43)** | See below — and ⚠️ **this row asserted "52 tools, 1 tested" for three sessions after it stopped being true**, which is `P2-113`'s class inside the tracker itself. Re-measured: **55 tools, 54 tests**, the extraction it named as a prerequisite done by `P1-91`, and class-level sweeps already covering defaults, required fields, structural soundness and enum pinning. What actually remained was ONE thing nobody had written: **the join** |
 
 
 ---
@@ -8966,6 +8966,56 @@ the seam between the suite that knows the load outcome and the registry that rep
 passed the status *explicitly* to `BuildSnapshot`, so deleting the production wiring changed
 nothing they could see. **Passing a value into the unit under test does not prove anything supplies
 it.**
+
+## 5.62 `F-16` closed — and most of it had already been done, which is the finding
+
+`F-16` was the last open `F-` finding: *"MCP tool schema conformance — extract the tool
+schema/dispatch table out of `nt-mcp-server.js`, then ONE sweep over all 52 tools. **52 tools, 1
+tested.**"*
+
+⚠️ **Re-measured before writing anything, and three of its four clauses were stale:**
+
+| the entry said | measured 2026-08-15 |
+|---|---|
+| 52 tools | **55** |
+| 1 tested | **53 tests**, incl. sweeps titled *"the class, not the four instances"* |
+| extraction must come first | **done by `P1-91`** — `mcp/lib/tools.js` has existed since |
+| importing the server hangs the test | **still true**, and still the reason to read source text |
+
+This is **`P2-113`'s class inside the tracker itself** ([[a-comment-recording-a-defect-goes-stale]]):
+a row recording the *state* of a defect is a claim with no owner, and the three tickets that did
+`F-16`'s work had no reason to visit it. **Re-measure an entry before working it** — the cost here
+was one command, and without it the session would have re-extracted a module that already existed.
+
+### What actually remained: the JOIN
+
+Every existing test asks whether a schema is *right*. **None asked whether the tool it describes is
+REACHABLE.** Those are two files — `lib/tools.js` advertises, `nt-mcp-server.js` dispatches — and
+nothing compared them.
+
+That is **`P2-109`'s exact shape at a new site**: there, every component was individually correct
+and the defect lived in the line between them. Measured today: **55 advertised, 55 dispatched, both
+difference sets empty** — no defect, but an unwatched join on the surface that decides what an
+agent can call at all.
+
+⚠️ **The two directions fail differently and only one is loud**, so the test asserts both and says
+which is which:
+
+* *advertised, not dispatched* → the call reaches the dispatcher's default branch and errors. Visible.
+* *dispatched, not advertised* → **the tool is INVISIBLE**. No client reading `tools/list` can call
+  it and nothing reports it. That is **`P1-102` verbatim** (`/api/lockout` existed for months with
+  no tool in front of it) and **`P2-103`** (two inventory surfaces with five mutation batteries
+  keeping their payloads honest, reachable by nothing — *the honesty was bought and not spent*).
+
+⚠️ It carries a **positive control on the region**: if the case-label regex ever stops matching — a
+reformat, a switch replaced by a lookup table — both difference sets go empty and the test passes
+**while inspecting nothing**. `assert(dispatched.size > 50)` is what stops that, and it is the fifth
+instance of [[state-the-region-a-gate-inspects]] in two sessions.
+
+✅ **Driven negative before being believed**: renaming one `case` label made it fail, naming the
+tool; restoring made it pass. A detector that has never been seen to fire is not evidence.
+
+Wrapper tests **53 → 54**.
 
 ### Order from here
 
