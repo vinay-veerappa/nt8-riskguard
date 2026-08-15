@@ -8578,3 +8578,88 @@ would break far more than one anchor. **The tooling to do it safely now exists a
 2. **`P2-108`**, then **`P2-112`** (⚠️ its fix touches `Account.Change()`, so it wants a live
    market too), then **`P3-110`** (narrowed — §5.51).
 3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.
+
+---
+
+## 5.56 Market Replay is the answer to "the market is shut", and it cost one classifier change
+
+**Session 42.** Asked whether NT8 Market Replay could drive the position-dependent tickets with
+futures closed. **Yes**, and three measurements settled it rather than argument:
+
+* **The guard already watches `Playback101`** — 24 rule rows, `isExcluded: false`, StopGuard with a
+  15s attach deadline and `Flatten` on missing, `DailyLossLimit` −1000, `TrailingDrawdown` 1500.
+  Replay orders exercise the guard for real, not in a bubble.
+* **Replay data is on disk**: 261MB — but only `MNQ 12-25` (**one date**, 2025-12-01) and `^SP500`.
+  MNQ 12-25 is an **expired** contract; more dates need downloading.
+* ⚠️ **`Playback101` was classifying as a LIVE account.** `IsSimulationAccount` was
+  `Provider == Provider.Simulator`, and its provider is `Playback`.
+
+### What replay unblocks
+
+| item | replay? |
+|---|---|
+| `P2-108` (`NAKED_POSITION` every 10s in shadow) | **yes** — needs a position with no stop |
+| **`P1-106`'s unvalidated half** | **yes**, and it is the prize: breach the −1000 daily loss for real and the guard imposes a lockout **while a position is open**, which nothing on this box could previously do |
+| `P1-102` (lockout read/clear tool) | **yes**, end to end — a real breach gives a real binding lockout to clear |
+| `P3-110` (`TriggerPending`) | probably, via a stop-limit |
+| **`P2-112`** | **no** — needs `Application.Current == null` (headless NT8); replay is irrelevant |
+
+⚠️ **Connecting Playback DISCONNECTS Provider31**, so the guard stops seeing the 96 funded/eval
+accounts for the duration of a replay run. Acceptable on a closed weekend — **re-verify arming
+afterwards**, and never start one while those accounts hold anything.
+
+### The classifier change, and why it is recorded rather than quiet
+
+`Provider.Playback` now also classifies as non-live. **This reversed a decision the code itself had
+written down**: *"Playback is deliberately NOT exempt — it costs nothing to arm a relationship for
+a playback run, and guessing wrong in the other direction costs money."*
+
+That first clause is true **about the copier**, and the copier is the only caller it considered.
+`McpBridgeAddOn` asks the same question on the **order-placement** path, where the cost is not
+"arm a relationship" but an operator and an agent pressing `confirmLive: true` on **every replay
+order** — rehearsing, against an account that cannot lose a cent, the one reflex standing between a
+careless call and the funded 50K. **A safety flag you press a hundred times a weekend is not a
+safety flag.** That is the gap in the recorded reasoning, and it is the whole argument.
+
+⚠️ **It is not `P2-38` repeated.** That defect was `Name.StartsWith("Sim")` — a **user-chosen
+string** read as a fact about money. This is an **exact platform-enum match**. Widening a name test
+and adding a second exact enum value are different acts. Null, unset, and anything not positively
+identified all still fail closed.
+
+### ⚠️ And no battery covered the money switch at all
+
+**27 batteries, and not one mutated `IsSimulationAccount`** — the single predicate deciding whether
+an account can lose real money, which had **already had a real defect in it**. `P2-38`'s fix
+shipped with tests and no mutants. *The riskiest predicate in the repo was the least mutated*,
+which is `P2-27`'s shape at the sharpest possible place. `mutate_p238.py` now exists: **5/5**.
+
+⚠️ **Mutant 3 is the one to carry**: widen to "anything that is not NinjaTrader" and Rithmic and
+InteractiveBrokers — real money both — classify as simulated. **Every positive assertion still
+passes under it.** Only the negative half catches it, and it fails 5 of them. **A classifier that
+answers "simulated" to everything passes every positive test ever written for it** — the
+detector-needs-a-negative-test rule applied to the money switch.
+
+### Evidence
+
+Suite **1482 → 1487/0**; `mutate_p238.py` **5/5**; anchors **306/0**; **29** batteries wired;
+`nt_compile` **errorCount 0**; `sync_nt8 --verify` **ALL IN SYNC (10 files)**. **Live-validated**:
+`nt_place_order` on `Playback101` with `confirmLive` **omitted** returned `status: submitted` where
+it was previously refused as live — the enforcer, not the report — then cancelled, with
+`/api/orders?account=Playback101` and `/api/positions` both reading `[]` afterwards.
+
+### Order from here
+
+1. **Drive a replay session** — **`P1-102`** first, then **`P2-108`**.
+   ⚠️ Re-verify guard arming after reconnecting Provider31.
+
+   ⚠️ **`P1-102` is where `P1-106` (closed) left its unvalidated admission half, and
+   `check_next_list_ids.py` is what forced that to be said.** Naming `P1-106` (closed) as work in
+   this list failed the gate — *"if work REMAINS inside a closed entry, that work needs its own ID;
+   a remainder hiding
+   under a closed one is invisible to every count."* Exactly right: `P1-106` is CLOSED with only
+   its **refusal** half measured, because nothing on this box can impose a lockout on an account
+   holding a position. That blocker is already recorded as enlarging `P1-102`, so the replay run
+   validates both at once and is tracked under the ID that is actually open. **A closed ticket
+   cannot carry an open remainder** — the count stops being true the moment it does.
+2. **`P2-112`** (⚠️ its fix touches `Account.Change()`; wants a live market), **`P3-110`**.
+3. **`P2-29`**'s remainder, then the architectural **`P3-33`**.

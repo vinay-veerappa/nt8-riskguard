@@ -14629,6 +14629,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "A simulated account that does not start with 'Sim' still classifies as simulated -- "
                 + "the name was never the signal in either direction.");
 
+            // 2026-08-15: Provider.Playback added, reversing a decision this file's own doc comment
+            // had recorded. Market Replay is how the position-dependent tickets (P1-102, P2-108,
+            // P1-106's unvalidated half) get driven with the market shut, and Playback101 was
+            // classifying as LIVE -- so every replay order would have needed confirmLive: true.
+            // The cost of that is not friction, it is REHEARSING the flag that protects the funded
+            // account, against an account that cannot lose a cent.
+            var playback = new Account { Name = "Playback101", Provider = Provider.Playback };
+            Assert(TradeCopierEngine.IsSimulationAccount(playback),
+                "A Playback account classifies as non-live -- NinjaTrader's own enum says it "
+                + "replays recorded data and settles nothing");
+
+            // ⚠️ THE NEGATIVE HALF IS THE ONE THAT PROVES THIS. A classifier widened one value too
+            // far passes every positive test above while exempting real money, and that is exactly
+            // how P2-38 shipped. Each of these is a provider that CAN lose money, asserted
+            // one at a time so a failure names which.
+            foreach (var live in new[] { Provider.NinjaTrader, Provider.Rithmic, Provider.InteractiveBrokers })
+            {
+                var acc = new Account { Name = "Playback101", Provider = live };
+                Assert(!TradeCopierEngine.IsSimulationAccount(acc), string.Format(
+                    "an account on {0} is LIVE even when it is NAMED 'Playback101' -- the name is "
+                    + "still not the signal, in either direction", live));
+            }
+
+            // And the fail-closed floor the original note set, which the widening must not erode.
+            Assert(!TradeCopierEngine.IsSimulationAccount(null),
+                "a null account is treated as live -- anything this cannot positively identify "
+                + "as non-live stays live");
         }
 
         private static void TestStress_S5_PartialFillStorm()

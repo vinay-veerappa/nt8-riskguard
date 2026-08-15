@@ -342,6 +342,18 @@ jobs:
           # makes it do nothing, so the shape of the fix survives and the behaviour does not.
           - { label: P1-87, battery: mutate_p187.py }
 
+          # P2-38, ~180s. The sim/live classifier -- the ONE predicate deciding whether an account
+          # can lose real money. It gates confirmLive on order placement, strategy deployment, and
+          # T5's guarded-live-follower rule. ⚠️ NO BATTERY COVERED IT UNTIL SESSION 42: P2-38 was a
+          # real defect in it (Name.StartsWith("Sim") exempted a funded "SimpsonFund") and its fix
+          # shipped with tests and no mutants, so the riskiest predicate in the repo was the least
+          # mutated. Added when Provider.Playback was folded in for Market Replay testing, because
+          # widening a safety classifier is the direction P2-38 itself failed in.
+          # Mutant 3 is the one to know: widened to "anything that is not NinjaTrader", so Rithmic
+          # and InteractiveBrokers classify as simulated. EVERY POSITIVE ASSERTION STILL PASSES --
+          # only the negative half catches it, and it fails 5 of them.
+          - { label: P2-38, battery: mutate_p238.py }
+
           # P1-83, 176s. Config that is stored, settable, and read by nothing. The gate is a class
           # gate: it walks the two copier DTOs by reflection and counts real uses in the ENGINE,
           # excluding the declaration, `X = something.X` clone/serialize lines, and the field-name

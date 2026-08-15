@@ -2521,14 +2521,38 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// T5's requirement that a live follower be protected by RiskGuard (P1-20).
         ///
         /// Fails closed by construction: a null account, an unset provider, or anything
-        /// this cannot positively identify as the simulator is treated as live. Playback
-        /// is deliberately NOT exempt -- it costs nothing to arm a relationship for a
-        /// playback run, and guessing wrong in the other direction costs money.
+        /// this cannot positively identify as non-live is treated as live.
+        ///
+        /// ⚠️ PLAYBACK WAS DELIBERATELY EXCLUDED HERE UNTIL 2026-08-15, and the reversal is
+        /// recorded rather than quietly applied. The original reasoning was:
+        ///
+        ///     "Playback is deliberately NOT exempt -- it costs nothing to arm a relationship
+        ///      for a playback run, and guessing wrong in the other direction costs money."
+        ///
+        /// The first clause is true about the COPIER and it is the only path that sentence
+        /// considered. It is not the only caller. `McpBridgeAddOn` asks this question on the
+        /// ORDER PLACEMENT path, where the cost is not "arm a relationship" but **an operator
+        /// and an agent passing `confirmLive: true` on every single replay order** -- rehearsing,
+        /// against an account that cannot lose a cent, the exact reflex that is the last thing
+        /// standing between a careless call and the funded 50K. A safety flag you press a hundred
+        /// times a weekend is not a safety flag. That is the cost the original note missed, and
+        /// it is why this changed.
+        ///
+        /// ⚠️ AND NOTE WHAT THIS IS NOT. `P2-38` was `Name.StartsWith("Sim")`, which exempted a
+        /// funded account called "SimpsonFund" because a USER-CHOSEN STRING was being read as a
+        /// fact about money. This is an EXACT match on a platform enum: `Provider.Playback` is
+        /// NinjaTrader's own statement that the account replays recorded data and settles nothing.
+        /// Widening a name test and adding a second exact enum value are not the same act, and
+        /// the test below pins that distinction in both directions.
+        ///
+        /// Second clause of the original note still governs everything else: anything this cannot
+        /// positively identify stays live.
         /// </summary>
         internal static bool IsSimulationAccount(Account account)
         {
             if (account == null) return false;
-            return account.Provider == Provider.Simulator;
+            return account.Provider == Provider.Simulator
+                || account.Provider == Provider.Playback;
         }
 
         // ------------------------------------------------------------------

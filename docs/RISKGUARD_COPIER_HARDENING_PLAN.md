@@ -4784,7 +4784,7 @@ explicit deploy step is the feature.
 Use `--verify --only addons` to check drift and `--only addons` to deploy. Never copy by hand
 (this session did, and it is what left canonical two files ahead of deployed).
 
-### P2-38. The strategy-deploy guard has P1-20's name-prefix hole too — CLOSED 2026-08-07
+### P2-38. The strategy-deploy guard has P1-20's name-prefix hole too — CLOSED 2026-08-07 (⚠️ the classifier was WIDENED to `Provider.Playback` on 2026-08-15 — see the note at the end of this entry, and `mutate_p238.py`, which did not exist until then)
 *(found while fixing P1-20, 2026-08-07)*
 **Where**: `McpBridgeAddOn.cs:1710`, `:2243`, `:2307` —
 `account.Name.StartsWith("Sim") || account.Provider.ToString().Contains("imulat")`.
@@ -4842,6 +4842,44 @@ is what makes it testable at all.
 > false, all six `WindowsET` gone, all four `FirmProfiles` gone. The post-fix response returned
 > `"requested": {}` alongside the complete, unchanged live config. **The MCP tool most likely to be
 > reached for as a read was itself a destructive write.**
+
+**⚠️ WIDENED 2026-08-15 (session 42): `Provider.Playback` now also classifies as non-live.**
+
+Market Replay is how the position-dependent tickets (`P1-102`, `P2-108`, and `P1-106`'s
+unvalidated half) get driven with the market shut, and `Playback101` reports
+`provider: "Playback"`, so it was classifying as **LIVE** — every replay order would have needed
+`confirmLive: true`.
+
+**This REVERSED a decision the code itself had recorded**, and the reversal is written into the
+doc comment rather than applied quietly. The original note read *"Playback is deliberately NOT
+exempt — it costs nothing to arm a relationship for a playback run, and guessing wrong in the
+other direction costs money."* The first clause is true about the **copier**, which is the only
+caller that sentence considered. It is not the only caller: `McpBridgeAddOn` asks this question on
+the **order-placement** path, where the cost is not "arm a relationship" but an operator and an
+agent pressing `confirmLive: true` on every replay order — **rehearsing, against an account that
+cannot lose a cent, the exact reflex that is the last thing between a careless call and the funded
+50K. A safety flag you press a hundred times a weekend is not a safety flag.**
+
+⚠️ **This is NOT the defect this entry is about.** `P2-38` was `Name.StartsWith("Sim")` — a
+**user-chosen string** read as a fact about money, which is why "SimpsonFund" got through. This is
+an **exact match on a platform enum**: `Provider.Playback` is NinjaTrader's own statement that the
+account replays recorded data and settles nothing. Widening a name test and adding a second exact
+enum value are different acts. Everything else still fails closed: null, unset, and anything not
+positively identified stays live.
+
+⚠️ **AND NO BATTERY COVERED THIS PREDICATE AT ALL.** 27 batteries and not one mutated
+`IsSimulationAccount` — the single switch deciding whether an account can lose real money, which
+had already had a real defect in it. Its `P2-38` fix shipped with tests and **no mutants**. The
+riskiest predicate in the repo was the least mutated (`P2-27`'s shape). `mutation/mutate_p238.py`
+now exists: **5/5**. ⚠️ **Mutant 3 is the one to know** — widened to "anything that is not
+NinjaTrader", so Rithmic and InteractiveBrokers classify as simulated. **Every positive assertion
+still passes under it**; only the negative half catches it, and it fails 5 of them.
+*A classifier that says "simulated" to everything passes every positive test ever written for it.*
+
+**Live-validated**: `nt_place_order` on `Playback101` with `confirmLive` **omitted** was
+`status: submitted` (it was refused as live before), then cancelled; `/api/orders?account=Playback101`
+and `/api/positions` both read `[]` afterwards. Suite **1482 → 1487/0**, `nt_compile` **0 errors**.
+
 
 ### P2-29. Single-file size / complexity — PARTIALLY CLOSED 2026-08-15 (session 42): the WPF dashboard is out and verified; the `partial class` split of `RiskGuardAddOn` itself is the recorded remainder
 
