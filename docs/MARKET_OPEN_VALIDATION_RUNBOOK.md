@@ -125,10 +125,31 @@ distinguishable. It fires hourly at :45.
 `DynamicAtmManager.MonitorTick` was failing open with no dispatcher: the breakeven loop never ran.
 Fixed and suite-proven; the stop actually MOVING has never been watched.
 
-1. Place an ATM bracket on Sim101 (`nt_place_atm_order`), one contract, with a breakeven rule.
-2. Note the stop's price via `nt_orders account=Sim101`.
-3. Wait for price to travel the breakeven trigger distance.
-4. Re-read `nt_orders`. **PASS**: the stop's price has MOVED to (or past) entry.
+**The vehicle is the `DrawdownShield` ATM strategy** — checked before the open, it is the one of
+the eight that carries `breakevenTriggerTicks` / `breakevenOffsetTicks`, so no template has to be
+built by hand:
+
+```
+nt_place_atm_order
+  account=Sim101  symbol="MNQ 09-26"  action=buy  quantity=1
+  strategyName=DrawdownShield
+  stopTicks=40  targetTicks=80
+  breakevenTriggerTicks=12  breakevenOffsetTicks=2
+  idempotencyKey=<fresh uuid>
+```
+
+1. Place it. Record the fill price and the **stop's price** from `nt_orders account=Sim101`.
+2. Wait for price to travel **12 ticks** in favour (MNQ tick = 0.25, so 3.00 points).
+3. Re-read `nt_orders`. **PASS**: the stop has MOVED to entry + 2 ticks. **FAIL**: it is still at
+   entry − 40.
+
+⚠️ **`breakevenTriggerTicks` is 12 by default and the open is volatile — 3 MNQ points is seconds.**
+Do not walk away between steps 1 and 3, and record the timestamps: "the stop moved" and "the stop
+moved *when it should have*" are different claims and only the second one tests the loop.
+
+⚠️ **Symbol format**: pass `MNQ 09-26`; NT8 reports the position back as `MNQ SEP26`. Both are the
+same contract — `P1-105` deliberately does NOT compare expiries for this reason, and a mismatch
+here is not a defect.
 
 ⚠️ **`Account.Change()` semantics**: a second change in flight reverts the order, and the
 Simulator echoes your price back. **Verify the move by re-reading the order after it settles**,
