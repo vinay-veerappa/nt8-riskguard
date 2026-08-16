@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.74's — read that one; it carries the reasons.** 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ **`P1-117`, `P2-119` and `P2-120` ALL CLOSED in session 48, and the last one is LIVE-VALIDATED both ways**: the config save now reports what it did and refuses what a write INTRODUCES, the window no longer edits the live config in place, and the bridge route stopped answering `success = true` regardless. Core **v1.31.0** deployed, `nt_compile` **0 errors**, guard loaded / shadow / armed / guarding. ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
+| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.75's — read that one; it carries the reasons.** ✅ **`P1-121` CLOSED in session 49** — entered on the operator's *"the copier UI does not look like it is done"*, and it was not a feature gap: the window was finished and **wrong**. `_statusText` was a green `[ ENGINE: ACTIVE ]` literal assigned once at construction and **never again**, over rows reading `Armed: LIVE` that never consulted the global copier mode — so a `disabled` copier, submitting nothing, rendered as a healthy screen. Three producers (`GetCopierMode`, `DetectConfigConflicts`, `CopierMetric.Samples`) already computed all of it for the API; the UI consumed **none**, while a comment claimed it did. Decisions moved to `addons/CopierStatusView.cs` (no WPF type, so it can be mutated at all — `TradeCopierWindow.cs` is outside the test build). Suite **1846 → 1924**, battery **14/14**. 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ **`P1-117`, `P2-119` and `P2-120` ALL CLOSED in session 48, and the last one is LIVE-VALIDATED both ways**: the config save now reports what it did and refuses what a write INTRODUCES, the window no longer edits the live config in place, and the bridge route stopped answering `success = true` regardless. Core **v1.31.0** deployed, `nt_compile` **0 errors**, guard loaded / shadow / armed / guarding. ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3349,7 +3349,7 @@ and `P?-65` together and makes the redesign testable.
 the *order* they forced is the reusable part.
 
 > ### Do next: `P2-116` — an equity rule with no equity reading reports `EvaluatedNotEnforcing` on 88 of 89 prop accounts, on the surface built to answer *is the guard protecting me*
-> ### (order of work lives in §5.74's `Order from here`: `P2-116`, then `P2-29`'s remainder, then `P3-118` / `P3-110` / `P3-33`)
+> ### (order of work lives in §5.75's `Order from here`: `P2-116`, then `P2-29`'s remainder, then `P3-118` / `P3-110` / `P3-33`)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
@@ -10296,3 +10296,95 @@ reads as a quiet, healthy relay.
 outbox at 7848 bytes / 18 alerts. ⚠️ **The 255 itself is still unexplained** — this makes the next
 one diagnosable, it does not explain the last one. Read 15 minutes as the **worst-case dead
 window**; the outbox is a file and the relay resumes from its cursor, so alerts are late, not lost.
+
+---
+
+## 5.75 Session 49 — the copier UI, where three producers had computed the answer and nothing consumed it
+
+**Entered on the operator's sentence**, not on the do-next list: *"the copier UI does not look like
+it is done."* It was not a feature gap. `grep -rn "TODO\|not implemented\|stub" TradeCopierWindow.cs`
+returned **nothing**; every control had a handler and every handler worked. The window was
+finished and it was **wrong**, which is the harder version.
+
+### What was measured, before writing anything
+
+`_statusText` appears **three times** in `TradeCopierWindow.cs`: the declaration, the construction,
+and the `Children.Add`. It was set once to a green literal `"  [ ENGINE: ACTIVE ]"` and **never
+assigned again** — not on the 2-second refresh timer, not in the `catch`. *There is no input to
+this program that makes that header say anything else.* Beside it, `grep -c "CopierMode"` in the
+same file: **0** — while the copier's global `live`/`shadow`/`disabled` mode gates **every** copy at
+`TradeCopierEngine.cs:5385` and fails closed on a typo.
+
+The live box, read through the API in the same minute:
+
+```
+copierMode: "live"        enforcing: false
+notEnforcingReason: "the relationship is not ArmedForLive, so it copies to SIMULATION
+                     followers only -- a live follower is refused."
+configConflictNote: "none -- every follower is covered by a direct relationship OR a group"
+metricsNote: "A zero here means either no copy has filled this session or a genuinely clean fill"
+```
+
+**The API knows all of it. The window showed none of it.** So the operator-visible failure is:
+the copier is `disabled`, submitting nothing at all, and the one screen built to report on it shows
+a green ENGINE: ACTIVE over rows each reading `Armed: LIVE`.
+
+> **The tell was a comment.** Above `DetectConfigConflicts`: *"exposes the conflict through
+> `DetectConfigConflicts()` for the API **and the UI** to render."* The API renders it; the UI has
+> never had a single reference to it. That comment was the only thing in the repo asserting a
+> consumer that did not exist — and it read as a completed design.
+
+### What is reusable
+
+- **Derive the display from the ENFORCER.** `CopierStatusView.IsActing` calls
+  `TradeCopierEngine.IsCopierActingMode` rather than comparing to `"live"`; a test asserts the two
+  agree across `live`/`LIVE`/`shadow`/`disabled`/`liv`/`""`/`null`. That single assertion is the
+  architecture of the ticket, and mutant 6 is the drift it prevents. F-9 restated.
+- **The extraction is evidence, not tidiness.** `TradeCopierWindow.cs` is outside the test build
+  (`P2-27`'s open half), so *nothing written there can be executed by a test or killed by a mutant*.
+  Moving the decisions into `CopierStatusView.cs` — no WPF type, no `#if`, picked up by the csproj
+  glob — is what made 14 mutants possible at all. Fifth use of the
+  `BridgeAccountResolver`/`GuardConfigEdit` pattern.
+- ⚠️ **The load-bearing metric test is the INVERSE one.** "Unmeasured renders as *not measured*"
+  passes under a `MetricText` that **always** says not-measured, which would hide every real
+  reading. The discriminator is that a **measured zero** must print `0ms (n=3)`.
+- ⚠️ **A shared function fed blanks is not shared code.** `GroupLine` is deliberately separate from
+  `RelationshipLine`: a group has no quarantine flag and no metrics of its own, so the reuse would
+  have printed *"Latency: not measured this session"* for a group whose followers are measured fine.
+- **A `catch` that leaves the last text on screen is a stale green claim.** On a 2-second timer a
+  permanently failing read held the old header up indefinitely. The screen must never look
+  healthier than the last successful read.
+
+### Gates and limits
+
+⚠️ **Mutant 1's first anchor matched TWICE** — `if (!IsActing(copierMode))` is verbatim in both row
+renderers — and a 2-match anchor scores a false **SURVIVOR**, not a false pass. Caught on the first
+run by the battery's own anchor check; re-anchored down to the `Detail` line that distinguishes them.
+
+⚠️ **No mutant can be placed in `TradeCopierWindow.cs`**, because the harness does not compile it
+either and a mutant nothing compiles is not evidence. The window is held only by paired
+absence+presence source gates and by `nt_compile`. Say that limit out loud rather than letting
+14/14 stand for the whole change.
+
+**Evidence**: suite **1846 → 1924 assertions / 589 declared tests / 0 failures**; battery
+`mutate_p1121.py` **14/14 killed, 0 survivors, 0 declared unreachable**.
+
+### Confirmation runs waiting on a market — NOT work, and deliberately not listed below
+
+Unchanged from §5.74 and repeated only so they are not forgotten: Sunday 18:00 ET, all needing one
+filled contract — `F-6`'s repeating-condition suppression and its STALE-guard heartbeat, the
+stop-move half of the trailing-stop entry, and the lockout **admit** half.
+
+⚠️ **These are unvalidated halves of CLOSED entries, so they are named here in prose and NOT in the
+ordering list below.** `check_next_list_ids.py` refuses a draft that lists a closed ID as work to
+do, and it fired on the first version of this very section — correctly. If any of them turns out to
+be more than a confirmation run, **it gets its own ID**: a remainder hiding under a closed entry is
+invisible to every count.
+
+### Order from here
+
+1. **`P2-116`** — still heads the list, unchanged by this session: an equity rule with no equity
+   reading reports `EvaluatedNotEnforcing` on **88 of 89** prop accounts, on the surface built to
+   answer *is the guard protecting me*. It is `F-9`'s class in the optimistic direction and it is
+   the same shape as the one just closed, one layer down.
+2. Then **`P2-29`'s remainder** (the `partial class` split), then `P3-118`, `P3-110`, `P3-33`.

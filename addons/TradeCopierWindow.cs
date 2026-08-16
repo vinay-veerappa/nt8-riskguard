@@ -195,6 +195,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private TextBlock _statusText;
 
+        // P1-121. The global copier mode as of the current refresh. Read once per RefreshUI so
+        // the header and every card below it describe the same instant.
+        private string _copierMode = "live";
+
+        /// <summary>
+        /// The ONLY place severity becomes colour. CopierStatusView decides how loud a line is
+        /// and knows nothing about brushes, which is what keeps it in the test build.
+        /// </summary>
+        private static Brush BrushFor(CopierStatusSeverity severity)
+        {
+            switch (severity)
+            {
+                case CopierStatusSeverity.Critical:
+                    return new SolidColorBrush(Color.FromRgb(231, 76, 60));   // red
+                case CopierStatusSeverity.Warn:
+                    return new SolidColorBrush(Color.FromRgb(243, 156, 18));  // amber
+                case CopierStatusSeverity.Info:
+                    return new SolidColorBrush(Color.FromRgb(149, 165, 166)); // grey
+                default:
+                    return new SolidColorBrush(Color.FromRgb(46, 204, 113));  // green
+            }
+        }
+
         public TradeCopierControl()
         {
             var rootGrid = new Grid();
@@ -226,8 +249,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             _statusText = new TextBlock
             {
-                Text = "  [ ENGINE: ACTIVE ]",
-                Foreground = new SolidColorBrush(Color.FromRgb(46, 204, 113)),
+                // P1-121. Was "[ ENGINE: ACTIVE ]" in green, assigned here and never again --
+                // an unfalsifiable claim that survived a `disabled` copier. The real state
+                // arrives on the first RefreshUI; until then this says only that it has not
+                // been read yet, which is true.
+                Text = "  [ reading copier state... ]",
+                Foreground = new SolidColorBrush(Color.FromRgb(149, 165, 166)),
                 FontSize = 13,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -779,6 +806,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 _relationshipsPanel.Children.Clear();
                 var rels = TradeCopierEngine.Instance.GetRelationships();
 
+                // P1-121. The header, which used to be a green literal set once at construction.
+                // Read the mode ONCE and pass it down to every card: reading it per card would
+                // let the header and the rows disagree if an operator changed the mode mid-refresh.
+                _copierMode = TradeCopierEngine.Instance.GetCopierMode();
+
                 if (rels.Count == 0)
                 {
                     _relationshipsPanel.Children.Add(new TextBlock
@@ -816,10 +848,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                         _groupsPanel.Children.Add(CreateGroupCard(grp));
                     }
                 }
+
+                // P1-121. Every number in this line is folded by CopierStatusView out of the
+                // same two collections rendered above, and the conflicts come from the engine's
+                // own detector -- the one the API already reports and this window did not.
+                var headline = CopierStatusView.Describe(
+                    _copierMode, rels, groups,
+                    TradeCopierEngine.Instance.DetectConfigConflicts().Count);
+
+                _statusText.Text = "  " + headline.Text;
+                _statusText.Foreground = BrushFor(headline.Severity);
+                _statusText.ToolTip = headline.Detail;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TradeCopierControl EXCEPTION] {ex.Message}");
+
+                // P1-121. Without this the header keeps whatever it last said -- and this
+                // refresh runs on a 2-second timer, so a throw leaves a stale, possibly GREEN
+                // claim on screen indefinitely while nothing behind it is being read. The
+                // screen must never look healthier than the last successful read.
+                if (_statusText != null)
+                {
+                    _statusText.Text = "  [ COPIER STATUS UNAVAILABLE ]";
+                    _statusText.Foreground = BrushFor(CopierStatusSeverity.Critical);
+                    _statusText.ToolTip = "The last refresh threw: " + ex.Message
+                        + ". What is shown below may be stale.";
+                }
             }
         }
 
@@ -848,11 +903,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 FontSize = 14
             });
 
-            string statusText = $"Mode: {rel.SizingMode} | Ratio: {rel.QuantityRatio:F1}x | MaxPos: {rel.MaxPositionSize} | Latency: {rel.LatencyMs:F0}ms | Slippage: {rel.AvgSlippageTicks:F1}t | Armed: {(rel.ArmedForLive ? "LIVE" : "SIM")}";
+            // P1-121. This line used to end `Armed: LIVE` with no reference to the global mode,
+            // so a shadow or disabled copier rendered a screen of rows each claiming to be live,
+            // and printed `Latency: 0ms` whether or not anything had ever been measured.
+            CopierMetric latency, slippage;
+            TradeCopierEngine.Instance.GetRelationshipMetrics(rel, out latency, out slippage);
+
+            var line = CopierStatusView.RelationshipLine(
+                _copierMode, rel.SizingMode, rel.QuantityRatio, rel.MaxPositionSize,
+                rel.IsEnabled, rel.ArmedForLive, rel.IsQuarantined, rel.QuarantineReason,
+                latency, slippage);
+
             info.Children.Add(new TextBlock
             {
-                Text = statusText,
-                Foreground = Brushes.LightGray,
+                Text = line.Text,
+                Foreground = BrushFor(line.Severity),
+                ToolTip = line.Detail,
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             });
@@ -977,11 +1043,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ? string.Join(", ", grp.FollowerAccounts)
                 : "None";
 
-            string statusText = $"Followers ({grp.FollowerAccounts?.Count ?? 0}): [{followersStr}] | Mode: {grp.SizingMode} | Ratio: {grp.QuantityRatio:F1}x | Armed: {(grp.ArmedForLive ? "LIVE" : "SIM")}";
+            // P1-121. See CreateRelationshipCard: `Armed: LIVE` was rendered without reference
+            // to the global copier mode, so an inert group read as an acting one.
+            var groupLine = CopierStatusView.GroupLine(
+                _copierMode, followersStr, grp.FollowerAccounts?.Count ?? 0,
+                grp.SizingMode, grp.QuantityRatio, grp.IsEnabled, grp.ArmedForLive);
+
             info.Children.Add(new TextBlock
             {
-                Text = statusText,
-                Foreground = Brushes.LightGray,
+                Text = groupLine.Text,
+                Foreground = BrushFor(groupLine.Severity),
+                ToolTip = groupLine.Detail,
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             });

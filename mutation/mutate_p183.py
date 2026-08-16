@@ -99,8 +99,14 @@ MUTANTS = [
      "a display fragment comes back without the field behind it. What a half-done deletion\n"
      "     looks like -- and on a file the test build compiles away entirely, a source scan is\n"
      "     the only gate there is",
-     'string statusText = $"Mode: {rel.SizingMode} | Ratio: {rel.QuantityRatio:F1}x',
-     'string statusText = $"Stealth: ON | Mode: {rel.SizingMode} | Ratio: {rel.QuantityRatio:F1}x'),
+     # REPOINTED, not retired (P1-121, session 49). The old anchor was the window's own
+     # `string statusText = $"Mode: {rel.SizingMode} | ...` line, which no longer exists: the
+     # row text is now built by CopierStatusView.RelationshipLine and the window only renders
+     # it. check_anchors.py caught the break in the same commit that caused it, which is the
+     # gate working. The mutant's MEANING is unchanged -- reintroduce a display fragment in the
+     # window for a field with nothing behind it -- so it moves to the render site.
+     '                Text = line.Text,',
+     '                Text = "Stealth: ON | " + line.Text,'),
 
     (RULES,
      "the copier snapshot emits a stealthMode key again. The browser page in the OTHER repo\n"

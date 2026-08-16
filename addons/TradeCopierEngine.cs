@@ -529,6 +529,43 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         /// <summary>
+        /// P1-121. The two live metrics for ONE relationship, each carrying its sample count.
+        ///
+        /// GetSnapshot() already pairs every value with its count, but it returns one row per
+        /// relationship PER INSTRUMENT, which is the wrong grain for a per-relationship card --
+        /// the window would have to re-aggregate rows and would be free to do it differently
+        /// from the engine. This returns the same pairing at the grain the card renders.
+        ///
+        /// The count is what makes a zero readable: LatencyMs is 0.0 both when no copy has
+        /// filled this session and when a copy filled instantly, and only one of those is a
+        /// statement about the market. Samples tells them apart; without it the window is
+        /// obliged to print a number it cannot justify (P1-22 shipped exactly that).
+        ///
+        /// A READ. Must not mutate -- P1-69 destroyed the measurements it was asked to report.
+        /// </summary>
+        public void GetRelationshipMetrics(
+            CopierRelationship rel, out CopierMetric latency, out CopierMetric slippage)
+        {
+            if (rel == null)
+            {
+                latency = new CopierMetric { Value = 0, Samples = 0 };
+                slippage = new CopierMetric { Value = 0, Samples = 0 };
+                return;
+            }
+
+            lock (_lock)
+            {
+                int latencySamples;
+                _latencySampleCounts.TryGetValue(rel.Id, out latencySamples);
+                int slippageSamples;
+                _slippageSampleCounts.TryGetValue(rel.Id, out slippageSamples);
+
+                latency = new CopierMetric { Value = rel.LatencyMs, Samples = latencySamples };
+                slippage = new CopierMetric { Value = rel.AvgSlippageTicks, Samples = slippageSamples };
+            }
+        }
+
+        /// <summary>
         /// The only modes that place orders. Anything else -- a typo, an empty string, a mode
         /// someone added to a config surface and never implemented -- must not read as live.
         /// P1-87 is the precedent and the reason: a dispatch comparing against literals with no

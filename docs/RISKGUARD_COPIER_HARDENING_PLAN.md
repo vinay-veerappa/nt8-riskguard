@@ -4398,6 +4398,92 @@ reworded.
 
 ---
 
+### P1-121. The Trade Copier window shows a green `[ ENGINE: ACTIVE ]` that no input can turn red, over rows that read `Armed: LIVE` while the global copier mode is `disabled` — ✅ CLOSED 2026-08-16 (session 49)
+**Where**: `addons/TradeCopierWindow.cs`, new `addons/CopierStatusView.cs`, `addons/TradeCopierEngine.cs`
+**Found**: not by review and not by the suite — by the operator saying *"the copier UI does not look
+like it is done"*, then reading the window against the API it is supposed to agree with.
+
+**The defect, measured before any code was written.** `_statusText` was assigned once, in the
+constructor, to the literal `"  [ ENGINE: ACTIVE ]"` in green — and never assigned again. Not on
+the 2-second refresh timer, not on failure, not anywhere: `grep -n "_statusText"` returned exactly
+three lines, the declaration, the construction and the `Children.Add`. **There is no input to this
+program that makes that header say anything else.** Meanwhile the copier's own global mode —
+`live` / `shadow` / `disabled`, which gates *every* copy at `TradeCopierEngine.cs:5385` and fails
+closed on a typo — appeared in the window **zero** times, and each relationship row ended
+`Armed: {(rel.ArmedForLive ? "LIVE" : "SIM")}` with no reference to it.
+
+So the failure the operator meets is: **the copier is `disabled`, submitting nothing at all, and the
+one screen built to report on it shows a green ENGINE: ACTIVE header above a list of rows each
+saying `Armed: LIVE`.** Every individual widget is doing what it was written to do.
+
+**Three producers already computed everything the window needed**, and it consumed none of them:
+
+| Producer | What it knows | Rendered by the API | Rendered by the window |
+|---|---|---|---|
+| `GetCopierMode()` | the global live/shadow/disabled gate | ✅ `copierMode` + `copierModeNote` | ❌ |
+| `DetectConfigConflicts()` | a follower covered by BOTH a direct relationship and a group, so copied **twice** | ✅ `configConflicts` | ❌ |
+| `CopierMetric.Samples` | whether a metric was ever measured | ✅ `metricsNote` | ❌ |
+
+> **The comment above `DetectConfigConflicts` said the conflict was exposed "for the API and the
+> UI to render."** The API renders it. The UI never did. That comment was the only thing in the
+> repo asserting a consumer that did not exist — [[a-comment-recording-a-defect-goes-stale]] in
+> the one direction that is not about staleness: it was never true.
+
+**Why it is `P1` and not `P3`.** It places no order and drops none. It removes the operator's
+ability to *notice* that no order is being placed — and the product of a trade copier is entirely
+"my follower accounts mirror my leader". Believing that while it is false is how follower accounts
+silently diverge, and two of the 96 accounts on this box are funded. Weighed the way
+[[weigh-the-quiet-failure-above-the-loud]] prescribes: this never throws, never logs and never
+degrades. It just reads correct.
+
+**Fixed by** the split `P2-27` has prescribed since it was filed and that
+`BridgeAccountResolver`, `BridgeFlattenPlan`, `BridgeLockoutGate` and `GuardConfigEdit` have each
+already proven: **every decision moved into `addons/CopierStatusView.cs`, which names no WPF type
+and carries no `#if`**, so the `tests/RiskGuardTests.csproj` glob compiles it and it is executed
+and mutated. The window keeps the brush mapping and nothing else. `TradeCopierWindow.cs` remains
+outside the test build, so this is not tidiness — *it is the difference between having evidence
+about this code and having none.*
+
+Four things in it are worth reusing:
+
+1. **The display is derived from the ENFORCER, never recomputed beside it.** `CopierStatusView.IsActing`
+   calls `TradeCopierEngine.IsCopierActingMode` rather than comparing to `"live"` itself, and one
+   test asserts they agree across `live`/`LIVE`/`shadow`/`disabled`/`liv`/`""`/`null`. This is F-9's
+   finding restated — a rule's reported state had drifted from its enforced state in **both**
+   directions — and the remedy is the same one. Mutant 6 reintroduces exactly that drift.
+2. **A metric with no samples must not print a number.** `Latency: 0ms` is produced both by
+   *nothing has filled this session* and by *a copy filled instantly*, and only the second is a
+   claim about the market; `P1-22` shipped the first as if it were the second. New
+   `GetRelationshipMetrics` pairs each value with its count at the grain the card renders
+   (`GetSnapshot` already pairs them, but one row **per instrument**, which the window would have
+   had to re-aggregate and would then be free to do differently from the engine). ⚠️ **The
+   load-bearing test is the inverse** — a measured **zero** must still print as `0ms (n=3)`, or a
+   `MetricText` that always says *not measured* passes the obvious test while hiding every real
+   reading.
+3. **A group is deliberately NOT routed through `RelationshipLine`.** A group carries no quarantine
+   flag and no metrics of its own, so reusing that method means feeding it blanks — and it would
+   then print *"Latency: not measured this session"* for a group whose followers are being measured
+   perfectly well. **A shared function that has to be fed blanks is not shared code, it is a second
+   dialect with one caller lying.**
+4. **A throwing refresh now replaces the header.** The `catch` logged to `Console` and returned,
+   leaving the last text on screen — on a 2-second timer, meaning a permanently failing read left
+   a stale, possibly green, claim up indefinitely. The screen must never look healthier than the
+   last successful read.
+
+**Evidence**: suite **1846 → 1924 assertions / 589 declared tests**, 0 failures. Battery
+`mutation/mutate_p1121.py`, **14 mutants**. ⚠️ **Mutant 1's first anchor matched TWICE** — the
+`if (!IsActing(copierMode))` branch is verbatim in both `RelationshipLine` and `GroupLine` — and a
+2-match anchor scores a false **SURVIVOR**, which is `[[mutation-anchors-go-stale]]` catching
+itself on the first run rather than in six months.
+
+⚠️ **What this battery cannot reach, and it is the honest limit of the ticket**: no mutant can be
+placed in `TradeCopierWindow.cs`, because the harness does not compile it either — a mutant nothing
+compiles is not evidence. The window is held only by the source gates in
+`TestP1121_TheWindowDelegatesItsStatusTextToTheView` (paired absence + presence, per
+[[a-code-move-disarms-a-source-gate]]) and by `nt_compile`.
+
+---
+
 ### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — OPEN, found 2026-08-16 (session 48) by a test that made two other tests disagree
 
 **Where**: `addons/RiskGuardAddOn.cs`, three places that each ask *what mode is this?*

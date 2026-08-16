@@ -637,7 +637,23 @@ jobs:
           # never been able to fire" is. Three survived the first run, all one gap (the evidence
           # count was asserted for 1 of 5 rules that use it); the fix opened an escape route, and
           # the mutant for THAT survived too. Read the file before adding to it.
-          - { label: "UI3", batteries: "mutate_ui3.py" }   # 394s = UI3 394s
+          # ⚠️ PROVISIONAL PLACEMENT -- re-pack after this bin's first run. P1-121 has never run
+          # in CI, so there is no measured weight for it, and tools/pack_ci_matrix.py REFUSES to
+          # pack on a guess (rightly: session 48 hand-packed mutate_p227.py on "<=180s lands
+          # free" and turned a 271s bin into 726s of wall clock). The only honest way to get the
+          # number is to run it here once, so it is dropped into the LIGHTEST bin and this
+          # comment records that the arrangement is not yet a packing decision.
+          #
+          # Local wall clock is 63s for 14 mutants, which is NOT the CI weight and must not be
+          # used as one -- locally the build is warm and incremental; in CI every mutant pays a
+          # cold recompile, which is why comparable batteries measure 115-502s here. Expect this
+          # bin to be the critical path for exactly one run.
+          #
+          # NEXT STEP, do not skip: read the `BATTERY_SECONDS` line this job prints for
+          # mutate_p1121.py -- that line exists precisely because `gh run view` cannot see inside
+          # a bin -- then re-pack all 36 on measured times:
+          #     python tools/pack_ci_matrix.py --times <measured> --apply
+          - { label: "UI3+P1-121", batteries: "mutate_ui3.py mutate_p1121.py" }   # 394s + UNMEASURED = UI3 394s + P1-121 ?s
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

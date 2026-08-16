@@ -727,6 +727,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP1117_DeepCopyIsIndependentOfItsSource();
             TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace();
 
+            // P1-121: the copier window reports what the copier does.
+            TestP1121_TheViewAsksTheEngineWhichModesAct();
+            TestP1121_AnUnmeasuredMetricIsNotRenderedAsZero();
+            TestP1121_AMeasuredZeroIsRenderedAsAMeasurement();
+            TestP1121_AnArmedRowUnderAShadowCopierDoesNotClaimToBeLive();
+            TestP1121_AnArmedRowUnderALiveCopierReadsAsLive();
+            TestP1121_QuarantineOutranksEveryOtherRowState();
+            TestP1121_ADisabledRowSaysItIsNotCopying();
+            TestP1121_TheHeaderReportsTheGlobalMode();
+            TestP1121_TheHeaderCanTakeEverySeverity();
+            TestP1121_AllQuarantinedIsCriticalAndNothingConfiguredIsNotOk();
+            TestP1121_AConfigConflictIsSurfacedAndNeverLowersSeverity();
+            TestP1121_GroupFollowersAreCountedAndInertGroupsSaySo();
+            TestP1121_TheEngineReportsMetricsWithTheirSampleCounts();
+            TestP1121_TheWindowDelegatesItsStatusTextToTheView();
+
             // Structural self-check: fails if the runner silently stops covering declared tests.
             TestHarness_AllDeclaredTestsAreInvoked();
 
@@ -11210,6 +11226,457 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// config if there is something to copy it with; the source gate below checks the wiring,
         /// and this checks the thing the wiring calls.
         /// </summary>
+        // ================================================================================
+        // P1-121: the copier window describes what the copier DOES
+        //
+        // The window showed a green status assigned once at construction and never again, and
+        // rendered every row as armed-live without reference to the global copier mode. So a
+        // `disabled` copier -- one that submits nothing at all -- presented a green header over
+        // a list of rows each claiming to be live.
+        //
+        // These tests live here rather than against the window because TradeCopierWindow.cs is
+        // excluded from the test build (P2-27's open half). Everything decidable was moved into
+        // CopierStatusView, which names no WPF type and is therefore executed and mutated; what
+        // is left in the window is the brush mapping, held by the source gates at the end.
+        // ================================================================================
+
+        /// <summary>
+        /// The F-9 guard: the view must not have its own opinion about which modes act.
+        ///
+        /// This is the architecture of the ticket in one assertion. If someone later writes a
+        /// literal comparison inside CopierStatusView it passes every other test in this block
+        /// and fails this one the day the engine's set of acting modes changes -- which is
+        /// exactly the drift F-9 was, a reported state disagreeing with the enforced one.
+        /// </summary>
+        private static void TestP1121_TheViewAsksTheEngineWhichModesAct()
+        {
+            Console.WriteLine("\n[TEST] P1-121: CopierStatusView.IsActing delegates to the engine");
+
+            // Includes a typo, a blank and a null deliberately: the interesting agreement is on
+            // the inputs nobody designed for.
+            foreach (var mode in new[] { "live", "LIVE", "shadow", "disabled", "liv", "", null })
+            {
+                Assert(CopierStatusView.IsActing(mode) == TradeCopierEngine.IsCopierActingMode(mode),
+                    "P1-121: IsActing agrees with the enforcer for mode '" + (mode ?? "(null)") + "'");
+            }
+        }
+
+        /// <summary>
+        /// The two zeros. A zero latency is produced both by "no copy has filled this session"
+        /// and by "a copy filled instantly", and only the second is a claim about the market.
+        /// P1-22 shipped the first as if it were the second.
+        /// </summary>
+        private static void TestP1121_AnUnmeasuredMetricIsNotRenderedAsZero()
+        {
+            Console.WriteLine("\n[TEST] P1-121: an unmeasured metric never renders as a number");
+
+            var unmeasured = new CopierMetric { Value = 0, Samples = 0 };
+            string text = CopierStatusView.MetricText("Latency", unmeasured, "ms", 0);
+            Assert(text.Contains(CopierStatusView.NotMeasured),
+                "P1-121: zero samples renders as the not-measured text");
+            Assert(!text.Contains("0ms"),
+                "P1-121: zero samples does NOT render the number -- printing it is the defect");
+
+            // A metric with a non-zero VALUE but no samples must still refuse. A stale value
+            // left on the DTO by an earlier session is not a measurement taken in this one.
+            string stale = CopierStatusView.MetricText(
+                "Latency", new CopierMetric { Value = 42, Samples = 0 }, "ms", 0);
+            Assert(stale.Contains(CopierStatusView.NotMeasured) && !stale.Contains("42"),
+                "P1-121: a value with no samples is refused even when the value is non-zero");
+
+            // Null must not throw: this runs on a 2-second UI timer.
+            string nullText = CopierStatusView.MetricText("Latency", null, "ms", 0);
+            Assert(nullText.Contains(CopierStatusView.NotMeasured),
+                "P1-121: a null metric reads as unmeasured rather than throwing");
+        }
+
+        /// <summary>
+        /// The discriminator. A test that only checked "unmeasured says not-measured" passes
+        /// under a MetricText that ALWAYS says not-measured -- which would hide every real
+        /// reading. This is the other half.
+        /// </summary>
+        private static void TestP1121_AMeasuredZeroIsRenderedAsAMeasurement()
+        {
+            Console.WriteLine("\n[TEST] P1-121: a measured zero is reported as a measurement");
+
+            string text = CopierStatusView.MetricText(
+                "Latency", new CopierMetric { Value = 0, Samples = 3 }, "ms", 0);
+
+            Assert(!text.Contains(CopierStatusView.NotMeasured),
+                "P1-121: a measured zero is NOT reported as unmeasured");
+            Assert(text.Contains("0ms") && text.Contains("n=3"),
+                "P1-121: a measured zero prints the value and its sample count: " + text);
+
+            string slip = CopierStatusView.MetricText(
+                "Slippage", new CopierMetric { Value = 2.25, Samples = 4 }, "t", 1);
+            Assert(slip.Contains("2.3t") || slip.Contains("2.2t"),
+                "P1-121: slippage renders at one decimal: " + slip);
+            Assert(slip.Contains("n=4"), "P1-121: slippage carries its sample count");
+        }
+
+        /// <summary>
+        /// THE DEFECT. An enabled, armed relationship under a non-acting global mode used to
+        /// render as armed for live.
+        /// </summary>
+        private static void TestP1121_AnArmedRowUnderAShadowCopierDoesNotClaimToBeLive()
+        {
+            Console.WriteLine("\n[TEST] P1-121: an armed row under a non-acting copier reads as inert");
+
+            foreach (var mode in new[] { "shadow", "disabled", "typo" })
+            {
+                var line = CopierStatusView.RelationshipLine(
+                    mode, CopierSizingMode.QuantityRatio, 1.0, 10,
+                    /*enabled*/ true, /*armed*/ true, /*quarantined*/ false, null,
+                    new CopierMetric { Value = 0, Samples = 0 },
+                    new CopierMetric { Value = 0, Samples = 0 });
+
+                Assert(!line.Text.Contains("Armed: LIVE"),
+                    "P1-121: mode '" + mode + "' does not render an armed-live label -- that is the defect");
+                Assert(line.Text.Contains("INERT"),
+                    "P1-121: mode '" + mode + "' renders INERT: " + line.Text);
+                Assert(line.Text.Contains(mode),
+                    "P1-121: the row names the mode responsible, so the operator knows where to look");
+                Assert(line.Severity == CopierStatusSeverity.Warn,
+                    "P1-121: an inert armed row warns rather than reading as healthy");
+            }
+        }
+
+        /// <summary>
+        /// The positive control for the test above: under a live copier the row DOES say live.
+        /// Without this, a RelationshipLine that always said INERT would pass.
+        /// </summary>
+        private static void TestP1121_AnArmedRowUnderALiveCopierReadsAsLive()
+        {
+            Console.WriteLine("\n[TEST] P1-121: an armed row under a live copier reads as live");
+
+            var line = CopierStatusView.RelationshipLine(
+                "live", CopierSizingMode.QuantityRatio, 2.0, 10,
+                true, true, false, null,
+                new CopierMetric { Value = 12, Samples = 2 },
+                new CopierMetric { Value = 1.5, Samples = 2 });
+
+            Assert(line.Text.Contains("Armed: LIVE"), "P1-121: a live armed row says so: " + line.Text);
+            Assert(!line.Text.Contains("INERT"), "P1-121: a live armed row is not marked inert");
+            Assert(line.Severity == CopierStatusSeverity.Ok, "P1-121: a live armed row is Ok");
+            Assert(line.Text.Contains("2.0x"), "P1-121: the ratio is rendered");
+            Assert(line.Text.Contains("n=2"), "P1-121: measured metrics carry their counts");
+        }
+
+        /// <summary>
+        /// Quarantine outranks every other reason, INCLUDING a live+armed configuration --
+        /// it is the one state the operator did not choose, so it must not be masked.
+        /// </summary>
+        private static void TestP1121_QuarantineOutranksEveryOtherRowState()
+        {
+            Console.WriteLine("\n[TEST] P1-121: a quarantined row reports quarantine, whatever else is true");
+
+            var line = CopierStatusView.RelationshipLine(
+                "live", CopierSizingMode.QuantityRatio, 1.0, 10,
+                /*enabled*/ true, /*armed*/ true, /*quarantined*/ true, "slippage 9t > max 4t",
+                new CopierMetric { Value = 0, Samples = 0 },
+                new CopierMetric { Value = 9, Samples = 5 });
+
+            Assert(line.Text.Contains("QUARANTINED"),
+                "P1-121: quarantine is reported even when enabled+armed+live: " + line.Text);
+            Assert(!line.Text.Contains("Armed: LIVE"),
+                "P1-121: a quarantined row does not also claim to be live");
+            Assert(line.Severity == CopierStatusSeverity.Critical,
+                "P1-121: quarantine is critical");
+            Assert(line.Detail != null && line.Detail.Contains("slippage 9t"),
+                "P1-121: the recorded quarantine reason reaches the operator");
+
+            // A quarantine with a blank reason must still be reported, and must not trail off.
+            var noReason = CopierStatusView.RelationshipLine(
+                "live", CopierSizingMode.QuantityRatio, 1.0, 10, true, true, true, "   ",
+                new CopierMetric(), new CopierMetric());
+            Assert(noReason.Detail != null && noReason.Detail.Contains("no reason recorded"),
+                "P1-121: a quarantine with a blank reason says so rather than showing an empty phrase");
+        }
+
+        private static void TestP1121_ADisabledRowSaysItIsNotCopying()
+        {
+            Console.WriteLine("\n[TEST] P1-121: a disabled row says it is not copying");
+
+            var line = CopierStatusView.RelationshipLine(
+                "live", CopierSizingMode.QuantityRatio, 1.0, 10,
+                /*enabled*/ false, /*armed*/ true, false, null,
+                new CopierMetric(), new CopierMetric());
+
+            Assert(line.Text.Contains("DISABLED") && !line.Text.Contains("Armed: LIVE"),
+                "P1-121: a disabled row does not claim to be live: " + line.Text);
+            Assert(line.Severity == CopierStatusSeverity.Warn, "P1-121: a disabled row warns");
+        }
+
+        /// <summary>
+        /// The header, over the states that used to all render as one green literal.
+        /// Every count is recounted from the fixture rather than hardcoded, so the assertion
+        /// cannot drift away from the data the way F-9's counters did.
+        /// </summary>
+        private static void TestP1121_TheHeaderReportsTheGlobalMode()
+        {
+            Console.WriteLine("\n[TEST] P1-121: the header reports the global copier mode");
+
+            var rels = new List<CopierRelationship>
+            {
+                new CopierRelationship { LeaderAccountName = "L", FollowerAccountName = "F1",
+                    IsEnabled = true, ArmedForLive = true },
+                new CopierRelationship { LeaderAccountName = "L", FollowerAccountName = "F2",
+                    IsEnabled = true, ArmedForLive = false }
+            };
+            var groups = new List<CopierGroup>();
+
+            int expectedTotal = rels.Count;
+
+            var disabled = CopierStatusView.Describe("disabled", rels, groups, 0);
+            Assert(disabled.Text.Contains("DISABLED"),
+                "P1-121: a disabled copier says DISABLED in the header: " + disabled.Text);
+            Assert(disabled.Severity == CopierStatusSeverity.Warn,
+                "P1-121: a disabled copier does not read as healthy");
+            Assert(disabled.Detail.Contains(expectedTotal.ToString() + " relationship"),
+                "P1-121: the header counts the relationships it was given (" + expectedTotal + ")");
+
+            var shadow = CopierStatusView.Describe("shadow", rels, groups, 0);
+            Assert(shadow.Text.Contains("SHADOW") && shadow.Severity == CopierStatusSeverity.Warn,
+                "P1-121: a shadow copier says SHADOW and warns: " + shadow.Text);
+
+            var live = CopierStatusView.Describe("live", rels, groups, 0);
+            Assert(live.Severity == CopierStatusSeverity.Ok,
+                "P1-121: a live copier with an armed relationship is Ok");
+            Assert(live.Text.Contains("1 ARMED"),
+                "P1-121: the header counts the ARMED relationships, not all of them: " + live.Text);
+
+            var typo = CopierStatusView.Describe("liv", rels, groups, 0);
+            Assert(typo.Severity == CopierStatusSeverity.Critical,
+                "P1-121: an unrecognised mode is critical -- nothing copies and no other surface says so");
+            Assert(typo.Detail.Contains("liv"),
+                "P1-121: the unrecognised mode is quoted back: " + typo.Detail);
+        }
+
+        /// <summary>
+        /// The guard against the whole class regressing to a constant. The original defect was
+        /// literally a status that could not change; a view that returned one severity for
+        /// every input would satisfy any single-state test written above.
+        /// </summary>
+        private static void TestP1121_TheHeaderCanTakeEverySeverity()
+        {
+            Console.WriteLine("\n[TEST] P1-121: the header is capable of every severity");
+
+            var armed = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true }
+            };
+            var quarantined = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true, IsQuarantined = true }
+            };
+            var simOnly = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = false }
+            };
+            var none = new List<CopierRelationship>();
+            var noGroups = new List<CopierGroup>();
+
+            var seen = new HashSet<CopierStatusSeverity>
+            {
+                CopierStatusView.Describe("live", armed, noGroups, 0).Severity,
+                CopierStatusView.Describe("live", simOnly, noGroups, 0).Severity,
+                CopierStatusView.Describe("live", quarantined, noGroups, 0).Severity,
+                CopierStatusView.Describe("live", none, noGroups, 0).Severity
+            };
+
+            Assert(seen.Contains(CopierStatusSeverity.Ok),
+                "P1-121: some input produces Ok");
+            Assert(seen.Contains(CopierStatusSeverity.Info),
+                "P1-121: some input produces Info");
+            Assert(seen.Contains(CopierStatusSeverity.Warn),
+                "P1-121: some input produces Warn");
+            Assert(seen.Contains(CopierStatusSeverity.Critical),
+                "P1-121: some input produces Critical -- a status that cannot go red is the defect");
+        }
+
+        private static void TestP1121_AllQuarantinedIsCriticalAndNothingConfiguredIsNotOk()
+        {
+            Console.WriteLine("\n[TEST] P1-121: all-quarantined is critical; nothing-configured is not Ok");
+
+            var allQ = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true, IsQuarantined = true },
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true, IsQuarantined = true }
+            };
+            var head = CopierStatusView.Describe("live", allQ, new List<CopierGroup>(), 0);
+            Assert(head.Severity == CopierStatusSeverity.Critical && head.Text.Contains("ALL QUARANTINED"),
+                "P1-121: every enabled relationship quarantined is critical: " + head.Text);
+
+            var partial = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true, IsQuarantined = true },
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true }
+            };
+            var partialHead = CopierStatusView.Describe("live", partial, new List<CopierGroup>(), 0);
+            Assert(partialHead.Severity == CopierStatusSeverity.Warn,
+                "P1-121: one of two quarantined warns rather than reading critical or healthy");
+
+            var empty = CopierStatusView.Describe("live", new List<CopierRelationship>(),
+                new List<CopierGroup>(), 0);
+            Assert(empty.Severity == CopierStatusSeverity.Warn && empty.Text.Contains("NOTHING CONFIGURED"),
+                "P1-121: a live copier with nothing configured is not reported as healthy: " + empty.Text);
+        }
+
+        /// <summary>
+        /// A conflict must never LOWER the severity, and must be visible on an otherwise
+        /// perfect configuration -- the only case where it is the sole finding. A follower
+        /// covered twice is copied twice while every individual row is correct.
+        /// </summary>
+        private static void TestP1121_AConfigConflictIsSurfacedAndNeverLowersSeverity()
+        {
+            Console.WriteLine("\n[TEST] P1-121: a config conflict is surfaced and never lowers severity");
+
+            var healthy = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true }
+            };
+            var noGroups = new List<CopierGroup>();
+
+            var clean = CopierStatusView.Describe("live", healthy, noGroups, 0);
+            Assert(clean.Severity == CopierStatusSeverity.Ok && !clean.Text.Contains("CONFLICT"),
+                "P1-121: no conflicts, no conflict text");
+
+            var conflicted = CopierStatusView.Describe("live", healthy, noGroups, 1);
+            Assert(conflicted.Text.Contains("1 CONFIG CONFLICT"),
+                "P1-121: the conflict count is shown: " + conflicted.Text);
+            Assert(conflicted.Severity == CopierStatusSeverity.Warn,
+                "P1-121: a conflict on an otherwise healthy copier raises the severity");
+            Assert(conflicted.Detail.Contains("copied twice"),
+                "P1-121: the detail says what a conflict DOES, not just that there is one");
+
+            // On an already-critical header the conflict must not soften it.
+            var critical = CopierStatusView.Describe("liv", healthy, noGroups, 2);
+            Assert(critical.Severity == CopierStatusSeverity.Critical,
+                "P1-121: a conflict never lowers an existing Critical");
+            Assert(critical.Text.Contains("2 CONFIG CONFLICTS"),
+                "P1-121: the plural is used for more than one: " + critical.Text);
+        }
+
+        /// <summary>
+        /// Group followers are counted into the header. A group of three followers that copies
+        /// nothing is not the same as an empty copier, and the header used to say neither.
+        /// </summary>
+        private static void TestP1121_GroupFollowersAreCountedAndInertGroupsSaySo()
+        {
+            Console.WriteLine("\n[TEST] P1-121: group followers count toward the header; inert groups say so");
+
+            var group = new CopierGroup
+            {
+                GroupName = "G1",
+                LeaderAccountName = "L",
+                IsEnabled = true,
+                ArmedForLive = true,
+                FollowerAccounts = new List<string> { "F1", "F2", "F3" }
+            };
+            int expected = group.FollowerAccounts.Count;
+
+            var head = CopierStatusView.Describe("live", new List<CopierRelationship>(),
+                new List<CopierGroup> { group }, 0);
+            Assert(head.Detail.Contains(expected.ToString() + " relationship"),
+                "P1-121: a group contributes its " + expected + " followers to the count: " + head.Detail);
+            Assert(head.Severity == CopierStatusSeverity.Ok,
+                "P1-121: an armed group under a live copier is Ok");
+
+            var inert = CopierStatusView.GroupLine("shadow", "F1, F2, F3", 3,
+                CopierSizingMode.QuantityRatio, 1.0, true, true);
+            Assert(inert.Text.Contains("INERT") && !inert.Text.Contains("Armed: LIVE"),
+                "P1-121: an armed group under a shadow copier does not claim to be live: " + inert.Text);
+
+            var liveGroup = CopierStatusView.GroupLine("live", "F1", 1,
+                CopierSizingMode.QuantityRatio, 1.0, true, true);
+            Assert(liveGroup.Text.Contains("Armed: LIVE") && liveGroup.Severity == CopierStatusSeverity.Ok,
+                "P1-121: an armed group under a live copier does say live");
+
+            var emptyGroup = CopierStatusView.GroupLine("live", "", 0,
+                CopierSizingMode.QuantityRatio, 1.0, true, true);
+            Assert(emptyGroup.Text.Contains("EMPTY") && emptyGroup.Severity == CopierStatusSeverity.Warn,
+                "P1-121: a group with no followers reports that it copies to nothing");
+        }
+
+        /// <summary>
+        /// The engine accessor the window uses. A relationship the engine has never measured
+        /// must come back with zero samples, not with a fabricated reading.
+        /// </summary>
+        private static void TestP1121_TheEngineReportsMetricsWithTheirSampleCounts()
+        {
+            Console.WriteLine("\n[TEST] P1-121: GetRelationshipMetrics carries the sample counts");
+
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "L",
+                FollowerAccountName = "F",
+                LatencyMs = 0,
+                AvgSlippageTicks = 0
+            };
+
+            CopierMetric latency, slippage;
+            TradeCopierEngine.Instance.GetRelationshipMetrics(rel, out latency, out slippage);
+
+            Assert(latency != null && slippage != null,
+                "P1-121: both metrics are returned");
+            Assert(latency.Samples == 0 && !latency.Measured,
+                "P1-121: a never-measured relationship reports zero samples, so the view can refuse a number");
+
+            // Null must not throw -- this is called from a UI timer for every card.
+            CopierMetric nl, ns;
+            TradeCopierEngine.Instance.GetRelationshipMetrics(null, out nl, out ns);
+            Assert(nl != null && ns != null && !nl.Measured && !ns.Measured,
+                "P1-121: a null relationship yields unmeasured metrics rather than throwing");
+        }
+
+        /// <summary>
+        /// Source gates over TradeCopierWindow.cs, which no test can execute.
+        ///
+        /// Both directions, deliberately: an ABSENCE gate ("the old literal is gone") passes
+        /// silently if the whole region is deleted or renamed, so each is paired with a
+        /// PRESENCE gate naming what must be there instead. Comments are stripped first, or the
+        /// window's own comments -- which quote the old literal to explain it -- would fail the
+        /// gate describing them.
+        /// </summary>
+        private static void TestP1121_TheWindowDelegatesItsStatusTextToTheView()
+        {
+            Console.WriteLine("\n[TEST] P1-121: the window renders status through CopierStatusView");
+
+            var src = Ui2WindowCode();
+            Assert(!string.IsNullOrEmpty(src), "P1-121: TradeCopierWindow.cs is readable");
+            if (string.IsNullOrEmpty(src)) return;
+
+            Assert(!src.Contains("ENGINE: ACTIVE"),
+                "P1-121: the unfalsifiable green literal is gone from the window");
+
+            Assert(src.Contains("CopierStatusView.Describe("),
+                "P1-121: the header is produced by CopierStatusView.Describe");
+            Assert(src.Contains("CopierStatusView.RelationshipLine("),
+                "P1-121: relationship rows are produced by CopierStatusView.RelationshipLine");
+            Assert(src.Contains("CopierStatusView.GroupLine("),
+                "P1-121: group rows are produced by CopierStatusView.GroupLine");
+
+            // The window must not re-derive the armed label itself -- that is the drift the
+            // whole ticket is about. The view owns every occurrence of it now.
+            Assert(!src.Contains("\"LIVE\" : \"SIM\""),
+                "P1-121: the window no longer decides the armed label; the view does");
+
+            // _statusText must be WRITTEN somewhere other than its construction, or the header
+            // is a constant again with a different value. The original defect was that this
+            // count was zero.
+            int assignments = CountOccurrences(src, "_statusText.Text =");
+            Assert(assignments >= 2,
+                "P1-121: _statusText.Text is assigned on refresh AND on failure (found "
+                + assignments + ") -- the defect was that it was assigned nowhere after construction");
+
+            Assert(src.Contains("COPIER STATUS UNAVAILABLE"),
+                "P1-121: a throwing refresh replaces the header rather than leaving a stale green claim");
+
+            // Severity -> colour must live in one place, or the mapping drifts per call site.
+            Assert(CountOccurrences(src, "private static Brush BrushFor(") == 1,
+                "P1-121: there is exactly one severity-to-brush mapping in the window");
+        }
+
         private static void TestP1117_DeepCopyIsIndependentOfItsSource()
         {
             Console.WriteLine("\n[TEST] P1-117: RiskConfigMerge.DeepCopy is independent of its source");
