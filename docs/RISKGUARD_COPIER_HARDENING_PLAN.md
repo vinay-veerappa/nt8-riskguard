@@ -4484,6 +4484,41 @@ compiles is not evidence. The window is held only by the source gates in
 
 ---
 
+### P3-122. The bridge tells you an unarmed relationship *"copies to SIMULATION followers only"* while the copier is in `shadow` and copying to nothing at all — OPEN, found 2026-08-16 (session 49) while wiring the window's reader
+**Where**: `nt8-mcp-bridge/addons/CopierEnforcementView.cs`, `NotEnforcingReason`
+
+Found by comparing the two readers of the same question after building the third.
+`CopierEnforcementView` (the API, `nt8-mcp-bridge`) and `CopierStatusView` (the window, this
+repo) both correctly defer to `TradeCopierEngine.IsCopierActingMode` — neither keeps its own
+copy of the predicate, which is `P1-100`'s lesson applied. **Their reason ORDERING differs**,
+and one ordering produces a false sentence:
+
+| enabled | armed | mode | bridge says | window says |
+|---|---|---|---|---|
+| ✔ | ✘ | `live` | *not ArmedForLive, so it copies to SIMULATION followers only* ✅ | `Armed: SIM` ✅ |
+| ✔ | ✘ | `shadow` | *not ArmedForLive, so it copies to SIMULATION followers only* ❌ | `INERT - copier mode is 'shadow'` ✅ |
+
+In `shadow` the copy path blocks at `TradeCopierEngine.cs:5385` **before any follower is
+reached** — `COPY_BLOCKED_COPIER_SHADOW`, `continue` — so it copies to simulation followers
+*too*. The bridge's sentence describes a behaviour that is not happening.
+
+The ordering is **deliberate** and its comment says so: *"The mode is named LAST because it is
+the newest reason and the one an operator will not think to check."* That reasoning is right
+about which reason is most surprising and wrong about which is **binding** — when two gates are
+both shut, the one to name is the one that shuts hardest, not the one that is easiest to forget.
+**Rank refusal reasons by what BINDS, not by what surprises.**
+
+**Fix**: test `copierModeIsActing` before `armedForLive` in `NotEnforcingReason`, and keep the
+mode's explanatory sentence. The regression test is the row above: enabled + **not** armed +
+`shadow` must not mention simulation followers.
+
+⚠️ **Not measured live** — the mechanism is read from the copy path, not driven. Flipping the
+deployed copier out of `live` is the operator's call, not a validation step, so this was filed
+rather than confirmed. Banded `P3` for that reason and because `shadow` is the safe direction:
+it misdescribes a state in which nothing is being sent.
+
+---
+
 ### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — OPEN, found 2026-08-16 (session 48) by a test that made two other tests disagree
 
 **Where**: `addons/RiskGuardAddOn.cs`, three places that each ask *what mode is this?*
