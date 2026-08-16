@@ -602,6 +602,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestUi3_TheWorstStateSortsFirst();
             TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
             TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
+
+            // P2-116: an equity rule with no equity reading
+            TestP2116_AnAccountWithNoEquityReadingCannotBeEnforcing();
+            TestP2116_AnAccountWithAnEquityReadingStillEnforces();
+            TestP2116_ANegativeEquityIsAReadingNotAnAbsence();
+            TestP2116_TheInertRowSaysWhatIsMissing();
+            TestP2116_TheFirmTrailingDrawdownIsASecondReader();
+            TestP2116_PeakEquityGivebackNeedsAReadingToo();
+            TestP2116_TheRealizedPnLRulesAreDeliberatelyLeftAlone();
+            TestP2116_EquityBackedRulesAreFoundBySweepNotByHand();
             TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken();
             TestP186_TheNewsShieldIsRedOutOfTheBox();
             TestP182_AFlagThatCannotFireMustNotDefaultOn();
@@ -2536,23 +2546,319 @@ namespace NinjaTrader.NinjaScript.AddOns
                 NewsEventCount = 3
             };
 
+            // P2-116. Evidence can be backed by a COLLECTION or by an account READING, and this
+            // classification has to cover BOTH -- otherwise attaching an honest label to an
+            // equity-backed rule reads as "has a label but never varies" and the gate fires on
+            // the fix rather than on a defect.
+            //
+            // ⚠️ The probe pair holds account PRESENCE constant and moves only the NUMBER. That
+            // is the whole difficulty: probing null-vs-present would make every `Account == null
+            // ? 0 : 1` rule "vary", i.e. ten rules whose evidence is genuinely the account's
+            // existence would be dragged into demanding a label they should not have.
+            //
+            // ⚠️ The probes run against the POPULATED config, not the empty one. A rule can need
+            // both a collection and a reading -- the firm trailing drawdown needs the account
+            // mapped to a firm AND an equity number -- and probing it with an empty firm map
+            // would hold it at zero evidence in both directions, reporting an honestly labelled
+            // rule as "has a label but never varies".
+            var equityAbsent = P2116ContextLike(richCtx, P2116AccountNamed(ctx.AccountName, 0.0));
+            var equityPresent = P2116ContextLike(richCtx, P2116AccountNamed(ctx.AccountName, 50182.75));
+
             var mislabelled = new List<string>();
             foreach (var rule in GuardRuleRegistry.Rules)
             {
                 if (rule.Evaluator == null) continue;
-                var lo = rule.Evaluator(ctx);
-                var hi = rule.Evaluator(richCtx);
-                bool varies = (lo == null ? 0 : lo.EvidenceCount) != (hi == null ? 0 : hi.EvidenceCount);
+                bool variesWithCollections =
+                    P2116EvidenceOf(rule, ctx) != P2116EvidenceOf(rule, richCtx);
+                bool variesWithTheReading =
+                    P2116EvidenceOf(rule, equityAbsent) != P2116EvidenceOf(rule, equityPresent);
+                bool varies = variesWithCollections || variesWithTheReading;
                 bool labelled = !string.IsNullOrEmpty(rule.EvidenceLabel);
                 if (varies != labelled)
                     mislabelled.Add(rule.ConfigPath + (varies ? " varies but has NO label" : " has a label but never varies"));
             }
 
             Assert(mislabelled.Count == 0, string.Format(
-                "every rule whose evidence count moves with its collections declares an "
-                + "EvidenceLabel, and no scalar rule claims one ({0} mismatched{1})",
+                "every rule whose evidence count moves with its collections OR with the account's "
+                + "equity reading declares an EvidenceLabel, and no scalar rule claims one "
+                + "({0} mismatched{1})",
                 mislabelled.Count,
                 mislabelled.Count == 0 ? "" : ": " + string.Join("; ", mislabelled)));
+        }
+
+        // ── P2-116: an equity rule with NO equity reading ────────────────────────────────
+        //
+        // Measured on the live box 2026-08-15, the hour the broker was reconnected: 89 subscribed
+        // Provider31 accounts, exactly ONE reporting any equity at all, and all 89 reporting
+        // `Trailing drawdown` as EvaluatedNotEnforcing -- the state that means "this rule ran and
+        // you are within it". The evidence count was the existence of an AccountState OBJECT,
+        // which every subscribed account has, rather than of an equity READING, which 88 do not.
+        //
+        // ⚠️ The rule is structurally INCAPABLE of firing on those 88. Trailing drawdown breaches
+        // when currentPnL < PeakEquity - TrailingDrawdown; with no reading PeakEquity stays 0, so
+        // the test is `0 < -1500`, never true. INERT is the honest state -- "the evaluator ran and
+        // its evidence set is empty, so the verdict is a foregone conclusion" -- and it self-heals
+        // the moment the broker pushes a number.
+        //
+        // The operator has confirmed the population: one live account, 88 dormant evals. That
+        // settles the BAND and must not shrink the fix -- "they are dormant" is a fact about the
+        // broker's population today, not about the code, and the day one is funded its rows look
+        // identical to the 87 beside it and identical to what they looked like while dormant.
+
+        private static RiskGuardAddOn.AccountStateSnapshot P2116Account(double equity)
+        {
+            return P2116AccountNamed("P2116Acct", equity);
+        }
+
+        private static RiskGuardAddOn.AccountStateSnapshot P2116AccountNamed(string name, double equity)
+        {
+            return new RiskGuardAddOn.AccountStateSnapshot
+            {
+                AccountName = name,
+                AccountEquity = equity,
+                RealizedPnL = 0.0,
+                TradesToday = 0
+            };
+        }
+
+        /// <summary>Everything from `model` except the account, so only the reading moves.</summary>
+        private static GuardRuleContext P2116ContextLike(
+            GuardRuleContext model, RiskGuardAddOn.AccountStateSnapshot account)
+        {
+            return new GuardRuleContext
+            {
+                AccountName = model.AccountName,
+                Config = model.Config,
+                PropConfig = model.PropConfig,
+                Account = account,
+                AllAccounts = model.AllAccounts,
+                NewsEventCount = model.NewsEventCount,
+                NewsEventsLoadStatus = model.NewsEventsLoadStatus
+            };
+        }
+
+        private static GuardRuleContext P2116ContextWith(
+            RiskConfig cfg, PropFirmProtectionConfig prop, RiskGuardAddOn.AccountStateSnapshot account)
+        {
+            return new GuardRuleContext
+            {
+                AccountName = account == null ? "P2116Acct" : account.AccountName,
+                Config = cfg,
+                PropConfig = prop,
+                Account = account,
+                AllAccounts = account == null
+                    ? new List<RiskGuardAddOn.AccountStateSnapshot>()
+                    : new List<RiskGuardAddOn.AccountStateSnapshot> { account },
+                NewsEventCount = 0
+            };
+        }
+
+        private static int P2116EvidenceOf(GuardRuleDefinition rule, GuardRuleContext ctx)
+        {
+            if (rule == null || rule.Evaluator == null) return 0;
+            var reading = rule.Evaluator(ctx);
+            return reading == null ? 0 : reading.EvidenceCount;
+        }
+
+        private static RiskConfig P2116ConfigWithEveryEquityRuleOn()
+        {
+            var cfg = new RiskConfig();
+            cfg.PnLRules.TrailingDrawdown = 1500.0;
+            cfg.PnLRules.DailyLossLimit = 1000.0;
+            cfg.Sizing.MaxContractsPerAccount = 5;
+            cfg.Overtrading.MaxTradesPerSession = 10;
+            cfg.FirmMirror.Enabled = true;
+            cfg.FirmMirror.TrailingDD.Enabled = true;
+            cfg.FirmMirror.TrailingDD.Amount = 2500.0;
+            cfg.FirmMirror.DailyLoss.Enabled = true;
+            cfg.FirmMirror.DailyLoss.Amount = 1100.0;
+            cfg.FirmMirror.AccountFirmMap["P2116Acct"] = "Apex";
+            return cfg;
+        }
+
+        private static PropFirmProtectionConfig P2116PropConfig()
+        {
+            return new PropFirmProtectionConfig
+            {
+                EnablePeakEquityProtection = true,
+                MaxPeakGivebackPct = 30.0,
+                MinPeakGainDollars = 500.0
+            };
+        }
+
+        private static GuardRuleDefinition P2116Rule(string configPath)
+        {
+            return GuardRuleRegistry.Rules.FirstOrDefault(
+                r => string.Equals(r.ConfigPath, configPath, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static GuardRuleState P2116StateOf(
+            string configPath, RiskGuardAddOn.AccountStateSnapshot account)
+        {
+            var rule = P2116Rule(configPath);
+            if (rule == null || rule.Evaluator == null) return GuardRuleState.ConfiguredNotEvaluated;
+            var ctx = P2116ContextWith(P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), account);
+            // guardCanAct: true and the account NOT excluded -- the most permissive possible
+            // input, so anything that does not come back Enforcing failed on its own merits.
+            return GuardRuleRegistry.DeriveState(rule, rule.Evaluator(ctx), true, false);
+        }
+
+        private static string P2116NoteOf(
+            string configPath, RiskGuardAddOn.AccountStateSnapshot account)
+        {
+            var rule = P2116Rule(configPath);
+            if (rule == null || rule.Evaluator == null) return "";
+            var ctx = P2116ContextWith(P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), account);
+            var reading = rule.Evaluator(ctx);
+            return reading == null || reading.Note == null ? "" : reading.Note;
+        }
+
+        private static void TestP2116_AnAccountWithNoEquityReadingCannotBeEnforcing()
+        {
+            Console.WriteLine("\n[TEST] P2-116: an equity rule with no equity reading reports INERT");
+
+            var state = P2116StateOf("PnLRules.TrailingDrawdown", P2116Account(0.0));
+            Assert(state == GuardRuleState.Inert, string.Format(
+                "trailing drawdown on an account reporting NO equity is INERT (was {0}) -- with no "
+                + "reading PeakEquity stays 0 and the breach test is `0 < -1500`, never true", state));
+        }
+
+        private static void TestP2116_AnAccountWithAnEquityReadingStillEnforces()
+        {
+            // ⚠️ THE NEGATIVE CONTROL, and the reason it exists: a rule that reports INERT for
+            // everything satisfies the assertion above. P3-30's audit shipped behind three
+            // positive-only acceptance tests and fired on correctly protected accounts.
+            Console.WriteLine("\n[TEST] P2-116: the one account that DOES report equity still enforces");
+
+            var state = P2116StateOf("PnLRules.TrailingDrawdown", P2116Account(50182.75));
+            Assert(state == GuardRuleState.Enforcing, string.Format(
+                "trailing drawdown on the funded account, which reports $50,182.75, is ENFORCING "
+                + "(was {0})", state));
+        }
+
+        private static void TestP2116_ANegativeEquityIsAReadingNotAnAbsence()
+        {
+            // ⚠️ This pins `!= 0` and REFUSES `> 0`, which is the tempting one-character
+            // implementation. An account whose equity has gone negative is reporting a reading --
+            // and it is the account most likely to be in trouble. Treating that as "no evidence"
+            // would switch the trailing-drawdown rule to INERT at the exact moment it matters,
+            // which is a WORSE defect than the one being fixed.
+            Console.WriteLine("\n[TEST] P2-116: a NEGATIVE equity is a reading, not an absence");
+
+            var state = P2116StateOf("PnLRules.TrailingDrawdown", P2116Account(-250.0));
+            Assert(state == GuardRuleState.Enforcing, string.Format(
+                "an account reporting NEGATIVE equity is still being read, so trailing drawdown "
+                + "is ENFORCING (was {0})", state));
+        }
+
+        private static void TestP2116_TheInertRowSaysWhatIsMissing()
+        {
+            // A red row with no noun in it makes the operator re-derive this whole investigation.
+            // P2-113's lesson: a registry that records WHY inherits the duty to say so.
+            Console.WriteLine("\n[TEST] P2-116: the inert row NAMES the reading it does not have");
+
+            string note = P2116NoteOf("PnLRules.TrailingDrawdown", P2116Account(0.0));
+            Assert(note.IndexOf("equity", StringComparison.OrdinalIgnoreCase) >= 0, string.Format(
+                "the note on an unreadable account names the missing EQUITY reading (was \"{0}\")",
+                note));
+        }
+
+        private static void TestP2116_TheFirmTrailingDrawdownIsASecondReader()
+        {
+            // FirmMirror.TrailingDD reads AccountEquity too, and gates its evidence on the account
+            // being MAPPED to a firm -- which a dormant eval certainly can be. Mapped and unread is
+            // still unread. Counting the SITES before closing is this codebase's most repeated
+            // lesson: P1-100, P2-98/P1-99 and P1-105 were all a predicate learning a clause that
+            // the other readers of the same state never did.
+            Console.WriteLine("\n[TEST] P2-116: the firm trailing drawdown needs a reading, not just a mapping");
+
+            var unread = P2116StateOf("FirmMirror.TrailingDD.Amount", P2116Account(0.0));
+            Assert(unread == GuardRuleState.Inert, string.Format(
+                "a firm-MAPPED account reporting no equity is INERT on the firm trailing drawdown "
+                + "(was {0})", unread));
+
+            var read = P2116StateOf("FirmMirror.TrailingDD.Amount", P2116Account(50182.75));
+            Assert(read == GuardRuleState.Enforcing, string.Format(
+                "a firm-mapped account that DOES report equity still enforces (was {0})", read));
+        }
+
+        private static void TestP2116_PeakEquityGivebackNeedsAReadingToo()
+        {
+            // Third site. It reports no CurrentValue, so it looks unlike the other two -- but the
+            // enforcer behind it tracks peak equity, and with no reading the peak stays 0 and the
+            // giveback can never trigger. What the row DISPLAYS is not what decides whether it can
+            // fire.
+            Console.WriteLine("\n[TEST] P2-116: peak equity giveback needs a reading too");
+
+            var unread = P2116StateOf("PropFirm.EnablePeakEquityProtection", P2116Account(0.0));
+            Assert(unread == GuardRuleState.Inert, string.Format(
+                "peak equity giveback on an account reporting no equity is INERT (was {0})", unread));
+
+            var read = P2116StateOf("PropFirm.EnablePeakEquityProtection", P2116Account(50182.75));
+            Assert(read == GuardRuleState.Enforcing, string.Format(
+                "peak equity giveback on an account that reports equity enforces (was {0})", read));
+        }
+
+        private static void TestP2116_TheRealizedPnLRulesAreDeliberatelyLeftAlone()
+        {
+            // ⚠️ SCOPE PIN, and the assertion most likely to be "helpfully" broken by widening the
+            // fix to every per-account rule.
+            //
+            // The daily loss limit reads RealizedPnL, which the GUARD tracks itself from
+            // AccountItemUpdate. Zero there is a legitimate reading for a flat account and is not
+            // distinguishable from "never reported". Equity is different IN KIND: the guard is a
+            // passive reader of a number the broker pushes, and 0.0 is exactly what "never pushed"
+            // looks like.
+            //
+            // Reporting a flat, funded, actively watched account as INERT on its daily loss limit
+            // is F-9's defect in the PESSIMISTIC direction, and an operator who learns to ignore
+            // INERT rows has lost the signal this entire registry exists to give them.
+            Console.WriteLine("\n[TEST] P2-116: the realized-PnL and sizing rules are NOT swept into this");
+
+            var flat = P2116Account(0.0);
+            Assert(P2116StateOf("PnLRules.DailyLossLimit", flat) == GuardRuleState.Enforcing,
+                "the daily loss limit still ENFORCES on an account with no equity reading -- "
+                + "zero realized PnL is a real reading for a flat account");
+            Assert(P2116StateOf("Overtrading.MaxTradesPerSession", flat) == GuardRuleState.Enforcing,
+                "the per-session trade cap still ENFORCES -- its evidence is the account, not equity");
+            Assert(P2116StateOf("Sizing.MaxContractsPerAccount", flat) == GuardRuleState.Enforcing,
+                "the per-account contract cap still ENFORCES -- it acts on every order regardless");
+        }
+
+        private static void TestP2116_EquityBackedRulesAreFoundBySweepNotByHand()
+        {
+            // The DERIVED half. Hold the config constant, move ONLY the account's equity, and
+            // collect every rule whose evidence follows it. Each must carry an EvidenceLabel: a
+            // rule that can go INERT without saying what its evidence IS hands the operator a red
+            // row with no noun in it, and the label is what the UI renders.
+            //
+            // ⚠️ The `>= 1` is not padding. Without it this assertion is GREEN when nothing is
+            // equity-backed -- which is precisely the state the defect is in. A gate whose subject
+            // can vanish is a gate that disarms itself.
+            Console.WriteLine("\n[TEST] P2-116: every equity-backed rule is found by SWEEP and carries a label");
+
+            var cfg = P2116ConfigWithEveryEquityRuleOn();
+            var prop = P2116PropConfig();
+            var absent = P2116ContextWith(cfg, prop, P2116Account(0.0));
+            var present = P2116ContextWith(cfg, prop, P2116Account(50182.75));
+
+            var equityBacked = new List<string>();
+            var unlabelled = new List<string>();
+            foreach (var rule in GuardRuleRegistry.Rules)
+            {
+                if (rule.Evaluator == null) continue;
+                if (P2116EvidenceOf(rule, absent) == P2116EvidenceOf(rule, present)) continue;
+                equityBacked.Add(rule.ConfigPath);
+                if (string.IsNullOrEmpty(rule.EvidenceLabel)) unlabelled.Add(rule.ConfigPath);
+            }
+
+            Assert(equityBacked.Count >= 1 && unlabelled.Count == 0, string.Format(
+                "at least one rule's evidence follows the account's equity reading, and every one "
+                + "that does declares an EvidenceLabel ({0} equity-backed: {1}; {2} unlabelled{3})",
+                equityBacked.Count,
+                equityBacked.Count == 0 ? "NONE" : string.Join(", ", equityBacked),
+                unlabelled.Count,
+                unlabelled.Count == 0 ? "" : ": " + string.Join(", ", unlabelled)));
         }
 
         // ── UI4: the snapshot BUILDER ────────────────────────────────────────────────────
