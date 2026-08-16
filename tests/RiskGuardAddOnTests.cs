@@ -696,6 +696,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestCM5_ReplacementAppliesToRelationshipsAsWell();
             TestCM3_AnUnknownEnumFallsBackRatherThanRefusingTheRequest();
 
+            // P2-27 / P1-117: the guard-config VALUE validator -- RED until GuardConfigEdit exists.
+            TestP227_GuardConfigEditIsReachableFromTheTestBuild();
+            TestP227_AValidConfigIsAccepted();
+            TestP227_AnOmittedModeIsAccepted();
+            TestP227_ModeMatchingIsCaseInsensitive();
+            TestP227_AnUnrecognisedModeIsRefused();
+            TestP227_TheModeRefusalNamesTheValidModes();
+            TestP227_AZeroTrailingDrawdownIsRefused();
+            TestP227_ANegativeTrailingDrawdownIsRefused();
+            TestP227_ANegativeMinShadowSessionsIsRefused();
+            TestP227_TheRefusalNamesTheFieldThatIsWrong();
+
             // Structural self-check: fails if the runner silently stops covering declared tests.
             TestHarness_AllDeclaredTestsAreInvoked();
 
@@ -10406,6 +10418,177 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Console.ResetColor();
                 _testsFailed++;
             }
+        }
+
+        // ------------------------------------------------------------------------------------
+        // P2-27 / P1-117. The guard-config VALUE validator.
+        //
+        // Two writers reach one RiskConfig: /api/riskguard/config's POST (nt8-mcp-bridge) and
+        // RiskGuardWindow.OnSaveConfigClick (this repo). Neither validates a VALUE. The merged
+        // config goes to SaveAndReloadConfig, WHICH DOES NOT RUN PREFLIGHT, so a config that
+        // cannot pass preflight is written and reloaded happily and the guard comes up DISARMED
+        // at the next restart with nothing about the file looking wrong.
+        //
+        // The class lives HERE and not in nt8-mcp-bridge because the submodule direction is
+        // bridge -> core: a class over there is unreachable from RiskGuardWindow, which is the
+        // other writer. A validator that only one of two writers can call is the defect shape
+        // this whole repo keeps rediscovering (P1-100, P2-98/P1-99, P1-105).
+        //
+        // REACHED BY REFLECTION so these assertions are RED rather than UNCOMPILABLE while the
+        // class does not exist -- that is what makes them usable as an agent-loop test-first gate.
+        // ------------------------------------------------------------------------------------
+
+        private static Type GuardConfigEditType()
+        {
+            return Type.GetType("NinjaTrader.NinjaScript.AddOns.GuardConfigEdit, RiskGuardTests");
+        }
+
+        /// <summary>
+        /// The verdict, or a `___`-fenced sentinel when the class or method is not there yet.
+        ///
+        /// ⚠️ THE SENTINEL SHAPE IS DELIBERATE AND Refused() BELOW IS WHY. The first draft of the
+        /// equivalent bridge tests returned a plain string here, and two assertions then PASSED
+        /// VACUOUSLY: a bare !string.IsNullOrEmpty(reason) is satisfied by the class being ABSENT.
+        /// Never give Refuse() itself a sentinel-shaped return value.
+        /// </summary>
+        private static string CallRefuse(string mode, double trailingDrawdown, int minShadowSessions)
+        {
+            Type t = GuardConfigEditType();
+            if (t == null) return "___CLASS_MISSING___";
+            var m = t.GetMethod("Refuse", new[] { typeof(string), typeof(double), typeof(int) });
+            if (m == null) return "___METHOD_MISSING___";
+            return (string)m.Invoke(null, new object[] { mode, trailingDrawdown, minShadowSessions });
+        }
+
+        private static bool Refused(string reason)
+        {
+            return !string.IsNullOrEmpty(reason)
+                   && reason.IndexOf("___", StringComparison.Ordinal) < 0;
+        }
+
+        private static bool Accepted(string reason)
+        {
+            // An absent class is NOT an acceptance. Without this clause every positive assertion
+            // below would pass before a line of the fix was written.
+            return reason == null;
+        }
+
+        private static bool Mentions(string reason, string needle)
+        {
+            return Refused(reason)
+                   && reason.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static void TestP227_GuardConfigEditIsReachableFromTheTestBuild()
+        {
+            Console.WriteLine("\n[TEST] P2-27: GuardConfigEdit is reachable from the test build");
+            Assert(GuardConfigEditType() != null,
+                "P2-27: GuardConfigEdit exists and is reachable from the test build");
+        }
+
+        /// <summary>
+        /// ⚠️ THE LOAD-BEARING TEST. A validator that refuses EVERYTHING satisfies every negative
+        /// assertion below it. P3-30's audit shipped behind three positive-only acceptance tests
+        /// and fired on correctly protected accounts; for a refuser the acceptance case is the
+        /// direction that proves it works at all.
+        /// </summary>
+        private static void TestP227_AValidConfigIsAccepted()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a valid config is ACCEPTED");
+            Assert(Accepted(CallRefuse("shadow", 1500.0, 5)),
+                "P2-27: a valid config -- a known mode, a positive trailing drawdown -- is ACCEPTED");
+            Assert(Accepted(CallRefuse("live", 2500.0, 0)),
+                "P2-27: live with zero MinShadowSessions is ACCEPTED (zero is not negative)");
+        }
+
+        /// <summary>
+        /// The endpoint takes PARTIAL bodies by design -- that is P2-41's merge. Refusing an
+        /// omitted field would make every partial write fail, which is the P1-72 shape: a surface
+        /// refusing what it advertises it accepts.
+        /// </summary>
+        private static void TestP227_AnOmittedModeIsAccepted()
+        {
+            Console.WriteLine("\n[TEST] P2-27: an omitted mode is ACCEPTED, not refused");
+            Assert(Accepted(CallRefuse(null, 1500.0, 5)),
+                "P2-27: a NULL mode means 'not being changed' and is ACCEPTED");
+            Assert(Accepted(CallRefuse("   ", 1500.0, 5)),
+                "P2-27: a WHITESPACE mode means 'not being changed' and is ACCEPTED");
+        }
+
+        private static void TestP227_ModeMatchingIsCaseInsensitive()
+        {
+            Console.WriteLine("\n[TEST] P2-27: mode matching is case-insensitive");
+            Assert(Accepted(CallRefuse("SHADOW", 1500.0, 5)),
+                "P2-27: mode matching is CASE-INSENSITIVE -- SHADOW is accepted");
+            Assert(Accepted(CallRefuse("Disabled", 1500.0, 5)),
+                "P2-27: mode matching is CASE-INSENSITIVE -- Disabled is accepted");
+        }
+
+        /// <summary>
+        /// `enabled` is the exemplar deliberately: P1-72 has REGRESSED TWICE on this codebase and
+        /// it is always a surface accepting a value nothing implements. P2-93 is the same defect
+        /// inside the guard -- `pure` and `override_with_friction` passed preflight and then acted
+        /// on nothing, because IsActingMode() names only `live`.
+        /// </summary>
+        private static void TestP227_AnUnrecognisedModeIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-27: an unrecognised mode is REFUSED");
+            Assert(Refused(CallRefuse("enabled", 1500.0, 5)),
+                "P2-27: an unrecognised mode is REFUSED");
+            Assert(Refused(CallRefuse("pure", 1500.0, 5)),
+                "P2-27: `pure` -- a mode that passes preflight and acts on nothing -- is REFUSED");
+        }
+
+        private static void TestP227_TheModeRefusalNamesTheValidModes()
+        {
+            Console.WriteLine("\n[TEST] P2-27: the mode refusal names the valid modes");
+            string reason = CallRefuse("enabled", 1500.0, 5);
+            Assert(Mentions(reason, "shadow") && Mentions(reason, "live") && Mentions(reason, "disabled"),
+                "P2-27: the refusal NAMES the valid modes");
+        }
+
+        /// <summary>
+        /// Zero is not a tight limit, it is NO protection -- and GuardRules.cs:262 already uses
+        /// exactly `PnLRules.TrailingDrawdown &lt;= 0` to report the rule Off. This promotes the
+        /// guard's own live predicate from REPORTING to REFUSING; it is not a new rule.
+        ///
+        /// ⚠️ SCOPE: this validates the GLOBAL PnLRules value. Zero on an AccountRiskProfile is a
+        /// deliberate sentinel meaning "derive it" (RiskGuardAddOn.cs:2409-2411 resolves it to 5%
+        /// of cash, else the global), so the same number is correct there and must not be fed in.
+        /// </summary>
+        private static void TestP227_AZeroTrailingDrawdownIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a zero trailing drawdown is REFUSED");
+            Assert(Refused(CallRefuse("shadow", 0.0, 5)),
+                "P2-27: a trailing drawdown of ZERO is REFUSED");
+        }
+
+        private static void TestP227_ANegativeTrailingDrawdownIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a negative trailing drawdown is REFUSED");
+            Assert(Refused(CallRefuse("shadow", -1500.0, 5)),
+                "P2-27: a NEGATIVE trailing drawdown is REFUSED");
+        }
+
+        private static void TestP227_ANegativeMinShadowSessionsIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a negative MinShadowSessions is REFUSED");
+            Assert(Refused(CallRefuse("shadow", 1500.0, -1)),
+                "P2-27: a negative MinShadowSessions is REFUSED");
+        }
+
+        /// <summary>
+        /// P1-90's resolver refuses an unresolvable account by listing the 96 real ones, and that
+        /// is the standard here. A UI renders this string next to an input; "invalid
+        /// configuration" is not actionable in a form with a dozen of them.
+        /// </summary>
+        private static void TestP227_TheRefusalNamesTheFieldThatIsWrong()
+        {
+            Console.WriteLine("\n[TEST] P2-27: the refusal names the field that is wrong");
+            Assert(Mentions(CallRefuse("shadow", 0.0, 5), "trailing"),
+                "P2-27: the trailing-drawdown refusal NAMES the field that is wrong");
+            Assert(Mentions(CallRefuse("shadow", 1500.0, -1), "shadow session"),
+                "P2-27: the MinShadowSessions refusal NAMES the field that is wrong");
         }
 
         private static void TestMaxPositionSizeEnforcement()
