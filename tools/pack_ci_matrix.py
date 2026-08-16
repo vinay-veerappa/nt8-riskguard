@@ -39,6 +39,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 
+# ⚠️ IMPORTED, NOT RESTATED. check_ci_runs_every_battery.py rejects a matrix with more bins
+# than this, so a second copy of the number here could drift into a packer that cheerfully
+# --applies a plan its own CI gate then refuses -- the two-definitions failure this project
+# has paid for repeatedly (the reporter disagreeing with the enforcer). The gate owns it
+# because the gate is what CI runs; this file is optional.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_ci_runs_every_battery import MAX_BINS  # noqa: E402
+
 # Matches BOTH shapes on purpose: the pre-packing `battery: x.py` and the packed
 # `batteries: "x.py y.py"`. Not for compatibility -- so that --apply is re-runnable
 # against a file it has already rewritten. A packer that can only read the shape it
@@ -140,7 +148,7 @@ def read_times(path: Path | None) -> dict[str, float]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--times", type=Path, default=None)
-    ap.add_argument("--bins", type=int, default=20)
+    ap.add_argument("--bins", type=int, default=MAX_BINS)
     ap.add_argument("--apply", action="store_true",
                     help="rewrite the matrix in ci.yml (default: print the plan only)")
     # ⚠️ MEASURED (run 31911413509): checkout 5s + setup-dotnet 25s + setup-python 0s. A job's
@@ -156,6 +164,24 @@ def main() -> int:
     entries = read_entries()
     if not entries:
         print("REFUSING: no matrix entries found -- the workflow shape changed.")
+        return 2
+
+    # ⚠️ Refused rather than clamped. Clamping would silently produce a plan that is not the
+    # one asked for, and the caller asking for 21 has a belief about slots that needs
+    # correcting, not routing around. There is no override flag on purpose: the edit needed
+    # to raise it is one line in the gate, and making someone open that file makes them read
+    # why the number is what it is.
+    if args.bins > MAX_BINS:
+        print("REFUSING: --bins %d exceeds the ceiling of %d." % (args.bins, MAX_BINS))
+        print("  GitHub allows 20 concurrent jobs ACCOUNT-WIDE, shared with nt8-mcp-bridge;")
+        print("  %d leaves one slot for it. Measured: 21 bins pushed alongside the bridge ran"
+              % MAX_BINS)
+        print("  853s, against 726s for the arrangement it was meant to improve on -- two")
+        print("  batteries queued ~5 min, one of them starting 1s after the BRIDGE's job ended.")
+        print("  More bins is not more parallelism past the allowance; it is more waiting.")
+        return 2
+    if args.bins < 1:
+        print("REFUSING: --bins must be at least 1.")
         return 2
 
     times = read_times(args.times)

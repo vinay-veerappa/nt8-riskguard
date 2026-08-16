@@ -88,6 +88,22 @@ def execution_sites(text: str) -> dict[str, int]:
     return counts
 
 
+# ⚠️ THE SLOT ALLOWANCE IS 20 JOBS ACCOUNT-WIDE, SHARED WITH `nt8-mcp-bridge` -- not 20 per
+# workflow. 19 leaves exactly one for the sibling repo, whose CI is a single job.
+#
+# This is a GATE and not a comment because the fact was already documented, correctly, at the
+# top of ci.yml since session 45, and session 48 still hand-edited the matrix to 21 bins. The
+# measurement: 21 bins + the bridge's 1 job = 22 against 20, two batteries queued 302s and
+# 314s, and the run went 726s -> 853s. The one that started 1 SECOND after the bridge's job
+# ended is the whole proof. From inside a waiting run none of that is visible, so the failure
+# presents as an unexplained regression in a push that changed nothing about timing.
+#
+# Costs nothing to hold: UI4 is 493s of work and the ideal bin at 19 is 451s, so UI4 -- not
+# the bin count -- is the floor at 17, 18, 19 AND 20 bins. All four predict the same ~10.3
+# min. Raising this number buys zero and re-admits the queue.
+MAX_BINS = 19
+
+
 def main() -> int:
     if not WORKFLOW.exists():
         print(f"FAIL: no workflow at {WORKFLOW.relative_to(REPO)}")
@@ -105,6 +121,32 @@ def main() -> int:
         print("FAIL: the matrix declares `batteries:` lists, but no run step iterates")
         print("      `${{ matrix.batteries }}`. Every battery below would be listed and none")
         print("      of them executed, and the per-battery count would still read 'wired'.")
+        return 1
+
+    # Counted HERE, before the per-battery verdicts, because that is the only position where
+    # it can fire. Placed after them it was unreachable: no matrix entries means every battery
+    # reads as missing, which returns first -- a branch with no input that reaches it, which is
+    # the "green that can never be red" this repo has been caught shipping before. From here
+    # the reachable input is real and specific: the run step still loops over
+    # `matrix.batteries` (CONSUMES passed, just above) while the entry list is empty or has
+    # changed shape enough that ENTRY no longer matches it.
+    bins = len(ENTRY.findall(text))
+    if bins == 0:
+        print("FAIL: a run step iterates `${{ matrix.batteries }}` but no matrix entry parsed.")
+        print("      Either the list is empty or its shape changed. Every check below would")
+        print("      then be inspecting nothing, so this refuses rather than reporting on it.")
+        return 1
+    if bins > MAX_BINS:
+        print(f"FAIL: the matrix has {bins} bins; the ceiling is {MAX_BINS}.")
+        print()
+        print("GitHub allows 20 concurrent jobs ACCOUNT-WIDE, shared with nt8-mcp-bridge. Past")
+        print("that, another bin is not another runner -- it is another WAIT, and the wait is")
+        print("invisible from inside the run doing the waiting. Measured: 21 bins pushed")
+        print("alongside the bridge ran 853s against the 726s the arrangement it replaced took.")
+        print()
+        print("Re-pack instead of adding a bin -- the bins are an OUTPUT of the packer, so")
+        print("'which existing bin has room' is the wrong question:")
+        print("    python tools/pack_ci_matrix.py --times run_times.tsv --bins 19 --apply")
         return 1
 
     sites = execution_sites(text)
@@ -154,7 +196,8 @@ def main() -> int:
         print("a wasted slot pushes a real battery into the next wave.")
         return 1
 
-    print(f"\nOK: all {len(batteries)} mutation batteries are executed by CI, exactly once each.")
+    print(f"\nOK: all {len(batteries)} mutation batteries are executed by CI, exactly once")
+    print(f"    each, in {bins} bins (ceiling {MAX_BINS}, to leave a slot for the sibling repo).")
     return 0
 
 
