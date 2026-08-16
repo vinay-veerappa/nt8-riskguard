@@ -5022,7 +5022,7 @@ and it will be the one the operator actually uses.
 
 ---
 
-### P3-128. With every relationship switched OFF, the copier headline reads `[ COPIER LIVE - SIM ONLY ]` and says copies *"reach simulation followers only"* — nothing is copied at all — OPEN, found 2026-08-16 (session 51) by reading the live payload of the ticket that put this sentence on screen
+### P3-128. With every relationship switched OFF, the copier headline reads `[ COPIER LIVE - SIM ONLY ]` and says copies *"reach simulation followers only"* — nothing is copied at all — ✅ CLOSED v1.34.0 (session 51) and live-validated
 
 **Where**: `addons/CopierStatusView.cs` (**this repo**), `Headline`
 
@@ -5066,6 +5066,42 @@ the surface they were just given.
 regression is confirmable by reading `/api/copier/snapshot` before and after. It is a **core**
 change, so it needs a tag and a vendored-pin bump in `nt8-mcp-bridge`, which is the only reason it
 was not folded into `P1-125`.
+
+**CLOSED v1.34.0, the same evening it was filed, and live-validated on the state that produced it.**
+One rung in `Headline`, `total > 0 && enabled == 0`, reading `[ COPIER LIVE - NOTHING ENABLED ]` at
+`Warn`.
+
+**Placement was the whole of the ticket.** It sits BELOW both quarantine rungs and above
+`armed == 0`. Above them, `quarantined >= enabled` is `1 >= 0` for an all-quarantined,
+all-disabled copier, so the new rung would have swallowed the quarantine report — and quarantine
+ranks first deliberately, because it is the one state the operator did not choose.
+
+⚠️ **`Warn`, not `Info`, and that is not a cosmetic call.** The browser page renders `info` in the
+same grey as a healthy copier and `warn` in amber. Reporting this state as `Info` is how it sat
+unnoticed on a page whose whole claim is that a non-acting copier is visible without being looked
+for.
+
+⚠️ **The negative control is the load-bearing test**, and it was green before and after: an
+**ENABLED**, unarmed relationship still reads `SIM ONLY` and still says "simulation", because that
+state really does copy to simulation followers only. **A rung keyed on `armed == 0` instead of
+`enabled == 0` passes all six red assertions and deletes the state it is imitating** — `enabled`
+and `armed` are different counters and conflating them is the entire defect.
+
+**Evidence**: six acceptance tests written FIRST and watched failing at **2012 passed / 6 failed**,
+with the failure output reproducing the live payload verbatim; **2018 / 0** after. Implemented by
+**agent-loop at HEAD** (past `v0.6.7`) — APPROVE in round 1, both reviewers, 11.0s of model time,
+patch applied unchanged. `nt_compile` **0 errors**, `deploy --verify` **30 files / 0 orphans**.
+Live, immediately after deploy:
+
+```
+[ COPIER LIVE - NOTHING ENABLED ]   severity: warn
+Every relationship is switched off, so nothing is copied. 2 relationships, 0 enabled.
+```
+
+⚠️ **The GROUP half is covered by the same rung and by its own test, but is NOT live-validated** —
+this box has no copier groups configured, so the state cannot be produced here. `Describe` folds
+group followers into the same `enabled` counter, which is why one rung serves both; a fix reading
+only the relationship list fails that test.
 
 ---
 
