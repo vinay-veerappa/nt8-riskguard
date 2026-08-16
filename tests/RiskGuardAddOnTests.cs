@@ -700,7 +700,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP227_GuardConfigEditIsReachableFromTheTestBuild();
             TestP227_AValidConfigIsAccepted();
             TestP227_AnOmittedModeIsAccepted();
-            TestP227_ModeMatchingIsCaseInsensitive();
+            TestP227_ModeIsCaseSensitiveBecausePreflightIs();
             TestP227_AnUnrecognisedModeIsRefused();
             TestP227_DisabledIsTheCopiersModeNotTheGuards();
             TestP227_TheValidatorAgreesWithPreflightOnEveryMode();
@@ -10517,13 +10517,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P2-27: a WHITESPACE mode means 'not being changed' and is ACCEPTED");
         }
 
-        private static void TestP227_ModeMatchingIsCaseInsensitive()
+        /// <summary>
+        /// ⚠️ SECOND CORRECTION TO THIS TICKET, and the agreement test above is what forced it.
+        /// The spec said "compared CASE-INSENSITIVELY" -- carried over from the bridge draft
+        /// without checking -- and that made two of these tests UNSATISFIABLE TOGETHER: the loop
+        /// spent three rounds at 16 of 17 green and ended ARBITER_NEVER_RAN, because no
+        /// implementation can both accept `SHADOW` and agree with a preflight that refuses it.
+        ///
+        /// PREFLIGHT IS ORDINAL: `if (_mode != "shadow" && _mode != "live" && ...)`. So `Shadow`
+        /// in the config file is refused with "Unrecognised mode", and the validator has to land
+        /// on the same answer or it writes a config the guard cannot arm on -- which is the entire
+        /// defect it exists to prevent.
+        ///
+        /// The refusal must NAME THE CASE though. Telling an operator that `Live` is unrecognised
+        /// is true of the comparison and false of the codebase, and they will go looking for a
+        /// typo they did not make. See P3-118: three readers of Mode, three different case rules.
+        /// </summary>
+        private static void TestP227_ModeIsCaseSensitiveBecausePreflightIs()
         {
-            Console.WriteLine("\n[TEST] P2-27: mode matching is case-insensitive");
-            Assert(Accepted(CallRefuse("SHADOW", 1500.0, 5)),
-                "P2-27: mode matching is CASE-INSENSITIVE -- SHADOW is accepted");
-            Assert(Accepted(CallRefuse("Live", 1500.0, 0)),
-                "P2-27: mode matching is CASE-INSENSITIVE -- Live is accepted");
+            Console.WriteLine("\n[TEST] P2-27: mode is case-sensitive, because preflight is");
+            Assert(Refused(CallRefuse("SHADOW", 1500.0, 5)),
+                "P2-27: `SHADOW` is REFUSED, because preflight compares the mode ordinally");
+            Assert(Refused(CallRefuse("Live", 1500.0, 0)),
+                "P2-27: `Live` is REFUSED, because preflight compares the mode ordinally");
+            Assert(Mentions(CallRefuse("SHADOW", 1500.0, 5), "case"),
+                "P2-27: a case-only mismatch says so, rather than calling the mode unrecognised");
         }
 
         /// <summary>

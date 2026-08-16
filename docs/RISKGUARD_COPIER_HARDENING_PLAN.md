@@ -4201,6 +4201,50 @@ source-gate-plus-small-harness. The session-47 ticket had it on the bridge side 
 
 ---
 
+### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — OPEN, found 2026-08-16 (session 48) by a test that made two other tests disagree
+
+**Where**: `addons/RiskGuardAddOn.cs`, three places that each ask *what mode is this?*
+
+| reader | comparison | answer for `"Live"` |
+|---|---|---|
+| `DefaultArmedForMode` (`:610`) | `OrdinalIgnoreCase` | matches `live` → an acting mode → comes up **disarmed** |
+| `RunPreflight` check (c) (`:3857`) | `_mode != "shadow" && _mode != "live" && …` — **ordinal** | **no match → refuses to arm, "Unrecognised mode 'Live'"** |
+| `IsActingMode` (`:4205`) | `_mode == "live"` — **ordinal** | no match → **not acting**, observation only |
+
+Two more comparators exist on the same concept and both ignore case:
+`TradeCopierEngine.IsRecognisedCopierMode` and the copier's own acting check.
+
+**The behaviour is safe and the MESSAGE is the defect.** Every disagreement here fails closed — a
+capitalised mode does not act, and preflight refuses to arm it — so nothing is left unprotected.
+But the operator is told their mode is **unrecognised**, which is true of one `!=` and false of the
+codebase: `Live` appears everywhere, `DefaultArmedForMode` recognised it a moment earlier, and the
+copier would have accepted it. They will go looking for a typo they did not make.
+
+⚠️ **Found by a test that made two OTHER tests contradict each other.** `P2-27`'s validator was
+specified as case-insensitive, copied forward from a bridge draft without checking. Its acceptance
+suite then demanded both *"`SHADOW` is accepted"* and *"the validator agrees with preflight on every
+mode"* — and no implementation can satisfy both, because preflight refuses `SHADOW`. The agent-loop
+sat at **16 of 17 green for three rounds** and ended `ARBITER_NEVER_RAN`. **The contradiction was
+the finding**: an agreement test does not only catch drift, it catches a specification that
+disagrees with the code it is specifying.
+
+**Fix**: one predicate — `GuardConfigEdit.IsRecognisedGuardMode(string)` is the obvious home once
+`P2-27` lands — with all three readers calling it, keyed on `OrdinalIgnoreCase` to match the two
+readers that already do and the two copier comparators beside them. ⚠️ **That is a behaviour change
+on the arming path** (`Mode: "Live"` would begin to arm where it now refuses), which is why it is
+filed rather than folded into `P2-27`: a validator ticket must not quietly widen what preflight
+accepts. Until it lands, `P2-27`'s validator is deliberately **ordinal**, so that it agrees with the
+reader that decides arming, and its refusal names the case rather than claiming the mode is unknown.
+
+**Band**: `P3`. Every reader fails closed, so no position goes unprotected; the cost is an
+operator's time and a misleading sentence. ⚠️ Re-band if the one-predicate fix is taken, because at
+that point the three readers stop agreeing by accident and start agreeing by construction, and a
+mistake in the shared predicate reaches the arming decision.
+
+⚠️ **Evidence is obtainable with the market shut** — it is a config string and a preflight call.
+
+---
+
 ### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, but NARROWED by live measurement 2026-08-14: the hazard AS FILED does not reproduce, and only a small remainder stands
 
 **Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
