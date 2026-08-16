@@ -4771,8 +4771,12 @@ to nothing. **A defect in a string nothing displays is not reachable by the oper
 `P3-122` and this entry should be closed together: rendering the reason is what makes its
 ordering matter.
 
-**Fix**: render the copier's global mode and `notEnforcingReason` in the Copier section header,
-severity-coloured, plus the `configConflicts` count. The decision belongs in
+**Fix**: render the copier's global mode and `notEnforcingReason` severity-coloured, plus the
+`configConflicts` count. ⚠️ **Put it in the SYSTEM ROW, not the Copier section header.**
+[`UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) §4 decision 4 reserves a feed/guard/copier system
+row for exactly this — *"where `P3-34`'s two-or-three-indicator problem lives"* — and the operator
+confirmed §4 on 2026-08-16. Shipping it in a section header means `P2-127` moves it later. The
+existing page header already shows the GUARD's mode; this is the third indicator beside it. The decision belongs in
 `CopierEnforcementView` (already in the test build) and NOT in the HTML, for the same reason
 `CopierStatusView` exists: `ui/index.html` is in no test build and no mutation battery can reach
 it.
@@ -4870,9 +4874,11 @@ inspector* and keeps only frequent actions inline. The ~28-row `CONFIGURATION` b
 the fleet is the single biggest contributor to the scroll, and it is in the wrong pane by the
 design's own rules.
 
-⚠️ **THERE IS A GENUINE CONFLICT TO SETTLE, AND IT IS THE OPERATOR'S TO SETTLE.** On 2026-08-16
-they asked for *"tabs on the left to switch between each item"*. The recorded design says no
-top-level tabs. These are close enough to be confused and are not the same thing:
+✅ **SETTLED BY THE OPERATOR, 2026-08-16: BUILD §4. The left-hand nav tabs are DROPPED.**
+Asked to choose between the layout they had just proposed and the one they agreed on 2026-08-13,
+they chose §4 — *"lets stick to §4 which is what was the original design."* **This question is
+closed; do not re-open it, and do not re-derive it from the "cluttered" report.** The two options
+were close enough to be confused, which is why the comparison is kept below rather than deleted:
 
 | | left NAV TABS (the 2026-08-16 request) | FLEET pane (§4, agreed 2026-08-13) |
 |---|---|---|
@@ -4880,12 +4886,29 @@ top-level tabs. These are close enough to be confused and are not the same thing
 | what selecting does | swaps which section is on screen | drives the inspector to that account's config |
 | where a warning on an unselected item goes | **hidden behind a tab** | still visible in the tree, worst-first |
 
-**Recommendation: build §4, not the tabs.** It satisfies the operator's stated goal — no single
-scroll, pick a thing on the left, see its detail on the right — and it does so per ACCOUNT, which
-is the question they actually ask ("which limit applies to this account"). Section tabs answer a
-question nobody asks. But **record the operator's decision here before building either**; do not
-let a design doc silently overrule a live request, and do not let a live request silently discard
-a recorded constraint.
+§4 satisfies the operator's stated goal — no single scroll, pick a thing on the left, see its
+detail on the right — and does it per ACCOUNT, which is the question actually asked ("which limit
+applies to this account"). Section tabs answer a question nobody asks.
+
+### What building §4 concretely means here
+
+| Region | Contents | Source today |
+|---|---|---|
+| **FLEET**, left, always visible | groups with followers nested; *"Unlinked accounts"* below; sorted **worst-first** | the existing `ACCOUNTS` section + `/api/copier/snapshot` rows, re-grouped |
+| **INSPECTOR**, right, follows selection | the selected entity's full config. **The only tabs in the app live here**: `[copier] [risk] [rare]` | the existing `CONFIGURATION` block, **moved off the top level** |
+| **EVENTS**, bottom | filtered to the selection | SSE already exists (§10 item 3) |
+| **inline on each row** | the frequent actions only: arm/disarm, enable/disable, ratio | today's two toggles, extended by `P2-126` |
+
+⚠️ **Moving the `CONFIGURATION` block is the de-cluttering.** It is ~28 rows at the top level and
+§4 puts set-rarely config in the inspector. Nothing else on the page accounts for the scroll the
+operator reported.
+
+⚠️ **`P1-125` HAS A DESIGNATED HOME IN §4 AND IT IS NOT THE COPIER SECTION HEADER.** §4 decision 4:
+*"Selecting nothing shows the system row (feed / guard / copier) — which is where `P3-34`'s
+two-or-three-indicator problem lives."* The copier's global mode belongs in that system row,
+beside the feed and the guard, because the operator's confusion is precisely that the page shows
+**one** mode and they read it as covering both. `P1-125` can still ship before the layout — it is
+independent — but put it where §4 will keep it, not somewhere the restructure has to move it from.
 
 ⚠️ **Whichever wins, the hiding hazard is the same and is the reason §4.2 killed tabs.** This
 page's value is that `INERT`, `ConfiguredNotEvaluated` and a non-acting copier are visible without

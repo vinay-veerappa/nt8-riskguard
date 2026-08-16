@@ -102,6 +102,17 @@ Data is available in-process (`Account.Get(AccountItem.UnrealizedProfitLoss)`,
 
 ## 4. Layout — one window, two panes, zero nav tabs
 
+> ✅ **RE-CONFIRMED BY THE OPERATOR 2026-08-16, against a live challenge.** Looking at the shipped
+> page they called it *"cluttered"* and proposed *"tabs on the left to switch between each item"* —
+> i.e. the thing §4.2 killed. Shown this section, they chose to keep it: *"lets stick to §4 which
+> is what was the original design."* **This layout has now survived being re-proposed against, and
+> the alternative is closed.** The reason it looked appealing is worth keeping: §4 was never built
+> — the read models landed as stacked sections with the guard-config block at the TOP LEVEL, where
+> this section puts set-rarely config in the inspector. **What the operator was reacting to is the
+> absence of §4, not §4.** Tracked as `P2-127`; the region-by-region mapping from today's sections
+> lives there.
+
+
 ```
 ┌────────────────────────────────┬──────────────────────────┐
 │ FLEET (always visible)         │ INSPECTOR (selection)    │

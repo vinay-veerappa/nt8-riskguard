@@ -10624,15 +10624,16 @@ makes its ordering reachable by the operator.
 0. ⚠️ **READ [`docs/UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) FIRST — §4, §7, §10, §11.**
    All three entries below are continuations of that design, not new work, and one of them was
    first filed contradicting it. Do not plan UI work from the plan entries alone.
-1. **SETTLE THE LAYOUT CONFLICT — the operator's call, not the implementer's.** §4.2 killed
-   top-level navigation tabs; on 2026-08-16 the operator asked for exactly those. The
-   recommendation in **`P2-127`** is to build §4's fleet/inspector instead, because it meets the
-   stated goal (no single scroll, pick on the left, detail on the right) *per account*, which is
-   the question actually asked. **Get an answer before writing code**; either way it is one
-   sentence in `P2-127`.
+1. ✅ **THE LAYOUT IS SETTLED — BUILD §4. Do not re-open it.** Offered the choice between the
+   left-hand nav tabs they proposed on 2026-08-16 and the fleet/inspector they agreed on
+   2026-08-13, the operator chose **§4**: *"lets stick to §4 which is what was the original
+   design."* Nav tabs are dropped. The concrete region-by-region mapping, and which of today's
+   sections feeds each, is tabulated in **`P2-127`**.
 2. **`P1-125`** — the browser UI never states the copier's global mode. Smallest, highest
-   consequence, and **independent of the layout decision**, so it can go first regardless: a
-   `disabled` copier renders exactly like a working one. Close **`P3-122`** in the same change.
+   consequence, and independent of the layout, so it goes first: a `disabled` copier renders
+   exactly like a working one. Close **`P3-122`** in the same change. ⚠️ **Build it as §4's
+   system row (feed / guard / copier), not as a Copier section header** — §4 decision 4 reserves
+   that row for it, so anywhere else is work `P2-127` has to undo.
 3. **`P2-127`** — build whichever layout won. Take it BEFORE the new controls: §4 decides where
    each control lives (frequent actions inline on the row, set-rarely config in the inspector),
    and doing it after means moving them twice. Move the decisions into a compiled class first.
