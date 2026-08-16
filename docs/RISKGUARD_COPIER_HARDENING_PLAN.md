@@ -4201,6 +4201,78 @@ source-gate-plus-small-harness. The session-47 ticket had it on the bridge side 
 
 ---
 
+### P2-119. `SaveAndReloadConfig` returns `void` and swallows its own exception, so a config write that FAILED is reported to the operator as *"saved and hot-reloaded successfully"* — OPEN, found 2026-08-16 (session 48) while looking for the one place to wire `P2-27`'s validator
+
+**Where**: `addons/RiskGuardAddOn.cs:43`, and its three callers.
+
+```csharp
+public void SaveAndReloadConfig(RiskConfig newConfig)     // <- void
+{
+    lock (_stateLock)
+    {
+        try
+        {
+            string json = JsonConvert.SerializeObject(newConfig, Formatting.Indented);
+            File.WriteAllText(_configFile, json);
+            LoadConfig();
+            LogEvent("SYSTEM", "CONFIG_SAVE", "Configuration successfully saved and reloaded from UI.");
+        }
+        catch (Exception ex)
+        {
+            LogEvent("SYSTEM", "ERROR", $"Failed to save config: {ex.Message}");   // <- and returns normally
+        }
+    }
+}
+```
+
+```csharp
+_addOn.SaveAndReloadConfig(cfg);                                          // RiskGuardWindow.cs:417
+MessageBox.Show("Configuration saved and hot-reloaded successfully!", ...); // <- UNCONDITIONAL
+```
+
+**The catch swallows and the method returns normally, so the caller cannot tell.** A locked file,
+a permissions failure, a full disk, or a serializer throw all produce the same thing: one `ERROR`
+line in the audit log that nobody is watching, and a green dialog saying the opposite. The
+`try/catch` sits *inside* `OnSaveConfigClick`'s own `try`, so even that cannot see it.
+
+⚠️ **This is [[report-the-outcome-not-the-call]] at a third site**, and structurally identical to
+`P1-105`: `positionClosed = true` recorded that control reached the line, not that anything closed.
+Here the success message records that `SaveAndReloadConfig` *returned*, which it does either way.
+
+⚠️ **AND THERE ARE THREE WRITERS, NOT TWO.** The count in `P1-117` and `P2-27` was wrong:
+
+| caller | what it writes |
+|---|---|
+| `RiskGuardWindow.cs:417` | `OnSaveConfigClick` — the seventeen-assignment form save |
+| `RiskGuardWindow.cs:724` | the account-exclusion toggle — **and excluding an account removes it from guarding** |
+| `nt8-mcp-bridge`'s `RiskGuardConfig` route | the merged partial body |
+
+The third one was found only by grepping for the callee rather than reasoning about the callers,
+which is [[a-second-reader-of-the-same-state]] in its usual form: *count the sites before closing
+the ticket.* The exclusion toggle is the interesting one — it is a protection-affecting write with
+no validation and no confirmation, and it was not on anybody's list.
+
+**Fix, and it closes three things at once.** `SaveAndReloadConfig` returns a result rather than
+`void`, calls `GuardConfigEdit.Refuse` **before** it writes, and refuses rather than persisting;
+the three callers report what it actually answered. That is the one choke point all three writers
+share, so wiring the validator there is strictly better than wiring each caller — which is what
+`P2-27` was originally scoped to do, and would have left the exclusion toggle unvalidated and the
+route and the window with two copies of the same call.
+
+⚠️ **`P2-27`'s `GuardConfigEdit` is CALLED BY NOTHING until this lands** — `P2-24`'s class,
+recorded here rather than left silent. The class is built, mutated 11/11 and CI-wired; it is the
+wiring that is outstanding, and this entry is it.
+
+**Band**: `P2`. No position goes unprotected — the guard keeps running its previous config — but
+the operator believes limits are in force that were never written, which is the
+`configured / evaluated / enforcing` family on the surface that *sets* the config rather than the
+one that reports it.
+
+⚠️ **Evidence is obtainable with the market shut**: make `RiskGuard/config.json` read-only and
+press Save.
+
+---
+
 ### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — OPEN, found 2026-08-16 (session 48) by a test that made two other tests disagree
 
 **Where**: `addons/RiskGuardAddOn.cs`, three places that each ask *what mode is this?*
