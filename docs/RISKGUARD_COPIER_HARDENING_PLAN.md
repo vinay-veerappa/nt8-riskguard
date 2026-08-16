@@ -7144,3 +7144,69 @@ encodes for `Unknown`.
 **Not reproduced, and deliberately not claimed**: nothing here has been measured stranding a real
 order. The false-positive half is measured; the false-negative half is derived from the two lists
 and is the reason for the band. Say which half was measured.
+
+---
+
+### P2-132. In `shadow`, the rule inventory cannot distinguish a rule that JUST FIRED from one that has never fired — measured on the funded account while `MAX_SIZE_BREACH` was live — OPEN, found 2026-08-16 (session 52)
+
+**Where**: `nt8-riskguard/addons/GuardRules.cs` (the `Max contracts per account` / `Max contracts
+aggregate` evaluators) and the `state` vocabulary the inventory reports.
+
+**Measured live**, Sunday session, on `TAKEPROFITPRO524207503` — the funded 50K TPT PRO:
+
+```
+nt_positions        MNQ SEP26  Long  11        <- cap is 10
+interventions.jsonl 23:40:52Z  SHADOW_LOCKOUT  TAKEPROFITPRO524207503
+                    "Rule MAX_SIZE_BREACH recorded a shadow-only lockout observation"
+nt_riskguard_inventory --account TAKEPROFITPRO524207503:
+    { "name": "Max contracts per account", "state": "EvaluatedNotEnforcing",
+      "currentValue": null, "limit": 10, "evidenceCount": 1, "note": null }
+```
+
+**The enforcer fired at the exact second the 10-lot filled. The reporter shows `null`.**
+
+Two separate halves, and the second is the larger one.
+
+**(a) The sizing evaluators hardcode a null `currentValue`** while the enforcer reads the position
+every sweep (`RiskGuardAddOn.cs`: `if (pos.Quantity > limit)`):
+
+```csharp
+Evaluator = c => c.Config.Sizing.MaxContractsPerAccount <= 0
+    ? ...
+    : R(null, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1)
+```
+
+⚠️ **This is inconsistent within one view**, which is what makes it misleading rather than merely
+sparse: `Daily loss limit` reports `-101.25` against `-1000`, `Max trades per session` reports
+`4` against `8`, `Max consecutive losses` reports `5` against `3`. Three rules tell you where you
+stand and the sizing ones do not — and the sizing one was the one in breach. `F-9`'s remedy
+applies unchanged: **derive the display FROM the enforcer**, which already computes `pos.Quantity`.
+
+**(b) `EvaluatedNotEnforcing` is doing two jobs and the operator cannot separate them.** In
+`shadow` NOTHING is `Enforcing` — correctly, since nothing acts. So a rule that has never come
+close and a rule that **breached ninety seconds ago and recorded a lockout** render identically.
+`evidenceCount` does not separate them either (both `1`).
+
+⚠️ **The consequence is not cosmetic, and it is aimed at the next thing the operator will do.**
+The account carries `isLockedOut: true` right now — a shadow-authority lockout that does not bind
+(`P2-92`, working as designed). **The moment the guard is armed to `live`, that account stops
+trading.** The per-account field is in the payload, so a careful reader can find it; the per-RULE
+view, which is where you would look to ask *which* rule, says nothing. This is the same family as
+[[configured-evaluated-enforcing]]: *what a rule REPORTS can disagree with what it DOES*, and here
+it disagrees in the reassuring direction.
+
+**Fix sketch**: (a) pass the enforcer's own `pos.Quantity` (the max across the account's non-flat
+positions, and the aggregate across accounts for the `Aggregate` row) as `currentValue`; (b) add a
+BREACHED signal folded out of the same comparison the enforcer makes — not a sixth state, since
+`Enforcing` vs `EvaluatedNotEnforcing` is about *authority* and this is about *the value* — plus
+the timestamp of the last firing, so "never fired" and "fired a minute ago" are different answers.
+⚠️ **Recount it from the rule rows rather than adding a counter** (`P2-103`'s rule, and `F-9` was
+a drifting counter).
+
+⚠️ **A negative control is mandatory here** ([[detector-needs-a-negative-test]]): a BREACHED flag
+that is true whenever a limit exists would pass every positive test. The 96 accounts holding
+nothing must report it false in the same sweep that reports this one true.
+
+**What is NOT claimed**: the guard behaved correctly throughout. It detected the breach, recorded
+the lockout, and declined to flatten because it is in `shadow`. This entry is about the READ
+surface only.
