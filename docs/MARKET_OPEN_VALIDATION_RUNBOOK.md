@@ -103,6 +103,24 @@ and the flood reappears for a reason that is not the defect. **Finish all compil
 `interventions.jsonl`. An empty outbox is only a failure if the intervention line says `warning`
 or above.
 
+✅ **RESULT — PASSED at 22:00-22:03 UTC.** Long 1 MNQ @ 30175.75 on Sim101, no stop, 125 seconds:
+
+| | pre-fix (2026-08-15) | **measured tonight** |
+|---|---|---|
+| `NAKED_POSITION` | 12 | **1** |
+| `AUDIT_FINDING_SUPPRESSED` | 0 | **1** |
+| `ACTION_SUPPRESSED` | 0 | **0** (correct — audit findings are not actions) |
+| outbox lines | — | **1** (`⚠ [WOULD] NAKED_POSITION`, severity `warning`) |
+
+The suppression line explains itself: *"…is STILL TRUE and will stop being logged after 1 line(s) in
+observing mode. It will report again the moment the condition changes."* **The budget of 1 in an
+observing mode is the fix, not a tuning value**, and it is visible in the message.
+
+⚠️ **`grep -c NAKED_POSITION` returned 2, and that was MY error, not the guard's** — the
+`AUDIT_FINDING_SUPPRESSED` line *quotes* the finding it is suppressing, so a bare substring counts
+it twice. Counted by `'"eventType":"NAKED_POSITION"'` it is **1**. *Detection by substring, in the
+runbook's own command.* The commands above are corrected.
+
 **Clean up**: flatten Sim101.
 
 ---
@@ -170,6 +188,30 @@ moved *when it should have*" are different claims and only the second one tests 
 same contract — `P1-105` deliberately does NOT compare expiries for this reason, and a mismatch
 here is not a defect.
 
+### ❌ RESULT — **FAILED**, and it found a `P1`. Filed as **`P1-130`**.
+
+| | |
+|---|---|
+| entry | **30185.25**, stop **30175.25** (40t), trigger 12t, offset 2t |
+| price reached | **30199.5 — +57 ticks**, nearly 5× the trigger |
+| stop after 230s | **30175.25, UNMOVED** |
+| `breakevenTriggered` | **false** |
+| `ATM_STOP_ORDER_NOT_FOUND` | **55 lines, one per 5s, unbounded** |
+
+**The loop runs, the trigger fires, the arithmetic is right, and the WRITE fails.** The log names
+the correct target — *"the move to **30185.75** was not requested"* — which is exactly entry + 2
+ticks. `ModifyStopPrice` requires `OrderState.Working`; the resting stop was in **`Accepted`**, the
+state `P3-110` measured on 2026-08-14 and the panic-flatten path already learned.
+
+**The same class holds the right answer twice** — `MonitorTickCore:623` accepts `Accepted`, and
+`ReconcileStopFromBroker:818` reads *this very order* through `OccupiesSlot`, which classifies
+`Accepted` as `Working` liveness. Only the WRITER hand-rolled a narrower test. All three stop-move
+sites, breakeven and **trailing**, funnel through it: **no ATM stop advances on this connection.**
+
+⚠️ **This is exactly the remainder `P2-112`'s closure flagged as unmeasured — "the stop-MOVE half".
+A confirmation run found a `P1` that 2018 green tests could not.** That is the argument for driving
+the box, in one line.
+
 ⚠️ **`Account.Change()` semantics**: a second change in flight reverts the order, and the
 Simulator echoes your price back. **Verify the move by re-reading the order after it settles**,
 never from the change call's own answer.
@@ -236,6 +278,15 @@ be paying the cost before knowing the tooling is sound.
    verified by re-reading `/api/riskguard/config`** — not by the write's own answer.
    ⚠️ If any of A/B/C fails, **D does not run**: the failure is the session's finding and arming a
    guard on a box whose alerting or stop-management has just been shown wrong is the wrong order.
+
+   ❌ **D WAS NOT RUN. C FAILED** (`P1-130`: no ATM stop advances on this connection), so the
+   pre-agreed condition was not met. This is the rule executing, not a judgement call made at the
+   time — which is the reason the condition was written down BEFORE the window opened. The guard
+   was never armed; it is still `shadow`, as it has been all session.
+
+   **When D is next attempted, `P1-130` should be fixed first.** The lockout-admit test places a
+   REDUCING order against an open position, and a box whose stop-management writer cannot find its
+   own orders is not the box to measure a lockout gate on.
    ⚠️ While `live`, all 97 accounts are under an acting guard, including the funded TPT PRO. That
    is tolerable only because nothing is being traded on it. **Return to `shadow` before anything
    else, even if D fails halfway.**

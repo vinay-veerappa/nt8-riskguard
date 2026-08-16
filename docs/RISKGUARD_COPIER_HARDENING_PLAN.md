@@ -5171,6 +5171,94 @@ advertises it.
 
 ---
 
+### P1-130. The ATM breakeven and trailing stops NEVER move: the writer demands `OrderState.Working` while a resting stop sits in `Accepted` — the reader in the same class already knows better — OPEN, found 2026-08-16 (session 51) at the Sunday open, by driving it
+
+**Where**: `addons/DynamicAtmManager.cs`, `ModifyStopPrice` (`:742`)
+
+**MEASURED LIVE at the Sunday 2026-08-16 open on Sim101 / MNQ SEP26**, which is the whole reason
+the runbook item existed:
+
+| | |
+|---|---|
+| entry filled | **30185.25**, long 1 |
+| stop placed | **30175.25** (40 ticks), `DrawdownShield`, BE trigger **12t**, offset **2t** |
+| price reached | **30199.5** — **+57 ticks**, nearly 5× the trigger |
+| stop after 230s | **30175.25 — UNMOVED** |
+| `nt_atm_bracket_status` | `breakevenTriggered: false` |
+| `ATM_STOP_ORDER_NOT_FOUND` | **55 lines, one every 5 seconds** |
+
+**The loop RUNS, the trigger FIRES, the arithmetic is RIGHT, and the write fails.** The log names
+the correct target price:
+
+```
+no WORKING stop order with id '802abaf811e9442c8d7c58c301884a4f' on 'Sim101',
+so the move to 30185.75 was not requested. The position may be unprotected.
+```
+
+`30185.75` is exactly entry + 2 ticks. Every computation in the chain is correct. **And that order
+id existed the whole time** — `/api/orders` showed it as `Stop_21ea2a85`, `StopMarket`,
+`stopPrice: 30175.25`, state **`Accepted`**.
+
+⚠️ **`ModifyStopPrice` matches `order.OrderState == OrderState.Working` and nothing else**, and on
+this connection a resting stop **never occupies that state**. `P3-110` measured precisely this fact
+on 2026-08-14 — *"a `StopMarket` rests in **`Accepted`** — not `TriggerPending`"* — and the panic
+flatten learned it. This writer never did.
+
+⚠️ **THE SAME CLASS ALREADY CONTAINS THE RIGHT ANSWER, TWICE.** This is
+[[a-second-reader-of-the-same-state]] inside one file:
+
+| site | test | finds the resting stop? |
+|---|---|---|
+| `MonitorTickCore` `:623` (is the entry still alive?) | `Working \|\| Submitted \|\| Accepted` | ✅ |
+| `ReconcileStopFromBroker` `:818` (**the reader of this very order**) | `RiskGuardAddOn.OccupiesSlot(o.OrderState)` | ✅ |
+| `ModifyStopPrice` `:742` (**the writer of this very order**) | `== OrderState.Working` | ❌ |
+
+`OccupiesSlot` is the guard's own shared predicate and `Classify(Accepted)` returns
+`OrderLiveness.Working`, so the codebase has one correct definition, uses it to READ the order, and
+hand-rolls a narrower one to WRITE it. **The reader and the writer of a single order disagree about
+whether it exists.**
+
+**Scope: this is not only breakeven.** All three stop-move sites — breakeven (`:657`, `:689`) and
+**trailing** (`:702`) — funnel through `RequestStopMove` → `ModifyStopPrice`. **No ATM stop
+advances, ever, on this connection.**
+
+⚠️ **AND THE BOUNDED RETRY CANNOT REACH ITS BOUND.** `RequestStopMove` checks
+`bracket.StopModifyAttempts >= MaxStopModifyAttempts` and has an `ATM_STOP_MOVE_ABANDONED` event
+for giving up — but on the not-found path it does `if (!ModifyStopPrice(...)) return false;`
+**without incrementing the counter**, so the cap is unreachable and the retry runs every 5 seconds
+for the life of the position. Measured: **55 lines and still counting when the position was
+flattened.** That is [[a-retry-that-cannot-exit]] and *an alarm that is always on is off*, at a
+third site after `P2-107` and `P2-108`.
+
+⚠️ **The message is also wrong in the reassuring direction's opposite**: *"The position may be
+unprotected"* is **false here** — the original 40-tick stop is resting and working perfectly. The
+position is protected, it is merely not being ADVANCED. A risk surface that cries unprotected at a
+protected position is the `P3-122`/`P3-128` family again, and it trains the operator to discount
+the one line that will matter.
+
+**Fix**: `ModifyStopPrice` uses `RiskGuardAddOn.OccupiesSlot(order.OrderState)` — the predicate its
+own reader uses, ten lines away — and `RequestStopMove` increments `StopModifyAttempts` on **every**
+failed request, not only on provider refusals, so the abandon cap is reachable. Correct the message
+to say what is true: the stop was not MOVED and remains at its current price.
+
+⚠️ **The regression test must be the STATE, not the move.** A test that asserts "the stop moves"
+passes against a stub that reports `Working`; the defect only exists because the live provider
+reports `Accepted`. Drive `ModifyStopPrice` across **every** state `OccupiesSlot` admits — this is
+exactly [[test-doubles-are-not-evidence]], and the NT8 stub has already hidden one live `P0` by
+omitting 6 of 16 `OrderState`s.
+
+**Band**: `P1`. It fails in the safe direction — the initial stop stays exactly where it was placed,
+so no position is naked — but **every risk-reduction feature of the ATM system is inert**, silently,
+on the live path, while `nt_atm_bracket_status` reports `breakevenTriggered: false` to anyone who
+looks and nothing at all to anyone who does not. An operator running `DrawdownShield` believes their
+stop went to breakeven at +12 ticks. It did not, and it never will.
+
+⚠️ **`P2-112` is CLOSED and was not wrong** — it made this loop RUN, and this defect is what the
+running loop then hit. It is the exact remainder its own closure flagged as unmeasured: *"the
+stop-MOVE half"*. **A confirmation run found a P1 the suite could not.**
+
+---
+
 ### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, but NARROWED by live measurement 2026-08-14: the hazard AS FILED does not reproduce, and only a small remainder stands
 
 **Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
