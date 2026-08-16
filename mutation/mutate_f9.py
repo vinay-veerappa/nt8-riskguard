@@ -98,7 +98,7 @@ MUTANTS = [
     ("the TRAILING rule keeps the resolved BRANCH and reports the TOP-LEVEL AMOUNT. Every\n"
      "     state assertion passes and the number beside the row is a limit the operator is not\n"
      "     held to -- P1-42's lesson, one layer out",
-     '                        sub.Amount, mapped ? 1 : 0, note);',
+     '                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);',
      '                        fm.TrailingDD.Amount, mapped ? 1 : 0, note);'),
 
     ("the DAILY-LOSS rule keeps the resolved branch and reports the top-level amount",
@@ -107,20 +107,20 @@ MUTANTS = [
 
     ("evidence goes back to the MAP SIZE on the trailing rule. One mapped account turns all\n"
      "     96 accounts' firm rules green, 88 of them expired prop accounts",
-     '                    return R(c.Account == null ? (double?)null : c.Account.AccountEquity,\n'
-     '                        sub.Amount, mapped ? 1 : 0, note);',
-     '                    return R(c.Account == null ? (double?)null : c.Account.AccountEquity,\n'
+     '                    return R(HasEquityReading(c.Account) ? (double?)c.Account.AccountEquity : null,\n'
+     '                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);',
+     '                    return R(HasEquityReading(c.Account) ? (double?)c.Account.AccountEquity : null,\n'
      '                        sub.Amount, fm.AccountFirmMap == null ? 0 : fm.AccountFirmMap.Count, note);'),
 
     ("evidence becomes unconditional on the trailing rule, so an UNMAPPED account renders as\n"
      "     firm-protected while the number in force is the guessed top-level one",
-     '                        sub.Amount, mapped ? 1 : 0, note);',
+     '                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);',
      '                        sub.Amount, 1, note);'),
 
     ("evidence keys on `resolved` instead of `mapped` on the trailing rule. Looks stricter and\n"
      "     is wrong: a dangling mapping reports 0, the count stops varying with the collection,\n"
      "     and the derived EvidenceLabel check fails",
-     '                        sub.Amount, mapped ? 1 : 0, note);',
+     '                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);',
      '                        sub.Amount, resolved ? 1 : 0, note);'),
 
     ("the trailing rule drops the MASTER switch. ComputeFirmMirror does not check\n"

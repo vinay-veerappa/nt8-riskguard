@@ -106,7 +106,7 @@ MUTANTS = [
     # entry would have printed [SKIP] and scored a survivor for the rest of its life.
     ("the firm rules hardcode their evidence, so 'loaded but UNMAPPED, therefore none can\n"
      "     fire' reports green -- a state this system has already been in",
-     '                        sub.Amount, mapped ? 1 : 0, note);',
+     '                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);',
      '                        sub.Amount, 1, note);'),
 
     # ---- the escape route the fix for the first three survivors OPENED ----

@@ -4049,7 +4049,7 @@ surface).
 
 ---
 
-### P2-116. An equity rule with NO equity reading reports `EvaluatedNotEnforcing` — 88 of 89 prop accounts read exactly like the one that is actually protected — OPEN, found 2026-08-15 the hour the broker was reconnected
+### P2-116. An equity rule with NO equity reading reports `EvaluatedNotEnforcing` — 88 of 89 prop accounts read exactly like the one that is actually protected — ✅ CLOSED v1.33.0 (session 50), LIVE-VALIDATED
 
 **Where**: `addons/GuardRules.cs:265` (and the other `PerAccount` equity rules beside it)
 
@@ -4131,6 +4131,67 @@ guard holds a real equity reading for one**. Whatever the fix does to the row, t
 the summary view, because it is the answer to the question the surface exists for.
 
 ---
+
+
+---
+
+✅ **CLOSED (session 50, v1.33.0) and live-validated on the box the defect was measured on.**
+Evidence for an equity-backed rule is now an equity **READING**, not the existence of an
+`AccountState` object, via one predicate `HasEquityReading` that **three** readers call:
+`PnLRules.TrailingDrawdown`, `FirmMirror.TrailingDD.Amount` and
+`PropFirm.EnablePeakEquityProtection`. The two accounts that were byte-identical now differ:
+
+| | funded `…503` | dormant `…748` |
+|---|---|---|
+| Trailing drawdown | `EvaluatedNotEnforcing`, ev 1, cur 50182.75 | **`Inert`**, ev 0, cur `null` |
+| Firm trailing drawdown | `EvaluatedNotEnforcing`, ev 1 | **`Inert`**, ev 0 |
+| Peak equity giveback | `EvaluatedNotEnforcing`, ev 1 | **`Inert`**, ev 0 |
+| Daily loss limit | `EvaluatedNotEnforcing` | `EvaluatedNotEnforcing` ← **scope pin holds** |
+
+Five things in it are reusable:
+
+⚠️ **`!= 0.0` and NOT `> 0`, and this is the fix, not a style choice.** An account whose
+equity has gone NEGATIVE is reporting a reading, and it is the account most likely to be in
+trouble; `> 0` switches the rule to INERT at the moment it matters most, which is a **worse**
+defect than the one being fixed. One character, and a test pins it.
+
+⚠️ **The scope was deliberately NOT widened to the realized-PnL rules**, and a green test
+pins that too. `RealizedPnL` is tracked by the GUARD, where zero is a legitimate reading for a
+flat account; `AccountEquity` is pushed by the BROKER, where 0.0 is what "never pushed" looks
+like. Reporting a funded flat account as INERT on its daily loss limit is `F-9` in the
+PESSIMISTIC direction, and an operator who learns to ignore INERT rows has lost the signal.
+
+⚠️ **The note is PREFIXED, not replaced.** The firm row's existing text is the only place
+that says whether the plan's numbers or the fallback block's are in force; trading one missing
+fact for another is not a fix. Live: *"…cannot fire; resolved to plan 'TPT-50K-PRO'; its
+TrailingDD numbers are in force"*.
+
+⚠️ **`CurrentValue` is `null`, not `0.0`, when there is no reading** — a rendered
+`cur=0.0` is a NUMBER and the operator reads it as a fact about the account, which is
+`CopierMetric.Measured`'s distinction at a second surface.
+
+⚠️ **The classification gate had to be TAUGHT about the new evidence kind, or it would
+have fired on the fix.** `TestUi3_AnEmptyCollectionCanNeverReportEnforcing` derives
+`labelled ⇔ evidence-varies`, probing only the CONFIG COLLECTIONS — so an honestly
+labelled equity rule read as *"has a label but never varies"*. The probe pair now also moves
+the account's equity while holding **presence** constant; probing null-vs-present instead would
+drag in ten rules whose evidence genuinely IS the account's existence. **A gate can be correct
+and still be aimed at the wrong variable.**
+
+**Built with the agent-loop, and the loop's own verdict was wrong in both directions.** Its
+round-1 patch was green on every gate (1936/0, all five acceptance tests) and it then ran to
+`NOT_CONVERGING` as the panel churned **3 → 2 → 3** findings with **zero overlap between
+consecutive rounds** — the loop correctly diagnosing a reviewer exposing new surface rather
+than closing a defect. Arbitrated by hand: **two of its changes were better than my prototype**
+(a `double.IsNaN` guard, and the `null` CurrentValue) and are kept; **two were regressions** —
+the 350-line region re-emission stripped `⚠️` from three unrelated comments to satisfy
+the ASCII gate, and it put account equity in the value column of peak-equity giveback, whose
+Limit is a **PERCENT**. ⚠️ **A region the size of a whole collection initializer is the
+cost of not being able to anchor two adjacent lines** — `Firm daily loss` carries a
+byte-identical `EvidenceLabel` string to the rule above it, so neither is uniquely anchorable.
+
+**Evidence**: acceptance tests written BY HAND FIRST and verified **RED at 1931/5**, green at
+1941/0; battery `mutate_p2116.py` **12/12 killed, 0 survivors**; live inventory above.
 
 ### P1-117. The config window mutates the LIVE config in place, so a typo in any of thirteen boxes leaves the guard half-reconfigured while the dialog says the save failed — ✅ CLOSED 2026-08-16 (session 48), commit `c0e6556`
 
@@ -4484,7 +4545,7 @@ compiles is not evidence. The window is held only by the source gates in
 
 ---
 
-### P2-123. The tab called *"Symbol & Per-Ticker Matrix"* contains no per-ticker matrix — it is a static poster that reads zero engine state, beside two dead fields — OPEN, found 2026-08-16 (session 49) while closing `P1-121`
+### P2-123. The tab called *"Symbol & Per-Ticker Matrix"* contains no per-ticker matrix — it is a static poster that reads zero engine state, beside two dead fields — ✅ CLOSED v1.33.0 (session 50)
 **Where**: `addons/TradeCopierWindow.cs:622` `CreateSymbolMatrixTab`, fields at `:186-187`
 
 Measured, four commands, no reading required:
@@ -4516,12 +4577,86 @@ futures asset classes"* — with no mention of the rounding the MCP schema warns
 translated to NQ rounds below one contract. The one place an operator goes to understand
 conversion is the one place that omits how it loses a trade.
 
-**Fix**: render the tab from `GetRelationships()` — the effective per-ticker ratio per
+✅ **CLOSED (session 50, v1.33.0).** The tab now renders from the same `GetRelationships()`
+the first tab shows, on the same 2-second timer, through `addons/CopierSymbolMatrixView.cs` —
+no WPF type, no `#if`, so the harness executes it and mutants can reach it. The six dead
+`TextBox` fields are **deleted, not wired**: their names scoped the tab to six instruments while
+`PerTickerRatios` is an arbitrary case-insensitive map, so wiring them would have built an editor
+that cannot express the config it edits. The static table survives, relabelled **REFERENCE**, with
+the rounding caveat it had always omitted.
+
+⚠️ **THE FIRST VERSION OF THIS FIX COMMITTED THE DEFECT IT WAS FIXING, and that is the
+thing to carry.** `SmallestLeaderFillThatCopies` used `ceil(1/ratio)` — obviously right, and
+wrong. The copy path sizes with `(int)Math.Round(...)`, and .NET rounds **midpoints TO EVEN**, so
+at x0.1 a 5-lot gives `Math.Round(0.5) == 0` and is DROPPED while a **6**-lot copies. The
+arithmetic said **10**; the engine says **6**. A tab telling the operator they need four more
+contracts than they do is *a surface stating behaviour the engine does not perform*, which is this
+entry's own title. It now **probes** with the engine's own rounding, `RoundToContracts` is
+extracted so the copy path and the tab share ONE rule, and a mutant restoring the ceiling is in
+the battery.
+
+⚠️ **`ComputeEffectiveRatio` is itself a SECOND implementation of the sizing arithmetic.**
+`CalculateFollowerQuantity` computes `absRatio * symbolMultiplier` itself, character for
+character. They agree today and nothing structural makes them agree tomorrow — so *"the tab
+derives from the enforcer"* is only true while those two do. A **conformance test** now compares
+them across 24 root/quantity combinations rather than hoping, which is the same move as pinning
+the NT8 stub enum against the real assembly.
+
+Three smaller decisions worth reusing: a **zero ratio is not rendered as a number** where the
+sizing mode ignores ratios (`RatioApplies` asks the MODE, never the value — `x0` would tell a
+correctly configured fixed-lot operator their copier multiplies by zero); **automatic conversion
+needs BOTH conditions**, the flag AND a non-matrix sizing mode, where the old poster claimed
+conversion happened *"across all futures asset classes"* full stop; and **an empty config SAYS
+so** and names the flat ratio in force, at severity `Info`, because *"nothing to show"* and
+*"nothing is wrong"* must not look the same.
+
+⚠️ **The tests were written AFTER the code and all passed on their first run** — the
+weakest evidence position in this repo. The battery is the only thing that says they have teeth:
+`mutate_p2123.py` **16/16 killed, 0 survivors**, including the mutant that restores the `ceil`
+arithmetic. ⚠️ **Its first run left a live mutant in the tree** — not the battery's
+fault: an orphaned `nohup` run was still going when a second was started, two batteries mutated
+the same files concurrently, and one wrote the other's mutant back as "original". Caught because
+a later anchor reported **0 matches**. ⚠️ **The VISUAL half is unvalidated**: nothing here
+proves the tab looks right. Opening Trade Copier Manager is what would.
+
+**Original fix note**: render the tab from `GetRelationships()` — the effective per-ticker ratio per
 relationship, folded out of the same rows the first tab shows — and either wire the two fields or
 delete them. Keep any static reference table clearly labelled as *reference*, separate from
 configured state. Deliberately **not** folded into `P1-121`: that ticket's evidence is 14 mutants
 over an extracted decision class, and bolting an unmeasured editable matrix onto the same commit
 would have put a feature with no tests behind a mutation score that says nothing about it.
+
+---
+
+### P3-124. The mini/micro symbol table exists in FOUR places inside `TradeCopierEngine.cs`, and two of them are the sizing arithmetic written twice — OPEN, found 2026-08-16 (session 50) while giving the copier window a per-ticker tab
+
+**Where**: `addons/TradeCopierEngine.cs` — the `TranslateSymbol` switch (`:1553-1565`), the
+multiplier test inside `ComputeEffectiveRatio` (`:1500-1506`), the same multiplier test AGAIN
+inside `CalculateFollowerQuantity` (`:1746-1757`), and the pairing test in the conflict detector
+(`:4559-4571`).
+
+Four copies of *"NQ/ES/YM/CL/GC/RTY are minis and MNQ/MES/MYM/MCL/MGC/M2K are their micros"*.
+Adding a seventh asset class means finding all four, and nothing fails if you find three.
+
+⚠️ **Two of the four are not a table, they are the SIZING ARITHMETIC.**
+`ComputeEffectiveRatio` and `CalculateFollowerQuantity` both compute
+`Math.Abs(ratio) * symbolMultiplier` from the same inputs, character for character.
+`ComputeEffectiveRatio` is what the snapshot **reports** and now what the window **displays**;
+`CalculateFollowerQuantity` is what the copier **sends**. **A reporter and an enforcer computing
+one number twice is `F-9`'s shape**, and it is the reason `P2-123` shipped a conformance test
+comparing them across 24 combinations instead of trusting the agreement.
+
+**Why `P3` and not higher.** They agree today — measured, not assumed. The conformance test makes
+a future divergence fail the build rather than reach a screen, so the remaining cost is
+maintenance, not exposure. **Do not close it by deleting the test**: the test is what holds the
+duplication safe, and merging the two functions is what would let it be retired.
+
+**Fix**: give the mini/micro relation ONE definition — a root-pair table with `IsMini`,
+`MicroOf`, `MiniOf` and `MultiplierFrom` — and have all four sites read it. Then fold
+`CalculateFollowerQuantity`'s sizing onto `ComputeEffectiveRatio` so the number the operator is
+shown is arithmetically the number that is sent, and retire the conformance test in the same
+commit that makes it vacuous. ⚠️ This touches the live copy path, so it wants its own battery and
+a sim round trip, which is why it was not folded into `P2-123`.
 
 ---
 
