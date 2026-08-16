@@ -79,15 +79,23 @@
 # after the clock-injection speedup (weights from before it are unusable -- batteries with
 # more mutants shrank more, so packing on them yields a plan that looks balanced and is not).
 #
-#   before (33 shards, run 31914385667)   13m25s wall, 10,044s of job time, 13 queued
-#   after  (20 packed bins)               ~10.6 min predicted, 9,021s of work + 20x31s setup
+#   before (33 shards, run 31914385667)   13m25s wall, 10,044s job time, 13 of 33 QUEUED
+#   after  (20 bins,   run 31922684732)   10m59s wall,  9,178s job time,  0 of 20 queued
 #
-# Two separate savings: the queue disappears, and per-job setup is paid 20 times instead of
-# 33 (~400s of compute). ⚠️ AND ~10.6 MIN IS A FLOOR, NOT A TARGET: UI4 alone is 508s of
-# work and no packing splits a battery, so the next real gain has to come from UI4 or from
-# the suite each mutant re-runs -- not from re-binning. Re-pack after any battery is added:
-# the tool refuses to run on guessed weights, and the run step prints BATTERY_SECONDS per
-# battery because `gh run view` can no longer see inside a bin.
+# MEASURED, not predicted -- the plan said ~10.6 min and the run came in at 10m59s. Every
+# bin started within 3-6s of `checks` finishing, where 13 used to wait up to 375s. Two
+# separate savings: the queue is gone, and per-job setup is paid 20 times instead of 33
+# (866s less job time). ⚠️ AND THIS IS A FLOOR, NOT A TARGET: the whole run is now one
+# battery long. UI4 measured 505s of work in a 551s bin -- checks 97s + UI4 551s is 10.8
+# of the 10.99 minutes, and no packing splits a battery. The next real gain has to come
+# from UI4 itself or from the suite each mutant re-runs, NOT from re-binning; re-running
+# the packer against a different bin count cannot move this number.
+#
+# Re-pack after any battery is added: the tool refuses to run on guessed weights, and the
+# run step prints BATTERY_SECONDS per battery because `gh run view` can no longer see
+# inside a bin. Verified present for all 33 in the run above -- without them the next
+# re-measure has no weights and the packer correctly refuses, so this is the line that
+# keeps packing from being a one-way door.
 name: CI
 
 on:
