@@ -4132,7 +4132,7 @@ the summary view, because it is the answer to the question the surface exists fo
 
 ---
 
-### P1-117. The config window mutates the LIVE config in place, so a typo in any of thirteen boxes leaves the guard half-reconfigured while the dialog says the save failed — OPEN, found 2026-08-16 (session 47) while scoping `P2-27`'s validator
+### P1-117. The config window mutates the LIVE config in place, so a typo in any of thirteen boxes leaves the guard half-reconfigured while the dialog says the save failed — ✅ CLOSED 2026-08-16 (session 48), commit `c0e6556`
 
 **Where**: `addons/RiskGuardWindow.cs`, `OnSaveConfigClick` (~`:377-424`)
 
@@ -4201,7 +4201,7 @@ source-gate-plus-small-harness. The session-47 ticket had it on the bridge side 
 
 ---
 
-### P2-119. `SaveAndReloadConfig` returns `void` and swallows its own exception, so a config write that FAILED is reported to the operator as *"saved and hot-reloaded successfully"* — OPEN, found 2026-08-16 (session 48) while looking for the one place to wire `P2-27`'s validator
+### P2-119. `SaveAndReloadConfig` returns `void` and swallows its own exception, so a config write that FAILED is reported to the operator as *"saved and hot-reloaded successfully"* — ✅ CLOSED in the core 2026-08-16 (session 48), commit `772ac9e`; ⚠️ the BRIDGE caller and `nt_compile` are still outstanding
 
 **Where**: `addons/RiskGuardAddOn.cs:43`, and its three callers.
 
@@ -4270,6 +4270,97 @@ one that reports it.
 
 ⚠️ **Evidence is obtainable with the market shut**: make `RiskGuard/config.json` read-only and
 press Save.
+
+#### CLOSING NOTES (session 48) — what the fix cost, and what it did not catch
+
+Built by the agent loop and then corrected by hand. The loop reached a green patch at round 4
+(build ok, 1833/0, all 20 acceptance tests green) and ran out of rounds on a REVISE.
+
+⚠️ **The most dangerous defect in the reviewed patch was invisible to every gate the loop has.**
+It nested `ConfigSaveResult` inside `GuardConfigEdit`. `RiskGuardWindow.cs` names the type
+unqualified, and the window is `#if !TESTING` — compiled to nothing by `dotnet build`, and only
+*syntax*-checked by `tools/check_window_parses.py`. So the C# build was green, 1833 tests passed,
+and the first report would have been **NinjaTrader refusing the whole Custom assembly**, which
+stops every addon loading, this guard included. A reviewer raised the nesting; the arbiter
+dismissed it because *"the type is only used internally by the patch"* — an assertion about a
+file the panel could not open. **The harness and NinjaTrader do not compile the same set of
+files, and only `nt_compile` knows the difference.**
+
+⚠️ **And the dismissal was written to the loop's settled-decision store**, where it would have
+biased every future run in this repo. Corrected by hand in
+`logs/agent_loop/settled_decisions.jsonl` (gitignored; original kept as
+`.bak_before_correction`). A review system with a memory can remember a wrong answer — check
+what it saved, not just what it said.
+
+**What the panel DID find, independently and correctly** (findings #8/#9): the patch backfilled
+a blank `Mode` and a missing `PnLRules` section from the config being *replaced*, validated
+that, and then serialised the incoming one. **Validating one object and persisting another is
+strictly worse than the defect being fixed** — it does not merely fail to report an outcome, it
+reports a success about the wrong config. Every value validated at the chokepoint is now read
+exactly as it will be written.
+
+**The mutation battery (`mutation/mutate_p2119.py`, 11 mutants across THREE files) is where the
+rest came from.** Four survived the first run and **all four were missing tests of mine**:
+
+* **a blank `Mode`** — and writing the test that kills the mutant found *the same hole in the
+  hand-written implementation*, one clause further along. `Refuse` accepts a blank mode because
+  for a PARTIAL body blank means "leave it alone"; this chokepoint writes a WHOLE config, where
+  blank is what gets persisted. The two callers need different answers to the same question.
+* **`shadow` → `SHADOW`** — every mode pair in the acceptance tests differed under *both* an
+  ordinal and a case-insensitive comparison, so nothing could tell a relaxed changed-check from
+  a correct one. The discriminator did not exist until the battery demanded it.
+* the first write on a box with no config; and a null config, serialised as the literal `null`.
+
+One mutant is declared `EXPECTED SURVIVOR:` and is unkillable by construction — the reloaded
+config is a JSON round trip of the caller's, so no input separates them.
+
+⚠️ **`check_anchors.py` refused a placeholder 4-tuple of `None`s on its first opportunity**
+("could not read it statically"), which is session 47's hardening working as designed.
+
+**State**: suite **1846/0**, battery **10 killed + 1 expected**, gates **10/10**.
+⚠️ **REMAINING**: the bridge's POST route still returns `success = true` regardless — it needs
+the core tagged and its pin advanced — and **`nt_compile` has not run**, which given the nesting
+defect is the gate that matters most here.
+
+---
+
+### P2-120. The bridge's `POST /api/riskguard/config` still answers `success = true` whatever the save did — the SECOND reader of an outcome the core now reports — OPEN, filed 2026-08-16 (session 48) when `P2-119` closed in the core
+
+**Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs`, in `RiskGuardConfig(body)`:
+
+```csharp
+RiskGuardAddOn.Instance.SaveAndReloadConfig(cfg);
+return new { success = true, status = "applied", config = ..., requested = req, ... };
+```
+
+**Why it is its own ID rather than a remainder of `P2-119`.** `P2-119` is CLOSED: the core now
+returns a `ConfigSaveResult` and refuses what a write introduces. This is the other side of a
+repo boundary — the bridge pins the core **by tag**, so it cannot even see the new return type
+until the tag is cut and the pin advanced. Work that remains inside a closed entry is invisible
+to every count, which is what `tools/check_next_list_ids.py` refused a draft of this handover for.
+
+**What it costs today.** The route discards the result, so a refusal and a failed write are both
+reported as `"applied"`. It is strictly better than before only in that the core now REFUSES
+rather than writing a bad value — the caller is told the opposite of what happened, and
+`config` (which echoes the live config) will quietly disagree with `success`. **An API that
+reports the negation of its own outcome is worse than one that reports nothing**, because a
+script acting on it proceeds.
+
+**Fix**:
+1. Tag the core and advance the submodule pin.
+2. `var r = RiskGuardAddOn.Instance.SaveAndReloadConfig(cfg);` then `success = r.Saved`, with
+   `refusal`/`error`/`warning` surfaced as their own fields. Keep echoing the resulting live
+   config — that is `P2-41`'s fix and it stays.
+3. Re-add the three ROUTE assertions to `nt8-mcp-bridge/tests/BridgeSourceTests.cs`. They were
+   removed in session 48 because they pinned a class that moved to the core; the gap is recorded
+   there in a 25-line note and this is the commit that closes it.
+4. **`deploy.py` and `nt_compile`.** Not optional here: the reviewed core patch nested
+   `ConfigSaveResult`, which builds green in both harnesses and fails NinjaTrader's compile,
+   and `nt_compile` is the only gate that knows the difference.
+
+⚠️ **Evidence is obtainable with the market shut** — make `RiskGuard/config.json` read-only and
+POST a valid change; the reply must say `success = false`. The positive control matters as much:
+a normal POST must still say `true`.
 
 ---
 

@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.73's — read that one; it carries the reasons.** 🆕 **`P2-119`** (§5.73) — `SaveAndReloadConfig` returns `void` and swallows its own exception, so a write that FAILED is reported as *"saved and hot-reloaded successfully"*; it is also the one choke point **all THREE writers** share (the form save, the **account-exclusion toggle** nobody had counted, and the bridge route), so giving it a return value and calling `GuardConfigEdit.Refuse` there closes `P2-27`'s wiring and `P1-117` in one edit. ✅ **`P2-27`'s validator itself LANDED in session 48** — `GuardConfigEdit`, 11 mutants / 0 survivors, CI-wired — but ⚠️ **nothing calls it yet** — dead safety machinery, which is why the wiring outranks everything below. 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
+| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.74's — read that one; it carries the reasons.** 🆕 **`P2-120`** (§5.74) — the bridge's `POST /api/riskguard/config` still answers `success = true` whatever the save did. The core half (`P2-119`) is CLOSED and now returns a `ConfigSaveResult`; the bridge pins the core BY TAG, so this needs the tag cut and the pin advanced, and it carries **`deploy.py` + `nt_compile`** with it. ⚠️ `nt_compile` is not a formality here: the reviewed patch nested `ConfigSaveResult`, which builds green in BOTH harnesses and fails NinjaTrader's compile, stopping every addon loading. ✅ **`P2-119` and `P1-117` both CLOSED in session 48** — the config save reports what it did and refuses what a write INTRODUCES, and the window no longer edits the live config in place; suite 1846/0, battery 10 killed + 1 declared unreachable. 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3348,8 +3348,8 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-119` — a config write that FAILED reports success, and it is the one choke point all THREE writers share, so wiring `P2-27`'s validator there closes `P1-117` too
-> ### (order of work lives in §5.73's `Order from here`: `P2-119` (the wiring, because `P2-27`'s validator is called by nothing until it lands), then `P2-116`, then `P2-29`'s remainder, then `P3-118` / `P3-110` / `P3-33`)
+> ### Do next: `P2-120` — the bridge route still reports `success = true` whatever the save did, and it carries the tag, the pin, and the `nt_compile` that is the only gate for the class of defect the core patch nearly shipped
+> ### (order of work lives in §5.74's `Order from here`: the bridge's config-save reader (which carries the tag, the pin and `nt_compile`), then `P2-116`, then `P2-29`'s remainder, then `P3-118` / `P3-110` / `P3-33`)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
@@ -10130,12 +10130,12 @@ copies of the same call in the window and the route.
 
 ### Order from here
 
-1. **`P2-119`** — give `SaveAndReloadConfig` a return value, call `GuardConfigEdit.Refuse` before
-   it writes, and have all three callers report what it actually answered. ⚠️ **Taken first because
-   `P2-27`'s class is called by NOTHING until it lands** — dead safety machinery, recorded rather
-   than hidden, and the gate for it (`check_no_dead_safety_machinery.py`) is scoped to periodic and
-   preflight entry-point NAMES, so `Refuse` passes it vacuously. It also carries `P1-117`'s fix,
-   since the window's parse-into-locals is the same edit.
+⚠️ **SUPERSEDED BY §5.74's list — read that one.** Item 1 below is DONE (both halves), and is left
+in place only for the note under it, which is about this gate rather than about the work.
+
+1. ✅ **DONE in session 48** — the config-save chokepoint now returns an outcome and refuses what a
+   write introduces, and the window no longer edits the live config in place. The remaining bridge
+   caller is a NEW entry in §5.74, not a remainder of this one.
    ⚠️ This line first cited the closed entry that named that class BY ID, and
    `check_next_list_ids.py` **refused it twice** — once for the citation and once for the note
    explaining the citation. An ordering block naming a closed ID is the one thing that gate
@@ -10156,6 +10156,142 @@ recurring-condition suppression and its STALE-guard heartbeat, the stop-move hal
 **admit** half. **The relay must be running before that reopen**, or the first three cannot be
 observed at all.
 
-⚠️ **Not tagged.** `GuardConfigEdit.cs` is a new addon file and the bridge pins this repo by tag,
-but nothing calls the class, so there is no behaviour to ship. Tag when `P2-119` wires it — and
-`nt_compile` then, because that is the only thing on the box that compiles the bridge's half.
+⚠️ **Not tagged AT THE TIME OF THIS SECTION.** `GuardConfigEdit.cs` was a new addon file that
+nothing called, so there was no behaviour to ship. The wiring landed later the same session — see
+§5.74, where the tag, the pin and `nt_compile` all move together.
+
+---
+
+## 5.74 Session 48 (continued) — the wiring landed, CI stopped being slow for a reason I had already written down, and F-6 was inert on the day it mattered
+
+**Order from here** (this supersedes §5.73's list):
+
+1. **`P2-120`** — the bridge's POST route still answers `success = true` whatever the save did.
+   Tag the core, advance the pin, return `result.Saved`, surface the refusal, and re-add the
+   three ROUTE assertions to `nt8-mcp-bridge/tests/BridgeSourceTests.cs`. Then **`deploy.py` and
+   `nt_compile`**, which for this change is not a formality (see the nesting defect below).
+
+   ⚠️ **It is a NEW ID and not "the rest of `P2-119`", because `check_next_list_ids.py` refused
+   the first draft of this very section for listing a CLOSED entry as work to do.** The core half
+   is genuinely finished; the bridge is across a repo boundary that pins the core by tag and
+   cannot see the new return type until that tag exists. *A remainder hiding under a closed entry
+   is invisible to every count* — and the gate enforced that against me while I was writing the
+   paragraph claiming to have learned it.
+2. **Re-pack CI from measured weights** once run `31932265493` has published
+   `BATTERY_SECONDS mutate_p2119.py`. Its current bin placement is PROVISIONAL and expected to be
+   the critical path for exactly one run.
+3. `P2-116`, `P2-29`'s remainder, `P3-118`, `P3-110`, `P3-33`.
+
+### The CI regression was mine, twice, in opposite directions
+
+`mutate_p227.py` was hand-packed into the CM3 bin on the guess *"≤180s lands free"*. It measured
+**271s**, that bin ran **636s**, and it became the critical path alone: **726s**. Splitting it
+into a 21st bin measured **worse — 853s**. Re-packing all 34 on measured weights into **19 bins**:
+**657s**, every bin starting within 4 seconds, nothing queued.
+
+⚠️ **The 21st bin is not why the split was slow, and the reason was ALREADY IN `ci.yml`.** The
+concurrency limit is **20 jobs account-wide, shared across every repo** — written down correctly
+in that file since session 45, sixty lines above the matrix. I read the matrix and counted this
+workflow's jobs. Measured on run `31929912836`, and the timestamps are a causal chain:
+
+```
+05:51:00  19 bins start; 2 do not
+05:56:01  the BRIDGE's only job ends
+05:56:02  P2-107 starts        <- 1s after a slot in ANOTHER REPO freed
+05:56:13  the P2-27 bin ends
+05:56:14  P1-85+P1-83 starts   <- 314s late, and the critical path at 446s
+```
+
+**Where a number is ENFORCED is not where it is DOCUMENTED.** `MAX_BINS = 19` now lives in
+`check_ci_runs_every_battery.py` and `pack_ci_matrix.py` IMPORTS it, so the packer cannot
+`--apply` a plan its own CI gate would reject. 19 costs nothing: UI4 is 493s of work and the
+ideal bin at 19 is 451s, so **UI4 is the floor at 17, 18, 19 AND 20 bins** — all four predict the
+same ~10.3 min. Between plans that tie, take the one that does not depend on another repository.
+
+⚠️ **The reasoning error is worth more than the number.** The split was argued from *"which
+existing bin has room for 271s?"* — but the bins are an **output** of the packer, not an input. A
+full re-pack puts `P2-27` with `P0-63` at 447s, comfortably under the floor. Nothing was ever too
+big; the arrangement was stale.
+
+⚠️ **My first placement of the new bin-count gate was unreachable** — after the per-battery
+verdicts, where "no matrix entries" already makes every battery read as missing and returns
+first. A branch with no input that reaches it is the *green that can never be red* this repo has
+shipped before. Moved to directly after the `CONSUMES` check and driven failing in both
+directions.
+
+### `check_window_parses.py` was checking one file out of fourteen
+
+`TARGETS = ['TradeCopierWindow.cs']`, with a comment asking the next person to extend it. `P2-29`
+split the dashboard into `RiskGuardWindow.cs` and nobody did. So it printed
+`OK: TradeCopierWindow.cs parse(s) as valid C#` — **true, and read as a verdict on a file it had
+never opened** — and it had been blind to that window for as long as the window had existed.
+
+**Fourth hand-typed inventory in this project to drift**, after `BridgeTests.csproj`,
+`check_bridge_parses.py` and `sync_nt8_strategies.py`. All four carried a comment telling the next
+person to maintain them; the comment is what failed. It now globs `addons/*.cs` — **1 → 14** — and
+prints the count and the names, so the region it inspected is in its own output. Its subprocess
+capture also had the cp1252 hazard, which here **fails OPEN**: a killed reader thread yields no
+`CS1xxx` lines, which scores as a pass.
+
+### `P1-117` and `P2-119` — and the review that could not see the file that mattered
+
+Fixed together, because they are one mechanism: the chokepoint decides whether a write
+*introduces* a bad value by comparing incoming against live, and the window was handing it **the
+live object it had just mutated field by field** — every value equal to itself, every change
+permitted, and the validator's own tests all green. The bridge never had it, because
+`RiskConfigMerge.Apply` returns a new object. **One writer being correct is not evidence about
+the others.**
+
+⚠️ **The agent-loop patch nested `ConfigSaveResult` inside `GuardConfigEdit`, which would have
+broken NinjaTrader.** `RiskGuardWindow.cs` names it unqualified; the window is `#if !TESTING`, so
+`dotnet build` compiles it away and the parse gate only checks syntax. Green build, 1833 passing
+tests, and the first report would have been NT8 refusing the **whole Custom assembly**. A reviewer
+raised it and the arbiter dismissed it because *"the type is only used internally by the patch"* —
+a claim about a file the panel could not open. ⚠️ **And that dismissal was saved to the loop's
+settled-decision store**, where it would have biased every future run here; corrected by hand. **A
+review system with a memory can remember a wrong answer — check what it SAVED, not just what it
+said.**
+
+The panel did independently find the sharpest real defect: the patch **backfilled** a blank `Mode`
+and a missing `PnLRules` from the config being replaced, validated that, and serialised the
+incoming one. **Validating one object and persisting another is worse than the defect being
+fixed** — it reports a success about the wrong config.
+
+⚠️ **Four mutants survived the first battery run and all four were missing tests of MINE.** The
+blank-`Mode` one is the instructive one: writing the test that kills the mutant exposed **the same
+hole in my own implementation**, one clause further along. `Refuse` accepts a blank mode because
+for a partial body blank means *leave it alone*; the chokepoint writes a whole config, where blank
+is what gets persisted. **The same question needs different answers at the two callers**, and only
+the battery asked. The `shadow` → `SHADOW` mutant is the other: every mode pair in the acceptance
+tests differed under *both* comparisons, so nothing could tell a relaxed changed-check from a
+correct one.
+
+Suite **1846/0**, battery **10 killed + 1 declared unreachable**, gates **10/10**, anchors 367/0.
+
+### `F-6` was inert on the day the notes said it had to be running
+
+Checked because the deadline was today, and found: task **`State=Ready`, `LastTaskResult=255`**, no
+relay process. It had died at **16:28 the previous afternoon** and stayed dead for seven hours.
+
+**Cause: `RestartCount 3` was the only recovery, and it is a BUDGET, not a policy.** Three attempts
+a minute apart, then Task Scheduler gives up — permanently, until the next **logon**. On a box that
+stays logged in for days, "until the next logon" is "never". The comment above those settings
+called them *"the OUTER supervisor"*, which is what they look like and not what they are.
+
+⚠️ **And there was NOT ONE LINE anywhere saying why.** Under Task Scheduler there is no console, so
+everything the launcher printed — including the relay's stderr and the exit code — went nowhere.
+`F-6` made the SILENCE detectable and left the CAUSE unrecorded. Both halves are needed: the
+heartbeat tells you the channel is dead, and by the time you look the window is gone.
+
+Fixed: a 15-minute repeating trigger (safe only because `MultipleInstances` is `IgnoreNew` —
+**verified after registering, not assumed**), and a log file. ⚠️ `-RepetitionDuration
+([TimeSpan]::MaxValue)` is the obvious way to say *indefinitely* and Task Scheduler **refuses the
+whole registration** as out of range; omitting it is correct, so the script now **reads the task
+back** and prints what each trigger actually holds. ⚠️ Redirecting only stdout would have produced
+an **empty log** — the relay logs through `logging`, which writes to stderr — and an empty log
+reads as a quiet, healthy relay.
+
+**State**: relay running (pid 30340), log written, heartbeat delivered, cursor level with the
+outbox at 7848 bytes / 18 alerts. ⚠️ **The 255 itself is still unexplained** — this makes the next
+one diagnosable, it does not explain the last one. Read 15 minutes as the **worst-case dead
+window**; the outbox is a file and the relay resumes from its cursor, so alerts are late, not lost.
