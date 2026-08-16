@@ -7982,6 +7982,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P1-130: and the count STOPS at the cap rather than growing without bound -- the "
                 + "bracket is abandoned and says so once (got " + bracket.StopModifyAttempts
                 + ", cap " + DynamicAtmManager.MaxStopModifyAttempts + ")");
+
+            // ⚠️ THE ORDER THAT IS NOT THERE AT ALL, and this assertion exists because a fix
+            // slipped through without it. The first implementation counted only the "present in
+            // account.Orders but no longer live" case, reasoning that a transient absence should
+            // not abandon a healthy bracket. An order that is genuinely gone -- replaced, purged,
+            // never registered -- is absent on EVERY sweep, so the budget is never spent and the
+            // 5-second retry runs forever: the exact defect this ticket was filed for, restored by
+            // a narrower condition. The test that would have caught it did not exist, so here it is.
+            Instrument inst2; Order stop2; DynamicAtmManager atm2;
+            var acct2 = AtmSetup(out inst2, out stop2, out atm2);
+            var bracket2 = AtmBracketFor(acct2, inst2, stop2, 20000.00, 19990.00);
+            atm2.AddBracketForTest(bracket2);
+
+            acct2.Orders.Clear();               // the stop is not on the account at all
+            atm2.MonitorTickForTest();
+
+            Assert(bracket2.StopModifyAttempts >= 1,
+                "P1-130: a stop order ABSENT from account.Orders also spends the retry budget (got "
+                + bracket2.StopModifyAttempts + "). Counting only the present-but-terminal case "
+                + "leaves the unbounded retry exactly where it was.");
         }
 
         /// <summary>

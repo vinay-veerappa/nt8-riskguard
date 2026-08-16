@@ -739,7 +739,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Order order in account.Orders)
                 {
-                    if (order.OrderId == orderId && order.OrderState == OrderState.Working)
+                    if (order.OrderId == orderId && RiskGuardAddOn.OccupiesSlot(order.OrderState))
                     {
                         order.StopPrice = newStopPrice;
                         account.Change(new[] { order });
@@ -747,9 +747,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
-                RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
-                    $"no WORKING stop order with id '{orderId}' on '{account.Name}', so the move to "
-                    + $"{newStopPrice} was not requested. The position may be unprotected.");
+                // P1-130. The two ways this fails are NOT the same news, and the old message
+                // asserted the more alarming one for both: "the position may be unprotected" was
+                // printed 55 times against a stop that was resting perfectly and had merely not
+                // been ADVANCED. A risk surface that cries naked at a protected position trains
+                // the operator to discount the line that will one day be true.
+                Order present = null;
+                foreach (Order o in account.Orders)
+                {
+                    if (o.OrderId == orderId) { present = o; break; }
+                }
+
+                if (present == null)
+                {
+                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
+                        $"no order with id '{orderId}' is on '{account.Name}' at all, so the move to "
+                        + $"{newStopPrice} was not requested. The bracket's stop cannot be located; "
+                        + "check the account for an unmanaged position.");
+                }
+                else
+                {
+                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
+                        $"the stop order '{orderId}' on '{account.Name}' is {present.OrderState} and no "
+                        + $"longer live, so the move to {newStopPrice} was not requested."
+                        + (RiskGuardAddOn.IsTerminal(present.OrderState)
+                            ? " It is terminal, so THE POSITION MAY BE UNPROTECTED."
+                            : " It is on its way out; the stop was not moved."));
+                }
                 return false;
             }
             catch (Exception ex)
@@ -794,7 +818,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return false;
             }
 
-            if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice)) return false;
+            // P1-130. EVERY failed request spends the budget, including the one where the order is
+            // not in `account.Orders` at all.
+            //
+            // ⚠️ The first draft of this fix counted ONLY the "present but no longer live" case, on
+            // the reasoning that a transient absence should not abandon a healthy bracket. That
+            // reasoning is plausible and it reinstates the defect this ticket was filed for: an
+            // order that is genuinely gone -- replaced, purged, never registered -- is absent on
+            // EVERY sweep, so the budget is never spent, `MaxStopModifyAttempts` is never reached,
+            // and the 5-second retry runs for the life of the position. That is the 55 log lines
+            // measured on the live box, restored by a narrower condition.
+            //
+            // The cost of counting it is bounded and visible: three sweeps, fifteen seconds, and
+            // then ATM_STOP_MOVE_ABANDONED says so once and names the price the stop is left at. A
+            // bound that is occasionally early is a bound; one that cannot be reached is not.
+            if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice))
+            {
+                bracket.StopModifyAttempts++;
+                return false;
+            }
 
             bracket.RequestedStopPrice = newStopPrice;
             RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_REQUESTED",
