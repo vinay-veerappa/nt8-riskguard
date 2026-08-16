@@ -719,6 +719,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2119_AnUnchangedNaNIsNotTreatedAsAChange();
             TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig();
             TestP2119_IntroducingAnUnknownModeIsRefused();
+            TestP2119_AConfigWithNoPnLRulesIsNotBackfilledFromTheOldOne();
+            TestP2119_ABlankModeIsNotBackfilledFromTheOldOne();
+            TestP2119_TheFirstConfigOnAFreshBoxIsValidatedStrictly();
+            TestP2119_ANullConfigIsRefused();
+            TestP2119_AWarningIsAbsentOnAHealthySave();
             TestP1117_DeepCopyIsIndependentOfItsSource();
             TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace();
 
@@ -11036,6 +11041,168 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P2-119: changing mode to the COPIER's 'disabled' is refused");
             Assert(Accepted(CallRefuseChange("Live", "Live", 1500.0, 1500.0, 5, 5)),
                 "P2-119: but an already-broken mode, unchanged, does not trap the operator either");
+            // Found by writing the mutation battery, not by review: every case above differs
+            // from its old value under an ORDINAL comparison AND under a case-insensitive one,
+            // so a mutant that relaxes the changed-check to OrdinalIgnoreCase survived all of
+            // them. `shadow` -> `SHADOW` is the only pair that tells the two apart.
+            Assert(Refused(CallRefuseChange("shadow", "SHADOW", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing 'shadow' to 'SHADOW' IS a change and is refused. If the "
+                + "changed-check ignores case, this writes a mode preflight refuses to arm on.");
+        }
+
+        /// <summary>
+        /// A missing PnLRules section IS the removal of the trailing drawdown rule. The first
+        /// implementation backfilled it from the config being REPLACED, so the save passed
+        /// preflight on a value the incoming config did not contain and was then serialised as
+        /// is -- validating one object and persisting another, which is worse than the defect
+        /// being fixed: it does not merely fail to report, it reports a success about the wrong
+        /// config.
+        /// </summary>
+        private static void TestP2119_AConfigWithNoPnLRulesIsNotBackfilledFromTheOldOne()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a missing PnLRules section is not backfilled from the live config");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_null_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                var edited = CopyOf(addon.Config);
+                edited.PnLRules = null;          // "remove the trailing drawdown rule"
+
+                object result = CallSaveAndReload(addon, edited);
+
+                Assert(ResultFlag(result, "Saved") == false,
+                    "P2-119: removing the whole PnLRules section is REFUSED, not silently "
+                    + "validated against the limit it is removing");
+                Assert(!File.Exists(Path.Combine(dir, "config.json")),
+                    "P2-119: ...and nothing was written");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>
+        /// Found by the mutation battery, not by review: mutant 6 restored the agent-loop
+        /// patch's own `newMode = blank ? oldMode : newMode` and SURVIVED 1838 green tests.
+        /// Nothing here asked what happens to a config whose Mode is blank, and the answer was
+        /// that it validated against the live mode and then serialised the blank one.
+        /// </summary>
+        private static void TestP2119_ABlankModeIsNotBackfilledFromTheOldOne()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a blank Mode is not backfilled from the live config");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_blank_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                var edited = CopyOf(addon.Config);
+                edited.Mode = "";
+
+                object result = CallSaveAndReload(addon, edited);
+
+                Assert(ResultFlag(result, "Saved") == false,
+                    "P2-119: a config whose Mode is BLANK is refused. Substituting the live mode "
+                    + "for validation and then writing the blank one validates one object and "
+                    + "persists another -- and reports success about the first.");
+                Assert(!File.Exists(Path.Combine(dir, "config.json")),
+                    "P2-119: ...and nothing was written");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>
+        /// The FIRST write on a box with no config yet. Nothing is "pre-existing" then, so the
+        /// not-trapped rule has nothing to protect and every field must be validated strictly --
+        /// otherwise the one config that establishes the baseline is the one nothing checks.
+        /// Mutant 9 swapped this for an unconditional accept and survived.
+        /// </summary>
+        private static void TestP2119_TheFirstConfigOnAFreshBoxIsValidatedStrictly()
+        {
+            Console.WriteLine("\n[TEST] P2-119: with no existing config, the first write is validated strictly");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_first_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = new RiskGuardAddOn();
+                addon.SetConfigFileForTest(Path.Combine(dir, "config.json"));
+                // Set EXPLICITLY to null. A fresh RiskGuardAddOn initialises `_config = new
+                // RiskConfig()`, so the no-old-config branch is not reachable by simply omitting
+                // the setup -- which is worth knowing rather than asserting around: on a real
+                // box the "first write" always has a defaults object to compare against, and
+                // those defaults are healthy (Mode "shadow", TrailingDrawdown 1500). The branch
+                // below is therefore defensive. It is tested rather than deleted because a null
+                // here would otherwise NullReference inside the chokepoint, and it is reached
+                // deliberately so it cannot become the dead safety machinery this repo has a CI
+                // gate against.
+                addon.SetConfigForTest(null);
+                Assert(addon.Config == null,
+                    "Precondition: there is no live config, which is what makes this the first write");
+
+                var fresh = new RiskConfig();
+                fresh.Mode = "shadow";
+                fresh.MinShadowSessions = 5;
+                fresh.PnLRules.TrailingDrawdown = 0.0;     // no limit at all
+
+                object result = CallSaveAndReload(addon, fresh);
+                Assert(ResultFlag(result, "Saved") == false,
+                    "P2-119: the first config written to a fresh box is REFUSED if it is bad. "
+                    + "With no old value to compare against there is no pre-existing condition "
+                    + "to protect, so 'only refuse what this write introduces' means refuse it.");
+
+                var good = new RiskConfig();
+                good.Mode = "shadow";
+                good.MinShadowSessions = 5;
+                good.PnLRules.TrailingDrawdown = 1500.0;
+                Assert(ResultFlag(CallSaveAndReload(addon, good), "Saved") == true,
+                    "P2-119: ...and a GOOD first config is accepted (the positive control -- "
+                    + "refusing every first write would satisfy the assertion above)");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>Mutant 12: a null config was serialised as the literal `null`.</summary>
+        private static void TestP2119_ANullConfigIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a null config is refused rather than serialised");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_nullcfg_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                object result = CallSaveAndReload(addon, null);
+                Assert(ResultFlag(result, "Saved") == false,
+                    "P2-119: a null config is REFUSED");
+                Assert(!string.IsNullOrEmpty(ResultText(result, "Refusal")),
+                    "P2-119: ...with a refusal, not an error -- nothing was attempted");
+                Assert(!File.Exists(Path.Combine(dir, "config.json")),
+                    "P2-119: ...and the literal `null` was not written to config.json");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>
+        /// The warning must describe the config the guard is NOW RUNNING, which is whatever came
+        /// back off disk -- not the object the caller handed in. They differ whenever the reload
+        /// normalises anything, and the operator acts on the running state.
+        /// </summary>
+        private static void TestP2119_AWarningIsAbsentOnAHealthySave()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a healthy save carries no warning");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_warn_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                var edited = CopyOf(addon.Config);
+                edited.PnLRules.TrailingDrawdown = 2500.0;
+                object result = CallSaveAndReload(addon, edited);
+                Assert(ResultFlag(result, "Saved") == true,
+                    "Precondition: the save succeeded");
+                Assert(result != null && ResultText(result, "Warning") == null,
+                    "P2-119: a config with nothing wrong with it produces NO warning. A warning "
+                    + "that is always present is one nobody reads -- `an alarm that is always on "
+                    + "is off`, which this repo has now shipped seven times.");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
         /// <summary>

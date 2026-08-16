@@ -657,6 +657,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             mergedJson = Merge(live, patch);
             return mergedJson.ToObject<RiskConfig>();
         }
+
+        public static RiskConfig DeepCopy(RiskConfig source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            return Apply(source, null, out _);
+        }
     }
 
     public class PersistedStateData

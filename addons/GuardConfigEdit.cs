@@ -32,20 +32,48 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return modeProblem;
             }
 
+            string trailingProblem = RefuseTrailingDrawdown(trailingDrawdown);
+            if (trailingProblem != null)
+            {
+                return trailingProblem;
+            }
+
+            return RefuseMinShadowSessions(minShadowSessions);
+        }
+
+        /// <summary>
+        /// ⚠️ EXTRACTED SO THAT RefuseChange DOES NOT HAVE TO LIE TO Refuse. The first
+        /// implementation validated one field at a time by calling
+        /// `Refuse("shadow", newTrailingDrawdown, 1)` -- passing invented values for the fields
+        /// it was not asking about, so that Refuse's other clauses would stay quiet.
+        ///
+        /// That is correct only for as long as Refuse's clauses stay INDEPENDENT. The moment one
+        /// of them relates two fields (a live mode requiring a nonzero drawdown, say), the
+        /// placeholders become assertions about a config that does not exist, and the wrong
+        /// answer arrives silently with every test still green. Per-field questions get
+        /// per-field methods; Refuse composes them in the same order it always did, so there is
+        /// still exactly ONE definition of each rule.
+        /// </summary>
+        private static string RefuseTrailingDrawdown(double trailingDrawdown)
+        {
             // `!(x > 0)` rather than `x <= 0` deliberately: it refuses NaN too, and NaN is what a
-            // caller gets from a text box that parsed to nothing. `NaN <= 0` is FALSE, so the
-            // obvious form accepts it and writes a limit no comparison can ever satisfy.
+            // caller gets from a text box that parsed to nothing, or from a config whose
+            // PnLRules section is missing entirely. `NaN <= 0` is FALSE, so the obvious form
+            // accepts it and writes a limit no comparison can ever satisfy.
             if (!(trailingDrawdown > 0.0))
             {
                 return "Trailing drawdown must be greater than zero. Zero is not a tight limit, "
                      + "it is no limit -- the guard reports the rule as off.";
             }
+            return null;
+        }
 
+        private static string RefuseMinShadowSessions(int minShadowSessions)
+        {
             if (minShadowSessions < 0)
             {
                 return "Minimum shadow sessions cannot be negative. Use 0 to require none.";
             }
-
             return null;
         }
 
@@ -103,5 +131,89 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             return "Mode '" + mode + "' is not a guard mode. Valid: 'shadow', 'live'.";
         }
+
+        /// <summary>
+        /// Refuse only what THIS WRITE INTRODUCES. A value that is already unacceptable and is
+        /// being left alone is permitted through, because one of the writers behind this
+        /// chokepoint is the account-exclusion toggle -- the control that puts an account BACK
+        /// under the guard. Refusing there would remove the remedy for the very condition being
+        /// refused over, which is `P1-106` at a second site.
+        ///
+        /// ⚠️ THE OLD VALUES MUST COME FROM A DIFFERENT OBJECT THAN THE NEW ONES. If a caller
+        /// mutates the live config in place and passes it as `newConfig`, every field here
+        /// equals itself, nothing is ever "changed", and this method permits everything while
+        /// its own tests pass. That was `P1-117`, and it is why the window now edits a copy.
+        /// </summary>
+        public static string RefuseChange(
+            string oldMode, string newMode,
+            double oldTrailingDrawdown, double newTrailingDrawdown,
+            int oldMinShadowSessions, int newMinShadowSessions)
+        {
+            // Ordinal, matching RunPreflight. See RefuseMode.
+            if (!string.Equals(oldMode, newMode, StringComparison.Ordinal))
+            {
+                // ⚠️ A BLANK MODE MEANS SOMETHING DIFFERENT HERE THAN IT DOES IN Refuse, and
+                // that asymmetry is the point. Refuse validates a PARTIAL body, where an omitted
+                // field means "do not change it" -- so blank is accepted there, and
+                // TestP227_AnOmittedModeIsAccepted pins it. RefuseChange guards a write of the
+                // WHOLE config: nothing is omitted, and a blank mode is the value that gets
+                // serialised. Deferring to RefuseMode here would accept it and persist a config
+                // the guard cannot arm on.
+                //
+                // Found by the mutation battery. Mutant 6 restored the blank-fill and survived
+                // 1838 green tests; writing the test that kills it showed the same hole in the
+                // hand-written implementation, one clause further along.
+                if (string.IsNullOrWhiteSpace(newMode))
+                {
+                    return "Mode is blank, and this write replaces the whole configuration -- "
+                         + "blank is what would be saved. Use 'shadow' or 'live'.";
+                }
+
+                string refusal = RefuseMode(newMode);
+                if (refusal != null) return refusal;
+            }
+
+            // ⚠️ .Equals, NOT `!=`. `NaN != NaN` is TRUE in C#, so `!=` reports an UNCHANGED NaN
+            // as a change and refuses a save the operator needs in order to repair it -- the
+            // trap this whole method exists to avoid, reintroduced by the obvious operator.
+            if (!newTrailingDrawdown.Equals(oldTrailingDrawdown))
+            {
+                string refusal = RefuseTrailingDrawdown(newTrailingDrawdown);
+                if (refusal != null) return refusal;
+            }
+
+            if (oldMinShadowSessions != newMinShadowSessions)
+            {
+                string refusal = RefuseMinShadowSessions(newMinShadowSessions);
+                if (refusal != null) return refusal;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// What a config save actually did. `SaveAndReloadConfig` returned void and swallowed its
+    /// own exception, so all three writers announced a success nobody had observed (`P2-119`).
+    ///
+    /// ⚠️ TOP-LEVEL, NOT NESTED INSIDE GuardConfigEdit, and that is not a style preference.
+    /// The agent-loop patch that introduced this type nested it, the C# build stayed green, and
+    /// `RiskGuardWindow.cs` -- which names `ConfigSaveResult` unqualified -- WOULD NOT HAVE
+    /// COMPILED IN NINJATRADER. The window is `#if !TESTING`, so `dotnet build` compiles it to
+    /// nothing and the parse gate only checks syntax; the first report would have been NT8
+    /// refusing the whole Custom assembly, which stops EVERY addon loading, this guard
+    /// included. The review panel considered the nesting and dismissed it on the grounds that
+    /// "the type is only used internally by the patch" -- a claim about a file it could not see.
+    /// </summary>
+    public class ConfigSaveResult
+    {
+        /// <summary>True only if the file was written AND reloaded without throwing.</summary>
+        public bool Saved { get; set; }
+        /// <summary>Non-null: refused BEFORE writing. Nothing was persisted.</summary>
+        public string Refusal { get; set; }
+        /// <summary>Non-null: the write or the reload threw. Nothing reliable was persisted.</summary>
+        public string Error { get; set; }
+        /// <summary>Saved, but the resulting config still holds a pre-existing bad value.</summary>
+        public string Warning { get; set; }
     }
 }

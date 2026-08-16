@@ -40,22 +40,96 @@ namespace NinjaTrader.NinjaScript.AddOns
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
-        public void SaveAndReloadConfig(RiskConfig newConfig)
+        /// <summary>
+        /// P2-119. This returned void and caught every exception into a log line, so all three
+        /// writers -- the window's Save button, the account-exclusion toggle, and the bridge's
+        /// POST route -- announced an outcome they had never been told. A failed write left the
+        /// file holding the old limits under a dialog saying the new ones were in force.
+        ///
+        /// ⚠️ EVERY VALUE VALIDATED HERE MUST BE THE VALUE THAT GETS WRITTEN. The first draft
+        /// substituted the live value whenever the incoming one was blank or its section was
+        /// missing -- so a config with `Mode: ""` or no `PnLRules` at all passed preflight on
+        /// the strength of values it did not contain, and was then serialised AS IS. Validating
+        /// one config and persisting another is a superset of the defect being fixed: it does
+        /// not merely fail to report, it reports a success about the wrong object. Read the
+        /// fields off `newConfig` exactly as they will be written, or not at all.
+        /// </summary>
+        public ConfigSaveResult SaveAndReloadConfig(RiskConfig newConfig)
         {
             lock (_stateLock)
             {
+                if (newConfig == null)
+                {
+                    const string nullRefusal = "Save refused: the new configuration was null.";
+                    LogEvent("SYSTEM", "CONFIG_REFUSE", nullRefusal);
+                    return new ConfigSaveResult { Saved = false, Refusal = nullRefusal };
+                }
+
+                // No old config means nothing can be "pre-existing", so every field counts as
+                // introduced and is validated strictly. An explicit bool rather than a sentinel:
+                // `int.MinValue` for "absent" is indistinguishable from `int.MinValue` for
+                // "that is what it was", and those two must not compare equal.
+                bool hasOld = _config != null;
+
+                string oldMode = hasOld ? _config.Mode : null;
+                double oldTrailing = TrailingDrawdownOf(hasOld ? _config : null);
+                int oldSessions = hasOld ? _config.MinShadowSessions : 0;
+
+                // Read exactly what will be serialised. A missing PnLRules section IS the
+                // removal of the trailing drawdown rule, so it reads as NaN and is refused as a
+                // change -- not quietly backfilled from the config being replaced.
+                string newMode = newConfig.Mode;
+                double newTrailing = TrailingDrawdownOf(newConfig);
+                int newSessions = newConfig.MinShadowSessions;
+
+                string refusal = hasOld
+                    ? GuardConfigEdit.RefuseChange(oldMode, newMode, oldTrailing, newTrailing,
+                                                   oldSessions, newSessions)
+                    : GuardConfigEdit.Refuse(newMode, newTrailing, newSessions);
+
+                if (refusal != null)
+                {
+                    LogEvent("SYSTEM", "CONFIG_REFUSE", refusal);
+                    return new ConfigSaveResult { Saved = false, Refusal = refusal };
+                }
+
                 try
                 {
                     string json = JsonConvert.SerializeObject(newConfig, Formatting.Indented);
                     File.WriteAllText(_configFile, json);
                     LoadConfig(); // Reloads from the file, updating _config and _parsedWindows
                     LogEvent("SYSTEM", "CONFIG_SAVE", "Configuration successfully saved and reloaded from UI.");
+
+                    // Read off the RELOADED config, not off newConfig: what the operator should
+                    // be warned about is the state the guard is now running under, which is
+                    // whatever came back off disk.
+                    string warning = _config == null
+                        ? null
+                        : GuardConfigEdit.Refuse(_config.Mode, TrailingDrawdownOf(_config),
+                                                 _config.MinShadowSessions);
+                    if (warning != null)
+                        LogEvent("SYSTEM", "CONFIG_SAVE_WARNING", warning);
+
+                    return new ConfigSaveResult { Saved = true, Warning = warning };
                 }
                 catch (Exception ex)
                 {
                     LogEvent("SYSTEM", "ERROR", $"Failed to save config: {ex.Message}");
+                    return new ConfigSaveResult { Saved = false, Error = ex.Message };
                 }
             }
+        }
+
+        /// <summary>
+        /// The global trailing drawdown, or NaN when there is no PnLRules section to hold one.
+        /// NaN and not 0: both mean "no limit is in force", but 0 is a value somebody could have
+        /// typed, and the two arrive by different routes worth telling apart in a message.
+        /// GuardConfigEdit refuses both.
+        /// </summary>
+        private static double TrailingDrawdownOf(RiskConfig cfg)
+        {
+            if (cfg == null || cfg.PnLRules == null) return double.NaN;
+            return cfg.PnLRules.TrailingDrawdown;
         }
 
         public void ReloadConfig()

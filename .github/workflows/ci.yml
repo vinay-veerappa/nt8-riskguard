@@ -596,7 +596,29 @@ jobs:
           # TEXT instead. Those four mutants put each original defect back verbatim, because
           # "does the source-text check actually fail when the defect returns?" is the one
           # question a source-text check cannot answer about itself.
-          - { label: "UI2", batteries: "mutate_ui2.py" }   # 402s = UI2 402s
+          # P2-119 / P1-117, added 2026-08-16 (session 48). The config-save chokepoint: the
+          # validator that refuses only what a write INTRODUCES, the result type that reports
+          # what the save actually did, and the deep copy that makes the old/new comparison
+          # meaningful. Eleven mutants across THREE files -- the first battery here to do that,
+          # because the behaviour is a JOIN across them and a battery pinned to one file would
+          # have scored full marks on a third of the change. Ten killed; one declared EXPECTED
+          # SURVIVOR (unkillable: the reloaded config is a JSON round trip of the caller's, so
+          # no input separates them).
+          #
+          # ⚠️ THIS PLACEMENT IS PROVISIONAL AND IT IS EXPECTED TO BE THE CRITICAL PATH FOR
+          # EXACTLY ONE RUN. It is bolted onto the lightest bin because a battery's weight is
+          # BATTERY_SECONDS, which only exists once CI has run it -- so there is a genuine
+          # chicken-and-egg here, and pack_ci_matrix.py rightly refuses to pack on an estimate.
+          # The honest move is to take one slow run rather than feed the packer a number I made
+          # up, which is precisely the mistake this file records two entries above.
+          #
+          # PREDICTION, stated so the next run can falsify it: ~290s (mutate_p227 has the same
+          # 13 build+test cycles and measured 271s; this one runs against a slightly larger
+          # suite). That puts this bin at ~692s against UI4's 493s, so wall clock should go
+          # 657s -> ~790s for one run. A re-pack of all 35 then absorbs it completely: total
+          # compute becomes ~8861s and the ideal bin at 19 is ~466s, still under UI4's 493s
+          # floor, so the wall should return to ~657s. EXPECTED IS NOT MEASURED.
+          - { label: "UI2+P2-119", batteries: "mutate_ui2.py mutate_p2119.py" }   # 402s + ~290s ESTIMATE
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
