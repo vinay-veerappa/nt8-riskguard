@@ -11136,3 +11136,87 @@ A `git status` alone would have started a hunt for a leftover mutant
 ([[mutation-battery-killed-leaves-a-mutant]] is a real hazard and this was not it). Compare with
 `git cat-file blob HEAD:<path>` before believing either answer — the same tool that
 [[a-worktree-is-not-a-fresh-checkout]] names for the opposite error.
+
+---
+
+## 5.83 Session 52 — `P2-127` slice 1: the fleet tree, and three decisions the loop got to by default
+
+The layout question is SETTLED (§4, re-confirmed against the operator's own counter-proposal on
+2026-08-16) and was not re-opened. What landed is the **decision class**, `BridgeFleetView.cs`,
+and it was taken first for the reason `P2-127`'s plan entry gives: `ui/index.html` is in no test
+build and no mutation battery, so anything decided in JavaScript is decided somewhere nothing can
+check. Suite **444/15 → 467/0** across 77 tests, battery **16/16**, `nt_compile` **0 errors**,
+`deploy --verify` **31 files / 0 orphans**. **Nothing renders it yet** — the entry stays OPEN.
+
+**The defect it exists for was measured before it was designed**, from one payload that carries
+both scales at once:
+
+```
+"rows":   [ { "verdict": "Idle", "severity": 5 } ]   <- CopierSnapshotJson,  0 is WORST
+"system": { "severity": "warn" }                     <- CopierStatusSeverity, 0 is BEST
+```
+
+⚠️ **So the discriminating test is not that each scale converts correctly — it is that the SAME
+NUMBER means opposite things on the two.** A single shared conversion passes every other assertion
+in that test method and fails only that one. This is the `P2-109` shape again: *the regression test
+is that the two answers DIFFER*.
+
+### The loop returned NOT_CONVERGING, and hand-arbitration changed three things
+
+Four rounds, all 15 acceptance tests green from round 2, no regressions — and blocking findings
+`2 → 4 → 2` with **zero overlap between consecutive rounds**, which is the loop's own stated
+signal that revisions are exposing new surface rather than closing the defect. [[agent-patch-loop-arbiter-gotchas]]
+says arbitrate by hand at that point, and it was right again:
+
+* ⚠️ **The arbiter UPHELD a finding the ticket had explicitly scoped OUT** — that the system
+  severity is not wired into the tree — when the ticket's SCOPE paragraph names that as a later
+  slice. Its own ruling format has an `out-of-scope` count, and it reported `out-of-scope=0`.
+* ✅ **One upheld finding was real and my tests had missed it**: a leader and a follower may hold
+  several relationships, one per instrument, so a tree built per ROW lists that account twice.
+  **Both live rows are instrument-less, so every test written against the box as it stands passes
+  under the defect.** Second session running in which the minority reviewer found the gap between
+  my assertions.
+* ⚠️ **The arbiter REJECTED a correct finding as "stable and correct"**: `List<T>.Sort` is
+  documented UNSTABLE, and `groups` is a `Dictionary` whose enumeration order is explicitly
+  unspecified. **Equal ranks are the NORMAL case here** — all 95 unlinked accounts on this box tie
+  — so without a name tie-break the page re-orders itself between refreshes that saw identical
+  data. Verified by mutation rather than by reading: removing the tie-break fails both ordering
+  assertions.
+
+### ⚠️ An INAPPLICABLE state is not an UNREADABLE one, and the ticket's silence chose the wrong one
+
+The ticket said "fail closed" for unknown states and said nothing about an account in **no** copier
+relationship. The model applied fail-closed to both and ranked every unlinked account **WORST** —
+which on this box is **95 of 97 accounts painted permanently red**. That is *an alarm that is
+always on is off*, for the **eighth** time in this system, arrived at by a route none of the
+previous seven took: not a rule that fires too often, but a **default applied to a set it was never
+about**. [[check-the-exemplar-belongs-to-the-class]] in reverse — the class was right and the
+membership test was missing.
+
+Ranking them `ok` is the opposite lie. `NotApplicableRank` sits **above** every real rank, so it
+sorts as the least severe thing and a renderer can colour it as neither. It is **deliberately
+temporary** — an unlinked account still has a GUARD state, which is what the operator actually
+wants for it, and that is the next slice — and a test pins it so that change has to be conscious.
+
+### ⚠️ The battery went 15/15 on its first run and the sixteenth mutant is the whole point
+
+House rule says a one-round green is when to trust it least, so the green was probed rather than
+believed. Dropping the `Unlinked` node when it has **no children** survived the entire suite,
+because every other test supplies a spare account and the empty case was never driven. **An absent
+node and an empty one read identically to whatever renders them** — the agent loop's own `CF-9`
+arriving at a second surface within the same session. The test and the mutant both exist now.
+
+### Two process notes
+
+⚠️ **The red acceptance tests were PUSHED, and bridge CI went red for it.** The loop builds its
+worktree from `HEAD`, so the tests must be committed before the run — but *committed* is not
+*pushed*. Session 51's resolution was to commit locally and squash with the fix so no commit on
+`main` is ever red, and departing from it put a knowingly-red run in the history. **A red run you
+meant looks exactly like one you did not**, which is precisely what makes
+[[check-ci-before-trusting-docs]] expensive.
+
+⚠️ **The loop's worktree does not populate submodules**, so this repo's two tests that assert on
+the vendored core failed at its baseline: **439 passed / 17 failed in the worktree against 444/15
+here**. The loop handled it correctly — it counted them as expected failures and reported no
+regression — but two real gates were dark for the whole run and nothing in the output said so.
+Logged against the loop as a consumer finding.
