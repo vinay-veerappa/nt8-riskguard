@@ -112,8 +112,27 @@ or above.
 The relay's heartbeat carries the guard's own freshness, so *relay down* and *NT8 down* are
 distinguishable. It fires hourly at :45.
 
-* **14:45 PDT** (before the open) — read `logs/alert_relay.log` in `tvDownloadOHLC` and confirm a
-  new `Discord update sent` line, then confirm the message names the guard's last-seen time.
+✅ **RESULT — PASSED at 14:45:13 PDT, before the open.** Recorded here because a runbook that
+only holds plans is half a document.
+
+* The heartbeat fired **14:45:13**, exactly one hour after `13:45:11`. The relay is alive.
+* ⚠️ **The log line alone does not prove the claim** — `Discord update sent (0 embed(s), no file)`
+  says a message went out, not what was in it. Driving `format_heartbeat()` against the live guard
+  directory returns:
+
+  ```
+  **RiskGuard relay heartbeat**
+  relay: alive, 0 alert(s) delivered since start
+  guard: alive, last sweep 0s ago
+  ```
+
+  So the message really does carry the **guard's** freshness beside the relay's, which is the
+  whole point: *relay up + guard stale* and *relay down* are different reports.
+* `heartbeat.txt` is being stamped by the guard continuously (age **0s** against a 180s STALE
+  threshold), so the guard's sweep loop is running in `shadow` as it should.
+* ⚠️ **The STALE half is NOT driven** — it needs the guard stopped, which is a bigger intervention
+  than this window allows. **Positive half only, and the branch is confirmed to exist and to be
+  reachable** (`GUARD_STALE_AFTER_SECONDS = 180`). Say which half was measured.
 * **Then kill NT8's bridge?** No — do **not** manufacture staleness tonight. The negative half
   (heartbeat reports the guard as STALE) needs the guard stopped, which is a bigger intervention
   than this window allows. **Record the positive half only, and say so.**
