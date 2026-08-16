@@ -520,14 +520,26 @@ jobs:
           # Trader profile has DailyLoss OFF, so the old reporter claimed a live rule that could not fire.
           - { label: "F9", batteries: "mutate_f9.py" }   # 331s = F9 331s
 
-          # P2-27, added 2026-08-16 (session 48). The shared guard-config value validator, and it
-          # is packed HERE because CM3 was the lightest bin at 325s and UI4's 508s is the floor --
-          # so up to ~180s lands free. Eleven mutants, all killed on the first run.
+          # P2-27, added 2026-08-16 (session 48). The shared guard-config value validator.
+          # Eleven mutants, all killed on the first run.
           #
-          # ⚠️ NO MEASURED CI SECONDS YET, which is why the arithmetic below still reads "325s =
-          # CM3 325s". A new battery has none by definition, and inventing one would corrupt the
-          # weights pack_ci_matrix.py packs from. The first run prints BATTERY_SECONDS for it;
-          # fold the real number in then and re-run the packer.
+          # ⚠️ IT WAS PACKED INTO CM3 FIRST AND THAT WAS WRONG, measured rather than argued.
+          # The estimate was "CM3 is the lightest bin at 325s and UI4's ~508s is the floor, so up
+          # to ~180s lands free". BATTERY_SECONDS came back at 246s, so CM3+P2-27 ran 636s and
+          # became the critical path on its own: run 31929291223 went 10m59s -> 12m06s, with the
+          # next bin at 580s and UI4 at 536s. A guessed weight is not a weight -- the same lesson
+          # pack_ci_matrix.py already refuses to pack without, applied one level up to a human
+          # doing the packing by hand.
+          #
+          # ⚠️ AND IT DOES NOT FIT IN TWENTY BINS. Adding 246s to the lightest bin available
+          # (CM3 325s, then F9 331s, then P1-76 348s) clears 536s every time, so the FLOOR HAS
+          # MOVED -- the work grew and no rebinning hides it. This is a 21st bin against ~20
+          # concurrent slots, which is the "past the slot count another job is another WAIT"
+          # boundary from session 47: one job now queues. Expected ~580s rather than 636s, and
+          # EXPECTED IS NOT MEASURED -- read the next run before quoting it.
+          #
+          # ⚠️ THE NEXT BATTERY ADDED NEEDS A REAL RE-PACK, not another hand-placed bin. Pull
+          # fresh BATTERY_SECONDS for all 35 and run tools/pack_ci_matrix.py --apply.
           #
           # ⚠️ Three of the eleven are defects THIS TICKET SHIPPED before being caught, which is
           # the reason to read the list rather than the score: mutant 2 restores the spec's own
@@ -539,7 +551,9 @@ jobs:
           # ticket is about refusing something, so it satisfies all of them and ships a validator
           # that makes the endpoint unusable -- P2-115's constant and F-17's always-refuse again.
           # The six ACCEPTANCE cases are the only thing that bans it.
-          - { label: "CM3+P2-27", batteries: "mutate_cm3.py mutate_p227.py" }   # 325s = CM3 325s
+          - { label: "P2-27", batteries: "mutate_p227.py" }   # 246s = P2-27 246s
+
+          - { label: "CM3", batteries: "mutate_cm3.py" }   # 325s = CM3 325s
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
