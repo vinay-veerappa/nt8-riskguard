@@ -5171,7 +5171,7 @@ advertises it.
 
 ---
 
-### P1-130. The ATM breakeven and trailing stops NEVER move: the writer demands `OrderState.Working` while a resting stop sits in `Accepted` — the reader in the same class already knows better — OPEN, found 2026-08-16 (session 51) at the Sunday open, by driving it
+### P1-130. The ATM breakeven and trailing stops NEVER move: the writer demands `OrderState.Working` while a resting stop sits in `Accepted` — the reader in the same class already knows better — ✅ FIXED 2026-08-16 (session 51) and live-validated, ⚠️ but the feature is still NOT proven end-to-end
 
 **Where**: `addons/DynamicAtmManager.cs`, `ModifyStopPrice` (`:742`)
 
@@ -5252,6 +5252,45 @@ so no position is naked — but **every risk-reduction feature of the ATM system
 on the live path, while `nt_atm_bracket_status` reports `breakevenTriggered: false` to anyone who
 looks and nothing at all to anyone who does not. An operator running `DrawdownShield` believes their
 stop went to breakeven at +12 ticks. It did not, and it never will.
+
+**FIXED AND RE-DRIVEN ON THE SAME BOX, 40 MINUTES LATER, WITH THE MARKET STILL OPEN.** A second
+`DrawdownShield` bracket, breakeven trigger dropped to 2 ticks so the WRITE path is exercised
+regardless of where price drifts (the trigger value was never what was under test):
+
+| | before the fix | **after** |
+|---|---|---|
+| `ATM_STOP_ORDER_NOT_FOUND` | **55**, one per 5s, unbounded | **0** |
+| `ATM_STOP_MOVE_REQUESTED` | **never possible** | **3** |
+| retry | unbounded | **stopped at 3 of 3** |
+
+`ATM_STOP_MOVE_REQUESTED: a1934749: breakeven trigger reached -- requested stop 30183.5 ->
+30193.75` is a line the old code **could not emit**, because it never got past the lookup. The
+writer now finds a stop resting in `Accepted` and asks the broker to move it.
+
+⚠️ **AND THE FEATURE STILL DOES NOT WORK, FOR THE NEXT REASON DOWN — say this plainly.** The
+provider then **ignored the change**:
+
+```
+ATM_STOP_CHANGE_IGNORED  a1934749: requested stop 30193.75 but the provider holds 30183.5
+                         (attempt 1 of 3). Treating the BROKER's price as the truth.
+```
+
+That is `P0-63`'s known behaviour, already detected and handled — the reconciler takes the broker's
+price as truth, exactly as designed. **So the breakeven stop still did not move on Sim101.** What
+changed is which link fails: from *"we never asked"* to *"we asked and the Simulator declined"*.
+
+⚠️ **AND AN ALTERNATIVE READING MUST BE RECORDED RATHER THAN DISMISSED.** It is possible NT8
+refuses to modify an order that has not reached `Working`, in which case the original
+`== OrderState.Working` test was defensive rather than wrong, and the right fix is to wait for
+`Working` or to cancel/replace. Tonight cannot distinguish the two: the Simulator ignores stop
+changes generally (`P0-63`), so a refusal proves nothing about the state. **The evidence for the
+change is that the request is now MADE and bounded; the evidence that a stop physically MOVES needs
+a non-Simulator account.** Do not record this as "breakeven works".
+
+⚠️ **`ATM_STOP_MOVE_ABANDONED` did NOT fire.** The retry stopped after three attempts because the
+reconciler's own counter reached the cap and the trigger stopped re-requesting — not because the
+give-up branch announced itself. **The announcement is still unvalidated**, and a give-up that
+never speaks is the shape `P2-101` was filed under. Worth one directed test.
 
 ⚠️ **`P2-112` is CLOSED and was not wrong** — it made this loop RUN, and this defect is what the
 running loop then hit. It is the exact remainder its own closure flagged as unmeasured: *"the

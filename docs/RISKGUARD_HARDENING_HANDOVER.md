@@ -3348,7 +3348,7 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-130` — ATM breakeven/trailing stops NEVER move (found live at the Sunday open, §5.80); then `P2-127` — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
+> ### Do next: `P2-127` (✅ `P1-130` FIXED and live-validated the same session, §5.80 — but the ATM breakeven is still NOT proven end-to-end: the Simulator ignores the change — `P0-63`, closed, its known behaviour, so a non-Simulator account is needed) — — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
 > ### (order of work lives in §5.78's `Order from here`: `P2-127`'s §4 layout — the layout is SETTLED, do not re-open it — then `P2-126`'s write surface, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
 > ### (✅ `P3-128` CLOSED v1.34.0 session 51 — was `[ COPIER LIVE - SIM ONLY ]` over a copier whose every relationship is OFF; found by reading the live payload of the ticket that put that sentence on screen, fixed by the agent loop, live-validated)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
@@ -10987,12 +10987,73 @@ to measure a lockout gate on.
 
 ### Order from here
 
-1. **`P1-130`** — it is a `P1` on the live path, its fix is one predicate the file already uses, and
-   its evidence is fully obtainable (the state is reachable any time a bracket rests). Take it next.
-2. Then **`P2-127`** (§4 layout, settled), **`P2-126`**, then `P2-29`'s remainder, `P3-118`,
+1. ✅ **`P1-130` was FIXED in this same session and live-validated** — `ATM_STOP_ORDER_NOT_FOUND`
+   55 → **0**, and the move is now REQUESTED and bounded. ⚠️ **It is not "breakeven works"**: the
+   Simulator then ignores the change (`P0-63`, closed), so the stop still did not physically move. That
+   remainder needs a **non-Simulator account** and is a confirmation run, not work — unless it
+   turns out to be more, in which case it gets its own ID.
+2. **`P2-127`** (§4 layout, settled), **`P2-126`**, then `P2-29`'s remainder, `P3-118`,
    `P3-124`, `P3-110`, `P3-33`.
 
 ⚠️ Also seen and NOT filed, because it predates this session and was not driven: three orders from
 an earlier bracket (`AtmEntry_0511fe1c`, `Stop_0511fe1c`, `Target_0511fe1c`, prices ~29511) sat in
 **`CancelPending`** throughout, including after two `nt_close_position` calls that reported
 cancelling them. If they are still there next session, that is its own ID.
+
+
+---
+
+## 5.81 Session 51 — `P1-130` fixed and re-driven inside the same market session, and the arbiter settled a decision contradicting the finding it had just upheld
+
+`P1-130` was **found, fixed, deployed and re-validated in one open**, which is only possible because
+the market was there: the state that produces it (a stop resting in `Accepted`) exists whenever a
+bracket rests, and nowhere else.
+
+| | before | after |
+|---|---|---|
+| `ATM_STOP_ORDER_NOT_FOUND` | **55**, one per 5s, unbounded | **0** |
+| `ATM_STOP_MOVE_REQUESTED` | impossible — never got past the lookup | **3** |
+| retry | unbounded | **stopped at 3 of 3** |
+
+⚠️ **AND IT IS STILL NOT "BREAKEVEN WORKS".** The provider then IGNORED the change
+(`ATM_STOP_CHANGE_IGNORED … requested 30193.75 but the provider holds 30183.5`), which is `P0-63`'s
+known Simulator behaviour, correctly detected and handled. **The failing link moved from *we never
+asked* to *we asked and the Simulator declined*.** The remainder needs a non-Simulator account.
+
+⚠️ **An alternative reading is recorded rather than dismissed**: NT8 may refuse to modify an order
+that has not reached `Working`, in which case the original test was defensive and the right fix is
+to wait or to cancel/replace. **Tonight cannot distinguish them** — the Simulator ignores stop
+changes generally, so its refusal proves nothing about the state. What IS evidenced is that the
+request is now made and bounded. Do not upgrade that into a claim about stops moving.
+
+⚠️ `ATM_STOP_MOVE_ABANDONED` **did not fire** — the retry stopped because the reconciler's counter
+hit the cap and the trigger stopped re-requesting, not because the give-up branch spoke. **The
+announcement remains unvalidated**, which is `P2-101`'s shape.
+
+### The agent loop: right in round 4, and the arbiter poisoned the memory store
+
+Round 4 was **green on every mechanical gate** — 2033 passed, 0 failed, all 12 acceptance tests
+green, no regressions, lock-scope clean — and the panel still said REVISE, so the run ended
+`MAX_ROUNDS_EXHAUSTED` and applied nothing. **Arbitrating by hand was correct and the reviewer was
+right**: the patch counted the retry budget only when the stop order was *present but no longer
+live*, on the plausible reasoning that a transient absence should not abandon a healthy bracket.
+**That reinstates the defect** — an order genuinely gone is absent on EVERY sweep, so the budget is
+never spent and the 5-second retry runs forever. `deepseek-v4-flash` caught it; `glm-5.2` approved.
+
+⚠️ **The test that would have caught it did not exist, and that is mine**: my acceptance test drove
+"present but terminal" and never "absent from `account.Orders`". The fix slipped through precisely
+where the test was silent. **A model's unrequested refinement lands exactly in the gap between your
+assertions.** The test exists now.
+
+⚠️ **AND THE ARBITER SETTLED THE OPPOSITE OF WHAT IT UPHELD, IN ONE RULING.** It upheld *"the patch
+fails to increment `StopModifyAttempts` when the order is absent … causing an unbounded retry"* and
+in the same output nominated as SETTLED: *"The failure counter may increment **only** when the stop
+order is still present in account.Orders but no longer occupies a live slot."* Those contradict.
+**The settled entry was persisted to `logs/agent_loop/settled_decisions.jsonl`** and would have been
+fed to later runs as an established constraint — teaching the next run to re-introduce the defect
+this one was filed for. Deleted by hand; logged as **CF-7** in the loop's own
+`CONSUMER_FINDINGS.md`.
+
+**The general lesson for using this tool**: [[agent-patch-loop-arbiter-gotchas]] said to arbitrate
+by hand when a run does not converge. Extend it — **read the SETTLED block too, not only the
+rulings**, because that is the half that outlives the run.
