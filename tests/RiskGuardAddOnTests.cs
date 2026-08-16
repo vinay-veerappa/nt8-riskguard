@@ -704,9 +704,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP227_AnUnrecognisedModeIsRefused();
             TestP227_DisabledIsTheCopiersModeNotTheGuards();
             TestP227_TheValidatorAgreesWithPreflightOnEveryMode();
+            TestP227_ARefusalDoesNotAdviseAFixThatWouldNotWork();
             TestP227_TheModeRefusalNamesTheValidModes();
             TestP227_AZeroTrailingDrawdownIsRefused();
             TestP227_ANegativeTrailingDrawdownIsRefused();
+            TestP227_ANaNTrailingDrawdownIsRefused();
             TestP227_ANegativeMinShadowSessionsIsRefused();
             TestP227_TheRefusalNamesTheFieldThatIsWrong();
 
@@ -10659,6 +10661,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P2-27: `pure` -- recognised, but refused by preflight as not implemented -- is REFUSED");
         }
 
+        /// <summary>
+        /// ⚠️ FOUND BY HAND-REVIEWING THE PATCH, after every gate passed and one reviewer returned
+        /// APPROVE(0). The first implementation told the operator that `PURE` and `DISABLED` were
+        /// refused because "mode is case-sensitive". True of the comparison, and useless as advice:
+        /// `pure` and `disabled` are refused in every case there is. A refusal that names a fix
+        /// WHICH DOES NOT WORK is worse than one that names none -- it is exactly `P3-118`, where
+        /// preflight calls `Live` unrecognised and sends the reader hunting for a typo they did not
+        /// make.
+        ///
+        /// Nothing pinned the text, so nothing could have caught it. The general rule: when a
+        /// refusal's whole job is to tell somebody what to do next, the ADVICE is behaviour and
+        /// belongs in a test.
+        /// </summary>
+        private static void TestP227_ARefusalDoesNotAdviseAFixThatWouldNotWork()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a refusal does not advise a fix that would not work");
+
+            // Correcting the case of these does not make them acceptable, so saying "case" here
+            // sends the operator to try `pure` and `disabled`, which are refused too.
+            Assert(!Mentions(CallRefuse("PURE", 1500.0, 5), "case"),
+                "P2-27: the `PURE` refusal does not blame CASE -- lowercasing it does not help");
+            Assert(!Mentions(CallRefuse("DISABLED", 1500.0, 5), "case"),
+                "P2-27: the `DISABLED` refusal does not blame CASE -- lowercasing it does not help");
+
+            // The positive control. Without it, a refusal that never mentions case at all passes
+            // both assertions above, and the one place the advice IS correct would go silent --
+            // closing the last instance disarms the gate.
+            Assert(Mentions(CallRefuse("Shadow", 1500.0, 5), "case"),
+                "P2-27: a case-only variant of a VALID mode still blames case, which is the one "
+                    + "place that advice is right");
+        }
+
         private static void TestP227_TheModeRefusalNamesTheValidModes()
         {
             Console.WriteLine("\n[TEST] P2-27: the mode refusal names the valid modes");
@@ -10688,6 +10722,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine("\n[TEST] P2-27: a negative trailing drawdown is REFUSED");
             Assert(Refused(CallRefuse("shadow", -1500.0, 5)),
                 "P2-27: a NEGATIVE trailing drawdown is REFUSED");
+        }
+
+        /// <summary>
+        /// ⚠️ WRITTEN BECAUSE A MUTANT WOULD HAVE SURVIVED, not because a defect was seen. The
+        /// obvious form of this rule is `trailingDrawdown &lt;= 0`, and it ACCEPTS NaN -- every
+        /// comparison with NaN is false, so `NaN &lt;= 0` is false and the value sails through.
+        /// The class uses `!(x &gt; 0)` instead, which refuses it.
+        ///
+        /// The difference is invisible to every other test here, and NaN is not exotic on this
+        /// path: it is what a JSON body carrying a non-numeric literal, or a text box parsed with
+        /// a permissive parser, hands to a double. A trailing drawdown of NaN is a limit that no
+        /// comparison can ever satisfy -- the rule silently never fires, which is the whole
+        /// configured-but-not-enforcing family.
+        /// </summary>
+        private static void TestP227_ANaNTrailingDrawdownIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-27: a NaN trailing drawdown is REFUSED");
+            Assert(Refused(CallRefuse("shadow", double.NaN, 5)),
+                "P2-27: a NaN trailing drawdown is REFUSED -- `x <= 0` would have accepted it");
+            Assert(Refused(CallRefuse("shadow", double.NegativeInfinity, 5)),
+                "P2-27: a negative-infinity trailing drawdown is REFUSED");
         }
 
         private static void TestP227_ANegativeMinShadowSessionsIsRefused()
