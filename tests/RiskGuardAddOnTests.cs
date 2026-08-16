@@ -751,6 +751,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP1121_TheHeaderReportsTheGlobalMode();
             TestP1121_TheHeaderCanTakeEverySeverity();
             TestP1121_AllQuarantinedIsCriticalAndNothingConfiguredIsNotOk();
+            TestP3128_AllRelationshipsOffIsNotReportedAsCopyingToSim();
+            TestP3128_AGroupThatIsSwitchedOffCountsAsNothingEnabled();
             TestP1121_AConfigConflictIsSurfacedAndNeverLowersSeverity();
             TestP1121_GroupFollowersAreCountedAndInertGroupsSaySo();
             TestP1121_TheEngineReportsMetricsWithTheirSampleCounts();
@@ -11895,6 +11897,134 @@ namespace NinjaTrader.NinjaScript.AddOns
                 new List<CopierGroup>(), 0);
             Assert(empty.Severity == CopierStatusSeverity.Warn && empty.Text.Contains("NOTHING CONFIGURED"),
                 "P1-121: a live copier with nothing configured is not reported as healthy: " + empty.Text);
+        }
+
+        /// <summary>
+        /// P3-128. MEASURED ON THE LIVE BOX 2026-08-16, seconds after P1-125 put this
+        /// sentence on the operator's screen:
+        ///
+        ///     "[ COPIER LIVE - SIM ONLY ]"
+        ///     "2 relationships, 0 enabled. Nothing is armed for live, so copies reach
+        ///      simulation followers only and a live follower is refused."
+        ///
+        /// Both relationships were DISABLED. Nothing reached a simulation follower or any
+        /// other kind, and the detail line carries the contradicting number -- "0 enabled" --
+        /// in its own first clause.
+        ///
+        /// `Headline`'s ladder has no rung for `enabled == 0`, so a copier whose relationships
+        /// are all switched off falls into the `armed == 0` rung, whose sentence was written
+        /// for a different state: relationships that ARE enabled but are not armed for live.
+        ///
+        /// ⚠️ This is P3-122 in a second class, and it was filed the day P3-122 was closed --
+        /// a sentence that is true of a NEIGHBOURING state, describing behaviour that is not
+        /// happening, in the direction that reassures. Fixing the ordering in one reader did
+        /// not fix the other. Count the sites.
+        /// </summary>
+        private static void TestP3128_AllRelationshipsOffIsNotReportedAsCopyingToSim()
+        {
+            Console.WriteLine("\n[TEST] P3-128: every relationship off is not 'copies to simulation followers'");
+
+            // The live box's exact state: two relationships, both switched off, copier live.
+            var allOff = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = false, ArmedForLive = false },
+                new CopierRelationship { IsEnabled = false, ArmedForLive = false }
+            };
+            var noGroups = new List<CopierGroup>();
+
+            var head = CopierStatusView.Describe("live", allOff, noGroups, 0);
+
+            Assert(head.Detail.IndexOf("simulation", StringComparison.OrdinalIgnoreCase) < 0,
+                "P3-128: a copier with NOTHING enabled does not claim copies reach simulation "
+                + "followers -- nothing is copied anywhere. Got: " + head.Detail);
+            Assert(head.Text.IndexOf("SIM ONLY", StringComparison.OrdinalIgnoreCase) < 0,
+                "P3-128: and the headline does not read SIM ONLY, which is the state where "
+                + "enabled relationships copy to sim. Got: " + head.Text);
+            Assert(head.Text.IndexOf("NOTHING ENABLED", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P3-128: it names what is actually true -- nothing is enabled. Got: " + head.Text);
+            Assert(head.Severity == CopierStatusSeverity.Warn,
+                "P3-128: and it WARNS. A copier configured with relationships it is not running "
+                + "is 'configured to do something it is not doing', which is what Warn means -- "
+                + "Info renders in grey beside a healthy one. Got: " + head.Severity);
+
+            // ⚠️ NEGATIVE CONTROL, and it is the one that refuses the lazy fix. A headline that
+            // said NOTHING ENABLED whenever nothing is ARMED would satisfy every assertion
+            // above and destroy the state this rung exists for: relationships that are enabled,
+            // are not armed, and really do copy to simulation followers only.
+            var enabledNotArmed = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = true, ArmedForLive = false }
+            };
+            var simOnly = CopierStatusView.Describe("live", enabledNotArmed, noGroups, 0);
+            Assert(simOnly.Text.IndexOf("SIM ONLY", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P3-128: an ENABLED, unarmed relationship still reads SIM ONLY -- it is copying, "
+                + "to simulation followers, which is exactly what that rung is for. Got: "
+                + simOnly.Text);
+            Assert(simOnly.Detail.IndexOf("simulation", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P3-128: and still says so in its detail. Got: " + simOnly.Detail);
+
+            // A partially-enabled copier is NOT the nothing-enabled state: one live relationship
+            // is being copied and the headline must not report the fleet as switched off.
+            var mixed = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = false, ArmedForLive = false },
+                new CopierRelationship { IsEnabled = true, ArmedForLive = true }
+            };
+            var mixedHead = CopierStatusView.Describe("live", mixed, noGroups, 0);
+            Assert(mixedHead.Text.IndexOf("NOTHING ENABLED", StringComparison.OrdinalIgnoreCase) < 0,
+                "P3-128: one enabled relationship out of two is not 'nothing enabled'. Got: "
+                + mixedHead.Text);
+
+            // ⚠️ And the rung must sit BELOW the quarantine rungs. `quarantined >= enabled` is
+            // `1 >= 0` for an all-quarantined, all-disabled copier, so a rung placed too high
+            // would swallow the quarantine report -- the one state the operator did not choose.
+            var quarantinedAndOff = new List<CopierRelationship>
+            {
+                new CopierRelationship { IsEnabled = false, ArmedForLive = false, IsQuarantined = true }
+            };
+            var qHead = CopierStatusView.Describe("live", quarantinedAndOff, noGroups, 0);
+            Assert(qHead.Text.IndexOf("QUARANTIN", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P3-128: a quarantined relationship still reports its quarantine, even with "
+                + "nothing enabled -- quarantine ranks first because it is the state nobody "
+                + "chose. Got: " + qHead.Text);
+
+            // The counts stay recomputed from the collections, never tracked alongside them.
+            Assert(head.Detail.Contains("2"),
+                "P3-128: the relationship count is still folded out of the list it describes. "
+                + "Got: " + head.Detail);
+        }
+
+        /// <summary>
+        /// P3-128, the second half: a GROUP whose followers are all switched off is the same
+        /// state reached by a different collection, and `Describe` folds groups into the same
+        /// counters. A fix that reads only the relationship list leaves the group case saying
+        /// "copies reach simulation followers only" about a group that copies nothing.
+        /// </summary>
+        private static void TestP3128_AGroupThatIsSwitchedOffCountsAsNothingEnabled()
+        {
+            Console.WriteLine("\n[TEST] P3-128: a disabled GROUP is nothing-enabled too");
+
+            var noRels = new List<CopierRelationship>();
+            var offGroup = new List<CopierGroup>
+            {
+                new CopierGroup
+                {
+                    IsEnabled = false,
+                    ArmedForLive = false,
+                    FollowerAccounts = new List<string> { "Sim-ORB", "SimCopy2" }
+                }
+            };
+
+            var head = CopierStatusView.Describe("live", noRels, offGroup, 0);
+            Assert(head.Text.IndexOf("NOTHING CONFIGURED", StringComparison.OrdinalIgnoreCase) < 0,
+                "P3-128: a group with two followers IS configured -- that rung is for a copier "
+                + "with nothing in it at all. Got: " + head.Text);
+            Assert(head.Detail.IndexOf("simulation", StringComparison.OrdinalIgnoreCase) < 0,
+                "P3-128: and a switched-off group does not copy to simulation followers. Got: "
+                + head.Detail);
+            Assert(head.Text.IndexOf("NOTHING ENABLED", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P3-128: it reads as nothing enabled, from the group's own IsEnabled -- a fix "
+                + "that reads only the relationship list misses this. Got: " + head.Text);
         }
 
         /// <summary>

@@ -397,6 +397,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 };
             }
 
+            if (total > 0 && enabled == 0)
+            {
+                return new CopierHeadline
+                {
+                    Text = "[ COPIER LIVE - NOTHING ENABLED ]",
+                    Severity = CopierStatusSeverity.Warn,
+                    Detail = "Every relationship is switched off, so nothing is copied. "
+                        + counts + "."
+                };
+            }
+
             if (armed == 0)
             {
                 return new CopierHeadline
