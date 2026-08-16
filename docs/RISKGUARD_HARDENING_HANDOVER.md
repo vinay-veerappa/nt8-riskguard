@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.76's — read that one; it carries the reasons.** ✅ **`P2-116` and `P2-123` BOTH CLOSED in session 50 (`v1.33.0`), and `P2-116` is LIVE-VALIDATED**: the funded account and a dormant eval no longer read identically — trailing drawdown, firm trailing drawdown and peak equity giveback all report **`Inert`** with a stated reason on an account reporting no equity, while the daily loss limit correctly does NOT. ⚠️ **Both fixes were first written committing the defect they were fixing** (`ceil(1/ratio)` against a copy path that rounds midpoints TO EVEN; `> 0` against an account whose equity has gone negative) and **both were caught by writing the mutant, not by reading the code**. ✅ **`P1-121` CLOSED in session 49** — entered on the operator's *"the copier UI does not look like it is done"*, and it was not a feature gap: the window was finished and **wrong**. `_statusText` was a green `[ ENGINE: ACTIVE ]` literal assigned once at construction and **never again**, over rows reading `Armed: LIVE` that never consulted the global copier mode — so a `disabled` copier, submitting nothing, rendered as a healthy screen. Three producers (`GetCopierMode`, `DetectConfigConflicts`, `CopierMetric.Samples`) already computed all of it for the API; the UI consumed **none**, while a comment claimed it did. Decisions moved to `addons/CopierStatusView.cs` (no WPF type, so it can be mutated at all — `TradeCopierWindow.cs` is outside the test build). Suite **1846 → 1924**, battery **14/14**. ✅ **`P2-116` CLOSED (session 50)** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ **`P1-117`, `P2-119` and `P2-120` ALL CLOSED in session 48, and the last one is LIVE-VALIDATED both ways**: the config save now reports what it did and refuses what a write INTRODUCES, the window no longer edits the live config in place, and the bridge route stopped answering `success = true` regardless. Core **v1.31.0** deployed, `nt_compile` **0 errors**, guard loaded / shadow / armed / guarding. ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
+| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.77's — read that one; it carries the reasons.** 🆕 **§5.77 REORDERS EVERYTHING BELOW.** The operator sent a screenshot of the surface they actually use: the **browser UI** at `http://localhost:7890/ui`, served from `nt8-mcp-bridge/ui/index.html` — **not** the WPF `TradeCopierWindow` that sessions 49 and 50 spent themselves on. Measured: the page renders **0** of the `copierMode` / `notEnforcingReason` / `configConflicts` the API has returned all along (**21** references on the serving side), dispatches **2** of the **14** copier actions its own API accepts, and has **0** nav elements across **4** stacked sections. Filed `P1-125`, `P2-126`, `P2-127`. ⚠️ **The unfalsifiable-status-header defect closed in the WPF window last session is the same defect this page still has** — fixed there, not here. **Establish which surface the operator has open before improving a display.** ✅ **`P2-116` and `P2-123` BOTH CLOSED in session 50 (`v1.33.0`), and `P2-116` is LIVE-VALIDATED**: the funded account and a dormant eval no longer read identically — trailing drawdown, firm trailing drawdown and peak equity giveback all report **`Inert`** with a stated reason on an account reporting no equity, while the daily loss limit correctly does NOT. ⚠️ **Both fixes were first written committing the defect they were fixing** (`ceil(1/ratio)` against a copy path that rounds midpoints TO EVEN; `> 0` against an account whose equity has gone negative) and **both were caught by writing the mutant, not by reading the code**. ✅ **`P1-121` CLOSED in session 49** — entered on the operator's *"the copier UI does not look like it is done"*, and it was not a feature gap: the window was finished and **wrong**. `_statusText` was a green `[ ENGINE: ACTIVE ]` literal assigned once at construction and **never again**, over rows reading `Armed: LIVE` that never consulted the global copier mode — so a `disabled` copier, submitting nothing, rendered as a healthy screen. Three producers (`GetCopierMode`, `DetectConfigConflicts`, `CopierMetric.Samples`) already computed all of it for the API; the UI consumed **none**, while a comment claimed it did. Decisions moved to `addons/CopierStatusView.cs` (no WPF type, so it can be mutated at all — `TradeCopierWindow.cs` is outside the test build). Suite **1846 → 1924**, battery **14/14**. ✅ **`P2-116` CLOSED (session 50)** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ **`P1-117`, `P2-119` and `P2-120` ALL CLOSED in session 48, and the last one is LIVE-VALIDATED both ways**: the config save now reports what it did and refuses what a write INTRODUCES, the window no longer edits the live config in place, and the bridge route stopped answering `success = true` regardless. Core **v1.31.0** deployed, `nt_compile` **0 errors**, guard loaded / shadow / armed / guarding. ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3348,8 +3348,8 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: re-pack CI on measured battery weights, then `P2-29`'s remainder — the `partial class` split (✅ `P2-116` CLOSED v1.33.0, live-validated; see §5.76)
-> ### (order of work lives in §5.76's `Order from here`: re-pack CI on measured weights, then `P2-29`'s remainder, then `P3-124` / `P3-118` / `P3-122` / `P3-110` / `P3-33`)
+> ### Do next: `P1-125` — the BROWSER UI at :7890/ui never states the copier's global mode (✅ CI re-pack DONE in session 50, gain was nil; ✅ `P2-116` + `P2-123` CLOSED v1.33.0; see §5.77)
+> ### (order of work lives in §5.77's `Order from here`: `P1-125` + `P3-122` together, then `P2-127`'s left-nav restructure, then `P2-126`'s write surface, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
@@ -10522,3 +10522,95 @@ are already CLOSED. If any turns out to be more than a confirmation run it gets 
   measured; do not let one green stand for both.**
 * `F-6`'s repeating-condition suppression and its STALE-guard heartbeat.
 * The trailing-stop stop-move half, and the lockout **admit** half.
+
+---
+
+## 5.77 Session 50, addendum — the operator showed me the UI, and it is NOT the one I spent the session fixing
+
+**READ THIS BEFORE PICKING UP §5.76's ordering. It changes what is worth doing next.**
+
+At the end of session 50 the operator sent a screenshot of what they actually use:
+`http://localhost:7890/ui`, the **browser** UI, served by `nt8-mcp-bridge` out of
+`ui/index.html` (993 lines, static asset, `McpBridgeAddOn.cs:6900`). Their words:
+
+> *"the copier UI is not working. only the enable/disable buttons work. The UI itself is
+> cluttered. we should have a more organised UI rather than one single page. we can keep it
+> simple by having tabs on the left to switch between each item."*
+
+⚠️ **EVERYTHING SESSION 50 BUILT WENT INTO A DIFFERENT SURFACE.** `P1-121` and `P2-123` fixed
+`TradeCopierWindow.cs`, the **WPF window inside NT8** (*Trade Copier Manager*). Both closures are
+real, deployed and mutation-covered, and **neither is visible in the screenshot**, because the
+operator does not appear to work from that window. This is not wasted — the extracted decision
+classes are exactly what the browser UI now needs — but **the effort was spent on the less-used
+of two surfaces, and nothing in the repo said which one that was.**
+
+**The general lesson, and it is the one to carry**: *this system has TWO operator surfaces for
+the same state, and the docs name neither as primary.* Before improving a display, establish
+which display the operator has open. One screenshot reordered a whole backlog.
+
+### What was measured, before writing any of it down
+
+| Question | Answer |
+|---|---|
+| `copierMode` / `notEnforcingReason` / `configConflicts` in `ui/index.html` | **0** |
+| the same three in the bridge addon + `CopierEnforcementView.cs` | **21** |
+| copier actions `/api/copier/config` accepts | **14** |
+| copier actions the browser UI dispatches | **2** (`set`, `set_group`) |
+| fields it ever sends | **2** (`isEnabled`, `isQuarantined: false`) |
+| `<nav>` / tab elements in the page | **0** |
+| sections stacked on one scroll | **4** |
+| rows on screen with all 7 accounts expanded | **~190** |
+
+Three entries filed from that: **`P1-125`** (the page never states the copier's global mode —
+`P1-121` verbatim at this surface), **`P2-126`** (2 of 14 actions implemented), **`P2-127`** (the
+single-page layout and the left-nav restructure).
+
+### Three things that must not be lost when this is picked up
+
+1. ⚠️ **The header on that page says `mode shadow · armed · cannot act` and that is the GUARD's
+   mode.** The copier's own `live`/`shadow`/`disabled` mode — separate since `P3-34`, so the sim
+   can copy while the guard observes — is nowhere on the page. Reporting one mode and not the
+   other is worse than reporting neither: it invites the reader to assume both were covered.
+2. ⚠️ **A tabbed shell hides three of four sections by default, and this page's whole value is
+   that `INERT` and a non-acting copier are visible WITHOUT being looked for.** The nav must
+   carry each section's worst state as a badge, folded out of the same payload the section
+   renders — not its own counters, which is `F-9` and which is why `P2-103`'s summary recounts
+   from the detail rows. Get this wrong and an honest cluttered page becomes a tidy page that
+   lies by omission.
+3. ⚠️ **`ui/index.html` is in NO test build and NO mutation battery**, exactly like
+   `TradeCopierWindow.cs`. Move the decisions into a class the harness compiles BEFORE adding
+   behaviour, the way `CopierStatusView` and `CopierSymbolMatrixView` already do. Otherwise this
+   becomes a third untested surface — and the one the operator actually uses.
+
+### Also true, and cheap to close alongside
+
+`P3-122` (the bridge's `notEnforcingReason` can say an unarmed relationship *"copies to
+SIMULATION followers only"* while the copier is in `shadow` and copying to nothing) is a defect
+in a string **nothing currently displays**. Close it WITH `P1-125`: rendering the reason is what
+makes its ordering reachable by the operator.
+
+### Order from here
+
+1. **`P1-125`** — the browser UI never states the copier's global mode. Smallest of the three,
+   highest consequence, and it is the operator's actual complaint stated precisely: a `disabled`
+   copier renders exactly like a working one. Close **`P3-122`** in the same change.
+2. **`P2-127`** — the left-nav restructure. Take it BEFORE the new controls: it decides where
+   they live, and doing it after means moving them twice. Badge the nav from the payload.
+3. **`P2-126`** — the write surface. Largest, and it wants the shell to exist first. Every
+   control dispatches through the existing `dispatch()` chokepoint, which already handles
+   `refused` as a first-class answer rather than an error.
+4. Then the pre-existing queue from §5.76: **`P2-29`**'s `partial class` split, **`P3-118`**,
+   **`P3-124`**, **`P3-110`**, **`P3-33`**.
+
+### Confirmation runs waiting on a market — NOT work
+
+Unchanged from §5.76, and still needing one filled contract at a Sunday 18:00 ET open: `F-6`'s
+repeating-condition suppression and its STALE-guard heartbeat, the trailing-stop stop-move half,
+and the lockout **admit** half. Each is an unvalidated half of a CLOSED entry. If any turns out
+to be more than a confirmation run, it gets its own ID.
+
+⚠️ **And one more that is now on the list twice over**: the WPF window's visual half. `P1-121`'s
+amber header and `P2-123`'s per-ticker tab are compile-, test- and mutation-validated and **have
+never been looked at by a human**. Given this session's discovery, check first whether that
+window is a surface the operator opens at all before spending anything further on it.
+

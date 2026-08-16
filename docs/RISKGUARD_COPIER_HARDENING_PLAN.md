@@ -4739,6 +4739,123 @@ mistake in the shared predicate reaches the arming decision.
 
 ---
 
+### P1-125. The browser UI never states the copier's GLOBAL MODE -- the one gate that decides whether any copy is submitted at all -- while the API has returned it all along; `P1-121` verbatim, at the surface the operator actually uses -- OPEN, found 2026-08-16 (session 50) from an operator screenshot
+
+**Where**: `nt8-mcp-bridge/ui/index.html` (993 lines, served from `McpBridgeAddOn.cs:6900` as a
+static asset at `http://localhost:7890/ui`)
+
+Measured, two commands:
+
+| Question | Answer |
+|---|---|
+| `copierMode` / `notEnforcingReason` / `configConflicts` in `ui/index.html` | **0** |
+| the same three in `McpBridgeAddOn.cs` + `CopierEnforcementView.cs` | **21** |
+
+⚠️ **THIS IS THE DEFECT `P1-121` CLOSED, AT A DIFFERENT SURFACE, AND IT IS THE MORE IMPORTANT
+ONE.** Session 50 rebuilt the WPF `TradeCopierWindow` header so it derives from
+`CopierStatusView` and goes amber on a `shadow` or `disabled` copier. The **browser UI** — which
+is what the operator had open when they reported the problem — was never touched and still shows
+nothing. A `disabled` copier, submitting nothing at all, renders exactly like the screenshot:
+two rows, verdict `shadow`, a `Disable` button on each.
+
+The page header reads `mode shadow · armed · cannot act`. **That is the GUARD's mode.** The
+copier has its OWN mode (`live`/`shadow`/`disabled`), deliberately separate since `P3-34` so the
+sim can keep copying while the guard sits in shadow — and it appears nowhere on the page. An
+operator reading that header has been told about a mode, which is worse than being told nothing:
+it invites the conclusion that the copier's state has been reported too.
+
+⚠️ **The reason text is already built and already has a filed defect.** `CopierEnforcementView`
+computes `notEnforcingReason`, and `P3-122` is open against its ORDERING — it can say an unarmed
+relationship *"copies to SIMULATION followers only"* while the copier is in `shadow` and copying
+to nothing. **A defect in a string nothing displays is not reachable by the operator**, so
+`P3-122` and this entry should be closed together: rendering the reason is what makes its
+ordering matter.
+
+**Fix**: render the copier's global mode and `notEnforcingReason` in the Copier section header,
+severity-coloured, plus the `configConflicts` count. The decision belongs in
+`CopierEnforcementView` (already in the test build) and NOT in the HTML, for the same reason
+`CopierStatusView` exists: `ui/index.html` is in no test build and no mutation battery can reach
+it.
+
+---
+
+### P2-126. The copier section of the browser UI implements TWO of the fourteen actions its own API supports, so the operator can toggle a relationship and nothing else -- OPEN, found 2026-08-16 (session 50), reported by the operator as "only the enable/disable buttons work"
+
+**Where**: `nt8-mcp-bridge/ui/index.html` (the `dispatch` / `toggleRow` / `releaseRow` block,
+~lines 573-611) against `McpBridgeAddOn.cs:4253` `knownActions`
+
+Measured:
+
+| | |
+|---|---|
+| actions `/api/copier/config` accepts | **14** — `get`, `get_groups`, `set`, `update`, `set_group`, `upsert_group`, `remove_group`, `delete_group`, `add_follower_to_group`, `remove_follower_from_group`, `remove`, `clear`, `delete`, `set_mode` |
+| actions the UI ever dispatches | **2** — `set` and `set_group` |
+| fields the UI ever sends on them | **2** — `isEnabled`, and `isQuarantined: false` |
+
+So the operator cannot, from the page: **create** a relationship or a group, **delete** either,
+add or remove a follower from a group, change **sizing mode, ratio, per-ticker ratios or symbol
+mappings**, or set the **copier's global mode** — the last of which is `P3-34`'s whole point, a
+feature built specifically so the mode would stop being editable only by hand in
+`copier_config.json`.
+
+⚠️ **`Release` is wired and the operator was still right.** `releaseRow` exists and posts
+`isQuarantined: false`. It renders only when a row IS quarantined, and neither of the two live
+rows is — so the observation *"only the enable/disable buttons work"* is exactly what the page
+offers today. **Do not close this by pointing at code that cannot be reached**; that is
+`configured / evaluated / enforcing` at the level of a button.
+
+⚠️ **`quarantine` (the verb, not the release) does not exist in the addon at all** — measured, 0
+occurrences of `"quarantine"`/`"unquarantine"` as actions in `McpBridgeAddOn.cs`. This is the
+remains of `P1-72`'s twice-regressed advertisement. An operator can release a quarantine and
+cannot impose one. Decide deliberately whether that asymmetry stays; it is defensible (the engine
+imposes quarantine on measured slippage, not on opinion) but it is nowhere stated.
+
+**Fix**: this is the one that needs a design pass before code, and it should be taken WITH
+`P2-127` rather than bolted onto the current page. The read surface is already honest and rich;
+what is missing is a write surface, and the write surface is what
+`GuardConfigEdit`/`CopierRequests` exist to validate. **Every new control must dispatch through
+the existing `dispatch()` chokepoint** — one place that builds a request and one that reads the
+answer, including `refused`, which is the engine declining on purpose and is not an error.
+
+---
+
+### P2-127. The whole page is ONE scroll -- four stacked sections, ~190 rows fully expanded, no navigation -- OPEN, found 2026-08-16 (session 50), reported by the operator as "cluttered"
+
+**Where**: `nt8-mcp-bridge/ui/index.html`
+
+Measured:
+
+| | |
+|---|---|
+| `<nav>` / `role="tab"` / `class="tab"` elements | **0** |
+| top-level sections stacked on one scroll | **4** — Configuration, Copier, Accounts, "Configured, and evaluated by nothing" |
+| editable config rows in the first section | **~28** |
+| account rows visible by default | **7 of 97**, each expanding to **23** rule rows |
+| rows on screen with every account expanded | **~190** |
+
+The operator's request is a **left-hand nav that switches between sections**, keeping each view
+small. That is the right shape and it is cheap — the page already builds each section from its
+own `api()` call and its own render function, so the sections are separable today; what is
+missing is the shell.
+
+⚠️ **THE ONE THING THIS RESTRUCTURE MUST NOT DO IS HIDE A WARNING BEHIND A TAB.** The entire
+value of this page is that `INERT`, `ConfiguredNotEvaluated` and a non-acting copier are visible
+without being looked for — `GuardSnapshot.UnevaluatedRules` exists precisely so a box with no
+accounts loaded cannot render a clean, empty, reassuring page. A tabbed shell puts three of the
+four sections behind a click by default. **So the nav itself must carry the worst state in each
+section as a badge**, derived from the same payload the section renders, or this change converts
+an honest cluttered page into a tidy one that lies by omission. That is the same trade
+`P2-103`'s summary made and the reason it recounts from the detail rows rather than keeping its
+own counters.
+
+⚠️ **`ui/index.html` is in NO test build and NO mutation battery**, exactly like
+`TradeCopierWindow.cs`. Before adding behaviour to it, move the decisions — which badge, which
+severity, which sections exist — into a class the harness compiles, the way `CopierStatusView`
+and `CopierSymbolMatrixView` already do for the WPF window. Otherwise this grows a third
+untested surface, and it will be the one the operator actually uses.
+
+---
+
 ### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, but NARROWED by live measurement 2026-08-14: the hazard AS FILED does not reproduce, and only a small remainder stands
 
 **Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
