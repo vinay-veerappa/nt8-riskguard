@@ -10489,10 +10489,15 @@ the log is empty, and the process keeps running invisibly. The completion notifi
 
 ### Order from here
 
-1. **Re-pack CI on measured weights.** The two batteries added this session went in as
-   ESTIMATES (353s and 265s) — 22s/mutant, taken from the measured weight of the battery added in the session before this one. Read `BATTERY_SECONDS` for both
-   out of the first green run and re-pack. Session 48 is the record of what a guessed weight
-   costs. ⚠️ The re-pack needed the matrix FLATTENED to one battery per entry first: the packer
+1. ✅ **DONE in-session — CI re-packed on measured weights, and the gain was ZERO.** Run
+   `31958336028` came back green, 20/20, **12m32s** against a ~12.0 min prediction. The two
+   estimates were good (377s measured vs 353s estimated; 292s vs 265s — both ~8-10% low, the
+   22s/mutant heuristic holding at ~24s), so re-packing moved the heaviest bin **595s → 598s**
+   and the wall 12.0 → 12.1 min. ⚠️ **Record a nil gain as nil.** It was still worth doing for
+   exactly one reason: the packer refuses to run on guessed weights, so the next battery added
+   could not have been packed until these were measured. **A re-pack whose own gain is nothing
+   can still be what keeps the next one possible.** Nothing to re-pack now unless a battery is
+   added or removed. ⚠️ The re-pack needed the matrix FLATTENED to one battery per entry first: the packer
    weights ENTRIES, so given pairs it can only re-arrange pairs. The per-battery decomposition
    in each comment is what makes that reversible — **second time that comment has paid for
    itself.** 19 bins, heaviest **532s → 595s** against a 510s ideal, because total work rose to
