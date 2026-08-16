@@ -65,9 +65,13 @@ MUTANTS = [
      '                    ReconcileStopFromBroker(account, bracket);',
      ''),
 
+    # REPOINTED by P1-130, not retired. The old anchor was the ATM_STOP_ORDER_NOT_FOUND log call,
+    # which P1-130 split into TWO (absent vs present-but-terminal say different things), so the
+    # find-string went ambiguous and check_anchors.py refused it -- the gate working. The insertion
+    # point is unchanged: the first statement after the search loop has failed to find a live stop.
     ("ModifyStopPrice reports success even when no working stop order exists",
-     '                RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",',
-     '                if (true) return true;\n                RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",'),
+     '                Order present = null;',
+     '                if (true) return true;\n                Order present = null;'),
 
     # ---- the in-flight reservation, found by the trail test rather than by reading ----
     ("two Change() calls can land on one stop order in a single sweep again -- which per P0-61 "
