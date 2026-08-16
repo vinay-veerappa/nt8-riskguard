@@ -172,6 +172,18 @@
 #
 #   provisional (UI3 404s + P1-121 309s)   713s critical path
 #   re-packed on measured weights          532s heaviest bin, ideal 477s, predicted ~10.5 min
+#   MEASURED (run 31953269097)             684s wall / 11.4 min, 20/20 green, no overlap
+#
+# ⚠️ The plan said 532s for the heaviest bin and the slowest job came in at 589s (UI3+P1-100),
+# ~11% over -- which is the "every battery runs 10-20% slower as one of N concurrent jobs"
+# effect already recorded higher up, not a packing error. Expect the plan to under-predict by
+# about that much and do not chase the gap by re-binning.
+#
+# ⚠️ The weights themselves came from run 31952419083, which DID overlap a nt8-mcp-bridge run.
+# That is fine and worth knowing why: BATTERY_SECONDS counts a battery's OWN compute, so
+# queueing cannot inflate it -- only the ~10-20% concurrency slowdown touches it, roughly
+# uniformly, and packing depends on RELATIVE weights. Overlap invalidates a WALL CLOCK, not a
+# BATTERY_SECONDS. That distinction is the whole reason the per-battery line exists.
 #
 # Floor is unchanged and is still not the bin count: UI4 alone is 500s of work, so no packing
 # goes below ~9.9 min until that battery is split.
