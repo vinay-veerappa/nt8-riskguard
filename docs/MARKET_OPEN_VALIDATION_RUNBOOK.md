@@ -56,17 +56,43 @@ echo "interventions=$BASE_I outbox=$BASE_O"
 #    so a 30s sample cannot tell a fix from a slow clock.
 
 # 4. count what arrived after the mark
-tail -n +$((BASE_I+1)) "/c/Users/vinay/Documents/NinjaTrader 8/RiskGuard/interventions.jsonl" \
-  | grep -c NAKED_POSITION
-tail -n +$((BASE_I+1)) "/c/Users/vinay/Documents/NinjaTrader 8/RiskGuard/interventions.jsonl" \
-  | grep -c ACTION_SUPPRESSED
+I="/c/Users/vinay/Documents/NinjaTrader 8/RiskGuard/interventions.jsonl"
+tail -n +$((BASE_I+1)) "$I" | grep -c NAKED_POSITION
+tail -n +$((BASE_I+1)) "$I" | grep -c AUDIT_FINDING_SUPPRESSED
 tail -n +$((BASE_O+1)) "/c/Users/vinay/Documents/NinjaTrader 8/RiskGuard/alerts_outbox.jsonl" | wc -l
 ```
 
-**PASS**: `NAKED_POSITION` appears **once** (or once per re-evaluation of a genuinely *worsening*
-condition), `ACTION_SUPPRESSED` names the producer and the budget, and the outbox gains **one**
-line, not twelve.
-**FAIL**: ~12 `NAKED_POSITION` in 120s — the pre-`P2-107` behaviour.
+⚠️ **THE MARKER IS `AUDIT_FINDING_SUPPRESSED`, NOT `ACTION_SUPPRESSED`, and getting it wrong would
+read a PASS as a FAIL.** The first draft of this runbook counted the latter. `NAKED_POSITION` is
+bounded by **`AuditFindingThrottle`** (`P2-108`), not by `GuardActionDeduplicator` (`P2-107`):
+audit findings are `LogEvent`s with no action behind them, on a path `DispatchActions` never sees —
+which is exactly why `P2-108` had to exist after `P2-107` shipped. **`ACTION_SUPPRESSED = 0` is the
+CORRECT reading here**, and is the load-bearing zero in `P2-108`'s own filing.
+
+**The pre-fix numbers are on record, so this is a comparison and not an impression.** Measured
+2026-08-15 under Market Replay — one position, no stop, guard in `shadow`:
+
+| sample | NAKED_POSITION | ACTION_SUPPRESSED |
+|---|---|---|
+| t+30s | 3 | 0 |
+| t+60s | 6 | 0 |
+| t+90s | 9 | 0 |
+| t+120s | **12** | 0 |
+
+Perfectly linear, one per 10s, indefinitely; 180 sat in the log when it was filed.
+
+**PASS**: `NAKED_POSITION` is **bounded** for the episode, and exactly **one**
+`AUDIT_FINDING_SUPPRESSED` announces the suppression — announced once, because trading a screaming
+alarm for a silent one is not a fix.
+**FAIL**: the linear 3 / 6 / 9 / 12 above.
+
+⚠️ **`NAKED_POSITION` IS a `warning`** — it is in `GuardAlertSink.WarningEvents` — so it clears the
+`Alerts.MinSeverity = warning` floor and **must** reach the outbox. An empty outbox here IS a
+failure, unlike the `info` case noted below.
+
+⚠️ **This test does not actually need the open.** `P2-108` was measured under **Market Replay**,
+which produces a position just as well. If the open is late or the feed is unhealthy, run it on
+Replay rather than skipping it.
 
 ⚠️ **The budget lives in the sink INSTANCE and NT8 rebuilds the whole Custom assembly on every
 `nt_compile`.** Do not compile between step 2 and step 4, or each reload spends a fresh "1 of 1"
