@@ -1,0 +1,44 @@
+{
+  "plan": "docs/RISKGUARD_COPIER_HARDENING_PLAN.md",
+  "note": "P1-130 only. Two regions in DynamicAtmManager.cs. The acceptance tests are already in the suite and were VERIFIED RED at the 2021/12 baseline before this ticket was written.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P1-130: the ATM stop-move writer demands OrderState.Working, so no breakeven or trailing stop ever moves on a real connection",
+      "defect": "MEASURED LIVE at the Sunday 2026-08-16 open on Sim101 / MNQ SEP26.\n\nA DrawdownShield bracket: entry filled 30185.25, stop 30175.25 (40 ticks), breakeven trigger 12 ticks, offset 2. Price ran to 30199.5 -- 57 ticks in favour, nearly FIVE TIMES the trigger -- and the stop never moved in 230 seconds. `nt_atm_bracket_status` reported `breakevenTriggered: false`, and the log carried 55 lines, one every 5 seconds:\n\n    no WORKING stop order with id '802abaf811e9442c8d7c58c301884a4f' on 'Sim101',\n    so the move to 30185.75 was not requested. The position may be unprotected.\n\n30185.75 is exactly entry + 2 ticks, so the monitor ran, the trigger fired and every computation upstream was correct. THE WRITE FAILED.\n\n`ModifyStopPrice` matches `order.OrderState == OrderState.Working` and nothing else. On a real connection a resting stop sits in `Accepted` -- the fact P3-110 measured on 2026-08-14 ('both stop types rest in Accepted') and which the panic-flatten path already learned. That order existed the whole time: /api/orders showed it as StopMarket, stopPrice 30175.25, state Accepted.\n\nTHE SAME CLASS ALREADY HOLDS THE RIGHT ANSWER TWICE. MonitorTickCore (the entry-liveness check) tests `Working || Submitted || Accepted`. ReconcileStopFromBroker -- the READER of this very order, ten lines from the writer -- uses `RiskGuardAddOn.OccupiesSlot(o.OrderState)`, and `Classify(Accepted)` returns `OrderLiveness.Working`. The reader and the writer of one order disagree about whether it exists.\n\nSECOND DEFECT, same ticket: the bounded retry cannot reach its bound. RequestStopMove checks `StopModifyAttempts >= MaxStopModifyAttempts` and has an ATM_STOP_MOVE_ABANDONED event for giving up, but on the not-found path it does `if (!ModifyStopPrice(...)) return false;` WITHOUT incrementing the counter. So the cap is unreachable and the sweep re-asks every 5 seconds for the life of the position. 55 lines and still counting when the position was flattened.",
+      "spec": "ONE FILE: `addons/DynamicAtmManager.cs`. Two changes.\n\nA. `ModifyStopPrice` -- the liveness test.\n\nReplace `order.OrderState == OrderState.Working` with `RiskGuardAddOn.OccupiesSlot(order.OrderState)`.\n\nThat is the guard's own shared predicate. Do NOT write a new list of states, and do NOT add `|| order.OrderState == OrderState.Accepted` -- a second hand-rolled list is how the reader and the writer came to disagree in the first place, and OccupiesSlot is what ReconcileStopFromBroker in this same class already uses to find THIS ORDER.\n\nThe not-found log message must also stop asserting something untrue. `The position may be unprotected` is false in the measured case: the original stop was resting and working perfectly, it simply had not been ADVANCED. Say what is true -- no live stop order with that id was found, so the stop was not moved and remains where it is.\n\nB. `RequestStopMove` -- count the failure that actually happens.\n\n`if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice)) return false;` must increment `bracket.StopModifyAttempts` before returning false, so that MaxStopModifyAttempts is reachable and ATM_STOP_MOVE_ABANDONED can fire. A retry whose exit condition is never evaluated never exits.\n\nKeep the existing behaviour on the paths that already work: the in-flight guard (RequestedStopPrice not NaN) still returns false WITHOUT counting -- that is a deferral, not a failed attempt, and counting it would abandon a bracket for being busy. The provider-refusal counting done by ReconcileStopFromBroker stays exactly as it is.",
+      "context": "SCOPE. This is the stop-MOVE path only. Do not touch ShouldTriggerBreakeven, CalculateBreakevenStopPrice, the trailing arithmetic, ReconcileStopFromBroker, or the MonitorTickCore sweep structure -- all of them were measured CORRECT on the live box, which is how the defect was isolated to the write.\n\nWHY OccupiesSlot IS THE RIGHT PREDICATE AND NOT A WIDER ONE. Classify() puts Initialized, Submitted, Accepted, AcceptedByRisk, Working, PartFilled and TriggerPending under OrderLiveness.Working; OccupiesSlot additionally admits Changing, Inert and Indeterminate, which is correct here for the same reason it is correct for the reader: those describe an order that is still THERE. A cancelling or terminal order is excluded, and must stay excluded -- moving the price of an order that is going away is how a stop gets resurrected at the wrong level.\n\nTHE TEST FILE ALREADY CONTAINS THE REASON THIS WAS INVISIBLE. `AtmSetup` sets `stop.OrderState = OrderState.Working`, and so does every other order in the suite. 2018 tests were green against a stub that only ever reported the one state the writer accepted. The new acceptance tests drive every state OccupiesSlot admits, and `Working` passes at baseline -- it is the positive control, and it must keep passing.",
+      "expect_green": [
+        "P1-130: the breakeven move is REQUESTED for a stop resting in Accepted",
+        "P1-130: and the order really carries the new price for state Accepted",
+        "P1-130: the breakeven move is REQUESTED for a stop resting in Submitted",
+        "P1-130: and the order really carries the new price for state Submitted",
+        "P1-130: the breakeven move is REQUESTED for a stop resting in Initialized",
+        "P1-130: and the order really carries the new price for state Initialized",
+        "P1-130: the breakeven move is REQUESTED for a stop resting in PartFilled",
+        "P1-130: and the order really carries the new price for state PartFilled",
+        "P1-130: the breakeven move is REQUESTED for a stop resting in TriggerPending",
+        "P1-130: and the order really carries the new price for state TriggerPending",
+        "P1-130: a request that finds NO live order is counted as an attempt",
+        "P1-130: repeated sweeps keep counting rather than spinning at zero"
+      ],
+      "note_expect_green": "All TWELVE were VERIFIED RED at the 2021 passed / 12 failed baseline, and the list is complete: the loop's --list NOTE flagged six as 'forgotten criterion?' when only six were listed, which is the gate working, by running the suite before this ticket was written -- expect_green is matched against the runner's FAILURE LINES and means red-now-green-after.\n\nDELIBERATELY ABSENT, because they are GREEN NOW and must STAY green:\n\n  * the same two assertions for OrderState.Working -- THE POSITIVE CONTROL. A writer that matched every state, including terminal ones, would pass all six listed above. Working passing proves the test is not simply always-failing.\n  * `P1-130: and the count STOPS at the cap` -- passes vacuously at baseline (the count never moves at all), so it is not a red-first assertion; it is what stops the fix from turning an unbounded retry into an unbounded COUNTER.\n  * every P0-67 assertion in the tests beside these: the refused-move cache behaviour, the in-flight reservation, and the attempt counting on provider refusals. The in-flight guard must still NOT count -- a deferral is not a failed attempt.",
+      "regions": [
+        {
+          "id": "TheStopWriter",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool ModifyStopPrice(Account account, string orderId, double newStopPrice)",
+          "kind": "decl",
+          "note": "The whole method including its doc comment. The liveness test and the not-found message both live here."
+        },
+        {
+          "id": "TheMoveRequest",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)",
+          "kind": "decl",
+          "note": "The whole method. Only the ModifyStopPrice failure path changes; the in-flight guard and the abandon check must come back byte-identical."
+        }
+      ]
+    }
+  ]
+}
