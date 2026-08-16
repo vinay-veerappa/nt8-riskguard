@@ -50,6 +50,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private WrapPanel _cardsPanel;
         
         private readonly Dictionary<string, CardControls> _cardControls = new Dictionary<string, CardControls>();
+        // True only while UpdateUI is assigning a checkbox's state from the live config, so the
+        // resulting Checked/Unchecked event is not mistaken for the operator clicking it. WPF
+        // raises those events for programmatic assignment exactly as it does for a click, and
+        // nothing in the event distinguishes them. Single-threaded: every touch is on the
+        // dispatcher thread.
+        private bool _suppressExcludeEvents;
 
         // Config UI fields
         private ComboBox _modeCombo;
@@ -374,53 +380,167 @@ namespace NinjaTrader.NinjaScript.AddOns
             _firmDailyLossAmountText.Text = cfg.FirmMirror != null && cfg.FirmMirror.DailyLoss != null ? cfg.FirmMirror.DailyLoss.Amount.ToString() : "0";
         }
 
+        /// <summary>
+        /// P1-117. This used to do `var cfg = _addOn.Config;` and then set fifteen fields ON THE
+        /// LIVE OBJECT, with thirteen bare Parse calls among them, and only call
+        /// SaveAndReloadConfig as the LAST statement.
+        ///
+        /// So a single unparseable box -- `1o00` in Daily Loss Limit -- threw partway down, the
+        /// save never ran, and every field ABOVE the throw had already been applied to the live
+        /// guard. Statement 2 always landed, which means `Mode` in particular. The operator saw
+        /// "Failed to parse settings" and reasonably concluded nothing had happened, while the
+        /// running guard was in a state that matched neither the form nor the file on disk, and
+        /// the next restart would silently revert it.
+        ///
+        /// ⚠️ IT ALSO DEFEATED THE P2-119 CHOKEPOINT, which is why the two were fixed together:
+        /// SaveAndReloadConfig compares the incoming config against the live one to decide
+        /// whether THIS WRITE introduces a bad value, and passing the live object itself made
+        /// every comparison a value against itself.
+        ///
+        /// Now: parse EVERYTHING into locals first, so a bad box aborts before anything is
+        /// touched; then apply to a DEEP COPY; then save; then report what the save actually
+        /// answered rather than that control reached this line.
+        /// </summary>
         private void OnSaveConfigClick(object sender, RoutedEventArgs e)
         {
+            RiskConfig cfg;
             try
             {
-                var cfg = _addOn.Config;
-                cfg.Mode = _modeCombo.SelectedItem.ToString();
-                cfg.EnableWindowGate = _windowGateCheck.IsChecked ?? false;
-                cfg.Sizing.MaxContractsPerAccount = int.Parse(_maxContractsAccountText.Text.Trim());
-                cfg.Sizing.MaxContractsAggregate = int.Parse(_maxContractsAggregateText.Text.Trim());
-                cfg.Overtrading.MaxTradesPerSession = int.Parse(_maxTradesSessionText.Text.Trim());
-                cfg.Overtrading.MaxConsecutiveLosses = int.Parse(_maxConsecutiveLossesText.Text.Trim());
-                cfg.Overtrading.CooldownMinutes = int.Parse(_cooldownMinutesText.Text.Trim());
-                cfg.Overtrading.LockoutMinutes = int.Parse(_lockoutMinutesText.Text.Trim());
-                cfg.PnLRules.DailyLossLimit = double.Parse(_dailyLossLimitText.Text.Trim());
-                cfg.PnLRules.TrailingDrawdown = double.Parse(_trailingDrawdownText.Text.Trim());
-                cfg.PnLRules.LockoutMinutes = int.Parse(_pnlLockoutMinutesText.Text.Trim());
-                cfg.StopGuard.OnMissing = _onMissingCombo.SelectedItem.ToString();
-                cfg.StopGuard.StopAttachSeconds = int.Parse(_stopAttachSecondsText.Text.Trim());
-                cfg.Sizing.ExpectedCopies = int.Parse(_expectedCopiesText.Text.Trim());
+                // ---- Phase 1: PARSE ONLY. Nothing below this block may throw, and nothing in
+                // it may write to the live config. A failure here must leave the guard exactly
+                // as it was.
+                string mode = _modeCombo.SelectedItem.ToString();
+                bool windowGate = _windowGateCheck.IsChecked ?? false;
+                int maxContractsAccount = ParseIntField(_maxContractsAccountText, "Max contracts per account");
+                int maxContractsAggregate = ParseIntField(_maxContractsAggregateText, "Max contracts aggregate");
+                int maxTradesSession = ParseIntField(_maxTradesSessionText, "Max trades per session");
+                int maxConsecutiveLosses = ParseIntField(_maxConsecutiveLossesText, "Max consecutive losses");
+                int cooldownMinutes = ParseIntField(_cooldownMinutesText, "Cooldown minutes");
+                int overtradingLockout = ParseIntField(_lockoutMinutesText, "Overtrading lockout minutes");
+                double dailyLossLimit = ParseDoubleField(_dailyLossLimitText, "Daily loss limit");
+                double trailingDrawdown = ParseDoubleField(_trailingDrawdownText, "Trailing drawdown");
+                int pnlLockoutMinutes = ParseIntField(_pnlLockoutMinutesText, "P&L lockout minutes");
+                string onMissing = _onMissingCombo.SelectedItem.ToString();
+                int stopAttachSeconds = ParseIntField(_stopAttachSecondsText, "Stop attach seconds");
+                int expectedCopies = ParseIntField(_expectedCopiesText, "Expected copies");
 
-                // Excluded accounts from the text box (comma-separated)
                 var exclText = _excludedAccountsText.Text.Trim();
-                if (string.IsNullOrEmpty(exclText))
-                    cfg.ExcludedAccounts = new List<string>();
-                else
-                    cfg.ExcludedAccounts = exclText.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                                                   .Select(s => s.Trim())
-                                                   .Where(s => !string.IsNullOrEmpty(s))
-                                                   .ToList();
+                var excluded = string.IsNullOrEmpty(exclText)
+                    ? new List<string>()
+                    : exclText.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                              .Select(s => s.Trim())
+                              .Where(s => !string.IsNullOrEmpty(s))
+                              .ToList();
 
-                // FirmMirror
-                if (cfg.FirmMirror != null)
+                bool firmMirrorEnabled = _firmMirrorEnabledCheck.IsChecked ?? false;
+                // Parsed unconditionally, even though they are only APPLIED when the
+                // corresponding section exists. Parsing inside the `if` would make a typo in a
+                // box the operator can see depend on a config section they cannot, so the same
+                // bad input would be refused or silently ignored depending on the file.
+                double firmTrailingDD = ParseDoubleField(_firmTrailingDDAmountText, "Firm mirror trailing DD amount");
+                double firmDailyLoss = ParseDoubleField(_firmDailyLossAmountText, "Firm mirror daily loss amount");
+
+                // ---- Phase 2: apply to a COPY. Never to _addOn.Config.
+                cfg = RiskConfigMerge.DeepCopy(_addOn.Config);
+                if (cfg == null)
                 {
-                    cfg.FirmMirror.Enabled = _firmMirrorEnabledCheck.IsChecked ?? false;
-                    if (cfg.FirmMirror.TrailingDD != null)
-                        cfg.FirmMirror.TrailingDD.Amount = double.Parse(_firmTrailingDDAmountText.Text.Trim());
-                    if (cfg.FirmMirror.DailyLoss != null)
-                        cfg.FirmMirror.DailyLoss.Amount = double.Parse(_firmDailyLossAmountText.Text.Trim());
+                    MessageBox.Show("There is no configuration loaded to save.", "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
                 }
 
-                _addOn.SaveAndReloadConfig(cfg);
-                MessageBox.Show("Configuration saved and hot-reloaded successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                cfg.Mode = mode;
+                cfg.EnableWindowGate = windowGate;
+                cfg.Sizing.MaxContractsPerAccount = maxContractsAccount;
+                cfg.Sizing.MaxContractsAggregate = maxContractsAggregate;
+                cfg.Sizing.ExpectedCopies = expectedCopies;
+                cfg.Overtrading.MaxTradesPerSession = maxTradesSession;
+                cfg.Overtrading.MaxConsecutiveLosses = maxConsecutiveLosses;
+                cfg.Overtrading.CooldownMinutes = cooldownMinutes;
+                cfg.Overtrading.LockoutMinutes = overtradingLockout;
+                cfg.PnLRules.DailyLossLimit = dailyLossLimit;
+                cfg.PnLRules.TrailingDrawdown = trailingDrawdown;
+                cfg.PnLRules.LockoutMinutes = pnlLockoutMinutes;
+                cfg.StopGuard.OnMissing = onMissing;
+                cfg.StopGuard.StopAttachSeconds = stopAttachSeconds;
+                cfg.ExcludedAccounts = excluded;
+
+                if (cfg.FirmMirror != null)
+                {
+                    cfg.FirmMirror.Enabled = firmMirrorEnabled;
+                    if (cfg.FirmMirror.TrailingDD != null)
+                        cfg.FirmMirror.TrailingDD.Amount = firmTrailingDD;
+                    if (cfg.FirmMirror.DailyLoss != null)
+                        cfg.FirmMirror.DailyLoss.Amount = firmDailyLoss;
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to parse settings: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                // Reachable ONLY from phase 1 now, and phase 1 has written nothing.
+                MessageBox.Show($"Failed to parse settings: {ex.Message}\n\nNothing was changed.",
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
+
+            // ---- Phase 3: save, and report what the SAVE said. P2-119: this used to announce
+            // success unconditionally, because SaveAndReloadConfig returned void and swallowed
+            // its own exception -- the dialog recorded that control reached this line.
+            var result = _addOn.SaveAndReloadConfig(cfg);
+            ShowSaveResult(result, "Configuration saved and hot-reloaded successfully!");
+            LoadConfigIntoUI();   // a refused or failed save must leave the form showing the TRUTH
+        }
+
+        private static int ParseIntField(TextBox box, string fieldName)
+        {
+            int value;
+            if (!int.TryParse(box.Text.Trim(), out value))
+                throw new FormatException(string.Format("{0}: '{1}' is not a whole number.",
+                    fieldName, box.Text.Trim()));
+            return value;
+        }
+
+        private static double ParseDoubleField(TextBox box, string fieldName)
+        {
+            double value;
+            if (!double.TryParse(box.Text.Trim(), out value))
+                throw new FormatException(string.Format("{0}: '{1}' is not a number.",
+                    fieldName, box.Text.Trim()));
+            return value;
+        }
+
+        /// <summary>
+        /// One renderer for a ConfigSaveResult, so no caller can invent its own idea of what
+        /// happened. P2-119's defect was three writers each asserting an outcome none of them
+        /// had been told.
+        /// </summary>
+        private static void ShowSaveResult(ConfigSaveResult result, string successText)
+        {
+            if (result == null)
+            {
+                MessageBox.Show("The save returned no result, which should be impossible.",
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            if (!string.IsNullOrEmpty(result.Refusal))
+            {
+                MessageBox.Show(result.Refusal + "\n\nNothing was saved.", "Refused",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (!result.Saved)
+            {
+                MessageBox.Show("The configuration was NOT saved.\n\n"
+                    + (string.IsNullOrEmpty(result.Error) ? "No reason was reported." : result.Error),
+                    "Save failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            if (!string.IsNullOrEmpty(result.Warning))
+            {
+                MessageBox.Show(successText + "\n\n" + result.Warning, "Saved with a warning",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            MessageBox.Show(successText, "Success", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void UpdateUI()
@@ -542,8 +662,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                     }
 
-                    // Excluded checkbox state
-                    card.ExcludeCheck.IsChecked = snapshot.IsExcluded;
+                    // Excluded checkbox state.
+                    //
+                    // ⚠️ SUPPRESSED, and this is not cosmetic. Assigning IsChecked raises
+                    // Checked/Unchecked, so this RENDER line was calling OnCardExcludeChecked --
+                    // a config WRITE -- from a timer tick. It settled only because the value it
+                    // wrote back matched what it had just read. Once that handler reports
+                    // failures (P2-119) an unwritable config would pop a MODAL DIALOG on every
+                    // tick, so the loop had to be cut rather than tolerated. A render path must
+                    // not be able to write the config at all.
+                    _suppressExcludeEvents = true;
+                    try { card.ExcludeCheck.IsChecked = snapshot.IsExcluded; }
+                    finally { _suppressExcludeEvents = false; }
                 }
             }
         }
@@ -705,23 +835,59 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        /// <summary>
+        /// P1-117 / P2-119. This mutated the LIVE `ExcludedAccounts` list and then reported
+        /// NOTHING -- not success, not failure. A failed write left the in-memory guard changed
+        /// and the file on disk not, so the checkbox, the running guard and `config.json` told
+        /// three different stories and the next restart picked the third.
+        ///
+        /// ⚠️ THIS IS THE WRITER THE P2-119 CHOKEPOINT MUST NEVER BLOCK ON A PRE-EXISTING BAD
+        /// VALUE. Unchecking the box is how an account is put BACK UNDER THE GUARD. If a config
+        /// already holding, say, a zero trailing drawdown refused every save, the operator would
+        /// be locked out of the control that restores protection -- refusing to protect them in
+        /// the name of protecting them, which is P1-106 at a second site. RefuseChange only
+        /// refuses what THIS write introduces, and this write changes one list.
+        /// </summary>
         private void OnCardExcludeChecked(string accountName, bool isExcluded)
         {
+            // Raised by UpdateUI's own assignment to IsChecked, not by the operator. See the
+            // note there: without this, a render tick writes the config.
+            if (_suppressExcludeEvents) return;
+
+            ConfigSaveResult result;
             lock (_addOn.StateLock)
             {
-                var cfg = _addOn.Config;
+                var cfg = RiskConfigMerge.DeepCopy(_addOn.Config);
+                if (cfg == null)
+                {
+                    MessageBox.Show("There is no configuration loaded to change.", "Error",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                if (cfg.ExcludedAccounts == null)
+                    cfg.ExcludedAccounts = new List<string>();
+
                 if (isExcluded)
                 {
                     if (!cfg.ExcludedAccounts.Contains(accountName))
-                    {
                         cfg.ExcludedAccounts.Add(accountName);
-                    }
                 }
                 else
                 {
                     cfg.ExcludedAccounts.Remove(accountName);
                 }
-                _addOn.SaveAndReloadConfig(cfg);
+                result = _addOn.SaveAndReloadConfig(cfg);
+            }
+
+            // Silence on failure is the defect. Reported OUTSIDE the lock: MessageBox.Show is
+            // modal and blocks until the operator dismisses it, and holding StateLock across
+            // that would stall every rule evaluation behind a dialog nobody may be looking at.
+            if (result == null || !result.Saved)
+            {
+                ShowSaveResult(result, null);
+                // The checkbox is left alone deliberately. The live config is unchanged, so
+                // UpdateUI's next tick puts it back on its own -- and doing it here would mean
+                // assigning IsChecked from inside its own event handler.
             }
         }
 
