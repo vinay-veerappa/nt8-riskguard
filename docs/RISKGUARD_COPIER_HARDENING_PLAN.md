@@ -7210,3 +7210,57 @@ nothing must report it false in the same sweep that reports this one true.
 **What is NOT claimed**: the guard behaved correctly throughout. It detected the breach, recorded
 the lockout, and declined to flatten because it is in `shadow`. This entry is about the READ
 surface only.
+
+#### ⚠️ P1-131 CORRECTED, same session, before any code was written
+
+The entry above was filed against the wrong reference predicate, and the correction is the most
+useful thing in it. **`OccupiesSlot` is not the right answer to borrow**, because it is not the
+same question. Its own doc comment:
+
+```
+/// "Is there already an order here, so I must not create a second one?"
+/// True for anything the broker still holds. Answering this wrongly with NO is
+/// what produces two protective legs behind one position.
+```
+
+It excludes `Departing` **deliberately**: once a cancel is in flight you *should* be free to place
+the replacement leg. `WouldStrand` asks something else entirely — *"if I sever this connection
+now, is there anything at the broker I will no longer be able to manage?"* — and for that question
+**a cancel stuck in flight is the strongest possible YES**. The three Sim101 orders measured today
+had been `CancelPending` for about five hours; an assessment built on `OccupiesSlot` would have
+discarded exactly those.
+
+**So the bridge including `CancelPending` is CORRECT, and the "false positive" half of the entry
+above is withdrawn.** What remains is the false-negative half, which is the dangerous one and is
+larger than first stated. The stranding question is **`!IsTerminal`** — everything the broker still
+holds — and the bridge's list omits **six** non-terminal states:
+
+| omitted state | | |
+|---|---|---|
+| `Initialized` | live | |
+| `AcceptedByRisk` | live | |
+| `ChangeSubmitted` | live | ⚠️ `ChangePending` IS in the list; its twin is not |
+| `CancelSubmitted` | live | ⚠️ `CancelPending` IS in the list; its twin is not |
+| `Suspended` | present but dormant | |
+| `Unknown` | unreadable | ⚠️ the state you least want to disconnect under |
+
+**Every omission is in the direction that PERMITS a disconnect.** And the two twin-state
+asymmetries are the tell that the list was written by remembering states rather than by deriving
+them — each handshake has two halves and one half of each was recalled.
+
+**Revised fix**: the predicate is `!IsTerminal(state)` — `Filled`, `Cancelled`, `Rejected` are the
+only NOs — which also fixes `GetOrders`, whose inline filter is the same question minus `Rejected`.
+One definition, both sites, and an unrecognised state name answers **YES** (fail-safe: assess the
+disconnect as if something is there).
+
+⚠️ **THE GENERAL LESSON, and it is the reusable half.** "Reuse the shared predicate instead of
+hand-rolling one" is right only when it is the same QUESTION. This core already knows that — it
+carries three predicates over one enum (`OccupiesSlot`, `ProvidesCoverage`, `AcceptsModification`)
+and the third's comment opens *"The third question, added 2026-08-10 after a live trade"*. **This
+is the fourth**, and naming the bridge's copy `OccupiesSlotForBridge` is what disguised it: the
+name claims it is the core's predicate with a suffix, so nobody asked which question it answers.
+The defect is not that it duplicated a definition — it is that it duplicated a NAME across two
+questions. **Name a predicate after its question, not after the file it came from.**
+
+**Band unchanged at P1**, but for one reason instead of two: a disconnect permitted while a
+protective order rests in a state the bridge cannot see.
