@@ -56,12 +56,36 @@ def strip_comments(text: str) -> str:
     return "\n".join(out)
 
 
-def execution_sites(text: str, name: str) -> int:
-    """How many places in the comment-stripped workflow actually run `name`."""
-    escaped = re.escape(name)
-    matrix = re.findall(r"battery:\s*%s(?:\s|$|[,}])" % escaped, text)
-    runs = re.findall(r"run:.*%s" % escaped, text)
-    return len(matrix) + len(runs)
+# A packed matrix entry: `- { label: "A+B", batteries: "mutate_a.py mutate_b.py" }`.
+# ⚠️ Deliberately does NOT match the pre-packing singular `battery: mutate_a.py`. That shape
+# stopped RUNNING anything the moment the run step became a loop over `matrix.batteries`, so
+# matching it would report a battery as wired that CI never executes -- this gate's own
+# original defect, one shape later. A reverted entry now reads as MISSING, which is loud.
+ENTRY = re.compile(r"\{\s*label:\s*(?P<label>.+?)\s*,\s*batteries:\s*\"(?P<batteries>[^\"]*)\"\s*\}")
+
+# ...and the list must be CONSUMED, not merely declared. A gate that a value is COMPUTED is
+# not a gate that it is USED -- four mutants in this project have now beaten a source check
+# that assumed otherwise. If the run step stops iterating this list, every battery below is
+# declared and none of them run, and the count above would still say "all 33 wired".
+CONSUMES = re.compile(r"for\s+\w+\s+in\s+\$\{\{\s*matrix\.batteries\s*\}\}")
+
+
+def execution_sites(text: str) -> dict[str, int]:
+    """battery filename -> how many times the comment-stripped workflow actually runs it.
+
+    Tokenised on whitespace rather than substring-matched: `mutate_p199.py` is a substring of
+    nothing here today, but `mutate_p1_71.py` and `mutate_p1_76.py` differ by one character
+    and a packed list puts them on ONE line, which is where a substring check starts counting
+    a neighbour's name as its own.
+    """
+    counts: dict[str, int] = {}
+    for m in ENTRY.finditer(text):
+        for name in m.group("batteries").split():
+            counts[name] = counts.get(name, 0) + 1
+    # The pre-matrix shape, still valid: a `run:` line naming the battery directly.
+    for m in re.finditer(r"run:.*?(mutate_[a-z0-9_]+\.py)", text):
+        counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    return counts
 
 
 def main() -> int:
@@ -77,7 +101,18 @@ def main() -> int:
         print(f"FAIL: no mutate_*.py found in {BATTERIES.relative_to(REPO)}")
         return 1
 
-    counts = {b: execution_sites(text, b) for b in batteries}
+    if not CONSUMES.search(text):
+        print("FAIL: the matrix declares `batteries:` lists, but no run step iterates")
+        print("      `${{ matrix.batteries }}`. Every battery below would be listed and none")
+        print("      of them executed, and the per-battery count would still read 'wired'.")
+        return 1
+
+    sites = execution_sites(text)
+    counts = {b: sites.get(b, 0) for b in batteries}
+    # A name wired in the workflow that has no file on disk is the mirror failure: the matrix
+    # spends a slot on `python mutation/<gone>.py`, which exits non-zero for a reason that has
+    # nothing to do with mutation. Cheap to catch here, and nothing else looks.
+    orphans = sorted(set(sites) - set(batteries))
     missing = [b for b in batteries if counts[b] == 0]
     duplicated = [b for b in batteries if counts[b] > 1]
 
@@ -96,6 +131,16 @@ def main() -> int:
         print("the battery. A battery that only runs on the machine that wrote it is not a")
         print("gate. NOTE: comments are stripped before this check, so describing a battery")
         print("in the prose above a matrix entry does not count as running it.")
+        return 1
+
+    if orphans:
+        print()
+        print(f"FAIL: {len(orphans)} battery/batteries are wired but do not exist on disk:")
+        for b in orphans:
+            print(f"    mutation/{b}")
+        print()
+        print("The job will fail on a missing file, which reads like a mutation failure and is")
+        print("not one. Remove the matrix entry in the same commit that removes the battery.")
         return 1
 
     if duplicated:
