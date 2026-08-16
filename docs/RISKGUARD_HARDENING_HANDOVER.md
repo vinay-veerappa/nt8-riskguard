@@ -10383,8 +10383,19 @@ invisible to every count.
 
 ### Order from here
 
-1. **`P2-116`** — still heads the list, unchanged by this session: an equity rule with no equity
-   reading reports `EvaluatedNotEnforcing` on **88 of 89** prop accounts, on the surface built to
-   answer *is the guard protecting me*. It is `F-9`'s class in the optimistic direction and it is
-   the same shape as the one just closed, one layer down.
-2. Then **`P2-29`'s remainder** (the `partial class` split), then `P3-118`, `P3-110`, `P3-33`.
+1. **`P2-123`** — filed this session and **the operator's own subject**: the tab called
+   *"Symbol & Per-Ticker Matrix"* is a static poster. Measured: **0** engine references inside
+   `CreateSymbolMatrixTab`, **0** occurrences of `PerTickerRatios`/`CustomSymbolMappings` anywhere
+   in the window, and two `TextBox` fields declared and never constructed. Real persisted config
+   the copier enforces is invisible on the screen named after it, while the static table keeps
+   asserting the default conversion — so the display **contradicts** the config. Same class as
+   the header defect closed above, one tab across. It was deliberately not folded into that
+   commit: bolting an unmeasured editable matrix on would have put an untested feature behind a
+   14-mutant score that says nothing about it.
+2. **`P2-116`** — an equity rule with no equity reading reports `EvaluatedNotEnforcing` on
+   **88 of 89** prop accounts, on the surface built to answer *is the guard protecting me*.
+   `F-9`'s class in the optimistic direction, and the same shape as this session's closure, one
+   layer down. Take this ahead of `P2-123` if the priority is the guard rather than the copier.
+3. Then **`P2-29`'s remainder** (the `partial class` split), then `P3-118`, `P3-122`, `P3-110`,
+   `P3-33`. ⚠️ **`P3-122` is cheap and lives in the other repo** — one predicate reordering in
+   `nt8-mcp-bridge/addons/CopierEnforcementView.cs` plus a two-gates-shut regression row.

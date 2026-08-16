@@ -4484,6 +4484,47 @@ compiles is not evidence. The window is held only by the source gates in
 
 ---
 
+### P2-123. The tab called *"Symbol & Per-Ticker Matrix"* contains no per-ticker matrix — it is a static poster that reads zero engine state, beside two dead fields — OPEN, found 2026-08-16 (session 49) while closing `P1-121`
+**Where**: `addons/TradeCopierWindow.cs:622` `CreateSymbolMatrixTab`, fields at `:186-187`
+
+Measured, four commands, no reading required:
+
+| Question | Answer |
+|---|---|
+| `TradeCopierEngine` references inside `CreateSymbolMatrixTab` | **0** |
+| `PerTickerRatios` / `CustomSymbolMappings` anywhere in the window | **0** |
+| Occurrences of `_ratioNqText` in the file | **1** — the declaration |
+| Occurrences of `_ratioEsText` in the file | **1** — the declaration |
+
+The tab is a hardcoded `rows[i, 0..3]` table of asset classes, mini/micro contract names and
+scaling ratios, rendered as `TextBlock`s. It has no input, reads nothing, and writes nothing.
+The two `TextBox` fields that would have made it editable were declared and never constructed —
+**dead UI fields, which `check_no_dead_safety_machinery.py` does not cover because they are not
+safety machinery** — and their names (`Nq`, `Es`) show the tab was scoped to two instruments
+while the engine's `PerTickerRatios` is an arbitrary case-insensitive map.
+
+**Why it is `P2` and not cosmetic.** `PerTickerRatios` and `CustomSymbolMappings` are real,
+persisted, engine-enforced config, settable through `nt_copier_config`. An operator who sets
+`{"NQ": 2, "ES": 1}` sees **no trace of it** on the screen named after it — and worse, the static
+table continues asserting the default conversion, so the display actively **contradicts** the
+config the copier is enforcing. That is `P1-121`'s class one tab across, and `F-9`'s in the
+general form: *a surface that states behaviour it does not read.*
+
+⚠️ The static text also presents mini↔micro conversion as clean — *"1 NQ to 10 MNQ ... across all
+futures asset classes"* — with no mention of the rounding the MCP schema warns about in its own
+`autoConversion` description: **with ratio 1.0 a 1-lot micro copy is DROPPED**, because 1 MNQ
+translated to NQ rounds below one contract. The one place an operator goes to understand
+conversion is the one place that omits how it loses a trade.
+
+**Fix**: render the tab from `GetRelationships()` — the effective per-ticker ratio per
+relationship, folded out of the same rows the first tab shows — and either wire the two fields or
+delete them. Keep any static reference table clearly labelled as *reference*, separate from
+configured state. Deliberately **not** folded into `P1-121`: that ticket's evidence is 14 mutants
+over an extracted decision class, and bolting an unmeasured editable matrix onto the same commit
+would have put a feature with no tests behind a mutation score that says nothing about it.
+
+---
+
 ### P3-122. The bridge tells you an unarmed relationship *"copies to SIMULATION followers only"* while the copier is in `shadow` and copying to nothing at all — OPEN, found 2026-08-16 (session 49) while wiring the window's reader
 **Where**: `nt8-mcp-bridge/addons/CopierEnforcementView.cs`, `NotEnforcingReason`
 
