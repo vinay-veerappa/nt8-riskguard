@@ -743,6 +743,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP1121_TheEngineReportsMetricsWithTheirSampleCounts();
             TestP1121_TheWindowDelegatesItsStatusTextToTheView();
 
+            // P2-123: the tab named after per-ticker ratios now reads them
+            TestP2123_ARatioIsNotRenderedWhereTheSizingModeIgnoresIt();
+            TestP2123_AutoConversionNeedsBothConditions();
+            TestP2123_TheRoundingThatDropsATradeIsStated();
+            TestP2123_TheTabsRatioAndTheCopyPathAgree();
+            TestP2123_TheRatioResolverToleratesNoRelationship();
+            TestP2123_AMicroLeaderAtRatioOneReportsTheDroppedLot();
+            TestP2123_TheRatioIsTheEnginesAndNotTheViewsOwn();
+            TestP2123_ACustomMappingWithNoRatioStillAppears();
+            TestP2123_ConfiguredRootsAreDedupedTheWayTheEngineKeysThem();
+            TestP2123_NothingConfiguredSaysSoRatherThanShowingNothing();
+            TestP2123_AHealthyConfigurationProducesNoWarnings();
+            TestP2123_MatrixModeWithNoEntryForARootSaysItCopiesNothing();
+            TestP2123_DescribeFoldsEveryRelationshipAndSkipsNulls();
+            TestP2123_TheWindowRendersTheTabFromTheView();
+
             // Structural self-check: fails if the runner silently stops covering declared tests.
             TestHarness_AllDeclaredTestsAreInvoked();
 
@@ -11675,6 +11691,412 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Severity -> colour must live in one place, or the mapping drifts per call site.
             Assert(CountOccurrences(src, "private static Brush BrushFor(") == 1,
                 "P1-121: there is exactly one severity-to-brush mapping in the window");
+        }
+
+        // ── P2-123: the tab named after per-ticker ratios contained no per-ticker ratios ──
+        //
+        // Measured, four commands, no reading required:
+        //   TradeCopierEngine references inside CreateSymbolMatrixTab ......... 0
+        //   PerTickerRatios / CustomSymbolMappings anywhere in the window ..... 0
+        //   Occurrences of _ratioNqText in the file ........................... 1 (declaration)
+        //   Occurrences of _ratioEsText in the file ........................... 1 (declaration)
+        //
+        // An operator who set {"NQ": 2, "ES": 1} saw no trace of it on the screen named after
+        // it, while the static poster went on asserting the DEFAULT conversion -- so the
+        // display actively contradicted the config the copier was enforcing.
+
+        private static CopierRelationship P2123Relationship()
+        {
+            return new CopierRelationship
+            {
+                LeaderAccountName = "Leader",
+                FollowerAccountName = "Follower",
+                SizingMode = CopierSizingMode.QuantityRatio,
+                QuantityRatio = 1.0,
+                AutoSymbolConversion = true
+            };
+        }
+
+        /// <summary>The engine's own routing, so the tests drive what the copy path drives.</summary>
+        private static string P2123Route(CopierRelationship rel, string root)
+        {
+            return TradeCopierEngine.Instance.TranslateSymbol(root, rel);
+        }
+
+        private static void TestP2123_ARatioIsNotRenderedWhereTheSizingModeIgnoresIt()
+        {
+            // ⚠️ ComputeEffectiveRatio answers 0.0 for FixedLot, NetLiquidationRatio and
+            // AvailableCashPercent because those size off something OTHER than a ratio. A tab
+            // that printed "x0" there would tell a correctly configured operator their copier
+            // multiplies by zero. This is CopierMetric.Measured's distinction one screen across:
+            // a zero that means "not applicable" must never render as a measurement.
+            Console.WriteLine("\n[TEST] P2-123: a ratio is not rendered where the sizing mode ignores it");
+
+            Assert(CopierSymbolMatrixView.RatioApplies(CopierSizingMode.QuantityRatio, false),
+                "P2-123: a quantity-ratio relationship IS sized by ratio");
+            Assert(CopierSymbolMatrixView.RatioApplies(CopierSizingMode.PerTickerMatrix, false),
+                "P2-123: a per-ticker matrix relationship IS sized by ratio");
+            Assert(!CopierSymbolMatrixView.RatioApplies(CopierSizingMode.FixedLot, false),
+                "P2-123: fixed lot is NOT sized by ratio");
+            Assert(!CopierSymbolMatrixView.RatioApplies(CopierSizingMode.NetLiquidationRatio, false),
+                "P2-123: net liquidation ratio is NOT sized by a contract ratio");
+            Assert(!CopierSymbolMatrixView.RatioApplies(CopierSizingMode.AvailableCashPercent, false),
+                "P2-123: available cash percent is NOT sized by a contract ratio");
+
+            // The FixedLotMode FLAG overrides the enum, exactly as ComputeEffectiveRatio reads it.
+            Assert(!CopierSymbolMatrixView.RatioApplies(CopierSizingMode.QuantityRatio, true),
+                "P2-123: FixedLotMode set on a quantity-ratio relationship still means no ratio");
+
+            string text = CopierSymbolMatrixView.RatioTextFor(false, CopierSizingMode.FixedLot, 0.0);
+            Assert(text.IndexOf("fixed lot", StringComparison.OrdinalIgnoreCase) >= 0
+                   && text.IndexOf("x0", StringComparison.OrdinalIgnoreCase) < 0,
+                "P2-123: the fixed-lot row names its sizing mode and never renders a ratio (was \""
+                + text + "\")");
+        }
+
+        private static void TestP2123_AutoConversionNeedsBothConditions()
+        {
+            // ⚠️ The second condition is the one a reader forgets, and the static tab omitted
+            // BOTH: it claimed conversion happened "across all futures asset classes", full stop.
+            Console.WriteLine("\n[TEST] P2-123: automatic conversion needs the flag AND a non-matrix sizing mode");
+
+            var rel = P2123Relationship();
+            Assert(CopierSymbolMatrixView.AutoConversionActive(rel),
+                "P2-123: flag on, quantity-ratio mode -- conversion is active");
+
+            rel.AutoSymbolConversion = false;
+            Assert(!CopierSymbolMatrixView.AutoConversionActive(rel),
+                "P2-123: flag off -- conversion is not active");
+
+            rel.AutoSymbolConversion = true;
+            rel.SizingMode = CopierSizingMode.PerTickerMatrix;
+            Assert(!CopierSymbolMatrixView.AutoConversionActive(rel),
+                "P2-123: matrix mode disables automatic conversion even with the flag ON");
+
+            Assert(!CopierSymbolMatrixView.AutoConversionActive(null),
+                "P2-123: no relationship converts nothing");
+        }
+
+        private static void TestP2123_TheRoundingThatDropsATradeIsStated()
+        {
+            // The caveat the poster omitted, and the only one that loses an order.
+            Console.WriteLine("\n[TEST] P2-123: the rounding that DROPS a leader fill is stated");
+
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(1.0) == 1,
+                "P2-123: at ratio 1.0 a 1-lot copies");
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(2.0) == 1,
+                "P2-123: at ratio 2.0 a 1-lot copies");
+            // ⚠️ THESE NUMBERS ARE THE ENGINE'S, AND THEY ARE NOT ceil(1/ratio). .NET rounds
+            // midpoints TO EVEN, so at ratio 0.1 a 5-lot gives Math.Round(0.5) == 0 and is
+            // dropped while a 6-lot copies. The first version of this test asserted 10 and 3 --
+            // the arithmetic answer -- and would have pinned the tab to a claim the copy path
+            // does not honour, which is this ticket's own defect committed inside its fix.
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(0.1) == 6,
+                "P2-123: at ratio 0.1 a 6-lot copies and a 5-lot does NOT (banker's rounding), "
+                + "so 6 is the honest answer and 10 is the arithmetic one");
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(0.5) == 2,
+                "P2-123: at ratio 0.5 a 1-lot rounds to EVEN, which is zero, so it takes a 2-lot");
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(0.4) == 2,
+                "P2-123: at ratio 0.4 a 2-lot gives 0.8 which rounds to 1 -- 2, not the ceiling 3");
+            Assert(CopierSymbolMatrixView.SmallestLeaderFillThatCopies(0.0) == 0,
+                "P2-123: no ratio copies no fill");
+
+            // Every answer above must agree with what the copy path would actually send.
+            double[] ratios = new double[] { 1.0, 2.0, 0.1, 0.5, 0.4, 0.25, 0.75 };
+            foreach (double r in ratios)
+            {
+                int smallest = CopierSymbolMatrixView.SmallestLeaderFillThatCopies(r);
+                if (smallest <= 0) continue;
+                Assert(TradeCopierEngine.RoundToContracts(smallest * r) >= 1,
+                    "P2-123: at ratio " + r + " a " + smallest + "-lot really does copy");
+                Assert(smallest == 1 || TradeCopierEngine.RoundToContracts((smallest - 1) * r) < 1,
+                    "P2-123: and at ratio " + r + " the fill one BELOW it really does not -- "
+                    + "otherwise the tab overstates what the operator needs");
+            }
+        }
+
+        private static void TestP2123_TheTabsRatioAndTheCopyPathAgree()
+        {
+            // ⚠️ THE CONFORMANCE CHECK, and the reason it is needed: ComputeEffectiveRatio is a
+            // SECOND implementation of the sizing arithmetic. CalculateFollowerQuantity computes
+            // `absRatio * symbolMultiplier` itself, character for character, at
+            // TradeCopierEngine.cs:1736-1759. They agree today and nothing structural makes them
+            // agree tomorrow -- so "the tab derives from the enforcer" is only true while these
+            // two do.
+            //
+            // This is the forcing function that makes the duplication safe, and it is the same
+            // move as pinning the NT8 stub enum against the real assembly: where two definitions
+            // of one fact must not drift, make a test compare them rather than hoping.
+            Console.WriteLine("\n[TEST] P2-123: the ratio the tab shows and the quantity the copier sends agree");
+
+            var rel = P2123Relationship();
+            rel.MaxPositionSize = 100000;   // out of the way: this test is about SIZING, not clamping
+
+            string[] roots = new string[] { "NQ", "MNQ", "ES", "ZB" };
+            int[] quantities = new int[] { 1, 2, 5, 6, 10, 37 };
+            int compared = 0;
+            var disagreed = new List<string>();
+
+            foreach (string root in roots)
+            {
+                double ratio = TradeCopierEngine.ComputeEffectiveRatio(rel, root);
+                if (ratio <= 0.0) continue;
+                foreach (int qty in quantities)
+                {
+                    bool clamped;
+                    int actual = TradeCopierEngine.Instance.CalculateFollowerQuantity(
+                        rel, qty, root + " 03-26", 0, false, out clamped);
+                    if (clamped) continue;
+                    int predicted = TradeCopierEngine.RoundToContracts(qty * ratio);
+                    compared++;
+                    if (actual != predicted)
+                        disagreed.Add(root + " x" + qty + ": copier sends " + actual
+                            + ", the tab's ratio predicts " + predicted);
+                }
+            }
+
+            Assert(compared >= 12 && disagreed.Count == 0, string.Format(
+                "the tab's effective ratio predicts the copier's own quantity on all {0} "
+                + "combinations ({1} disagreed{2})",
+                compared, disagreed.Count,
+                disagreed.Count == 0 ? "" : ": " + string.Join("; ", disagreed)));
+        }
+
+        private static void TestP2123_TheRatioResolverToleratesNoRelationship()
+        {
+            // Promoting ComputeEffectiveRatio from a local function to a PUBLIC static changed
+            // who can call it: the local one could assume a non-null rel because it had exactly
+            // one caller. A mutation battery found this guard untested -- defensive code with no
+            // test is the shape check_no_dead_safety_machinery.py exists for.
+            Console.WriteLine("\n[TEST] P2-123: the promoted ratio resolver tolerates no relationship");
+
+            Assert(TradeCopierEngine.ComputeEffectiveRatio(null, "NQ") == 0.0,
+                "P2-123: a null relationship resolves to no ratio rather than throwing");
+        }
+
+        private static void TestP2123_AMicroLeaderAtRatioOneReportsTheDroppedLot()
+        {
+            // The live instance, end to end and through the ENGINE's own ratio: a micro leader
+            // root under automatic conversion is multiplied by 0.1, so a 1-lot fill converts to
+            // 0.1 of a mini and is skipped entirely.
+            Console.WriteLine("\n[TEST] P2-123: a micro leader root at ratio 1.0 reports the dropped 1-lot");
+
+            var rel = P2123Relationship();
+            rel.PerTickerRatios["MNQ"] = 1.0;
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            Assert(matrix.Rows.Count == 1,
+                "P2-123: one configured root produces one row (got " + matrix.Rows.Count + ")");
+            if (matrix.Rows.Count != 1) return;
+
+            var row = matrix.Rows[0];
+            Assert(Math.Abs(row.EffectiveRatio - 0.1) < 1e-9,
+                "P2-123: the row carries the ENGINE's effective ratio of 0.1 (got "
+                + row.EffectiveRatio + ")");
+            // 6, not 10: the copier rounds midpoints to EVEN, so a 5-lot at x0.1 gives
+            // Math.Round(0.5) == 0 and is dropped, while a 6-lot copies.
+            Assert(!string.IsNullOrEmpty(row.Warning) && row.Warning.Contains("below 6 contract"),
+                "P2-123: the row says a fill below 6 contracts is DROPPED (was \"" + row.Warning + "\")");
+            Assert(matrix.Severity == CopierStatusSeverity.Warn,
+                "P2-123: a matrix that loses fills to rounding is not rendered as healthy");
+        }
+
+        private static void TestP2123_TheRatioIsTheEnginesAndNotTheViewsOwn()
+        {
+            // ⚠️ THE POINT OF THE WHOLE TICKET. The operator writes 3.0; the copier applies 0.3
+            // because the root is a micro under automatic conversion. A tab that echoed the
+            // CONFIGURED number back would be the original defect wearing the fix's clothes --
+            // it would state a conversion the copier does not perform.
+            Console.WriteLine("\n[TEST] P2-123: the ratio shown is the ENGINE's, not the configured number echoed back");
+
+            var rel = P2123Relationship();
+            rel.PerTickerRatios["MNQ"] = 3.0;
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            if (matrix.Rows.Count != 1) { Assert(false, "P2-123: expected one row"); return; }
+
+            double fromEngine = TradeCopierEngine.ComputeEffectiveRatio(rel, "MNQ");
+            Assert(Math.Abs(matrix.Rows[0].EffectiveRatio - fromEngine) < 1e-9,
+                "P2-123: the row equals TradeCopierEngine.ComputeEffectiveRatio exactly (row "
+                + matrix.Rows[0].EffectiveRatio + " vs engine " + fromEngine + ")");
+            Assert(Math.Abs(matrix.Rows[0].EffectiveRatio - 3.0) > 1e-9,
+                "P2-123: and it is NOT the configured 3.0 echoed back -- conversion applies");
+        }
+
+        private static void TestP2123_ACustomMappingWithNoRatioStillAppears()
+        {
+            // A custom mapping is honoured in EVERY sizing mode and is the setting most likely
+            // to send a copy somewhere the operator did not expect. Listing only PerTickerRatios
+            // would hide it.
+            Console.WriteLine("\n[TEST] P2-123: a custom symbol mapping with no ratio entry still appears");
+
+            var rel = P2123Relationship();
+            rel.CustomSymbolMappings["MNQ"] = "MES";
+
+            var roots = CopierSymbolMatrixView.ConfiguredRoots(rel);
+            Assert(roots.Count == 1 && roots[0] == "MNQ",
+                "P2-123: the mapped root is listed even with no per-ticker ratio (got "
+                + string.Join(",", roots) + ")");
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            if (matrix.Rows.Count != 1) { Assert(false, "P2-123: expected one row"); return; }
+            Assert(matrix.Rows[0].RoutingOrigin == CopierSymbolOrigin.CustomMapping,
+                "P2-123: the row attributes the routing to the CUSTOM mapping, not the automatic table");
+            Assert(matrix.Rows[0].FollowerRoot == "MES",
+                "P2-123: and it routes where the ENGINE says, to MES (got "
+                + matrix.Rows[0].FollowerRoot + ")");
+        }
+
+        private static void TestP2123_ConfiguredRootsAreDedupedTheWayTheEngineKeysThem()
+        {
+            // The engine's dictionaries are OrdinalIgnoreCase. A root listed in both maps, or in
+            // two cases, is ONE root -- listing it twice would invent a conflict.
+            Console.WriteLine("\n[TEST] P2-123: configured roots are deduplicated case-insensitively");
+
+            var rel = P2123Relationship();
+            rel.PerTickerRatios["nq"] = 2.0;
+            rel.CustomSymbolMappings["NQ"] = "MNQ";
+            rel.PerTickerRatios["ES"] = 1.0;
+
+            var roots = CopierSymbolMatrixView.ConfiguredRoots(rel);
+            Assert(roots.Count == 2,
+                "P2-123: NQ appearing in both maps in two cases is ONE root (got "
+                + roots.Count + ": " + string.Join(",", roots) + ")");
+            Assert(roots[0] == "ES" && roots[1] == "NQ",
+                "P2-123: and they are sorted, so the tab does not reshuffle between refreshes (got "
+                + string.Join(",", roots) + ")");
+        }
+
+        private static void TestP2123_NothingConfiguredSaysSoRatherThanShowingNothing()
+        {
+            // ⚠️ "Nothing to show" and "nothing is wrong" must not look the same. An empty panel
+            // under a tab named for per-ticker ratios reads as "there are none to worry about".
+            Console.WriteLine("\n[TEST] P2-123: nothing configured SAYS so, and names the ratio in force");
+
+            var rel = P2123Relationship();
+            rel.QuantityRatio = 2.0;
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            Assert(matrix.Rows.Count == 0, "P2-123: nothing is configured, so there are no rows");
+            Assert(matrix.Headline.IndexOf("no per-ticker", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P2-123: the headline says nothing is configured (was \"" + matrix.Headline + "\")");
+            Assert(matrix.Headline.Contains("2"),
+                "P2-123: and it names the relationship ratio every instrument therefore uses (was \""
+                + matrix.Headline + "\")");
+            Assert(matrix.Severity == CopierStatusSeverity.Info,
+                "P2-123: an empty matrix is INFO -- neither an alarm nor a clean bill of health");
+        }
+
+        private static void TestP2123_AHealthyConfigurationProducesNoWarnings()
+        {
+            // ⚠️ THE NEGATIVE CONTROL. Every warning assertion above is satisfied by a view that
+            // warns about everything, and a tab that flags a correct configuration teaches the
+            // operator to ignore it. P3-30's audit fired on correctly protected accounts behind
+            // three positive-only tests.
+            Console.WriteLine("\n[TEST] P2-123: a healthy configuration produces NO warnings");
+
+            var rel = P2123Relationship();
+            rel.AutoSymbolConversion = false;   // same-instrument, so no conversion rounding
+            rel.PerTickerRatios["NQ"] = 2.0;
+            rel.PerTickerRatios["ES"] = 1.0;
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            Assert(matrix.Rows.Count == 2,
+                "P2-123: two configured roots produce two rows (got " + matrix.Rows.Count + ")");
+
+            int warned = 0;
+            foreach (var row in matrix.Rows)
+                if (!string.IsNullOrEmpty(row.Warning)) warned++;
+
+            Assert(warned == 0,
+                "P2-123: a configuration that loses no fills warns about NOTHING (got " + warned + ")");
+            Assert(matrix.Severity == CopierStatusSeverity.Ok,
+                "P2-123: and the matrix reads healthy, so a warning still means something");
+        }
+
+        private static void TestP2123_MatrixModeWithNoEntryForARootSaysItCopiesNothing()
+        {
+            // Matrix mode has NO fallback ratio by design, so a root that is mapped but carries
+            // no per-ticker number copies nothing at all. That is a silent no-op, which is the
+            // failure this whole tab exists to make visible.
+            Console.WriteLine("\n[TEST] P2-123: matrix mode with no entry for a root says it copies NOTHING");
+
+            var rel = P2123Relationship();
+            rel.SizingMode = CopierSizingMode.PerTickerMatrix;
+            rel.CustomSymbolMappings["NQ"] = "MNQ";   // routed, but no ratio for it
+
+            var matrix = CopierSymbolMatrixView.DescribeOne(rel, P2123Route);
+            if (matrix.Rows.Count != 1) { Assert(false, "P2-123: expected one row"); return; }
+
+            Assert(matrix.Rows[0].EffectiveRatio == 0.0,
+                "P2-123: matrix mode gives no ratio for an unlisted root");
+            Assert(!string.IsNullOrEmpty(matrix.Rows[0].Warning)
+                   && matrix.Rows[0].Warning.IndexOf("COPIES NOTHING", StringComparison.Ordinal) >= 0,
+                "P2-123: and the row SAYS it copies nothing (was \"" + matrix.Rows[0].Warning + "\")");
+            Assert(matrix.AutoConversionText.IndexOf("matrix mode", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P2-123: the card explains WHY automatic conversion is off (was \""
+                + matrix.AutoConversionText + "\")");
+        }
+
+        private static void TestP2123_DescribeFoldsEveryRelationshipAndSkipsNulls()
+        {
+            Console.WriteLine("\n[TEST] P2-123: Describe folds every relationship");
+
+            var a = P2123Relationship();
+            a.PerTickerRatios["NQ"] = 1.0;
+            var b = P2123Relationship();
+            b.LeaderAccountName = "Leader2";
+
+            var list = new List<CopierRelationship> { a, null, b };
+            var matrices = CopierSymbolMatrixView.Describe(list, P2123Route);
+
+            Assert(matrices.Count == 2,
+                "P2-123: two real relationships produce two matrices, the null is skipped (got "
+                + matrices.Count + ")");
+            Assert(CopierSymbolMatrixView.Describe(null, P2123Route).Count == 0,
+                "P2-123: no relationships produce no matrices rather than throwing");
+        }
+
+        private static void TestP2123_TheWindowRendersTheTabFromTheView()
+        {
+            // The SOURCE half. The view being correct proves nothing about whether the window
+            // uses it -- P1-69 shipped fixed in one of two read branches.
+            Console.WriteLine("\n[TEST] P2-123: the window renders the tab from CopierSymbolMatrixView");
+
+            var src = Ui2WindowCode();
+            Assert(!string.IsNullOrEmpty(src), "P2-123: TradeCopierWindow.cs is readable");
+            if (string.IsNullOrEmpty(src)) return;
+
+            Assert(src.Contains("CopierSymbolMatrixView.Describe("),
+                "P2-123: the tab is produced by CopierSymbolMatrixView.Describe");
+
+            // The dead fields are GONE. Each occurred exactly once -- its own declaration.
+            Assert(!src.Contains("_ratioNqText") && !src.Contains("_ratioEsText")
+                   && !src.Contains("_ratioYmText") && !src.Contains("_ratioClText")
+                   && !src.Contains("_ratioGcText") && !src.Contains("_ratioRtyText"),
+                "P2-123: the six declared-and-never-constructed ratio TextBoxes are gone");
+
+            // The blanket claim that conversion happens everywhere, which is false for any
+            // relationship in matrix mode or with the flag off.
+            Assert(!src.Contains("across all futures asset classes"),
+                "P2-123: the unconditional conversion claim is gone from the window");
+
+            // ⚠️ The tab must be REFRESHED, not built once. This count being zero is exactly the
+            // shape of P1-121's defect: a panel populated in the constructor and never again.
+            int clears = CountOccurrences(src, "_symbolMatrixPanel.Children.Clear()");
+            Assert(clears >= 2,
+                "P2-123: the matrix panel is repopulated on refresh AND on failure (found "
+                + clears + ") -- a panel filled once at construction is the P1-121 defect");
+
+            Assert(src.Contains("SYMBOL ROUTING UNAVAILABLE"),
+                "P2-123: a throwing refresh replaces the tab rather than leaving a stale claim "
+                + "about what the copier converts");
+
+            // The reference table survives, labelled as reference, in exactly one place.
+            Assert(CountOccurrences(src, "private UIElement BuildConversionReferenceCard()") == 1,
+                "P2-123: the static mini/micro table is kept once, as clearly-labelled REFERENCE");
+            Assert(src.Contains("ROUNDS DOWN"),
+                "P2-123: and it now states the rounding that drops a 1-lot micro copy");
         }
 
         private static void TestP1117_DeepCopyIsIndependentOfItsSource()

@@ -1187,38 +1187,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return null;
             }
 
-            double ComputeEffectiveRatio(CopierRelationship rel, string symbolRoot)
-            {
-                if (rel.SizingMode == CopierSizingMode.PerTickerMatrix)
-                {
-                    double ratio;
-                    if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out ratio)
-                        && !double.IsNaN(ratio) && !double.IsInfinity(ratio) && ratio > 0.0)
-                        return ratio;
-                    return 0.0;
-                }
-
-                if (rel.FixedLotMode || rel.SizingMode == CopierSizingMode.FixedLot)
-                    return 0.0;
-
-                if (rel.SizingMode == CopierSizingMode.NetLiquidationRatio || rel.SizingMode == CopierSizingMode.AvailableCashPercent)
-                    return 0.0;
-
-                double absRatio = Math.Abs(rel.QuantityRatio);
-                if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out double tickerRatio))
-                    absRatio = Math.Abs(tickerRatio);
-
-                double symbolMultiplier = 1.0;
-                if (rel.AutoSymbolConversion)
-                {
-                    if (symbolRoot == "NQ" || symbolRoot == "ES" || symbolRoot == "YM" || symbolRoot == "CL" || symbolRoot == "GC" || symbolRoot == "RTY")
-                        symbolMultiplier = 10.0;
-                    else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")
-                        symbolMultiplier = 0.1;
-                }
-
-                return absRatio * symbolMultiplier;
-            }
         }
 
         // ── P1-76: a follower belongs to a direct relationship OR a group, never both ──
@@ -1489,6 +1457,75 @@ namespace NinjaTrader.NinjaScript.AddOns
             return result;
         }
 
+        /// <summary>
+        /// The ratio actually in force for one relationship on one instrument root.
+        ///
+        /// ⚠️ P2-123 PROMOTED THIS FROM A LOCAL FUNCTION so the copier window can render the
+        /// SAME number the snapshot reports, rather than growing a second opinion beside it.
+        /// It was nested inside BuildSnapshot, which meant the only way for any other surface
+        /// to show a per-ticker ratio was to recompute one -- and the tab named after those
+        /// ratios showed a hardcoded poster instead. F-9's rule: derive the display from the
+        /// enforcer, never recompute it alongside.
+        ///
+        /// ⚠️ A RETURN OF 0.0 DOES NOT MEAN "the ratio is zero". It means the sizing mode makes
+        /// a ratio meaningless -- FixedLot sizes by a lot count, NetLiquidationRatio and
+        /// AvailableCashPercent size off account equity, and PerTickerMatrix has no fallback by
+        /// design. A caller that renders it as a number says something false; ask
+        /// CopierSymbolMatrixView.RatioApplies first.
+        /// </summary>
+        /// <summary>
+        /// How a fractional contract count becomes a contract count.
+        ///
+        /// P2-123 EXTRACTED THIS so the copier window can state the same rounding the copy path
+        /// performs. It is deliberately a named function rather than an inlined `(int)Math.Round`
+        /// because the behaviour is NOT what a reader assumes: .NET rounds MIDPOINTS TO EVEN, so
+        /// at ratio 0.1 a 5-lot leader fill gives Math.Round(0.5) == 0 and is DROPPED, while a
+        /// 6-lot copies. A surface that reasoned with ceil(1/ratio) would tell the operator they
+        /// need 10, which is wrong by four contracts in the direction that costs them fills.
+        ///
+        /// ⚠️ Do not "fix" the midpoint behaviour here. Changing it changes SIZING on every copy,
+        /// which is P0-6 territory; this exists to REPORT the rule, not to revise it.
+        /// </summary>
+        public static int RoundToContracts(double rawQuantity)
+        {
+            return (int)Math.Round(rawQuantity);
+        }
+
+        public static double ComputeEffectiveRatio(CopierRelationship rel, string symbolRoot)
+        {
+            if (rel == null) return 0.0;
+
+            if (rel.SizingMode == CopierSizingMode.PerTickerMatrix)
+            {
+                double ratio;
+                if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out ratio)
+                    && !double.IsNaN(ratio) && !double.IsInfinity(ratio) && ratio > 0.0)
+                    return ratio;
+                return 0.0;
+            }
+
+            if (rel.FixedLotMode || rel.SizingMode == CopierSizingMode.FixedLot)
+                return 0.0;
+
+            if (rel.SizingMode == CopierSizingMode.NetLiquidationRatio || rel.SizingMode == CopierSizingMode.AvailableCashPercent)
+                return 0.0;
+
+            double absRatio = Math.Abs(rel.QuantityRatio);
+            if (rel.PerTickerRatios != null && rel.PerTickerRatios.TryGetValue(symbolRoot, out double tickerRatio))
+                absRatio = Math.Abs(tickerRatio);
+
+            double symbolMultiplier = 1.0;
+            if (rel.AutoSymbolConversion)
+            {
+                if (symbolRoot == "NQ" || symbolRoot == "ES" || symbolRoot == "YM" || symbolRoot == "CL" || symbolRoot == "GC" || symbolRoot == "RTY")
+                    symbolMultiplier = 10.0;
+                else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")
+                    symbolMultiplier = 0.1;
+            }
+
+            return absRatio * symbolMultiplier;
+        }
+
         public string TranslateSymbol(string rawSymbol, CopierRelationship rel = null)
         {
             if (string.IsNullOrEmpty(rawSymbol)) return rawSymbol;
@@ -1737,7 +1774,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
 
-                rawCopyQty = (int)Math.Round(leaderQty * absRatio * symbolMultiplier);
+                rawCopyQty = RoundToContracts(leaderQty * absRatio * symbolMultiplier);
             }
 
             if (rawCopyQty < 1)

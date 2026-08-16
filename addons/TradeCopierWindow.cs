@@ -182,13 +182,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         private StackPanel _accountCheckboxesPanel;
         private readonly List<CheckBox> _accountCheckBoxes = new List<CheckBox>();
 
-        // Tab 3: Symbol Mapping & Per-Ticker Ratios
-        private TextBox _ratioNqText;
-        private TextBox _ratioEsText;
-        private TextBox _ratioYmText;
-        private TextBox _ratioClText;
-        private TextBox _ratioGcText;
-        private TextBox _ratioRtyText;
+        // Tab 3: Symbol Mapping & Per-Ticker Ratios.
+        //
+        // P2-123. Six `TextBox` fields -- _ratioNqText, _ratioEsText, _ratioYmText,
+        // _ratioClText, _ratioGcText, _ratioRtyText -- were DECLARED HERE AND NEVER
+        // CONSTRUCTED. Each occurred exactly once in the file, on its own declaration line.
+        // They are deleted rather than wired: their names scoped the tab to six instruments
+        // while the engine PerTickerRatios map is an arbitrary case-insensitive dictionary, so
+        // wiring them would have built an editor that cannot express the config it edits.
+        //
+        // What replaces them is a READ of the live configuration, refreshed on the same timer
+        // as every other panel. Editing per-ticker ratios stays with nt_copier_config, which is
+        // the one writer that preserves the rest of the relationship -- see the UI2 note on
+        // CopierRequests: a form that rebuilds a relationship from its own fields WIPES
+        // PerTickerRatios and CustomSymbolMappings, which is exactly this tab subject matter.
+        private StackPanel _symbolMatrixPanel;
 
         // Tab 4: Audit Stream
         private TextBox _auditLogBox;
@@ -626,29 +634,65 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             panel.Children.Add(new TextBlock
             {
-                Text = "BIDIRECTIONAL MINI <-> MICRO SYMBOL MAPPING MATRIX",
+                Text = "CONFIGURED SYMBOL ROUTING & PER-TICKER RATIOS",
                 Foreground = new SolidColorBrush(Color.FromRgb(52, 152, 219)),
                 FontSize = 15,
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 10)
             });
 
-            panel.Children.Add(new TextBlock
-            {
-                Text = "The copier automatically converts Mini contracts (1 NQ) to Micro contracts (10 MNQ) or Micro to Mini (10 MNQ -> 1 NQ) across all futures asset classes.",
-                Foreground = Brushes.LightGray,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 15)
-            });
+            // P2-123. This panel is filled by RefreshUI from the live relationships, on the
+            // same 2-second timer as every other panel. It is deliberately NOT populated here:
+            // a tab built once at construction is the defect P1-121 closed one tab across.
+            _symbolMatrixPanel = new StackPanel();
+            panel.Children.Add(_symbolMatrixPanel);
 
-            var matrixCard = new Border
+            panel.Children.Add(BuildConversionReferenceCard());
+
+            scroll.Content = panel;
+            return scroll;
+        }
+
+        /// <summary>
+        /// The built-in mini/micro table, as REFERENCE -- clearly separated from the configured
+        /// state above it.
+        ///
+        /// P2-123. This used to be the whole tab, presented as fact about what the copier was
+        /// doing. It is a description of a DEFAULT: it applies only where a relationship has
+        /// AutoSymbolConversion on and is not in per-ticker matrix mode, and the panel above
+        /// says which relationships those are.
+        /// </summary>
+        private UIElement BuildConversionReferenceCard()
+        {
+            var card = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(26, 30, 38)),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(15),
+                Margin = new Thickness(0, 18, 0, 0),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(45, 52, 64)),
                 BorderThickness = new Thickness(1)
             };
+
+            var stack = new StackPanel();
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "REFERENCE: BUILT-IN MINI <-> MICRO TABLE (a default, not a statement of what is configured)",
+                Foreground = new SolidColorBrush(Color.FromRgb(149, 165, 166)),
+                FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8)
+            });
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Applies only where a relationship has automatic conversion ON and is not in "
+                     + "per-ticker matrix mode, which forces same-instrument sizing.",
+                Foreground = Brushes.LightGray,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
 
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
@@ -656,7 +700,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
 
-            // Headers
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var h1 = new TextBlock { Text = "Asset Class", Foreground = Brushes.White, FontWeight = FontWeights.Bold };
             var h2 = new TextBlock { Text = "Mini Contract", Foreground = Brushes.White, FontWeight = FontWeights.Bold };
@@ -694,10 +737,88 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Grid.SetColumn(t4, 3); Grid.SetRow(t4, rowIdx); grid.Children.Add(t4);
             }
 
-            matrixCard.Child = grid;
-            panel.Children.Add(matrixCard);
-            scroll.Content = panel;
-            return scroll;
+            stack.Children.Add(grid);
+
+            // P2-123. The caveat the poster omitted, and it is the one that loses a trade. The
+            // MCP schema warns about it in its own autoConversion description; the one screen an
+            // operator opens to understand conversion was the one place that did not.
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Conversion ROUNDS DOWN. At ratio 1.0 a 1-lot MICRO leader fill converts to "
+                     + "0.1 of a mini and is DROPPED -- the copy is skipped, not rounded up. The "
+                     + "per-relationship rows above state the smallest leader fill that survives.",
+                Foreground = new SolidColorBrush(Color.FromRgb(243, 156, 18)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 12, 0, 0)
+            });
+
+            card.Child = stack;
+            return card;
+        }
+
+        /// <summary>P2-123. One relationship configured routing, as a card.</summary>
+        private UIElement CreateSymbolMatrixCard(CopierSymbolMatrix matrix)
+        {
+            var card = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(26, 30, 38)),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(15),
+                Margin = new Thickness(0, 0, 0, 10),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(45, 52, 64)),
+                BorderThickness = new Thickness(1)
+            };
+
+            var stack = new StackPanel();
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = matrix.Label,
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap
+            });
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Sizing: " + matrix.SizingModeText + "  |  " + matrix.AutoConversionText,
+                Foreground = Brushes.LightGray,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 4)
+            });
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = matrix.Headline,
+                Foreground = BrushFor(matrix.Severity),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            foreach (var row in matrix.Rows)
+            {
+                stack.Children.Add(new TextBlock
+                {
+                    Text = "   " + row.RoutingText + "   " + row.RatioText,
+                    Foreground = Brushes.LightGray,
+                    FontFamily = new FontFamily("Consolas"),
+                    TextWrapping = TextWrapping.Wrap
+                });
+
+                if (!string.IsNullOrEmpty(row.Warning))
+                {
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = "      " + row.Warning,
+                        Foreground = BrushFor(CopierStatusSeverity.Warn),
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 0, 0, 4)
+                    });
+                }
+            }
+
+            card.Child = stack;
+            return card;
         }
 
         private UIElement CreateAuditStreamTab()
@@ -859,6 +980,34 @@ namespace NinjaTrader.NinjaScript.AddOns
                 _statusText.Text = "  " + headline.Text;
                 _statusText.Foreground = BrushFor(headline.Severity);
                 _statusText.ToolTip = headline.Detail;
+
+                // P2-123. The Symbol & Per-Ticker Matrix tab, from the SAME `rels` the first
+                // tab renders. Every ratio comes from TradeCopierEngine.ComputeEffectiveRatio
+                // and every route from TradeCopierEngine.TranslateSymbol -- the two functions
+                // the copy path itself calls -- so this tab cannot state a conversion the
+                // copier does not perform.
+                if (_symbolMatrixPanel != null)
+                {
+                    _symbolMatrixPanel.Children.Clear();
+                    var matrices = CopierSymbolMatrixView.Describe(
+                        rels, (r, root) => TradeCopierEngine.Instance.TranslateSymbol(root, r));
+
+                    if (matrices.Count == 0)
+                    {
+                        _symbolMatrixPanel.Children.Add(new TextBlock
+                        {
+                            Text = CopierSymbolMatrixView.NoRelationships,
+                            Foreground = BrushFor(CopierStatusSeverity.Info),
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 0, 0, 10)
+                        });
+                    }
+                    else
+                    {
+                        foreach (var matrix in matrices)
+                            _symbolMatrixPanel.Children.Add(CreateSymbolMatrixCard(matrix));
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -874,6 +1023,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                     _statusText.Foreground = BrushFor(CopierStatusSeverity.Critical);
                     _statusText.ToolTip = "The last refresh threw: " + ex.Message
                         + ". What is shown below may be stale.";
+                }
+
+                // P2-123, and the same reasoning as the header above: this panel states what
+                // the copier is CONFIGURED to convert. Left standing after a failed read it
+                // asserts a configuration nobody has looked at for as long as the throw lasts.
+                if (_symbolMatrixPanel != null)
+                {
+                    _symbolMatrixPanel.Children.Clear();
+                    _symbolMatrixPanel.Children.Add(new TextBlock
+                    {
+                        Text = "[ SYMBOL ROUTING UNAVAILABLE ] the last refresh threw: " + ex.Message,
+                        Foreground = BrushFor(CopierStatusSeverity.Critical),
+                        TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 0, 0, 10)
+                    });
                 }
             }
         }
