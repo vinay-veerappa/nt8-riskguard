@@ -3348,7 +3348,7 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-127` — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
+> ### Do next: `P1-130` — ATM breakeven/trailing stops NEVER move (found live at the Sunday open, §5.80); then `P2-127` — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
 > ### (order of work lives in §5.78's `Order from here`: `P2-127`'s §4 layout — the layout is SETTLED, do not re-open it — then `P2-126`'s write surface, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
 > ### (✅ `P3-128` CLOSED v1.34.0 session 51 — was `[ COPIER LIVE - SIM ONLY ]` over a copier whose every relationship is OFF; found by reading the live payload of the ticket that put that sentence on screen, fixed by the agent loop, live-validated)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
@@ -10906,3 +10906,93 @@ still not evidence — the relay's health came from the cursor and the hourly he
   (merge semantics held; no `P?-65` wipe).
 * **`P1-125` confirmed by the operator's own screenshot** — `copier live · acting` beside `mode
   shadow · armed · cannot act`. The "nobody has looked at the page" flag from §5.78 is closed.
+
+
+---
+
+## 5.80 Session 51 — the Sunday open: two passes, one FAILURE, and the failure is a `P1` that 2018 green tests could not see
+
+The window was run from [`MARKET_OPEN_VALIDATION_RUNBOOK.md`](MARKET_OPEN_VALIDATION_RUNBOOK.md),
+written 35 minutes before it opened. Results are recorded IN that document beside each plan.
+
+| | item | result |
+|---|---|---|
+| A | `F-6` repeating-condition suppression | ✅ **PASS** |
+| B | `F-6` STALE-guard heartbeat (positive half) | ✅ **PASS** |
+| C | ATM breakeven stop-MOVE (`P2-112`'s remainder) | ❌ **FAIL → `P1-130`** |
+| D | lockout ADMIT half | **NOT RUN** — pre-agreed condition not met |
+
+### C is the session, and it is the argument for driving the box
+
+Long 1 MNQ @ **30185.25** with a `DrawdownShield` bracket: stop 40 ticks out, breakeven trigger 12
+ticks, offset 2. Price ran to **30199.5 — 57 ticks in favour, nearly five times the trigger** — and
+the stop **never moved** in 230 seconds. `breakevenTriggered: false`.
+
+**Everything upstream of the write was correct.** The monitor ran, the trigger fired, and the log
+names the right number: *"the move to **30185.75** was not requested"* — exactly entry + 2 ticks.
+
+`ModifyStopPrice` matches `order.OrderState == OrderState.Working`. **On this connection a resting
+stop sits in `Accepted`** — the fact `P3-110` measured on 2026-08-14 and the panic-flatten path
+already learned.
+
+⚠️ **The same class contains the right answer twice**, which is what makes this the sharpest
+instance of [[a-second-reader-of-the-same-state]] yet: `MonitorTickCore:623` accepts `Accepted`
+explicitly, and `ReconcileStopFromBroker:818` looks up **this very order** through the guard's own
+shared `OccupiesSlot` predicate, which classifies `Accepted` as `Working` liveness. **The reader and
+the writer of one order, ten lines apart, disagree about whether it exists.** All three stop-move
+sites — breakeven twice and **trailing** — funnel through the writer, so **no ATM stop advances at
+all** on this box.
+
+⚠️ **And its bounded retry cannot reach its bound**: `RequestStopMove` returns early on a failed
+`ModifyStopPrice` **without incrementing `StopModifyAttempts`**, so `MaxStopModifyAttempts` and its
+`ATM_STOP_MOVE_ABANDONED` event are unreachable. **55 lines at one per five seconds** when the
+position was flattened. [[a-retry-that-cannot-exit]] and *an alarm that is always on is off*, at a
+third site after `P2-107` and `P2-108`.
+
+⚠️ **`P2-112` was not wrong.** It made this loop RUN; this is what the running loop then hit, and it
+is *precisely* the remainder its own closure flagged as unmeasured — "the stop-MOVE half". **A
+confirmation run found a `P1` behind 2018 green tests.** The next time a closure says one half is
+unvalidated, that half is where the defect is.
+
+⚠️ **The regression test must drive the STATE, not the move**: a test asserting "the stop moves"
+passes against a stub reporting `Working`, and this defect exists only because the provider reports
+`Accepted`. [[test-doubles-are-not-evidence]] — the NT8 stub has already hidden one live `P0` by
+omitting 6 of 16 `OrderState`s.
+
+### A and B, briefly
+
+**A PASSED**: 1 `NAKED_POSITION` + 1 `AUDIT_FINDING_SUPPRESSED` + 1 outbox alert, against a pre-fix
+**12 / 0 / 12**. The suppression line explains its own budget — *"will stop being logged after 1
+line(s) in observing mode … will report again the moment the condition changes"*.
+
+⚠️ **`grep -c NAKED_POSITION` returned 2 and that was MY error**: the suppression line *quotes* the
+finding it suppresses, so a bare substring counts it twice. By `"eventType"` it is 1. **Detection by
+substring, in the runbook's own command** — the third instance of that habit in two sessions.
+
+**B PASSED (positive half)**: the heartbeat fired on the hour, and driving `format_heartbeat()`
+against the live guard directory returns `guard: alive, last sweep 0s ago` — so it really does carry
+the guard's freshness beside the relay's, which is what makes *relay down* and *NT8 down*
+distinguishable. The STALE branch was not driven; it needs the guard stopped.
+
+### D was not run, and that was the rule rather than a judgement
+
+The operator agreed BEFORE the window that D — which needs the guard in an acting mode — would run
+**only if A, B and C passed**. C failed, so it did not run and the guard was never armed. **Writing
+the condition down in advance is what made that automatic** instead of a decision taken at 15:10
+with a `P1` freshly on the table.
+
+⚠️ **When D is next attempted, fix `P1-130` first.** The admit test places a reducing order against
+an open position, and a box whose stop-management writer cannot find its own orders is not the box
+to measure a lockout gate on.
+
+### Order from here
+
+1. **`P1-130`** — it is a `P1` on the live path, its fix is one predicate the file already uses, and
+   its evidence is fully obtainable (the state is reachable any time a bracket rests). Take it next.
+2. Then **`P2-127`** (§4 layout, settled), **`P2-126`**, then `P2-29`'s remainder, `P3-118`,
+   `P3-124`, `P3-110`, `P3-33`.
+
+⚠️ Also seen and NOT filed, because it predates this session and was not driven: three orders from
+an earlier bracket (`AtmEntry_0511fe1c`, `Stop_0511fe1c`, `Target_0511fe1c`, prices ~29511) sat in
+**`CancelPending`** throughout, including after two `nt_close_position` calls that reported
+cancelling them. If they are still there next session, that is its own ID.
