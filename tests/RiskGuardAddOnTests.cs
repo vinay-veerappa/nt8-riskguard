@@ -711,6 +711,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP227_ANaNTrailingDrawdownIsRefused();
             TestP227_ANegativeMinShadowSessionsIsRefused();
             TestP227_TheRefusalNamesTheFieldThatIsWrong();
+            TestP2119_SaveAndReloadConfigReportsAnOutcome();
+            TestP2119_AGoodSaveReportsSavedAndActuallyWrites();
+            TestP2119_AFailedWriteIsReportedAsNotSaved();
+            TestP2119_AChangeThatIntroducesABadValueIsRefusedAndNotWritten();
+            TestP2119_APreExistingBadValueDoesNotTrapTheOperator();
+            TestP2119_AnUnchangedNaNIsNotTreatedAsAChange();
+            TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig();
+            TestP2119_IntroducingAnUnknownModeIsRefused();
+            TestP1117_DeepCopyIsIndependentOfItsSource();
+            TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace();
 
             // Structural self-check: fails if the runner silently stops covering declared tests.
             TestHarness_AllDeclaredTestsAreInvoked();
@@ -10764,6 +10774,360 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P2-27: the trailing-drawdown refusal NAMES the field that is wrong");
             Assert(Mentions(CallRefuse("shadow", 1500.0, -1), "shadow session"),
                 "P2-27: the MinShadowSessions refusal NAMES the field that is wrong");
+        }
+
+        // ------------------------------------------------------------------------------------
+        // P2-119 / P1-117. `SaveAndReloadConfig` returned VOID and swallowed its own exception,
+        // so all three writers reported success they had not observed:
+        //
+        //   RiskGuardWindow.cs:417  MessageBox "Configuration saved and hot-reloaded successfully!"
+        //   RiskGuardWindow.cs:724  the account-exclusion toggle -- NO feedback at all
+        //   the bridge's POST route  `success = true, status = "applied"`
+        //
+        // That is `report-the-outcome-not-the-call` at a fourth site: the message records that
+        // control reached the line after the call, which a swallowed exception guarantees.
+        //
+        // ⚠️ AND THE VALIDATOR MUST NOT BE ABLE TO TRAP THE OPERATOR. Putting a plain
+        // GuardConfigEdit.Refuse at the chokepoint would mean that a config ALREADY holding a bad
+        // value refuses every subsequent save -- including OnCardExcludeChecked, which is how an
+        // account is put BACK under the guard. Refusing there does not protect anybody; it takes
+        // away the control that fixes things, which is `a-lockout-must-not-trap-you` (P1-106) in
+        // a second place. So the chokepoint asks a different question: does THIS WRITE INTRODUCE
+        // the violation? A pre-existing one is permitted through and warned about.
+        //
+        // ⚠️ AND THAT QUESTION IS UNANSWERABLE UNLESS P1-117 IS FIXED IN THE SAME CHANGE. The
+        // window does `var cfg = _addOn.Config;` and mutates it FIELD BY FIELD, so `cfg` IS the
+        // live object -- by the time the chokepoint compares old against new they are the same
+        // reference and every value equals itself. The validator would permit everything while
+        // eleven tests of it passed. The bridge does not have this problem
+        // (RiskConfigMerge.Apply returns a new object), which is exactly why one writer being
+        // correct is not evidence about the others.
+        //
+        // REACHED BY REFLECTION, same reason as the P2-27 block above.
+        // ------------------------------------------------------------------------------------
+
+        private static string CallRefuseChange(string oldMode, string newMode,
+                                               double oldTrailing, double newTrailing,
+                                               int oldSessions, int newSessions)
+        {
+            Type t = GuardConfigEditType();
+            if (t == null) return "___CLASS_MISSING___";
+            var m = t.GetMethod("RefuseChange", new[]
+            {
+                typeof(string), typeof(string), typeof(double), typeof(double), typeof(int), typeof(int)
+            });
+            if (m == null) return "___METHOD_MISSING___";
+            return (string)m.Invoke(null, new object[]
+            {
+                oldMode, newMode, oldTrailing, newTrailing, oldSessions, newSessions
+            });
+        }
+
+        /// <summary>
+        /// Invokes SaveAndReloadConfig REFLECTIVELY and hands back whatever it returned -- null
+        /// while it is still `void`. A direct call compiles either way (C# lets a return value be
+        /// discarded), so a direct call could never be red for the thing this ticket changes.
+        /// </summary>
+        private static object CallSaveAndReload(RiskGuardAddOn addon, RiskConfig cfg)
+        {
+            var m = typeof(RiskGuardAddOn).GetMethod("SaveAndReloadConfig");
+            if (m == null) return null;
+            return m.Invoke(addon, new object[] { cfg });
+        }
+
+        private static bool SaveReturnsAnOutcome()
+        {
+            var m = typeof(RiskGuardAddOn).GetMethod("SaveAndReloadConfig");
+            return m != null && m.ReturnType != typeof(void);
+        }
+
+        /// <summary>A bool property off the save result, or null when it is not there yet.</summary>
+        private static bool? ResultFlag(object result, string prop)
+        {
+            if (result == null) return null;
+            var p = result.GetType().GetProperty(prop);
+            if (p == null) return null;
+            object v = p.GetValue(result, null);
+            return v is bool ? (bool?)(bool)v : null;
+        }
+
+        private static string ResultText(object result, string prop)
+        {
+            if (result == null) return null;
+            var p = result.GetType().GetProperty(prop);
+            if (p == null) return null;
+            return p.GetValue(result, null) as string;
+        }
+
+        /// <summary>
+        /// A config the validator accepts, on a real temp path, so every assertion below starts
+        /// from a state whose only interesting property is the one it is about to change.
+        /// </summary>
+        private static RiskGuardAddOn SaveHarness(string dir, double trailingDrawdown, string mode)
+        {
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigFileForTest(Path.Combine(dir, "config.json"));
+            var cfg = new RiskConfig();
+            cfg.Mode = mode;
+            cfg.MinShadowSessions = 5;
+            cfg.PnLRules.TrailingDrawdown = trailingDrawdown;
+            cfg.PnLRules.DailyLossLimit = 1000.0;
+            addon.SetConfigForTest(cfg);
+            addon.SetModeForTest(mode);
+            return addon;
+        }
+
+        private static RiskConfig CopyOf(RiskConfig source)
+        {
+            // Deliberately NOT RiskConfigMerge.DeepCopy: a test that builds its inputs with the
+            // helper under test cannot show the helper working. This is the independent second
+            // implementation, and TestP1117_DeepCopyIsIndependentOfItsSource compares them.
+            return JsonConvert.DeserializeObject<RiskConfig>(JsonConvert.SerializeObject(source));
+        }
+
+        private static void TestP2119_SaveAndReloadConfigReportsAnOutcome()
+        {
+            Console.WriteLine("\n[TEST] P2-119: SaveAndReloadConfig returns an outcome rather than void");
+            Assert(SaveReturnsAnOutcome(),
+                "P2-119: SaveAndReloadConfig returns an outcome. While it is void, every caller's "
+                + "success message records only that control reached the next line.");
+        }
+
+        /// <summary>
+        /// ⚠️ THE POSITIVE CONTROL, and it is the one that matters most here. A chokepoint that
+        /// refuses everything satisfies every negative assertion in this block, and would also
+        /// stop the operator saving anything at all -- a worse outcome than the defect.
+        /// </summary>
+        private static void TestP2119_AGoodSaveReportsSavedAndActuallyWrites()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a good save reports Saved AND writes the file");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_ok_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                var edited = CopyOf(addon.Config);
+                edited.PnLRules.TrailingDrawdown = 2000.0;
+
+                object result = CallSaveAndReload(addon, edited);
+
+                Assert(ResultFlag(result, "Saved") == true,
+                    "P2-119: a valid change reports Saved == true");
+                // ⚠️ `result != null` is load-bearing. ResultText() answers null for an ABSENT
+                // result, so a bare `== null` here PASSED while the method was still void --
+                // a green assertion about a property that did not exist, which is the exact
+                // sentinel trap the P2-27 block above was written to avoid.
+                Assert(result != null && ResultText(result, "Refusal") == null,
+                    "P2-119: ...and carries no refusal");
+                Assert(File.Exists(Path.Combine(dir, "config.json")),
+                    "P2-119: ...and the file is actually on disk");
+                Assert(addon.Config != null && addon.Config.PnLRules.TrailingDrawdown == 2000.0,
+                    "P2-119: ...and the live config reloaded to the new value");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>
+        /// The defect verbatim. The write fails, the exception is caught, and the caller is told
+        /// nothing -- so the operator's dialog says the limits were saved while the file holds the
+        /// old ones and the next restart reverts to them.
+        /// </summary>
+        private static void TestP2119_AFailedWriteIsReportedAsNotSaved()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a write that FAILS is reported as not saved");
+            var addon = new RiskGuardAddOn();
+            // A directory that cannot exist: a file is used as a parent path component.
+            string impossible = Path.Combine(Path.GetTempPath(),
+                "rg_p2119_nope_" + Guid.NewGuid().ToString("N"), "no", "such", "config.json");
+            addon.SetConfigFileForTest(impossible);
+            var cfg = new RiskConfig();
+            cfg.Mode = "shadow";
+            cfg.MinShadowSessions = 5;
+            cfg.PnLRules.TrailingDrawdown = 1500.0;
+            addon.SetConfigForTest(cfg);
+
+            var edited = CopyOf(cfg);
+            edited.PnLRules.TrailingDrawdown = 1750.0;
+            object result = CallSaveAndReload(addon, edited);
+
+            Assert(ResultFlag(result, "Saved") == false,
+                "P2-119: a write that throws reports Saved == false, not silence");
+            Assert(!string.IsNullOrEmpty(ResultText(result, "Error")),
+                "P2-119: ...and the error survives to the caller instead of only reaching the log");
+            Assert(!File.Exists(impossible),
+                "Precondition: nothing was written (the assertions above are about a real failure)");
+        }
+
+        private static void TestP2119_AChangeThatIntroducesABadValueIsRefusedAndNotWritten()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a change that INTRODUCES a bad value is refused, and nothing is written");
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2119_bad_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var addon = SaveHarness(dir, 1500.0, "shadow");
+                var edited = CopyOf(addon.Config);
+                edited.PnLRules.TrailingDrawdown = 0.0;      // "off", written as if it were tight
+
+                object result = CallSaveAndReload(addon, edited);
+
+                Assert(ResultFlag(result, "Saved") == false,
+                    "P2-119: introducing a zero trailing drawdown is REFUSED");
+                Assert(Mentions(ResultText(result, "Refusal"), "trailing"),
+                    "P2-119: ...and the refusal names the field");
+                Assert(!File.Exists(Path.Combine(dir, "config.json")),
+                    "P2-119: ...and NOTHING WAS WRITTEN. A refusal that still persists the value "
+                    + "is the defect with a message attached.");
+                Assert(addon.Config != null && addon.Config.PnLRules.TrailingDrawdown == 1500.0,
+                    "P2-119: ...and the live config still holds the old limit");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        /// <summary>
+        /// ⚠️ LOAD-BEARING. The account-exclusion toggle is how an account is put BACK under the
+        /// guard, and it shares this chokepoint. If a pre-existing bad value refused every save,
+        /// a config that is already wrong would lock the operator out of the control that fixes
+        /// it -- protecting nothing and removing the remedy, which is P1-106's shape exactly.
+        /// </summary>
+        private static void TestP2119_APreExistingBadValueDoesNotTrapTheOperator()
+        {
+            Console.WriteLine("\n[TEST] P2-119: a PRE-EXISTING bad value does not trap the operator");
+            Assert(Accepted(CallRefuseChange("shadow", "shadow", 0.0, 0.0, 5, 5)),
+                "P2-119: an unchanged, already-invalid trailing drawdown is PERMITTED -- this "
+                + "write did not introduce it, and refusing removes the only way to fix it");
+            Assert(Accepted(CallRefuseChange("shadow", "shadow", -5.0, -5.0, -2, -2)),
+                "P2-119: the same for every field at once");
+            Assert(Accepted(CallRefuseChange("shadow", "shadow", 0.0, 1500.0, 5, 5)),
+                "P2-119: and REPAIRING a pre-existing bad value is accepted, which is the point");
+        }
+
+        /// <summary>
+        /// `NaN != NaN` in C#, so the obvious `newValue != oldValue` test for "did this write
+        /// change it?" answers TRUE for an unchanged NaN and refuses a save the operator needs to
+        /// make. Double.Equals is the comparison that says what is meant here.
+        /// </summary>
+        private static void TestP2119_AnUnchangedNaNIsNotTreatedAsAChange()
+        {
+            Console.WriteLine("\n[TEST] P2-119: an unchanged NaN is not read as a change");
+            Assert(Accepted(CallRefuseChange("shadow", "shadow", double.NaN, double.NaN, 5, 5)),
+                "P2-119: an unchanged NaN trailing drawdown is PERMITTED. `!=` would refuse it and "
+                + "trap the operator in a config only this control can repair.");
+            Assert(Refused(CallRefuseChange("shadow", "shadow", 1500.0, double.NaN, 5, 5)),
+                "P2-119: but INTRODUCING a NaN is still refused (the negative control for the above)");
+        }
+
+        private static void TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig()
+        {
+            Console.WriteLine("\n[TEST] P2-119: RefuseChange accepts a valid config");
+            Assert(Accepted(CallRefuseChange("shadow", "shadow", 1500.0, 1500.0, 5, 5)),
+                "P2-119: a no-op save on a valid config is ACCEPTED");
+            Assert(Accepted(CallRefuseChange("shadow", "live", 1500.0, 2000.0, 5, 5)),
+                "P2-119: a valid change on every field is ACCEPTED");
+        }
+
+        private static void TestP2119_IntroducingAnUnknownModeIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-119: introducing an unknown mode is refused");
+            Assert(Refused(CallRefuseChange("shadow", "Live", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing mode to a CASE variant is refused -- preflight compares ordinally, "
+                + "so this would write a config the guard then refuses to arm on");
+            Assert(Refused(CallRefuseChange("shadow", "disabled", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing mode to the COPIER's 'disabled' is refused");
+            Assert(Accepted(CallRefuseChange("Live", "Live", 1500.0, 1500.0, 5, 5)),
+                "P2-119: but an already-broken mode, unchanged, does not trap the operator either");
+        }
+
+        /// <summary>
+        /// P1-117's fix, and the half that is EXECUTED. The window can only stop aliasing the live
+        /// config if there is something to copy it with; the source gate below checks the wiring,
+        /// and this checks the thing the wiring calls.
+        /// </summary>
+        private static void TestP1117_DeepCopyIsIndependentOfItsSource()
+        {
+            Console.WriteLine("\n[TEST] P1-117: RiskConfigMerge.DeepCopy is independent of its source");
+            var live = new RiskConfig();
+            live.Mode = "shadow";
+            live.MinShadowSessions = 5;
+            live.PnLRules.TrailingDrawdown = 1500.0;
+            live.ExcludedAccounts = new List<string> { "Acc1" };
+
+            var m = typeof(RiskConfigMerge).GetMethod("DeepCopy", new[] { typeof(RiskConfig) });
+            Assert(m != null, "P1-117: RiskConfigMerge.DeepCopy(RiskConfig) exists");
+            if (m == null) return;
+
+            var copy = (RiskConfig)m.Invoke(null, new object[] { live });
+            Assert(copy != null && !ReferenceEquals(copy, live),
+                "P1-117: the copy is a DIFFERENT object -- returning the same reference is the defect");
+            if (copy == null) return;
+
+            Assert(copy.Mode == "shadow" && copy.MinShadowSessions == 5
+                   && copy.PnLRules.TrailingDrawdown == 1500.0,
+                "P1-117: ...and it carries the same values");
+            Assert(!ReferenceEquals(copy.PnLRules, live.PnLRules),
+                "P1-117: ...NESTED objects are copied too. A shallow copy leaves PnLRules shared, "
+                + "so editing the copy still mutates the live config and the chokepoint compares "
+                + "a value to itself -- the defect surviving behind a correct-looking clone.");
+
+            copy.PnLRules.TrailingDrawdown = 99.0;
+            copy.Mode = "live";
+            copy.ExcludedAccounts.Add("Acc2");
+            Assert(live.PnLRules.TrailingDrawdown == 1500.0 && live.Mode == "shadow"
+                   && live.ExcludedAccounts.Count == 1,
+                "P1-117: ...and mutating the copy leaves the source untouched, including its lists");
+
+            Assert(((RiskConfig)m.Invoke(null, new object[] { null })) == null,
+                "P1-117: DeepCopy(null) is null rather than a throw -- the window calls it before "
+                + "it can know a config was loaded");
+        }
+
+        /// <summary>
+        /// A SOURCE gate, because RiskGuardWindow.cs is excluded from the test build (WPF) and
+        /// nothing here can execute it. Read over AllAddonCode() -- the whole tree, comments
+        /// stripped -- rather than one named file, because an absence gate pointed at a file the
+        /// code has moved out of passes while proving nothing (`a-code-move-disarms-a-source-gate`).
+        ///
+        /// ⚠️ IT IS A COUNT, NOT A BAN, and the distinction is the whole design. `var cfg =
+        /// _addOn.Config;` is CORRECT in LoadConfigIntoUI, which only reads the live config to
+        /// fill the form -- forbidding the idiom outright would forbid working code and get the
+        /// gate deleted. What must not exist is a second binding that then MUTATES what it bound.
+        /// A regex cannot see the difference, so the gate pins the number of bindings and forces
+        /// anyone adding one to come here and say which kind it is.
+        /// </summary>
+        private static void TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace()
+        {
+            Console.WriteLine("\n[TEST] P1-117: the config window does not edit the live config in place");
+            string src = AllAddonCode();
+
+            // Positive controls FIRST. Every assertion below is about a pattern being absent or
+            // rare, and all of them pass on an empty corpus.
+            Assert(src.IndexOf("SaveAndReloadConfig", StringComparison.Ordinal) >= 0,
+                "Positive control: the addon tree still contains a config save path at all.");
+            Assert(src.IndexOf("_addOn.Config", StringComparison.Ordinal) >= 0,
+                "Positive control: the window still reads _addOn.Config.");
+
+            int bindings = CountOccurrences(src, "= _addOn.Config;");
+            Assert(bindings == 1,
+                string.Format(
+                    "P1-117: exactly ONE binding of the live config object survives (found {0}), and "
+                    + "it is the read-only one in LoadConfigIntoUI. The other two MUTATED what they "
+                    + "bound: OnSaveConfigClick set 15 fields on the LIVE object before calling save, "
+                    + "so a throw in any of its 13 bare Parse calls left the guard half-reconfigured "
+                    + "under a dialog reading 'Failed to parse settings' -- and statement 2 "
+                    + "(`cfg.Mode = ...`) always landed. It also made the P2-119 chokepoint compare "
+                    + "the new config against itself. If you are adding a READ, bind it some other "
+                    + "way and raise this count deliberately.", bindings));
+
+            Assert(src.IndexOf("RiskConfigMerge.DeepCopy(", StringComparison.Ordinal) >= 0,
+                "P1-117: ...and the write paths take a copy instead. Asserting only the count would "
+                + "pass if the whole save path were deleted.");
+        }
+
+        private static int CountOccurrences(string haystack, string needle)
+        {
+            int n = 0, i = 0;
+            while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { n++; i += needle.Length; }
+            return n;
         }
 
         private static void TestMaxPositionSizeEnforcement()
