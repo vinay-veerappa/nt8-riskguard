@@ -5175,6 +5175,8 @@ advertises it.
 
 ### P1-130. The ATM breakeven and trailing stops NEVER move: the writer demands `OrderState.Working` while a resting stop sits in `Accepted` — the reader in the same class already knows better — ✅ FIXED 2026-08-16 (session 51) and live-validated, ⚠️ but the feature is still NOT proven end-to-end
 
+🔶 **SESSION 52, ON A REAL BROKER: the bounded-retry half is now LIVE-VALIDATED and the remaining gap has a name.** Driven on the funded 50K (Provider31): exactly **three** `ATM_STOP_ORDER_NOT_FOUND` attempts and then **`ATM_STOP_MOVE_ABANDONED`, which had NEVER fired before** (0 occurrences in the whole log until 19:56:03). ⚠️ **But the stop still did not move, for a DIFFERENT reason — filed as `P1-133`: the lookup keys on the GUID NT8 assigns at submission, and a real broker REPLACES `Order.OrderId` with its own id.** So this entry's fix was correct and its validation was worthless in the same breath: `Sim101` is the only account where the identity test can pass, because the Simulator never re-ids an order. ⚠️ **Also measured: on the real connection the resting stop is `Working`, not `Accepted`** — the state this ticket was filed about is the *Simulator's* behaviour, so the defect this entry fixed would not have bitten here at all. **The fix and its validation shared one blind spot.**
+
 **Where**: `addons/DynamicAtmManager.cs`, `ModifyStopPrice` (`:742`)
 
 **MEASURED LIVE at the Sunday 2026-08-16 open on Sim101 / MNQ SEP26**, which is the whole reason
@@ -7264,3 +7266,79 @@ questions. **Name a predicate after its question, not after the file it came fro
 
 **Band unchanged at P1**, but for one reason instead of two: a disconnect permitted while a
 protective order rests in a state the bridge cannot see.
+
+---
+
+### P1-133. The ATM manager looks its own stop up by an id the BROKER replaces, so breakeven and trailing can never work on any live account — the Simulator is the only place they have ever worked — OPEN, found 2026-08-16 (session 52), live on the funded 50K
+
+**Where**: `nt8-riskguard/addons/DynamicAtmManager.cs` — `ActiveBracket.StopOrderId` and every lookup
+keyed on it (`ModifyStopPrice`, `ReconcileStopFromBroker`).
+
+**Measured live** on `TAKEPROFITPRO524207503` (Provider31, funded 50K), 1 MNQ, `DrawdownShield`,
+2-tick trigger:
+
+```
+nt_place_atm_order ->  stopOrderId: "f953ea2b50bb43759747e0cb6beab2cc"     <- a GUID
+nt_orders          ->  name "Stop_15bc730b", orderId: "613562531447"       <- the BROKER's id
+
+19:55:48/53/58  ATM_STOP_ORDER_NOT_FOUND
+   "no order with id 'f953ea2b50bb43759747e0cb6beab2cc' is on
+    'TAKEPROFITPRO524207503' at all, so the move to 30216.5 was not requested"
+```
+
+**The order was sitting right there, `Working`, at the price the bracket recorded.** The arithmetic
+was right too — `30216.5` is exactly entry `30216.25` + the 1-tick offset. The *identity* is wrong:
+NT8 assigns a GUID at submission and **replaces `Order.OrderId` with the broker's id once the
+broker accepts**. The manager stores the GUID at placement and searches by it forever after.
+
+⚠️ **THIS IS WHY IT HAS ALWAYS PASSED ON `Sim101`.** The NT8 Simulator never re-ids an order, so
+the GUID keeps matching — measured in the same session, Sim101 orders carry
+`"orderId": "2f515ed0f89e4ab08f549fa356614236"`, still a GUID, while every order on the real
+connection carries a numeric broker id. **The one account where the feature works is the one
+account whose behaviour is not the product.** [[test-doubles-are-not-evidence]] with the double
+being a whole live provider.
+
+⚠️ **AND IT IS THE SECOND HALF OF `P1-130`, WHICH I CLOSED AS "the write fails".** That ticket
+fixed the *state* test (`Working` vs `Accepted`) and was validated on Sim101 — the only place the
+*identity* test could pass. **The fix and its validation shared the same blind spot.** `P1-130`'s
+own entry says the feature "is still NOT proven end-to-end"; this is what was hiding in that gap.
+
+**Fix**: do not key on `OrderId` at all. `Order` identity survives re-id — hold the `Order`
+reference the placer already has, or match on `Order.Name` (`Stop_<bracketId>`), which this system
+sets itself and the broker does not touch. ⚠️ **Whatever is chosen must be verified against a
+non-Simulator account**, because that is precisely the axis on which every existing test agrees
+and reality does not.
+
+---
+
+### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — OPEN, found 2026-08-16 (session 52), same run
+
+**Measured**, immediately after `P1-133`'s three not-found lines:
+
+```
+19:56:03  ATM_STOP_MOVE_ABANDONED  15bc730b: 3 consecutive stop moves were refused by the
+                                   provider; not asking again for this bracket.
+19:56:13  ATM_STOP_MOVE_ABANDONED  (same)
+19:56:18  ATM_STOP_MOVE_ABANDONED  (same)
+19:56:23  ATM_STOP_MOVE_ABANDONED  (same)
+```
+
+**Four in twenty seconds, from a line whose text promises it will not recur.** The attempt counter
+is correctly capped — the three `NOT_FOUND` lines stop exactly at the budget, which is `P1-130`'s
+bounded retry working — but the *announcement* of giving up is re-emitted on every sweep. **Ninth
+instance of *an alarm that is always on is off***, and the sharpest one yet, because the operator
+is told explicitly that this line will not repeat.
+
+⚠️ **`F-6`'s `GuardAlertSink` does not cover it**, for the same reason `P2-108` was not covered:
+this is a `LogEvent` with no action behind it, so `DispatchActions` never sees it. **That is now
+twice.** The de-duplication belongs where the *log* is written, not only where actions are
+dispatched — or every future give-up line arrives with this defect built in.
+
+**Second half — the message names the wrong cause.** *"refused by the provider"* is false here:
+the provider was never asked, because `P1-133` meant the order was never found. The counter is
+shared by two different failures and the text asserts one of them. Same class as `P1-130`'s
+*"the position may be unprotected"*, which was corrected for exactly this reason. **State what was
+observed — N attempts failed — and name the last observed reason rather than assuming it.**
+
+⚠️ **Do not fix this before `P1-133`.** Suppressing the repeat first would make the *only* visible
+symptom of a dead breakeven feature quieter.
