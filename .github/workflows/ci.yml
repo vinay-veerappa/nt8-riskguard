@@ -135,6 +135,22 @@
 #
 # ⚠️ Do not "optimise" this back to 20. The gain is zero and the failure it re-admits is
 # the one above, which presents as an unexplained 2-minute regression in an unrelated push.
+#
+# ⚠️ AND THE SPARE SLOT IS FOR THE SIBLING REPO, NOT FOR A SECOND RUN OF THIS ONE. Measured
+# 2026-08-16 immediately after the re-pack, by pushing three commits in quick succession:
+#
+#   31932881859  647s   the re-pack itself, running alone -- 19 bins all started within 3s
+#   31932897929  1157s  pushed 26s later
+#   31933160883  1325s  pushed 6m later, queued behind both
+#
+# All three green, all three the same 19 bins. Three concurrent runs want 57 jobs against 20
+# slots, so two of them spend most of their wall clock waiting. **The queueing cost of three
+# rapid pushes (~680s) is larger than everything the packing work saved (853s -> 647s).**
+#
+# Two things follow. First, a run's wall clock is only a measurement OF THE PACKING when that
+# run had the slots to itself -- always check `gh run list` for overlap before quoting a
+# number, in this repo AND in nt8-mcp-bridge. Second, batch the pushes: docs, code and a tag
+# landing as three commits in one push cost one run, not three.
 name: CI
 
 on:
