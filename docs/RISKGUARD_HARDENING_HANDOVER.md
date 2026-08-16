@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
+| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.71's — read that one; it carries the reasons.** 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3349,6 +3349,7 @@ and `P?-65` together and makes the redesign testable.
 the *order* they forced is the reusable part.
 
 > ### Do next: `P2-116` — 88 of 89 prop accounts report as protected when the guard has no equity for them
+> ### (order of work lives in §5.71's `Order from here`: `P2-116`, then `P2-29`'s remainder, then `P3-110` / `P3-33`)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
@@ -9658,3 +9659,170 @@ detect a missing heartbeat.
 * SMS-on-critical via `email_notify.py` (built into the plan, not yet wired)
 * **Telegram is `NOT_IMPLEMENTED`** and refused BY NAME — an advertised transport that does
   nothing is `P1-72`, which has regressed twice.
+
+---
+
+## 5.71 Sessions 46-47 — the mutation matrix stopped being the slow part, and the box was finally compiled
+
+Two sessions went undocumented, which is how a §5 file loses its authority: §0 was already
+stale by many sessions, and the newest `Order from here` was §5.63's. Recorded here in one
+block. **Session 46's work is described from its commits and was not re-measured in session
+47** except where this section says otherwise; everything under session 47 was measured.
+
+### Session 46 — the suite was the slow half, and nobody had re-checked
+
+`de3e2b3` profiled the suite for CI speed and found **two `Thread.Sleep`s**: 1050ms outlasting
+a trade-count debounce, 2200ms outlasting the `InFlightLedger` timeout. **3.25s of a 6.4s
+suite** — and CI runs the whole suite **once per mutant**, ~660 times per full run, so those
+two lines were roughly **36 minutes of every green CI run**. Replaced with an injected clock:
+test run **6410ms → ~2600ms**, per-mutant cycle **~10.8s → ~6.2s**.
+
+⚠️ **The clock injection is evidence first and speed second**, which is the part to carry.
+*"After 2.2 real seconds something had expired"* cannot test the **boundary**, races a loaded
+runner, and has to be padded for exactly that reason. Both tests now drive the clock and assert
+the boundary, and both gained a **negative control they could not previously express** — at
+1.999s the ledger entry SURVIVES, at 900ms a re-entry is still the SAME trade. Without those,
+*"expires"* passes for a ledger that purges on sight and *"counts a second trade"* passes for a
+debounce that never suppresses anything. Suite **1774 → 1776**: faster **and** strictly more
+asserted.
+
+⚠️ And **all four** clock reads in `AccountState` were routed through the injected source, not
+just the one the test needed. Routing one would give the class TWO clocks — a fake one for the
+debounce, the real one for the cooldown and both transition stamps — and **a half-injected
+clock IS a second reader of the same state that nobody compared**, the most repeated defect
+shape in this repo (`P1-100`, `P2-98`/`P1-99`, `P1-105`, all closed). Same for `InFlightLedger`'s
+three.
+
+`bc6927c` advanced **`P2-29`**: 26 independent types moved out of `RiskGuardAddOn.cs` into
+`addons/RiskGuardModels.cs`, **6,334 → 5,612 lines** plus a 957-line file. ⚠️ **This is NOT the
+recorded remainder and `P2-29` does not close.** The remainder on record is the `partial class`
+split of `RiskGuardAddOn` **itself**; there is still no `partial class RiskGuardAddOn` anywhere
+in `addons/`. The remainder shrank — read the entry, not the commit count.
+
+### Session 47 — packing, measured
+
+`6564fe2` had already established the shape of the problem at 33 batteries: **the floor is no
+longer the longest battery, it is `total_compute / slots`.** 33 jobs against ~20 concurrent
+slots meant 20 waited, worst 375s, so ~5 of 16.5 minutes was pure queueing that **grows with
+every battery added** — the sharding that made this fast at 24 had started working against
+itself. `de3e2b3` shipped `tools/pack_ci_matrix.py` and **deliberately did not apply it**,
+because the only measured weights predated the speedup and batteries with more mutants shrink
+more. Run `31914385667` is that measurement, so session 47 applied it.
+
+| | before (33 shards) | after (20 bins) |
+|---|---|---|
+| wall | 13m25s (`31914385667`) | **10m59s** (`31922684732`) |
+| job time | 10,044s | 9,178s |
+| queued | **13 of 33**, worst 375s | **0 of 20**, all starting within 3-6s |
+
+**Three things in it are reusable, and only one is about CI.**
+
+**1. A measured job duration is not a weight.** Each includes ~31s of setup that a packed bin
+pays **once**, and the error is **not uniform** — it inflates a 2-battery bin by 62s against a
+singleton's 31s, so packing on raw times systematically UNDER-fills the packed bins. That is
+the same *"looks balanced and is not"* the tool already refused for **missing** weights: a
+weight wrong by a known constant deserves the treatment of one that is absent. Corrected, the
+plan named its own floor — and the floor held: **UI4 measured 505s of work in a 551s bin, and
+`checks` 97s + UI4 551s is 10.8 of the 10.99 minutes.** Re-binning cannot move that number.
+
+**2. ⚠️ PACKING RE-CREATED A HAZARD SHARDING HAD REMOVED, AND IT FAILS GREEN.** A battery
+mutates shared `.cs` in place and restores at the end **with no `try`/`finally`**, so one that
+dies mid-mutant leaves a live mutant. With a checkout each that was contained inside one
+already-failing job. Sharing one, the next battery in the bin compiles against mutated source —
+and reports **KILLED**, because *a mutant already in the file is one the "unmutated" baseline
+contains too*. Same class as the killed local batch that left a live `mutate_cm4` mutant on
+2026-08-14. The run step now asserts the tree is clean after each battery and **stops the bin**
+if it is not: a missing answer is recoverable, a false green is not. Driven all three ways
+before being trusted — clean `rc=0`; **a survivor does NOT abort the bin** (aborting would undo
+`fail-fast: false` inside every job) `rc=1`; a crash leaves a mutant and the next battery never
+runs `rc=2`. **When an optimisation removes an isolation boundary, name what that boundary was
+silently providing.**
+
+**3. Packing is a one-way door without per-item times.** Once batteries share a job,
+`gh run view` reports the **bin's** duration and per-battery weights are unrecoverable — and
+`pack_ci_matrix.py` refuses to pack without them. The run step prints `BATTERY_SECONDS` per
+battery; **verified present for all 33** in the first packed run, which is the check that
+matters, not the code that emits it.
+
+⚠️ `--ignore-cr-at-eol` on that clean-tree assertion, because the blobs here are CRLF and
+`core.autocrlf` is true. Clean both ways locally — but **a local worktree is not a fresh
+checkout** (§5.66), and a false FAIL would abort all 20 bins on an environment difference. It
+cannot cause a false pass: a live mutant differs by real text, never by carriage returns.
+
+**The gate.** `check_ci_runs_every_battery.py` was rewritten for `batteries:` and **deliberately
+does not match the old singular `battery:`** — that entry stopped *running* anything the moment
+the run step became a loop, so still matching it would report a battery as wired that CI never
+executes, **this gate's own original defect one shape later**. It also asserts the list is
+**consumed**, because a gate that a value is COMPUTED is not a gate that it is USED, and it now
+fails on a battery wired but absent from disk. **Made to fail on purpose seven ways** before
+being trusted, per this workflow's own header rule. The per-battery prose was **moved, not
+dropped** — verified by diffing the comment multiset against the re-read file rather than by
+trusting the writer; the only two lines lost were the stale "ordered longest first, seconds from
+run 31768033709" region header, which was itself false.
+
+### The state audit that opened session 47, and what it found
+
+`gh run list` first, per the standing rule. It earned its five seconds:
+
+* ⚠️ **`nt8-mcp-bridge` CI was RED on `origin/main`**, and not because of a defect — the fix
+  (`1e73c4a`) was **committed locally and never pushed**, so the newest recorded state of that
+  repo was a failure that had already been repaired. Anchors read 86/0 locally the whole time.
+  Pushed in session 47; harness 394/0, wrapper 54/54, all three of its gates green.
+* ⚠️ **`tools/check_expected_survivors.py` does not exist in `nt8-mcp-bridge`** — the **fourth**
+  gate found present in one repo and absent in the other. It has **no subject there today** (no
+  bridge battery declares an `EXPECTED SURVIVOR:`), so its absence costs nothing yet; the first
+  declaration would arrive ungated, which is how this class always presents.
+* The **vendored pin** had gone 14 commits stale with 5 touching `addons/`, so `deploy.py`
+  refused — correctly. Tagged and advanced in session 47.
+
+### ✅ The box was compiled, and three things were confirmed live
+
+The operator compiled NT8 in session 47. **`NinjaTrader.Custom.dll` rebuilt at 20:14:51 local
+and `ARMED_ON_START` reached the audit log two seconds later at `03:14:53Z`** — that pairing is
+the discriminator, because a failed compile does not rewrite the DLL and `nt_health` reads
+healthy either way. `GuardAlertSink`, `GuardActionDeduplicator` and `BridgeConnectionPlan` are
+all present in the built assembly.
+
+* ✅ **`F-6`'s flood fix is live-validated.** The reload produced an `ARMED_ON_START` **audit**
+  line and **no outbox entry** — the outbox has not been written since `21:54Z`, and its last
+  two records are `severity: "warning"` / `[WOULD] ARMED_ON_START` from before the fix. The
+  reload that used to spend a fresh alert budget now says nothing. This is the half §5.70 could
+  not measure at the time.
+* ✅ **The heartbeat staleness recorded in `de3e2b3` is RESOLVED.** `heartbeat.txt` reads
+  current to the second. ⚠️ It was misread once first, by comparing a local-time `ls` mtime
+  against a UTC clock — **read the file's contents, not its mtime**; the guard writes UTC and
+  this box is UTC-7 while the guard's own `timestamp_et` is UTC-4, so three clocks are in play.
+* ⚠️ **The alert relay was down, and the reason is the finding.** `LastTaskResult: 255`, State
+  `Ready`, no relay process, and **no log anywhere** — `start_alert_relay.bat` writes to a
+  console Task Scheduler discards. It was read as a crash and **it was not: the operator had
+  stopped it deliberately.** *A deliberate stop and a crash produce byte-identical evidence
+  here.* The missing artifact is not "why did it die" but **"was this intended"**, and the fix
+  is cheap — tee the launcher to a log, and have the relay touch a local liveness file each
+  poll so the question is answerable without reading Discord. Until then `F-6` is inert
+  whenever the relay is not running, which is correct while nothing trades and is **not**
+  detectable when something does.
+
+### Order from here
+
+1. **`P2-116`** — an equity rule with no equity reading reports `EvaluatedNotEnforcing` on 88 of
+   89 prop accounts. ⚠️ **This section's first draft put `P2-29` here**, by copying §5.63's
+   order, which predates `P2-116` being raised in §5.65 — the same copy-forward that
+   `check_next_list_ids.py` exists to catch, in the one direction that gate cannot see: **an
+   order can be stale without naming a single closed ID.** A live surface reporting *protected*
+   for 88 accounts the guard holds no equity for outranks a refactor.
+2. **`P2-29`**'s remaining half — the `partial class` split of `RiskGuardAddOn` itself, still
+   5,612 lines. ⚠️ Still **before** the remaining features (`F-4`, `F-3`, `F-1`): it cuts apart
+   the file every one of them would be written into, and `F-6` has already added an outbox
+   queue, a sink field and an emission block to it.
+3. **`P3-110`** (narrowed by live measurement), then the architectural **`P3-33`**.
+
+⚠️ **Not listed above, deliberately: the unvalidated halves of CLOSED entries.** Futures reopen
+**Sunday 2026-08-16 18:00 ET**, and four of them need one filled contract — `F-6`'s suppression
+of a **recurring** condition and its STALE-guard heartbeat (§5.70), the stop-move half (§5.64),
+and the lockout **admit** half (§5.62, where only the refusal is measured). `check_next_list_ids.py`
+refuses a draft naming their closed IDs as work-to-do and it is right to: *a remainder hiding
+under a closed entry is invisible to every count.* **If any turns out to be more than a
+confirmation run, it gets its own ID.**
+
+⚠️ **And the relay must be running before that reopen**, or the first three of those cannot be
+observed at all — the guard will decide correctly and append to a file nobody is reading.
