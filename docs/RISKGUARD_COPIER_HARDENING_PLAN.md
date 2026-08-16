@@ -4132,6 +4132,75 @@ the summary view, because it is the answer to the question the surface exists fo
 
 ---
 
+### P1-117. The config window mutates the LIVE config in place, so a typo in any of thirteen boxes leaves the guard half-reconfigured while the dialog says the save failed — OPEN, found 2026-08-16 (session 47) while scoping `P2-27`'s validator
+
+**Where**: `addons/RiskGuardWindow.cs`, `OnSaveConfigClick` (~`:377-424`)
+
+```csharp
+var cfg = _addOn.Config;                                              // RiskGuardAddOn.cs:41 -> `public RiskConfig Config => _config;`
+cfg.Mode = _modeCombo.SelectedItem.ToString();                        // <- statement 2, ALWAYS lands
+cfg.EnableWindowGate = _windowGateCheck.IsChecked ?? false;
+cfg.Sizing.MaxContractsPerAccount = int.Parse(...);                   // <- 13 bare Parse calls follow
+...
+cfg.PnLRules.DailyLossLimit = double.Parse(...);
+cfg.PnLRules.TrailingDrawdown = double.Parse(...);
+...
+_addOn.SaveAndReloadConfig(cfg);                                      // <- LAST statement; a throw skips it
+```
+```csharp
+catch (Exception ex)
+{
+    MessageBox.Show($"Failed to parse settings: {ex.Message}", "Error", ...);
+}
+```
+
+**`Config` is a live reference, not a clone** — an expression-bodied property returning the private
+field. So the seventeen assignments above are not building a candidate config to validate and then
+commit; **they are editing the object the guard is enforcing from, one statement at a time.**
+
+An unparseable value in any of the thirteen text boxes throws at that line. Everything **above** it
+has already been applied to the running guard. Everything **below** it, and the persist, has not.
+The operator is then shown *"Failed to parse settings"* — a sentence that means *nothing happened*.
+
+⚠️ **`Mode` is the second statement, which is what sets the band.** The ordinary operator gesture is
+*"go live and set my limits"*: type the mode, type the numbers, hit save. Fat-finger one number and
+**the guard is now in the new mode with the old limits, and has just told you the save failed.**
+Every ordering of that gesture puts `Mode` before every limit, because the handler's order is
+fixed, not the operator's.
+
+Two things make it survivable today and neither is a property of the code: the change is **not
+persisted** (`SaveAndReloadConfig` never runs), so a restart recovers it; and nothing has traded
+through it. It is *in effect* on the running guard for the rest of the session.
+
+**This is [[report-the-outcome-not-the-call]] at the config surface** — the dialog reports the
+outcome of *reaching the catch*, not the outcome of the write, which is partial. And it is
+`P2-41`'s shape from the other direction: that defect silently reset fields the caller never named;
+this one silently applies fields the caller did name while claiming it applied none.
+
+**Fix** — the shape matters more than the parsing:
+
+1. **Parse into locals first, then assign.** Nothing touches `_addOn.Config` until every box has
+   parsed and the whole set has validated. A failure then genuinely means *nothing happened*, which
+   is what the dialog already claims.
+2. **`TryParse`, not `Parse`**, so the message names the FIELD — `"Daily loss limit: 'l500' is not
+   a number"` — instead of surfacing a `FormatException`'s text into a form with thirteen inputs.
+   `Enum.Parse`/`int.Parse` hostility is the family `P3-111` closed at two endpoints, and this is
+   the same thing at a WPF text box.
+3. **Run the same value validator the HTTP route is getting** (see `P2-27` below). This window and
+   `/api/riskguard/config` are **two writers to one config**, and only one of them was being given
+   a validator.
+
+⚠️ **THE VALIDATOR MUST THEREFORE LIVE IN THIS REPO, NOT IN `nt8-mcp-bridge`.** The submodule
+direction is bridge → core, so a class in `nt8-mcp-bridge/addons/` is unreachable from
+`RiskGuardWindow.cs` no matter that both end up in one NT8 assembly at runtime. Putting it in the
+core also puts it behind **1776 executable tests and 33 batteries** instead of the bridge's
+source-gate-plus-small-harness. The session-47 ticket had it on the bridge side and that was wrong
+— recorded in handover §5.72.
+
+⚠️ **Evidence is obtainable with the market shut.** This needs a text box and a typo, not a fill.
+
+---
+
 ### P3-110. The panic flatten's cancel set omits `OrderState.TriggerPending` — OPEN, but NARROWED by live measurement 2026-08-14: the hazard AS FILED does not reproduce, and only a small remainder stands
 
 **Where**: `McpBridgeAddOn.cs`, `ActiveOrderStates` (hoisted from `EmergencyFlatten`'s local
@@ -5231,6 +5300,33 @@ There is also no profile there (`agent/nt8_riskguard.py` is core-only). **One wa
 NOT written on 2026-08-13**: a profile whose build gate cannot see the patch is a trap, because
 the next person to find it will trust its green. Same rule as everywhere else here — a thing
 that reads as protection it does not provide is the defect, not the absence.
+
+⚠️ **UPDATE 2026-08-16 (session 47) — the paragraph above is superseded, and the trap it predicted
+FIRED on the first run.** A profile now exists (`nt8-mcp-bridge/agent/nt8_bridge.py`, added with
+the `v1.28.0` pin), written the only way it can be honest: its module docstring leads with *"the
+one thing to know about this repo: `addons/McpBridgeAddOn.cs` IS IN NO TEST BUILD… `[test] ok` here
+proves much less than it does in the core repo,"* and it directs every ticket to move logic into an
+executable `Bridge*.cs`. That is the `P2-27` pattern stated as a profile rule.
+
+**It was then run, and the prediction cashed out exactly.** The `P2-27` config-validator ticket
+produced a patch that reported `[compile] ok — build succeeded` and `[test] ok — all 9 acceptance
+tests green`, and **it would not have compiled inside NT8**: the route half read
+`cfg.TrailingDrawdown`, a property `RiskConfig` does not have. Both gates were *true* and both were
+*structurally blind to the changed line*, because `BridgeTests.csproj` sets
+`EnableDefaultCompileItems=false` and does not include the file that was edited.
+
+**What stopped it was not the profile and not the gates.** One panel reviewer filed the missing
+property as a BLOCKER; the arbiter dismissed it and recommended SHIP; agent-loop `v0.6.3`'s rule —
+*an arbiter may not recommend SHIP while a BLOCKER stands dismissed* — ended the run `ESCALATED`,
+which is not promotable, so nothing was applied. Hand-arbitrated and the blocker held. Full record
+in handover §5.72.
+
+**So the profile is usable and its green is still not evidence.** Read it as: the loop can be run
+here, the ladder's *lower* rungs (static, lock-scope, the executable `Bridge*.cs` half) are real,
+and the build/test rungs are a source gate wearing a compiler's name. Until `McpBridgeAddOn.cs` is
+in a test build, **the only thing that compiles it is `nt_compile` against a running NT8** — which
+is also the only place a mistake is invisible (a broken Custom assembly keeps running the last good
+one). Every bridge ticket must end with an `nt_compile`.
 
 The unblock is step 1 of `tests/README.md`'s ordered remedy, and it lives **in this repo**: move
 the NT8 stub block out of `tests/RiskGuardAddOnTests.cs` into `tests/TestingStubs.cs`. Mechanical,

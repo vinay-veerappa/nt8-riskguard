@@ -247,7 +247,7 @@ not. The command that checks it is in the last column.
 |---|---|---|
 | **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
 | **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.71's — read that one; it carries the reasons.** 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
+| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.72's — read that one; it carries the reasons.** 🆕 **`P1-117`** (§5.72) — `RiskGuardWindow.OnSaveConfigClick` edits the LIVE config in place across 17 assignments, so a typo in any of 13 text boxes leaves the guard half-reconfigured (`Mode` is statement 2 and always lands) while the dialog says the save failed; take it **together with** `P2-27`'s value validator, since the window and `/api/riskguard/config` are two writers to one config and the validator is the shared half — and it belongs in **this** repo, not the bridge, because the submodule direction means a bridge class cannot be called from the window. 🆕 **`P2-116`** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
 | **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
 | **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
 | **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
@@ -3349,7 +3349,7 @@ and `P?-65` together and makes the redesign testable.
 the *order* they forced is the reusable part.
 
 > ### Do next: `P2-116` — 88 of 89 prop accounts report as protected when the guard has no equity for them
-> ### (order of work lives in §5.71's `Order from here`: `P2-116`, then `P2-29`'s remainder, then `P3-110` / `P3-33`)
+> ### (order of work lives in §5.72's `Order from here`: `P2-116`, then `P1-117` + `P2-27`'s validator as ONE piece, then `P2-29`'s remainder, then `P3-110` / `P3-33`)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
 > ### (✅ `P2-108` closed 2026-08-15 — §5.58)
@@ -9768,10 +9768,11 @@ run 31768033709" region header, which was itself false.
   (`1e73c4a`) was **committed locally and never pushed**, so the newest recorded state of that
   repo was a failure that had already been repaired. Anchors read 86/0 locally the whole time.
   Pushed in session 47; harness 394/0, wrapper 54/54, all three of its gates green.
-* ⚠️ **`tools/check_expected_survivors.py` does not exist in `nt8-mcp-bridge`** — the **fourth**
-  gate found present in one repo and absent in the other. It has **no subject there today** (no
-  bridge battery declares an `EXPECTED SURVIVOR:`), so its absence costs nothing yet; the first
-  declaration would arrive ungated, which is how this class always presents.
+* ⚠️ **`tools/check_expected_survivors.py` did not exist in `nt8-mcp-bridge`** — the **fourth**
+  gate found present in one repo and absent in the other. It had **no subject there** (no bridge
+  battery declares an `EXPECTED SURVIVOR:`), so its absence cost nothing yet; the first
+  declaration would have arrived ungated, which is how this class always presents. **Ported in
+  session 47 and wired into that repo's CI** — see §5.72 for why the port was not one `cp`.
 * The **vendored pin** had gone 14 commits stale with 5 touching `addons/`, so `deploy.py`
   refused — correctly. Tagged and advanced in session 47.
 
@@ -9802,7 +9803,7 @@ all present in the built assembly.
   whenever the relay is not running, which is correct while nothing trades and is **not**
   detectable when something does.
 
-### Order from here
+### Order from here — ⚠️ SUPERSEDED BY §5.72, which added `P1-117` above item 2
 
 1. **`P2-116`** — an equity rule with no equity reading reports `EvaluatedNotEnforcing` on 88 of
    89 prop accounts. ⚠️ **This section's first draft put `P2-29` here**, by copying §5.63's
@@ -9826,3 +9827,172 @@ confirmation run, it gets its own ID.**
 
 ⚠️ **And the relay must be running before that reopen**, or the first three of those cannot be
 observed at all — the guard will decide correctly and append to a file nobody is reading.
+
+---
+
+## 5.72 Session 47 (continued) — the first agent-loop run in `nt8-mcp-bridge`, what caught it, and the writer nobody was validating
+
+Session 47's second half went after work that needs **no market**, after the operator pointed out —
+correctly — that the previous framing had over-weighted the items waiting on Sunday's reopen. Almost
+the whole backlog is market-independent. The two things picked were `P2-27`'s bridge remainder and
+the editable UI, to run in parallel. **Only the first was reached.** Nothing shipped, and the
+session's product is four findings and a new defect.
+
+### The gate that ported, and why it was not one `cp`
+
+`tools/check_expected_survivors.py` is now live in `nt8-mcp-bridge` CI. §5.71 recorded it as the
+**fourth** per-repo gate found present in one repo and absent in the other; this closes that.
+
+⚠️ **A verbatim copy would have PASSED on day one and been wrong anyway.** All eight bridge
+batteries use the plain `sys.exit(1 if survivors else 0)` and none declares, so the check is green —
+while prescribing a remedy that **does not exist in that repo**: *"hand the verdict to
+`_battery.finish`"*, and there is no `mutation/_battery.py` there. A gate whose failure message
+names a helper you cannot import sends its reader in a circle at the exact moment they are already
+stuck. So the port derives its remedy text from what the repo *has*, adds a check that refuses a
+battery calling the helper while it is absent (an `ImportError` on a mutation battery fires
+**between applying a mutant and restoring it**, which is [[a-battery-must-reach-its-restore-line]]),
+and rewrites the success message, which had been advertising a guarantee — *"fails on a declared
+survivor that has since been KILLED"* — that nothing in the bridge provides.
+
+**Copy a gate, then read what it tells you to do about the repo you copied it into.** A ported
+gate reports on the repo it was pasted into, not the one it was written for.
+
+⚠️ And the thing that made this take four sessions is in `ci.yml`'s own comments: session 42 wrote
+*"THIRD per-repo gate found missing on this side, after `check_ci_runs_every_battery.py` and
+`check_expected_survivors.py`"* — **naming this exact gap in prose, in a CI file, and creating no
+failure.** Nobody ported it until session 47. *A gate nobody reads is a comment*, inverted again:
+**if you find yourself listing a gate a repo lacks, port it in that commit or the list is the only
+thing that will ever exist.**
+
+### `P2-27`: the ticket, the run, and the hand arbitration
+
+The target was `/api/riskguard/config`'s POST path. It is hardened against the wrong **shape**
+(`P1-80` stopped it persisting a file nothing read back; `P2-41` made it *merge* rather than
+flatten) and against no wrong **content** at all: the merged `RiskConfig` goes straight to
+`SaveAndReloadConfig`, **which does not run preflight**, so a config that cannot pass preflight is
+written and reloaded happily and the guard comes up **disarmed at the next restart** with nothing
+about the file looking wrong. Survivable while the only writer is a deliberate API call; not
+survivable the moment the editable UI lands.
+
+Nine acceptance assertions were written **by hand first** and were red at the 396/9 baseline. The
+run:
+
+```
+[baseline] 391 passed, 11 failed; 11 expected failure(s)   [test-first] 9 acceptance test(s) red
+round 2:  [compile] ok   [test] ok - all 9 acceptance test(s) green
+          [panel] REVISE  [glm-5.2=APPROVE(0), deepseek-v4-flash=REVISE(2)]
+          [arbiter] ESCALATE (upheld=0 rejected=4)
+ESCALATED: Arbiter recommended SHIP while dismissing BLOCKER finding(s) #1.
+NOT APPLIED. Patch for review: logs/agent_loop/T1/final.patch
+```
+
+**The dismissed BLOCKER holds. The patch would not have compiled inside NT8.** Its route half read
+`cfg.TrailingDrawdown`; `RiskConfig` has no such property. Verified against the vendored core:
+
+| expression | verdict |
+|---|---|
+| `cfg.Mode` | ✅ exists on `RiskConfig` (`public string Mode`) |
+| `cfg.MinShadowSessions` | ✅ exists on `RiskConfig` (`public int MinShadowSessions`) |
+| `cfg.TrailingDrawdown` | ❌ **does not exist** |
+| `cfg.PnLRules.TrailingDrawdown` | ✅ — and `GuardRules.cs:260` names its own `ConfigPath` as exactly `"PnLRules.TrailingDrawdown"` |
+
+**Four things to carry out of this.**
+
+**1. ⚠️ `[compile] ok` was TRUE and proved nothing about the changed line.**
+`tests/BridgeTests.csproj` sets `EnableDefaultCompileItems=false` and does not include
+`addons/McpBridgeAddOn.cs`. The build succeeded because the *new* class compiled; the file the
+patch edited was never handed to a compiler. This is the trap the plan predicted on 2026-08-13 and
+declined to write a profile for — the profile now exists and its docstring leads with the warning,
+which is the honest form, but **a warning in a docstring is not a gate**. Every bridge ticket must
+end with `nt_compile`, the only thing on this box that compiles that file. ⚠️ It is also the one
+place a mistake is invisible: [[broken-nt8-assembly-is-invisible]] — NT8 keeps running the last good
+assembly, `nt_health` reads healthy, and the only symptom is a deploy having no effect.
+
+**2. What stopped it was one structural rule, not a reviewer and not a gate.** `glm-5.2` moved to
+APPROVE. The arbiter dismissed all four findings and recommended SHIP. `deepseek-v4-flash` filed the
+missing property as a BLOCKER **for exactly the right reason** — that the property names were
+unverified and the compile gate could not see them. agent-loop `v0.6.3`'s rule (an arbiter may not
+recommend SHIP over a standing BLOCKER; that run ends `ESCALATED`, which is not promotable) is the
+whole reason a non-compiling patch did not land. ⚠️ Consistent with [[agent-patch-loop-arbiter-gotchas]]:
+`ARBITER_SHIP` is not a review on this codebase. **0 of 66 findings upheld across five SHIP rulings
+now.** When a run ends `ESCALATED`, arbitrate by hand — it took one grep.
+
+**3. ⚠️ THE VALIDATOR WAS BEING BUILT ON THE WRONG SIDE OF THE SPLIT, and no gate could say so.**
+The ticket put `BridgeGuardConfigEdit` in `nt8-mcp-bridge/addons/`. The submodule direction is
+bridge → core, so **`RiskGuardWindow.cs` cannot call it** — no matter that both land in one NT8
+assembly at runtime. And the window is the *other writer to the same config*. Building a validator
+that one of two writers can reach is [[a-second-reader-of-the-same-state]] committed deliberately,
+at design time, by me. It belongs in the core, where it is also behind 1776 executable tests and 33
+batteries instead of a source gate. **Count the writers before choosing the repo.**
+
+**4. `TrailingDrawdown` = 0 means two OPPOSITE things in one config file**, and a uniform rule would
+have been wrong:
+
+* `PnLRules.TrailingDrawdown <= 0` → the rule is **off**. `GuardRules.cs:262` already uses exactly
+  that predicate to report `Off("no trailing drawdown set")`. So the validator's rule is not
+  invented — it is the guard's own live predicate, promoted from *reporting* to *refusing*.
+* `AccountRiskProfile.TrailingDrawdown == 0` → a **sentinel meaning "derive it"**.
+  `RiskGuardAddOn.cs:2409-2411`: `baseProfile.TrailingDrawdown > 0.0 ? baseProfile.TrailingDrawdown
+  : (cashValue > 0 ? cashValue * 0.05 : _config.PnLRules.TrailingDrawdown)` — 5% of cash, else the
+  global. It is the **default** on every profile.
+
+Refusing `0` uniformly would refuse the shipped default on every per-account profile. Same field
+name, two meanings, one file, nothing stating it. There is a third `TrailingDrawdown` on
+`RiskManagerAddOn` (default `2000`) — [[riskguard-third-risk-system]] again.
+
+### 🆕 `P1-117`, found while scoping the above
+
+**The config window mutates the live config in place.** `RiskGuardWindow.OnSaveConfigClick` does
+`var cfg = _addOn.Config;` — and `Config` is `=> _config`, a live reference, not a clone — then
+applies **seventeen assignments** to it, thirteen of them bare `int.Parse`/`double.Parse` on raw
+text-box text, inside one `try`. `SaveAndReloadConfig` is the last statement.
+
+A typo in any box throws there. **Everything above it is already applied to the running guard**;
+everything below it, and the persist, is not. The operator is shown *"Failed to parse settings"* —
+a sentence that means *nothing happened*.
+
+⚠️ **`cfg.Mode` is the second statement**, so it always lands. The ordinary gesture is *"go live and
+set my limits"*; fat-finger one number and **the guard is in the new mode with the old limits and
+has just reported the save failed.** Not persisted, so a restart recovers it — but the running
+guard holds it for the rest of the session. Full entry in the plan; evidence obtainable with the
+market shut.
+
+### What did NOT happen
+
+**Track B, the editable UI, was never started.** `ui/index.html` (654 lines) already has a
+token-authed `postJson` with 401 handling and `/api/riskguard/config` already accepts POST, so the
+page is the smaller half — but it is the reason `P2-27` was taken first, and `P2-27` did not land.
+⚠️ **Do not ship the editable page before the validator.** The page's entire purpose is an operator
+changing limits quickly, and the failure it exposes is silent and delayed: the write says
+`applied`, the page re-renders the value it just sent, and the guard is not protecting anything
+after the next restart.
+
+⚠️ **`UI_REDESIGN_DESIGN.md` §10 carries its own do-next list and no `Order from here` block has
+ever referenced it.** Two ordering lists, one of them invisible to every reader of this file and to
+`check_next_list_ids.py`, which reads only the handover. That is [[closures-do-not-propagate-backwards]]
+at a second surface. Its remainder: SSE instead of the 5s poll, operator-readable notes (they
+currently cite defect IDs at an operator), and an NT8 Control Center menu item.
+
+### Order from here
+
+1. **`P2-116`** — an equity rule with no equity reading reports `EvaluatedNotEnforcing` on 88 of 89
+   prop accounts. Unchanged from §5.71: a live surface reporting *protected* for 88 accounts the
+   guard holds no equity for outranks a refactor.
+2. **`P1-117` + `P2-27`'s validator, as ONE piece of work.** They are the two writers to one
+   config and the validator is the shared half. Build `GuardConfigEdit` **in this repo**, mutate
+   it, then call it from both `RiskGuardWindow.OnSaveConfigClick` (after the parse-into-locals fix)
+   and the bridge's `RiskGuardConfig` route. The nine red acceptance tests in
+   `nt8-mcp-bridge/tests/BridgeSourceTests.cs` and the ticket at
+   `nt8-mcp-bridge/agent/tickets_p227_config.json` are still valid for the route half; the class
+   half moves here. **Then the editable UI**, and not before.
+3. **`P2-29`**'s remaining half — the `partial class` split of `RiskGuardAddOn` itself, still 5,612
+   lines, still before the remaining features (`F-4`, `F-3`, `F-1`).
+4. **`P3-110`** (narrowed by live measurement), then the architectural **`P3-33`**.
+
+⚠️ Unchanged from §5.71 and still not listed above, deliberately: **the unvalidated halves of
+CLOSED entries** (`F-6`'s recurring-condition suppression and its STALE-guard heartbeat, the
+stop-move half, the lockout **admit** half). Futures reopen **Sunday 2026-08-16 18:00 ET** and each
+needs one filled contract. If any turns out to be more than a confirmation run, it gets its own ID.
+
+⚠️ **And the relay must be running before that reopen** — the operator stopped it deliberately in
+session 47, and *a deliberate stop and a crash produce byte-identical evidence here* (§5.71).
