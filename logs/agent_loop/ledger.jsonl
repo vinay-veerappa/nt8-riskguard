@@ -33,3 +33,4 @@
 {"ts": "2026-08-15T22:17:46", "ticket": "T1", "verdict": "ARBITER_NEVER_RAN", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": "test"}
 {"ts": "2026-08-15T22:24:40", "ticket": "T1", "verdict": "PANEL_UNREACHABLE", "applied": false, "rounds": 3, "cost_usd": 0.0, "gate": "review"}
 {"ts": "2026-08-15T23:34:44", "ticket": "T1", "verdict": "MAX_ROUNDS_EXHAUSTED", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["compile", "review", "static"]}
+{"ts": "2026-08-16T08:55:38", "ticket": "T1", "verdict": "NOT_CONVERGING", "applied": false, "rounds": 4, "cost_usd": 0.0, "gate": ["review", "test"]}
