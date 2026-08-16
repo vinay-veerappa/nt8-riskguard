@@ -4660,7 +4660,7 @@ a sim round trip, which is why it was not folded into `P2-123`.
 
 ---
 
-### P3-122. The bridge tells you an unarmed relationship *"copies to SIMULATION followers only"* while the copier is in `shadow` and copying to nothing at all — OPEN, found 2026-08-16 (session 49) while wiring the window's reader
+### P3-122. The bridge tells you an unarmed relationship *"copies to SIMULATION followers only"* while the copier is in `shadow` and copying to nothing at all — ✅ CLOSED 2026-08-16 (session 51), shipped with `P1-125`
 **Where**: `nt8-mcp-bridge/addons/CopierEnforcementView.cs`, `NotEnforcingReason`
 
 Found by comparing the two readers of the same question after building the third.
@@ -4692,6 +4692,47 @@ mode's explanatory sentence. The regression test is the row above: enabled + **n
 deployed copier out of `live` is the operator's call, not a validation step, so this was filed
 rather than confirmed. Banded `P3` for that reason and because `shadow` is the safe direction:
 it misdescribes a state in which nothing is being sent.
+
+**CLOSED (session 51), in `nt8-mcp-bridge/addons/CopierEnforcementView.cs`, and shipped with
+`P1-125` because it had to be**: a defect in a string that nothing displays is not reachable by an
+operator, so `P1-125`'s rendering of the reason is what makes this ordering matter at all.
+
+The ordering is now **disabled > global mode > not armed**, and the two words that decide it are in
+the code: rank by what **BINDS**, not by what **SURPRISES**. `isEnabled` stays first, deliberately
+— it is the only term that is both binding *and* actionable on the relationship itself, and its
+sentence claims no behaviour a shadow copier contradicts. That precedence is now the same one
+`CopierStatusView.RelationshipLine` uses for the WPF window, so the two surfaces cannot disagree.
+
+⚠️ **The reorder made the moved sentence LIE ABOUT ARMING, and that is the trap worth recording.**
+The mode branch used to be reachable only by armed relationships and its text said so — *"the
+relationship is enabled and armed, but the COPIER is in 'shadow'"*. Moving it above `armedForLive`
+makes it reachable by unarmed rows too, so the unchanged string would have asserted the opposite of
+the row it was explaining, **for exactly the row this ticket was filed about**. The clause is now
+conditional. *Moving a branch changes the set of inputs its words have to be true for.*
+
+⚠️ **And the other direction, which a reorder breaks in silence**: the simulation sentence is
+**correct** whenever the copier IS acting, and every assertion about this defect passes if you
+simply delete it. The battery's second mutant does exactly that. The positive control — unarmed +
+`live` still says *"copies to SIMULATION followers only"* — is the only thing that catches it.
+
+⚠️ **A substring test on the word `simulation` was WRONG, and it was mine.** The first draft asserted
+the shadow sentence must not contain "simulation"; the new sentence contains it while *denying* it
+(*"submits nothing at all — to a live follower or a simulated one alike"*), which is more useful to
+the operator, not less. The assertion now pins the false CLAIM (`copies to SIMULATION`) and is
+paired with a positive one (the sentence states that nothing is submitted). **When a check on
+wording fails, ask whether the wording or the check is wrong.**
+
+**Evidence**: 6 executed tests over the whole 48-combination space (2 × 2 × 2 × 6 modes), asserting
+that `NotEnforcingReason` and `WhyNotEnforcing().Sentence` never disagree — one ordering, two
+renderings. Battery `mutation/mutate_p1125.py` **22/22**.
+
+⚠️ **THE REORDERED BRANCH ITSELF IS NOT LIVE-VALIDATED, and saying so is the point.** The copier was
+driven into `shadow` and back for `P1-125`, and **the rows did not change**: both relationships on
+this box are switched OFF, so `disabled` binds first — correctly, and by this ticket's own design —
+and every row read `"the relationship is disabled."` in `live` and in `shadow` alike. The sentence
+this ticket rewrote needs **one enabled relationship under a non-acting copier**, which no state on
+the box currently produces. What is measured live is the ordering's FIRST rung; the rung that moved
+is covered by the 48-combination test and by two mutants, and by nothing on the box.
 
 ---
 
@@ -4739,7 +4780,7 @@ mistake in the shared predicate reaches the arming decision.
 
 ---
 
-### P1-125. The browser UI never states the copier's GLOBAL MODE -- the one gate that decides whether any copy is submitted at all -- while the API has returned it all along; `P1-121` verbatim, at the surface the operator actually uses -- OPEN, found 2026-08-16 (session 50) from an operator screenshot
+### P1-125. The browser UI never states the copier's GLOBAL MODE -- the one gate that decides whether any copy is submitted at all -- while the API has returned it all along; `P1-121` verbatim, at the surface the operator actually uses -- ✅ CLOSED 2026-08-16 (session 51) and live-validated
 
 **Where**: `nt8-mcp-bridge/ui/index.html` (993 lines, served from `McpBridgeAddOn.cs:6900` as a
 static asset at `http://localhost:7890/ui`)
@@ -4780,6 +4821,60 @@ existing page header already shows the GUARD's mode; this is the third indicator
 `CopierEnforcementView` (already in the test build) and NOT in the HTML, for the same reason
 `CopierStatusView` exists: `ui/index.html` is in no test build and no mutation battery can reach
 it.
+
+**CLOSED (session 51) and live-validated with the market shut.** Where each piece went, and the one
+rule behind the split:
+
+| piece | where | why there |
+|---|---|---|
+| severity / headline / detail | **`CopierStatusView.Describe`**, core, *unchanged* | the WPF window's producer, already mutation-covered. Reused, not re-derived |
+| wire shape, `SeverityName`, the not-loaded cell | `nt8-mcp-bridge/addons/CopierEnforcementView.cs` | names no NT8 type, so the bridge harness **executes** it |
+| composition | `McpBridgeAddOn.GetCopierSnapshot()` | in no test build — so it is plumbing and nothing else, pinned by a source gate |
+| a colour | `ui/index.html` | in no test build and never will be, so it decides nothing |
+
+**The load-bearing decision was to WRITE NO NEW DECISION.** `CopierStatusView.Describe` already
+answers *"is the copier copying?"*, folded out of the same relationships and groups this payload's
+rows come from. Writing a second answer for the browser — in the same session as `P3-122`, whose
+entire content is two surfaces disagreeing about one question — would have been the seventh
+instance of [[a-second-reader-of-the-same-state]] committed by the person closing the sixth.
+
+Three things inside it are reusable:
+
+* ⚠️ **The severity crosses the wire as a NAME, and that is not a style choice.** The rows in the
+  **same payload** carry a numeric `severity` from `CopierSnapshotJson.SeverityRank` where **0 is
+  the WORST**; `CopierStatusSeverity` runs the other way, `Ok=0 … Critical=3`. Two numbers with
+  opposite polarity in one JSON document is a trap for whoever writes the next consumer, and the
+  cost of getting it wrong is a page that paints an **ORPHAN green**. An unmapped rank reads
+  `critical`, for the same reason `SeverityRank` puts an unrecognised verdict at the top.
+* **The not-loaded cell is a state, not an absence.** `TradeCopierEngine.Instance` is null when the
+  addon fails to load, and the header still has to say something — a blank indicator is read as
+  *fine*. It reports `critical`, `isActing: false`, and says *"not the same as a copier with no
+  relationships"*, which is a distinction the page already drew for the rows and not for the header.
+* **The reason is rendered per ROW as a short label, with the sentence as the tooltip.** The full
+  sentence is ~30 words and is *identical on every row* whenever the global mode is the cause; a
+  table repeating one paragraph per row buries the row that differs, which is `P2-41`'s shape. The
+  banner states it once. ⚠️ The label is **not a second decision** — `WhyNotEnforcing` returns both
+  lengths from one ordering, and a test drives all 48 combinations asserting they never disagree.
+
+**Evidence**: harness **302/56 → 444 assertions / 68 tests**, battery `mutation/mutate_p1125.py`
+**22/22**, `nt_compile` **0 errors**, `deploy.py` 2 addons + the UI synced. Live, against the running
+box: `system` = `{loaded: true, mode: "live", isActing: true, severity: "info", headline: "[ COPIER
+LIVE - SIM ONLY ]", configConflicts: 0}` and both rows carrying `enforcing: false`,
+`notEnforcingLabel: "disabled"` — text that exists only in the new classes.
+
+✅ **The `shadow` half was measured too**, with the operator's consent: flipped to `shadow`
+(`severity: "warn"`, `isActing: false`, `"[ COPIER SHADOW ]"`), then restored to `live` and
+**verified by re-reading two endpoints rather than trusting the write's own answer**. ⚠️ **`disabled`
+was not driven**, and neither was the mode branch of the per-row refusal — both relationships here
+are switched off, so `disabled` binds first and correctly in either mode. That branch needs one
+enabled relationship under a non-acting copier and stays test-only.
+
+⚠️ **NOBODY HAS LOOKED AT THE PAGE.** The payload is measured; the rendering is not. That is exactly
+the state `P1-121` and `P2-123` are in at the *other* surface, and §5.77 was written about spending
+effort on a screen nobody opens. One glance closes it.
+
+🆕 **`P3-128` was found BY the live read**, in the headline this ticket just put on screen. Filed
+below.
 
 ---
 
@@ -4924,6 +5019,119 @@ closed first for this reason. Move the decisions — which badge, which severity
 contains — into a class the harness compiles, the way `CopierStatusView` and
 `CopierSymbolMatrixView` do for the WPF window. Otherwise this grows a third untested surface,
 and it will be the one the operator actually uses.
+
+---
+
+### P3-128. With every relationship switched OFF, the copier headline reads `[ COPIER LIVE - SIM ONLY ]` and says copies *"reach simulation followers only"* — nothing is copied at all — OPEN, found 2026-08-16 (session 51) by reading the live payload of the ticket that put this sentence on screen
+
+**Where**: `addons/CopierStatusView.cs` (**this repo**), `Headline`
+
+Measured on the box, verbatim, seconds after `P1-125` shipped:
+
+```json
+"headline": "[ COPIER LIVE - SIM ONLY ]",
+"detail":   "2 relationships, 0 enabled. Nothing is armed for live, so copies reach
+             simulation followers only and a live follower is refused."
+```
+
+Both relationships are **disabled**. Nothing reaches a simulation follower, or any other kind.
+The detail line even carries the contradicting number — *"0 enabled"* — in its own first clause.
+
+`Headline`'s ladder is `unrecognised mode > not acting > total == 0 > all quarantined > some
+quarantined > armed == 0 > armed`. There is **no rung for `enabled == 0`**, so a copier with
+relationships that are all switched off falls into the `armed == 0` rung, whose sentence is written
+for a *different* state: enabled relationships that are not armed for live.
+
+⚠️ **This is `P3-122` in the other class, filed the same day `P3-122` was closed.** Same shape
+exactly: a sentence that is true of a neighbouring state, describing a behaviour that is not
+happening, in the direction that reassures — *"copies reach simulation followers"* invites the
+reader to believe copying is occurring somewhere safe. **Two readers, one question, and fixing the
+ordering in one of them did not fix the other.** Count the sites.
+
+⚠️ **And the severity is `Info`, so the page renders it in grey.** A copier that copies nothing
+while its rows are all off is at least the same `Warn` as a `shadow` copier: both are *configured
+to do something they are not doing*, which is `CopierStatusSeverity.Warn`'s own definition.
+
+**Fix**: a rung for `total > 0 && enabled == 0` above the `armed == 0` one — *"[ COPIER LIVE -
+NOTHING ENABLED ]"*, `Warn`, detail naming the count. ⚠️ Note `quarantined >= enabled` on the rung
+above is already `0 >= 0` for this state and only escapes because `quarantined > 0` is tested
+first; a new rung must go **below** the quarantine rungs, or an all-quarantined copier stops
+reporting quarantine.
+
+**Band**: `P3`. Nothing is unprotected — the copier genuinely submits nothing — and the operator's
+own rows say `disabled` beside it. The cost is a headline that contradicts its own detail line on
+the surface they were just given.
+
+⚠️ **Evidence is obtainable with the market shut** — it is the box's current state, so the
+regression is confirmable by reading `/api/copier/snapshot` before and after. It is a **core**
+change, so it needs a tag and a vendored-pin bump in `nt8-mcp-bridge`, which is the only reason it
+was not folded into `P1-125`.
+
+---
+
+### P2-129. Three lists name the copier's actions, the two that are DECLARED agree exactly, and the one that RUNS refused `set_mode` — so the copier's global gate was unreachable through the tool that advertises it — ✅ CLOSED 2026-08-16 (session 51) and live-validated
+
+**Where**: `nt8-mcp-bridge/mcp/lib/copier-config-request.js`, `buildCopierConfigRequest`
+
+**Found by trying to use it.** Session 51 needed to flip the copier to `shadow` to validate
+`P1-125`'s amber header. The obvious call failed:
+
+```
+nt_copier_config action=set_mode copierMode=shadow
+  -> unknown action 'set_mode'. Known actions: get, get_groups, set, update, remove,
+     clear, delete, quarantine, unquarantine, set_group, ...
+```
+
+Measured, by extracting each list from its own source rather than reading them:
+
+| list | contains `set_mode`? |
+|---|---|
+| the tool SCHEMA's `action.enum` (`mcp/lib/tools.js`) — what is advertised | **yes** |
+| the addon's `knownActions` (`McpBridgeAddOn.cs`) — what is implemented | **yes** |
+| `buildCopierConfigRequest`'s three `Set`s — **what actually runs** | **NO** |
+
+The first two agree **exactly, 14 for 14**, and `tool-schema.test.js` proves it in both
+directions. **The refusal came from the untested middle.** `quarantine`/`unquarantine` in that
+message are correct — they are this wrapper's own aliases, translated to `set` + `isQuarantined`,
+which is `P1-72`'s fix working.
+
+⚠️ **THE LESSON IS THE GATE'S REGION, AND IT IS THIS PROJECT'S MOST REPEATED ONE.** The agreement
+test is the right idea aimed at the wrong pair: it compares what each end **DECLARES** and cannot
+see the translation between them. Its own doc comment even states the failure mode — *"a wrapper
+that does not name the action cannot reach it"* — while checking a list that names it. **A test
+that both halves declare the same thing is not a test that the path between them works.** Same
+family as `check_anchors` skipping 18 anchors it could not parse, `check_bridge_parses` reading 2
+files of 6, and `check_ci_runs_every_battery` matching a comment: *state the region a check
+inspects.*
+
+⚠️ **And it is `P1-72` inverted.** That defect advertised an action nothing implemented; this one
+refused an action **both** ends implemented. The pin written for `P1-72` extracts the addon's real
+whitelist — the right instinct — and still could not see this, because it never asked the builder.
+
+**Fix**: a `GLOBAL_WRITES` set, because `set_mode` is the first action that names **no
+relationship** — routing it through the relationship branch would demand a leader and a follower,
+naming a scope this action does not have (it changes what *every* relationship does). The mode
+VALUE is deliberately not validated in the wrapper: the addon owns which modes exist and fails
+closed, and a second list here is how `P3-111`'s hand-typed `period` enum came to forbid twelve
+values the addon serves.
+
+**The regression test drives the BUILDER**, not the schema: every action extracted from the addon's
+own source must be buildable, *and* what the builder SENDS must itself be an action the addon
+knows. Plus the refusal message must list every action accepted — `set_mode` was missing from the
+accepted set and from that message for exactly as long, and a refusal naming an incomplete menu
+sends the caller to another tool.
+
+**Evidence**: wrapper suite **63 → 66 tests**, and the three new ones were **watched failing**
+against the unfixed builder (3 failed / 63 passed) before the fix made them green. ⚠️ **Live-
+validated by driving the MCP server over stdio** — a running client keeps the old module, so
+`tools/call` against a freshly spawned server is the only end-to-end proof. It was called with
+`copierMode: "definitely_not_a_mode"` **on purpose**: the request reached the addon, which refused
+it with `applied: false, copierMode: "live"`, proving reachability **while changing nothing**.
+
+**Band**: `P2`. Nothing is unsafe — the wrapper failed closed, loudly, and the mode stayed
+reachable by `curl`, the browser UI and the NT8 window. The cost is that the copier's global gate,
+the one `P1-125` had just made visible, could not be operated from the agent surface that
+advertises it.
 
 ---
 
