@@ -467,6 +467,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept();
 
             // P0-67: the third Account.Change() site. MonitorTickCore had ZERO coverage.
+            TestAtm_P1130_AStopRestingInAcceptedIsStillMovable();
+            TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded();
             TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened();
             TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker();
             TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced();
@@ -7882,6 +7884,104 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             atm = new DynamicAtmManager();
             return acct;
+        }
+
+        /// <summary>
+        /// P1-130. MEASURED LIVE at the Sunday 2026-08-16 open, Sim101 / MNQ SEP26: entry 30185.25,
+        /// stop 30175.25, breakeven trigger 12 ticks. Price ran to 30199.5 -- **57 ticks in favour,
+        /// nearly five times the trigger** -- and the stop NEVER MOVED in 230 seconds.
+        ///
+        ///     no WORKING stop order with id '802abaf...' on 'Sim101',
+        ///     so the move to 30185.75 was not requested. The position may be unprotected.
+        ///
+        /// 30185.75 is exactly entry + 2 ticks, so every computation upstream was right. The WRITE
+        /// failed: `ModifyStopPrice` matches `OrderState == OrderState.Working`, and on a real
+        /// connection a resting stop sits in **`Accepted`** -- the fact `P3-110` measured on
+        /// 2026-08-14 and the panic-flatten path already learned.
+        ///
+        /// ⚠️ WHY 2018 GREEN TESTS COULD NOT SEE IT: `AtmSetup` sets `stop.OrderState =
+        /// OrderState.Working`, and so does every other order in this file. The suite models the one
+        /// state the writer accepts. That is [[test-doubles-are-not-evidence]] exactly, after the
+        /// stub already hid a live P0 by omitting 6 of 16 OrderStates.
+        ///
+        /// ⚠️ THE TEST DRIVES THE STATE, NOT THE MOVE. Asserting "the stop moves" passes against a
+        /// stub reporting Working; the defect exists only for the states it does not report.
+        /// </summary>
+        private static void TestAtm_P1130_AStopRestingInAcceptedIsStillMovable()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-130: a resting stop in a non-Working live state is still moved");
+
+            // Every state the guard's own OccupiesSlot predicate admits as "something is here".
+            // Accepted is the one the live provider actually used; the others are here because a
+            // writer that hand-rolls its own liveness test will be wrong about all of them.
+            var liveStates = new[]
+            {
+                OrderState.Accepted, OrderState.Working, OrderState.Submitted,
+                OrderState.Initialized, OrderState.PartFilled, OrderState.TriggerPending
+            };
+
+            foreach (var state in liveStates)
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                atm.AddBracketForTest(bracket);
+
+                stop.OrderState = state;        // the live state under test
+                atm.MonitorTickForTest();       // price is 20003.00 = +12 ticks, so breakeven fires
+
+                Assert(bracket.BreakevenTriggered,
+                    "P1-130: the breakeven move is REQUESTED for a stop resting in " + state
+                    + ". At baseline only Working was matched, so a stop in Accepted -- which is what "
+                    + "the live provider reports -- was reported missing and the stop never moved.");
+
+                Assert(Math.Abs(stop.StopPrice - 20000.50) < 1e-9,
+                    "P1-130: and the order really carries the new price for state " + state
+                    + " (expected 20000.50, got " + stop.StopPrice + ")");
+            }
+        }
+
+        /// <summary>
+        /// P1-130, the second half: the bounded retry could not reach its bound.
+        ///
+        /// `RequestStopMove` checks `StopModifyAttempts >= MaxStopModifyAttempts` and has an
+        /// `ATM_STOP_MOVE_ABANDONED` event for giving up -- but on the not-found path it returned
+        /// early WITHOUT incrementing the counter, so the cap was unreachable and the sweep re-asked
+        /// every 5 seconds forever. Measured live: **55 `ATM_STOP_ORDER_NOT_FOUND` lines** and still
+        /// counting when the position was flattened.
+        ///
+        /// [[a-retry-that-cannot-exit]], and *an alarm that is always on is off* -- a third site
+        /// after P2-107 and P2-108.
+        /// </summary>
+        private static void TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-130: a move that finds no order is COUNTED, so the retry can end");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // A genuinely absent order: terminal, so no liveness predicate can match it.
+            stop.OrderState = OrderState.Cancelled;
+
+            atm.MonitorTickForTest();
+            Assert(bracket.StopModifyAttempts >= 1,
+                "P1-130: a request that finds NO live order is counted as an attempt (got "
+                + bracket.StopModifyAttempts + "). At baseline it returned early without counting, "
+                + "so MaxStopModifyAttempts was unreachable and the sweep re-asked every 5s forever "
+                + "-- 55 lines were measured on the live box.");
+
+            int previous = bracket.StopModifyAttempts;
+            for (int i = 0; i < 10; i++) atm.MonitorTickForTest();
+
+            Assert(bracket.StopModifyAttempts > previous,
+                "P1-130: repeated sweeps keep counting rather than spinning at zero (got "
+                + bracket.StopModifyAttempts + ")");
+            Assert(bracket.StopModifyAttempts <= DynamicAtmManager.MaxStopModifyAttempts,
+                "P1-130: and the count STOPS at the cap rather than growing without bound -- the "
+                + "bracket is abandoned and says so once (got " + bracket.StopModifyAttempts
+                + ", cap " + DynamicAtmManager.MaxStopModifyAttempts + ")");
         }
 
         /// <summary>
