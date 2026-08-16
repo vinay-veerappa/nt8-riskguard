@@ -7059,3 +7059,88 @@ as the paths driven through it. Stress tests exist to drive the paths nobody tho
 - Concurrency tests must assert on an observed invariant, not merely on "no exception thrown" —
   the existing group-stress test only asserts the latter, which is why it has never caught
   anything.
+
+---
+
+### P1-131. The bridge hand-rolls its own order-liveness list, disagrees with the core's shared classifier in BOTH directions, and that count is what decides whether a disconnect would strand you — OPEN, found 2026-08-16 (session 52) by reading live state during market hours
+
+**Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs` — `OccupiesSlotForBridge` (2 call sites) and
+the inline filter in `GetOrders`.
+
+**Measured live**, Sunday session, while the funded 50K account held a real position:
+
+```
+nt_connection      TPT   openPositions: 1   workingOrders: 7
+nt_orders(funded)  4 orders, all state "Working"     <- genuinely live, correctly counted
+nt_orders(Sim101)  3 orders, all state "CancelPending", filled 0, no position
+```
+
+**Three of the seven "working orders" are cancelling and cannot fill.** They had been in
+`CancelPending` for roughly five hours.
+
+**The core already decided this question and wrote down why.** `RiskGuardAddOn.Classify`:
+
+```csharp
+// A cancel is in flight. It still occupies its slot at the broker, so
+// cancelling again is noise -- but it must NOT be counted as coverage,
+// which is precisely what `!IsTerminal` used to do (P0-60).
+case OrderState.CancelSubmitted:
+case OrderState.CancelPending:
+    return OrderLiveness.Departing;
+```
+
+and `OccupiesSlot` = `Working | Changing | Inert | Indeterminate`, which **excludes `Departing`**.
+The bridge's list is written out by hand and includes `CancelPending`:
+
+```csharp
+private static bool OccupiesSlotForBridge(OrderState s)
+{
+    return s == OrderState.Working || s == OrderState.Accepted
+        || s == OrderState.Submitted || s == OrderState.TriggerPending
+        || s == OrderState.ChangePending || s == OrderState.CancelPending
+        || s == OrderState.PartFilled;
+}
+```
+
+⚠️ **It is wrong in BOTH directions**, which is `F-9` and `P1-100`'s shape exactly — and the
+reason is the same in all three: **nothing ever compared the two answers.**
+
+| | core `OccupiesSlot` | `OccupiesSlotForBridge` | |
+|---|---|---|---|
+| `CancelPending` | **no** | **yes** | counted today, measured, ×3 |
+| `CancelSubmitted` | no | no | ⚠️ same handshake as the row above, opposite treatment |
+| `Initialized` | **yes** | **no** | live order, invisible |
+| `AcceptedByRisk` | **yes** | **no** | live order, invisible |
+| `ChangeSubmitted` | **yes** | **no** | ⚠️ `ChangePending` IS in the list; its twin is not |
+| `Suspended` | **yes** | **no** | present but dormant, invisible |
+| `Unknown` | **yes** | **no** | ⚠️ the state you least want to disconnect under |
+
+**Why this is a `P1` and not a display nit**: `workingOrders` is not only rendered — it is passed
+straight to `BridgeConnectionPlan.WouldStrand(openPositions, workingOrders, ...)`, the predicate
+that **refuses a disconnect** on the grounds that orders *"stay live at the broker and can be
+neither moved nor cancelled from here"*. So the false-negative half means **a disconnect is
+PERMITTED while a protective stop rests in a state the bridge does not recognise** — and the
+false-positive half means the refusal you *do* get may be citing orders that are already leaving.
+Today's refusal of a TPT disconnect would be justified entirely by three dead Sim101 orders.
+
+⚠️ **And there is a THIRD definition of the same question in the same file.** `GetOrders` filters
+with `order.OrderState == OrderState.Filled || order.OrderState == OrderState.Cancelled` — which
+omits **`Rejected`**, the third terminal state, so a rejected order is served as an active order by
+the endpoint whose description says "active/working". One question, three hand-rolled answers, one
+repo. `P1-90` was this shape across six sites.
+
+**Fix**: one predicate, extracted to its own file so the harness can EXECUTE it — the
+`CopierEnforcementView` / `BridgeFlattenPlan` trade. It cannot take `OrderState` (an NT8 type), so
+it takes the state NAME and the call sites pass `o.OrderState.ToString()`. Then all three sites
+call it, and a source gate pins that no fourth list appears. ⚠️ **The states must be derived from
+the core's own classifier rather than re-typed**, or this is the same defect with a newer list:
+the point is not that the bridge's list is short, it is that it is a SECOND list.
+
+⚠️ **The severity direction is not symmetric and the fix must not "simplify" it**: counting a
+departing order costs a refused disconnect, and missing a live one costs a stranded stop. When in
+doubt the predicate says YES — which is what the core's `Indeterminate` → `OccupiesSlot` already
+encodes for `Unknown`.
+
+**Not reproduced, and deliberately not claimed**: nothing here has been measured stranding a real
+order. The false-positive half is measured; the false-negative half is derived from the two lists
+and is the reason for the band. Say which half was measured.
