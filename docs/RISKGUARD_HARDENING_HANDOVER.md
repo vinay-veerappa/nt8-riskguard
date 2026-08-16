@@ -10548,6 +10548,36 @@ of two surfaces, and nothing in the repo said which one that was.**
 the same state, and the docs name neither as primary.* Before improving a display, establish
 which display the operator has open. One screenshot reordered a whole backlog.
 
+⚠️ **CORRECTION, WRITTEN THE SAME DAY, AND IT MATTERS MORE THAN THE PARAGRAPH ABOVE.** The
+first draft of this section called the browser UI a surface I had "found". It is not. It is
+**the agreed design's chosen host**, specified in
+[`docs/UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) §7 (*"Host decision — a local browser UI,
+served by the bridge"*) and built out across `UI1`-`UI7` with §10 tracking each landing. **The
+redesign is not lost and never was**: 493 lines, dated 2026-08-13, with a progress log per item.
+
+Two consequences, both of which corrected filed entries:
+
+* **`P2-127` was first filed proposing left-hand navigation tabs — the one thing §4.2 explicitly
+  killed**, in a list introduced with *"recorded so nobody re-adds them."* I re-added them,
+  having not opened the design doc, from a `GuardRules.cs` header comment that names it. The
+  entry now carries §4's fleet/inspector diagram and states the conflict as the operator's to
+  settle rather than resolving it silently.
+* **`P2-126` was filed as a discovery and is not one.** §10 item 4 already recorded *"nothing on
+  the page is EDITABLE — goal 1 of the two ('configure both systems') is untouched."*
+
+⚠️ **The real diagnosis of "cluttered" is therefore NOT "it needs navigation".** It is that **§4's
+two-pane layout was never built**: the read models (§10 items 2-4) landed as stacked sections, and
+an editable guard-config block was added at the **top level**, where §4 puts set-rarely config in
+the *inspector* and keeps only frequent actions inline. That ~28-row block above the fleet is the
+biggest single contributor to the scroll, and it is in the wrong pane by the design's own rules.
+
+⚠️ **§10 item 4's "Still to do" was itself stale** and has been updated in place: the GUARD half
+became editable after it was written (`P1-117`/`P2-119`); it is the COPIER half that is read-only.
+
+⚠️ **The process lesson is mine.** A header comment in `GuardRules.cs` names
+`docs/UI_REDESIGN_DESIGN.md` and I read past it for two sessions. **When a source file cites a
+design doc, open the design doc before proposing a design.**
+
 ### What was measured, before writing any of it down
 
 | Question | Answer |
@@ -10591,15 +10621,25 @@ makes its ordering reachable by the operator.
 
 ### Order from here
 
-1. **`P1-125`** — the browser UI never states the copier's global mode. Smallest of the three,
-   highest consequence, and it is the operator's actual complaint stated precisely: a `disabled`
-   copier renders exactly like a working one. Close **`P3-122`** in the same change.
-2. **`P2-127`** — the left-nav restructure. Take it BEFORE the new controls: it decides where
-   they live, and doing it after means moving them twice. Badge the nav from the payload.
-3. **`P2-126`** — the write surface. Largest, and it wants the shell to exist first. Every
-   control dispatches through the existing `dispatch()` chokepoint, which already handles
-   `refused` as a first-class answer rather than an error.
-4. Then the pre-existing queue from §5.76: **`P2-29`**'s `partial class` split, **`P3-118`**,
+0. ⚠️ **READ [`docs/UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) FIRST — §4, §7, §10, §11.**
+   All three entries below are continuations of that design, not new work, and one of them was
+   first filed contradicting it. Do not plan UI work from the plan entries alone.
+1. **SETTLE THE LAYOUT CONFLICT — the operator's call, not the implementer's.** §4.2 killed
+   top-level navigation tabs; on 2026-08-16 the operator asked for exactly those. The
+   recommendation in **`P2-127`** is to build §4's fleet/inspector instead, because it meets the
+   stated goal (no single scroll, pick on the left, detail on the right) *per account*, which is
+   the question actually asked. **Get an answer before writing code**; either way it is one
+   sentence in `P2-127`.
+2. **`P1-125`** — the browser UI never states the copier's global mode. Smallest, highest
+   consequence, and **independent of the layout decision**, so it can go first regardless: a
+   `disabled` copier renders exactly like a working one. Close **`P3-122`** in the same change.
+3. **`P2-127`** — build whichever layout won. Take it BEFORE the new controls: §4 decides where
+   each control lives (frequent actions inline on the row, set-rarely config in the inspector),
+   and doing it after means moving them twice. Move the decisions into a compiled class first.
+4. **`P2-126`** — the copier write surface, which is §10 item 4's outstanding half. Largest, and
+   it wants the layout to exist first. Every control dispatches through the existing
+   `dispatch()` chokepoint, which already treats `refused` as a first-class answer, not an error.
+5. Then the pre-existing queue from §5.76: **`P2-29`**'s `partial class` split, **`P3-118`**,
    **`P3-124`**, **`P3-110`**, **`P3-33`**.
 
 ### Confirmation runs waiting on a market — NOT work

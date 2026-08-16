@@ -4810,8 +4810,18 @@ remains of `P1-72`'s twice-regressed advertisement. An operator can release a qu
 cannot impose one. Decide deliberately whether that asymmetry stays; it is defensible (the engine
 imposes quarantine on measured slippage, not on opinion) but it is nowhere stated.
 
-**Fix**: this is the one that needs a design pass before code, and it should be taken WITH
-`P2-127` rather than bolted onto the current page. The read surface is already honest and rich;
+⚠️ **THIS IS NOT A NEW DISCOVERY AND MUST NOT BE PLANNED AS ONE.**
+[`docs/UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) §10 item 4 already records it as
+the outstanding half of the whole redesign: *"nothing on the page is EDITABLE — goal 1 of
+the two ('configure both systems') is untouched."* This entry is that sentence measured.
+⚠️ That line is now **partly stale**: the GUARD config became editable afterwards
+(`P1-117`/`P2-119`, the `Review and save` block posting to `/api/riskguard/config`). It is
+the **copier** half that is still read-only, which is why the operator hit it there.
+
+**Fix**: needs the layout settled first, so take it WITH
+`P2-127` rather than bolting controls onto the current scroll. §4 decides where each control goes: frequent actions
+(arm/disarm, enable/disable, ratio) **inline on the row**, set-rarely config (symbol
+mappings, per-ticker matrix, slippage thresholds) **in the inspector**. The read surface is already honest and rich;
 what is missing is a write surface, and the write surface is what
 `GuardConfigEdit`/`CopierRequests` exist to validate. **Every new control must dispatch through
 the existing `dispatch()` chokepoint** — one place that builds a request and one that reads the
@@ -4819,7 +4829,7 @@ answer, including `refused`, which is the engine declining on purpose and is not
 
 ---
 
-### P2-127. The whole page is ONE scroll -- four stacked sections, ~190 rows fully expanded, no navigation -- OPEN, found 2026-08-16 (session 50), reported by the operator as "cluttered"
+### P2-127. The page never got section 4 of the agreed design -- the fleet/inspector split -- so everything landed as one scroll; and the obvious fix is the ONE thing that design explicitly killed -- OPEN, found 2026-08-16 (session 50), reported by the operator as "cluttered"
 
 **Where**: `nt8-mcp-bridge/ui/index.html`
 
@@ -4833,26 +4843,64 @@ Measured:
 | account rows visible by default | **7 of 97**, each expanding to **23** rule rows |
 | rows on screen with every account expanded | **~190** |
 
-The operator's request is a **left-hand nav that switches between sections**, keeping each view
-small. That is the right shape and it is cheap — the page already builds each section from its
-own `api()` call and its own render function, so the sections are separable today; what is
-missing is the shell.
+⚠️ **READ [`docs/UI_REDESIGN_DESIGN.md`](UI_REDESIGN_DESIGN.md) §4 BEFORE TOUCHING THIS. THIS
+ENTRY WAS FIRST FILED PROPOSING THE EXACT THING THAT DESIGN KILLED.**
 
-⚠️ **THE ONE THING THIS RESTRUCTURE MUST NOT DO IS HIDE A WARNING BEHIND A TAB.** The entire
-value of this page is that `INERT`, `ConfiguredNotEvaluated` and a non-acting copier are visible
-without being looked for — `GuardSnapshot.UnevaluatedRules` exists precisely so a box with no
-accounts loaded cannot render a clean, empty, reassuring page. A tabbed shell puts three of the
-four sections behind a click by default. **So the nav itself must carry the worst state in each
-section as a badge**, derived from the same payload the section renders, or this change converts
-an honest cluttered page into a tidy one that lies by omission. That is the same trade
-`P2-103`'s summary made and the reason it recounts from the detail rows rather than keeping its
-own counters.
+§4 is titled *"Layout — one window, two panes, zero nav tabs"* and specifies:
+
+```
+┌────────────────────────────────┬──────────────────────────┐
+│ FLEET (always visible)         │ INSPECTOR (selection)    │
+│  ▾ Group A · leader NT_9451    │  [copier] [risk] [rare]  │
+│    ├ follower_1  1.0x  ✔MATCH  │  full config for the     │
+│    └ follower_2  1.0x  ⚠SHADOW │  selected entity         │
+├────────────────────────────────┴──────────────────────────┤
+│ EVENTS — filtered to selection                            │
+└───────────────────────────────────────────────────────────┘
+```
+
+and §4.2 lists **"top-level navigation tabs"** among the things *"Killed by the operator's
+constraints, **recorded so nobody re-adds them**."* The first draft of this entry re-added them,
+which is precisely what that sentence exists to prevent.
+
+**So the diagnosis is not "the page needs navigation". It is that §4 was never built.** What
+landed was the read models (§10 items 2-4) rendered as stacked sections, plus an editable guard
+config block that §4 never called for at the top level at all — §4 puts set-rarely config *in the
+inspector* and keeps only frequent actions inline. The ~28-row `CONFIGURATION` block sitting above
+the fleet is the single biggest contributor to the scroll, and it is in the wrong pane by the
+design's own rules.
+
+⚠️ **THERE IS A GENUINE CONFLICT TO SETTLE, AND IT IS THE OPERATOR'S TO SETTLE.** On 2026-08-16
+they asked for *"tabs on the left to switch between each item"*. The recorded design says no
+top-level tabs. These are close enough to be confused and are not the same thing:
+
+| | left NAV TABS (the 2026-08-16 request) | FLEET pane (§4, agreed 2026-08-13) |
+|---|---|---|
+| what the left column lists | **sections** — Configuration, Copier, Accounts | **entities** — groups, followers, unlinked accounts |
+| what selecting does | swaps which section is on screen | drives the inspector to that account's config |
+| where a warning on an unselected item goes | **hidden behind a tab** | still visible in the tree, worst-first |
+
+**Recommendation: build §4, not the tabs.** It satisfies the operator's stated goal — no single
+scroll, pick a thing on the left, see its detail on the right — and it does so per ACCOUNT, which
+is the question they actually ask ("which limit applies to this account"). Section tabs answer a
+question nobody asks. But **record the operator's decision here before building either**; do not
+let a design doc silently overrule a live request, and do not let a live request silently discard
+a recorded constraint.
+
+⚠️ **Whichever wins, the hiding hazard is the same and is the reason §4.2 killed tabs.** This
+page's value is that `INERT`, `ConfiguredNotEvaluated` and a non-acting copier are visible without
+being looked for — `GuardSnapshot.UnevaluatedRules` exists precisely so a box with no accounts
+loaded cannot render a clean, empty, reassuring page. Anything that puts a section behind a click
+must carry that section's worst state into the always-visible column, folded out of the same
+payload the section renders and never from its own counters (`F-9`; `P2-103` recounts from the
+detail rows for this reason).
 
 ⚠️ **`ui/index.html` is in NO test build and NO mutation battery**, exactly like
-`TradeCopierWindow.cs`. Before adding behaviour to it, move the decisions — which badge, which
-severity, which sections exist — into a class the harness compiles, the way `CopierStatusView`
-and `CopierSymbolMatrixView` already do for the WPF window. Otherwise this grows a third
-untested surface, and it will be the one the operator actually uses.
+`TradeCopierWindow.cs`, and §11's second open question already asks whether `P2-27` should be
+closed first for this reason. Move the decisions — which badge, which severity, what the tree
+contains — into a class the harness compiles, the way `CopierStatusView` and
+`CopierSymbolMatrixView` do for the WPF window. Otherwise this grows a third untested surface,
+and it will be the one the operator actually uses.
 
 ---
 

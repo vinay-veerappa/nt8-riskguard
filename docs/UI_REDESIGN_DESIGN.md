@@ -453,8 +453,18 @@ is reachable **only through the bridge**.
    rank is stated once in core and travels on each row; the page never re-derives it. This is the
    opposite of `GuardRuleState`, whose integer order *is* its severity order and is pinned as
    such. **The two enums look alike and must be treated differently.**
-   **Still to do here**: nothing on the page is EDITABLE — goal 1 of the two ("configure both
-   systems") is untouched. Also open: live SSE updates instead of the 5s poll, operator-readable
+   **Still to do here**: ⚠️ **UPDATED 2026-08-16 (session 50).** The GUARD half of this
+   became editable after this line was written — `P1-117`/`P2-119` landed the
+   `Review and save` block posting to `/api/riskguard/config`. **The COPIER half is
+   still read-only** and is filed as `P2-126`: the page dispatches **2** of the **14**
+   actions `/api/copier/config` accepts, so a relationship can be toggled and nothing
+   else — no create, no delete, no group edit, no ratio, no `set_mode`.
+   ⚠️ **AND §4'S LAYOUT WAS NEVER BUILT** (`P2-127`). What shipped is these read models
+   as stacked sections on one scroll, with the guard config block at the TOP LEVEL where
+   §4 puts set-rarely config in the inspector. The operator reported it as "cluttered"
+   on 2026-08-16 and proposed left-hand nav tabs — **which §4.2 explicitly killed**. That
+   conflict is unresolved and is recorded in `P2-127`; settle it before building either.
+   Also still open: nothing on the page states the COPIER's global mode (`P1-125`). Also open: live SSE updates instead of the 5s poll, operator-readable
    notes (they currently cite defect IDs), and the NT8 Control Center menu item (§7.4).
 5. **`F-9`** firm mapping, which is what makes the risk half of the inspector tell the truth.
    **Code half DONE 2026-08-13.** The two firm rules resolve `ResolveEffectiveFirmConfig` per
