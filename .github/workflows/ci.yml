@@ -193,6 +193,18 @@
 #   refuses to run without them. A re-pack whose own gain is nil can still be what keeps the
 #   next one possible.
 #
+# ⚠️ AND THE SLOT CONTENTION IS NOT ONLY THE SIBLING REPO -- IT IS YOUR OWN PREVIOUS PUSH.
+#   Measured immediately after the re-pack above, two pushes 13 SECONDS apart:
+#
+#     ci: re-pack ...        11m32s
+#     docs: record ...       20m41s   <- started 13s later, contending with the run above
+#
+#   Same workflow, same repo, same commit range, and nearly DOUBLE the wall clock. 19 bins x 2
+#   runs is 38 jobs against 20 slots, so the second run queues behind the first for most of its
+#   life. Neither run was slow; the arrangement was. BATCH PUSHES -- the block sixty lines up
+#   says the slots are account-wide and names the sibling repo, which reads as someone else's
+#   problem and is not.
+#
 # → NEXT SESSION: nothing to re-pack unless a battery is added or removed. The re-pack was done by FLATTENING the matrix to one
 #   battery per entry first -- the packer weights ENTRIES, so it can only re-arrange the pairs
 #   it is given, and the per-battery decomposition in each comment is what makes that reversible.
