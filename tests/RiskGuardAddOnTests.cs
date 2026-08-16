@@ -607,6 +607,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP2116_AnAccountWithNoEquityReadingCannotBeEnforcing();
             TestP2116_AnAccountWithAnEquityReadingStillEnforces();
             TestP2116_ANegativeEquityIsAReadingNotAnAbsence();
+            TestP2116_ANaNEquityIsNotAReading();
+            TestP2116_AnUnreadAccountReportsNoValueRatherThanZero();
+            TestP2116_TheFirmNoteIsPrefixedNotReplaced();
             TestP2116_TheInertRowSaysWhatIsMissing();
             TestP2116_TheFirmTrailingDrawdownIsASecondReader();
             TestP2116_PeakEquityGivebackNeedsAReadingToo();
@@ -2749,6 +2752,56 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(state == GuardRuleState.Enforcing, string.Format(
                 "an account reporting NEGATIVE equity is still being read, so trailing drawdown "
                 + "is ENFORCING (was {0})", state));
+        }
+
+        private static void TestP2116_ANaNEquityIsNotAReading()
+        {
+            // A broker pushing NaN, or an arithmetic result of one, is NOT a reading -- and
+            // without this guard it would be counted as evidence, because NaN != 0.0 is TRUE.
+            // Every comparison the trailing-drawdown enforcer then makes against it is false, so
+            // the rule would report Enforcing and be incapable of firing, which is the ticket's
+            // defect surviving inside its own fix.
+            Console.WriteLine("\n[TEST] P2-116: a NaN equity is not a reading");
+
+            var state = P2116StateOf("PnLRules.TrailingDrawdown", P2116Account(double.NaN));
+            Assert(state == GuardRuleState.Inert, string.Format(
+                "an account whose equity reads NaN is INERT (was {0}) -- NaN != 0.0 is true, so "
+                + "without an explicit guard it counts as evidence", state));
+        }
+
+        private static void TestP2116_AnUnreadAccountReportsNoValueRatherThanZero()
+        {
+            // ⚠️ CurrentValue must be NULL, not 0.0. A rendered `cur=0.0` is a NUMBER, and the
+            // operator reads it as a fact about the account -- the same confusion CopierMetric
+            // .Measured removed from the copier's latency fields, where a zero meant both
+            // "nothing filled" and "filled instantly".
+            Console.WriteLine("\n[TEST] P2-116: an unread account reports NO value, not a zero");
+
+            var rule = P2116Rule("PnLRules.TrailingDrawdown");
+            var unread = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), P2116Account(0.0)));
+            Assert(unread.CurrentValue == null, string.Format(
+                "no reading means no CurrentValue, not 0.0 (was {0})",
+                unread.CurrentValue == null ? "null" : unread.CurrentValue.ToString()));
+
+            var read = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), P2116Account(50182.75)));
+            Assert(read.CurrentValue != null && Math.Abs(read.CurrentValue.Value - 50182.75) < 0.001,
+                "an account that DOES report equity carries the number through");
+        }
+
+        private static void TestP2116_TheFirmNoteIsPrefixedNotReplaced()
+        {
+            // The existing note is the ONLY place that says whether the numbers in force came
+            // from the resolved plan or the fallback block. Replacing it to make room for the
+            // missing-reading text would trade one piece of missing information for another.
+            Console.WriteLine("\n[TEST] P2-116: the firm note is PREFIXED, not replaced");
+
+            string note = P2116NoteOf("FirmMirror.TrailingDD.Amount", P2116Account(0.0));
+            Assert(note.IndexOf("equity", StringComparison.OrdinalIgnoreCase) >= 0,
+                "the firm note names the missing equity reading (was \"" + note + "\")");
+            Assert(note.IndexOf("in force", StringComparison.OrdinalIgnoreCase) >= 0,
+                "and it KEEPS the text saying which numbers are in force (was \"" + note + "\")");
         }
 
         private static void TestP2116_TheInertRowSaysWhatIsMissing()

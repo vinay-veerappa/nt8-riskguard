@@ -245,6 +245,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             return new GuardRuleReading { DisabledByConfig = true, EvidenceCount = 1, Note = note };
         }
 
+        // P2-116. Evidence for an equity-backed rule is an equity READING, not the existence of
+        // an AccountState OBJECT. Every subscribed account has an object, so counting it scored
+        // 89 Provider31 accounts at evidence 1 while exactly ONE of them reported any equity --
+        // and the 88 rendered byte-identical to the funded account on every row but the number.
+        //
+        // AccountEquity is a non-nullable double that stays 0.0 until the broker pushes a value,
+        // so 0.0 is what "no reading has arrived" looks like from here.
+        //
+        // Trailing drawdown breaches when currentPnL < PeakEquity - TrailingDrawdown. With no
+        // reading PeakEquity stays 0 and the test is `0 < -1500`, never true -- so the rule is
+        // structurally incapable of firing, which is exactly what INERT means. It self-heals the
+        // moment a number arrives.
+        //
+        // ⚠️ `!= 0.0` AND NOT `> 0`. An account whose equity has gone NEGATIVE is reporting a
+        // reading, and it is the account most likely to be in trouble. Treating that as no
+        // evidence would switch this rule to INERT at the moment it matters most, which is a
+        // worse defect than the one being fixed. A test pins it.
+        private const string NoEquityReading =
+            "this account reports no equity, so its peak equity stays 0 and the rule cannot fire";
+
+        private static bool HasEquityReading(RiskGuardAddOn.AccountStateSnapshot account)
+        {
+            return account != null && !double.IsNaN(account.AccountEquity) && account.AccountEquity != 0.0;
+        }
+
         private static readonly List<GuardRuleDefinition> _rules = new List<GuardRuleDefinition>
         {
             // -- P&L, per account -------------------------------------------------------
@@ -258,11 +283,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
             new GuardRuleDefinition {
                 Name = "Trailing drawdown", ConfigPath = "PnLRules.TrailingDrawdown",
+                EvidenceLabel = "accounts reporting an equity reading",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
                 Evaluator = c => c.Config.PnLRules.TrailingDrawdown <= 0
                     ? Off("no trailing drawdown set")
-                    : R(c.Account == null ? (double?)null : c.Account.AccountEquity,
-                        c.Config.PnLRules.TrailingDrawdown, c.Account == null ? 0 : 1)
+                    // CurrentValue is NULL rather than 0.0 when there is no reading: a displayed
+                    // `cur=0.0` is a number the operator reads as this account is flat, which is
+                    // the same confusion the copier metrics removed.
+                    : R(HasEquityReading(c.Account) ? (double?)c.Account.AccountEquity : null,
+                        c.Config.PnLRules.TrailingDrawdown, HasEquityReading(c.Account) ? 1 : 0,
+                        HasEquityReading(c.Account) ? null : NoEquityReading)
             },
 
             // -- sizing -----------------------------------------------------------------
@@ -412,7 +442,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // note claim a plan's numbers are in force when the top-level block's are.
             new GuardRuleDefinition {
                 Name = "Firm trailing drawdown", ConfigPath = "FirmMirror.TrailingDD.Amount",
-                EvidenceLabel = "accounts mapped to a firm",
+                EvidenceLabel = "accounts mapped to a firm and reporting an equity reading",
                 Source = GuardRuleSource.FirmProfile, Scope = GuardRuleScope.PerAccount,
                 Evaluator = c =>
                 {
@@ -438,8 +468,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                         : mapped
                             ? "mapped to firm '" + firmKey + "', which is ABSENT from FirmProfiles; preflight refuses to arm on that, and the top-level TrailingDD block is what is in force"
                             : "not mapped to a firm plan; the top-level TrailingDD block is what is in force, and it was chosen for no stated account size";
-                    return R(c.Account == null ? (double?)null : c.Account.AccountEquity,
-                        sub.Amount, mapped ? 1 : 0, note);
+                    // P2-116. A SECOND READER of the same state: this already gated evidence
+                    // on the account being MAPPED to a firm, which a dormant eval certainly can
+                    // be. Mapped and unread is still unread. The existing note is PREFIXED, not
+                    // replaced -- it is the only place that says whether the numbers in force
+                    // came from the resolved plan or the fallback block.
+                    if (mapped && !HasEquityReading(c.Account))
+                        note = NoEquityReading + "; " + note;
+                    return R(HasEquityReading(c.Account) ? (double?)c.Account.AccountEquity : null,
+                        sub.Amount, mapped && HasEquityReading(c.Account) ? 1 : 0, note);
                 }
             },
             new GuardRuleDefinition {
@@ -486,11 +523,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
             new GuardRuleDefinition {
                 Name = "Peak equity giveback", ConfigPath = "PropFirm.EnablePeakEquityProtection",
+                EvidenceLabel = "accounts reporting an equity reading",
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
+                // P2-116, THIRD SITE. It reports no CurrentValue, so it looks unlike the two
+                // above -- but the enforcer behind it tracks peak equity, and with no reading the
+                // peak stays 0 and the giveback can never trigger. What a row DISPLAYS is not
+                // what decides whether it can fire.
+                //
+                // ⚠️ CurrentValue stays NULL deliberately. The Limit here is a PERCENT; putting
+                // the account equity in the value column would render dollars against a percent
+                // and read as wildly over the limit.
                 Evaluator = c => c.PropConfig == null || !c.PropConfig.EnablePeakEquityProtection
                     ? Off("peak equity protection disabled")
-                    : R(null, c.PropConfig.MaxPeakGivebackPct, c.Account == null ? 0 : 1,
-                        "ignores peaks below $" + c.PropConfig.MinPeakGainDollars + " (P1-40)")
+                    : R(null, c.PropConfig.MaxPeakGivebackPct, HasEquityReading(c.Account) ? 1 : 0,
+                        (HasEquityReading(c.Account) ? "" : NoEquityReading + "; ")
+                        + "ignores peaks below $" + c.PropConfig.MinPeakGainDollars + " (P1-40)")
             },
 
             // -- prop-firm suite: THE NEWS SHIELD. P2-25, and the reason for INERT. ----
