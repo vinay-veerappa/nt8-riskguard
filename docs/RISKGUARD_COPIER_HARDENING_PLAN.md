@@ -4324,7 +4324,7 @@ defect is the gate that matters most here.
 
 ---
 
-### P2-120. The bridge's `POST /api/riskguard/config` still answers `success = true` whatever the save did — the SECOND reader of an outcome the core now reports — OPEN, filed 2026-08-16 (session 48) when `P2-119` closed in the core
+### P2-120. The bridge's `POST /api/riskguard/config` still answers `success = true` whatever the save did — the SECOND reader of an outcome the core now reports — ✅ CLOSED and LIVE-VALIDATED 2026-08-16 (session 48), `nt8-mcp-bridge` commit `63df711`
 
 **Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs`, in `RiskGuardConfig(body)`:
 
@@ -4361,6 +4361,40 @@ script acting on it proceeds.
 ⚠️ **Evidence is obtainable with the market shut** — make `RiskGuard/config.json` read-only and
 POST a valid change; the reply must say `success = false`. The positive control matters as much:
 a normal POST must still say `true`.
+
+#### CLOSING NOTES — measured, both halves, with the market shut
+
+Core pinned `v1.30.0` → **`v1.31.0`**, which is what makes `ConfigSaveResult` reachable here at
+all. Then, against the running box:
+
+```
+POST {"PnLRules":{"TrailingDrawdown":0}}
+  -> success false, status "refused", refusal names the field
+     in text that exists only in GuardConfigEdit; live TD still 1500.0
+POST {"PnLRules":{"TrailingDrawdown":1500}}      (positive control)
+  -> success true, status "applied", warning null
+config.json unchanged at 1500.0 after both
+```
+
+**The positive control is not optional** — a route that refused everything would satisfy the
+first line on its own.
+
+⚠️ **The route does NOT call the validator, and the plan above that said it would was wrong.**
+The validator lives inside `SaveAndReloadConfig`, so all three writers get it whether they
+remember to ask or not; a route-level call would have been a **fourth copy of a decision that now
+has exactly one home**. What the route owns is the OUTCOME, and that is what the restored
+assertions pin.
+
+⚠️ **`nt_compile`: 0 errors** — the gate that actually mattered, since the core patch this builds
+on nearly shipped a nested type that compiles green in *both* harnesses and fails NinjaTrader.
+`nt_health` reports RiskGuard **1.31.0**, loaded, `shadow`, armed, guarding.
+
+⚠️ **Five assertions replaced the nine that were removed, and the last is the load-bearing one**:
+a NEGATIVE CONTROL forbidding the old unconditional `success = true, status = "applied"` literal.
+Every other assertion is satisfied by a file that still contains the defect beside the fix. Driven
+failing before being trusted (398/1). A first draft of another was a **tautology** — `no bare call
+OR a captured call`, always true once the capture assertion passes — and was removed rather than
+reworded.
 
 ---
 
