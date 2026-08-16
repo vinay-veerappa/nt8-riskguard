@@ -203,10 +203,23 @@ it is a confirmation run, not work.
 
 ## Order at 15:00
 
-1. **D**, only if the operator has said yes (it is the one with a real decision attached).
-2. **A** — the flood test. Needs 120 uninterrupted seconds and no compiling.
-3. **C** — the ATM stop move, which needs price to actually travel.
-4. **B** — free, just read the log at :45.
+✅ **DECIDED BY THE OPERATOR 14:32 PDT, before the open: A/B/C first, and D only if they pass.**
+The reasoning is theirs and it is the right way round — D is the only item that changes the box's
+risk posture, and spending it on a session whose safe items have not yet been shown to work would
+be paying the cost before knowing the tooling is sound.
+
+1. **A** — the flood test. Needs 120 uninterrupted seconds and **no compiling**.
+2. **C** — the ATM stop move, which needs price to actually travel.
+3. **B** — free, just read the log at :45.
+4. **D** — **conditional on A, B and C passing.** Guard → `live`, breach the daily loss limit on
+   **Sim101 only**, confirm the lockout binds, then (a) an increasing order → expect REFUSED,
+   (b) a reducing order → expect ADMITTED. Then `unlock` and **return the guard to `shadow`,
+   verified by re-reading `/api/riskguard/config`** — not by the write's own answer.
+   ⚠️ If any of A/B/C fails, **D does not run**: the failure is the session's finding and arming a
+   guard on a box whose alerting or stop-management has just been shown wrong is the wrong order.
+   ⚠️ While `live`, all 97 accounts are under an acting guard, including the funded TPT PRO. That
+   is tolerable only because nothing is being traded on it. **Return to `shadow` before anything
+   else, even if D fails halfway.**
 
 **Record each as PASS/FAIL with the measured numbers, and for anything not driven, say which half
 was measured.** A confirmation run that is skipped is not a pass.
