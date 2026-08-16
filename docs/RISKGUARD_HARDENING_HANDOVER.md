@@ -3348,7 +3348,7 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P2-127` (✅ `P1-130` FIXED and live-validated the same session, §5.80 — but the ATM breakeven is still NOT proven end-to-end: the Simulator ignores the change — `P0-63`, closed, its known behaviour, so a non-Simulator account is needed) — — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
+> ### Do next: `P2-127` (⚠️ **§5.82 first: the commit that CLOSED `P1-130` broke a `mutate_p0_67.py` anchor by SPLITTING one log call into two, so CI was RED on both of those pushes — including the `v1.35.0` tag push — and the whole 27-job matrix behind that gate never ran. Repointed, battery re-run 10/10 KILLED.** ✅ `P1-130` FIXED and live-validated the same session, §5.80 — but the ATM breakeven is still NOT proven end-to-end: the Simulator ignores the change — `P0-63`, closed, its known behaviour, so a non-Simulator account is needed) — — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
 > ### (order of work lives in §5.78's `Order from here`: `P2-127`'s §4 layout — the layout is SETTLED, do not re-open it — then `P2-126`'s write surface, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
 > ### (✅ `P3-128` CLOSED v1.34.0 session 51 — was `[ COPIER LIVE - SIM ONLY ]` over a copier whose every relationship is OFF; found by reading the live payload of the ticket that put that sentence on screen, fixed by the agent loop, live-validated)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
@@ -11057,3 +11057,82 @@ this one was filed for. Deleted by hand; logged as **CF-7** in the loop's own
 **The general lesson for using this tool**: [[agent-patch-loop-arbiter-gotchas]] said to arbitrate
 by hand when a run does not converge. Extend it — **read the SETTLED block too, not only the
 rulings**, because that is the half that outlives the run.
+
+---
+
+## 5.82 Session 52 — `P1-130`'s fix broke a mutation anchor, CI went red for two pushes, and every agent-loop finding was re-driven
+
+⚠️ **CI WAS RED ON THE TWO PUSHES THAT CLOSED `P1-130`, INCLUDING THE `v1.35.0` TAG PUSH**, and the
+previous session ended before those runs landed — so the session closed on a state claim
+(*"0 compile errors, 30 files in sync"*) that was true about the box and silent about the repo.
+Both are correct facts; only one of them was checked. This is [[check-ci-before-trusting-docs]] at
+the *end* of a session rather than the start: the rule says run `gh run list` before the first claim
+about state, and a claim made while runs are still in flight is a claim about a state that does not
+exist yet. **Runs 31976714399 and 31976656105, both `X checks`, both at `Mutation anchors still
+match`, and the whole 27-job matrix behind that gate never ran.**
+
+**Cause, and it is the gate working.** `P1-130` split `ModifyStopPrice`'s single
+`ATM_STOP_ORDER_NOT_FOUND` log call into **two** — §5.81's point that an absent order and a
+present-but-terminal one are not the same news — and `mutate_p0_67.py` anchored on that call. The
+find-string went from unique to **matching twice**, and `check_anchors.py` refuses an ambiguous
+anchor exactly as it refuses a missing one:
+
+```
+mutate_p0_67.py          1 BROKEN ANCHOR(S)
+  x DynamicAtmManager.cs matched 2 time(s): ModifyStopPrice reports success even when
+    no working stop order exists
+```
+
+⚠️ **This is the failure mode [[mutation-anchors-go-stale]] describes, arriving by its LESS obvious
+route.** The memory says a battery whose find-string stops matching prints `[SKIP]` and scores a
+survivor. Here the string still matched — it matched *more*. Both directions are silent when the
+battery is run and loud only in the gate, which is the argument for the gate: **an anchor is a
+claim of uniqueness, and a fix that ADDS a call site falsifies it just as thoroughly as one that
+deletes it.** Duplicating code is the ordinary way a defect gets fixed, so this route will recur.
+
+**Repointed, not retired** (house rule, fourth time — after `P2-92`, the two `mutate_p1105` anchors,
+and the six in `mutate_p2109`). The new anchor is `Order present = null;` — the first statement
+after the search loop has failed — which is the **identical insertion point**, so the mutant still
+injects `if (true) return true;` and still expresses "ModifyStopPrice claims success with no live
+stop". Evidence that the repoint landed somewhere reachable rather than passing vacuously: the
+battery re-ran **10/10 KILLED, SURVIVORS: none**, and that mutant fails **5** tests (2034 → 2029).
+A repoint is not verified by `check_anchors.py` going green — that only proves the string is unique
+again. **Run the battery.**
+
+### The agent-loop findings were re-driven, and one of them did not survive contact
+
+All seven `CF-` findings filed in §5.81's session were fixed upstream (`e2ed6bd`) and every one was
+re-measured against **this repo** at `ce5fdc17`, 2034 green. **CF-2, CF-3, CF-4, CF-6 and CF-7 are
+closed on measurement; CF-1 is 75% done; CF-5 is re-opened; CF-8 and CF-9 are new.** The detail
+lives in the loop's own `docs/architecture/CONSUMER_FINDINGS.md`; three things belong here because
+they are about how this repo uses the tool.
+
+⚠️ **The install in `.venv` is NOT the pin.** `requirements.txt` says `@v0.6.7`, `pip show` says
+`Version: 0.6.7`, and the actual install is an **editable pointer to `C:\Users\vinay\agent-loop`** —
+whatever that checkout is on, thousands of insertions past the tag. Every version surface agrees
+with the tag and **none of them describes the code that ran**. `python -m agent_loop --version` now
+prints the resolved *path* as well as the number, and the path is the only one of the two that has
+ever been true here. This matters for the same reason a deploy is verified by content and never by
+the path the tool believes in: *a run attributed to "agent-loop v0.6.7" in a commit message here
+means nothing.*
+
+✅ **CF-7 — the poisoned-settled-decision check — works, and it was checked the right way round.**
+It drops §5.81's verbatim pair, **and** leaves a legitimate settled decision containing the word
+"only" alone. The second half is the one that matters: [[detector-needs-a-negative-test]], because
+a validator that dropped every settled decision would pass the positive test perfectly. It is
+keyed on the literal word "only" though, so a paraphrase walks past it — **keep reading the SETTLED
+block by hand.** §5.81's instruction stands unchanged.
+
+🆕 **A zero-cost way to test anything upstream of the first model call**, worth reusing: give the
+probe ticket a deliberately **unresolvable anchor**. The run takes the worktree, runs the baseline
+suite, prints the gate line you are trying to observe, then dies at region extraction — **no model
+call, no spend**. That is how CF-6 was verified. Two probe tickets were driven this way and both
+were deleted afterwards; `git status` was checked clean.
+
+⚠️ **A file can read as modified while being byte-identical.** After the battery,
+`git status --porcelain` reported ` M addons/DynamicAtmManager.cs` and `git diff` printed nothing
+but a CRLF warning. Compared against the blob directly: **53355 bytes both sides, byte identical.**
+A `git status` alone would have started a hunt for a leftover mutant
+([[mutation-battery-killed-leaves-a-mutant]] is a real hazard and this was not it). Compare with
+`git cat-file blob HEAD:<path>` before believing either answer — the same tool that
+[[a-worktree-is-not-a-fresh-checkout]] names for the opposite error.
