@@ -702,6 +702,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestP227_AnOmittedModeIsAccepted();
             TestP227_ModeMatchingIsCaseInsensitive();
             TestP227_AnUnrecognisedModeIsRefused();
+            TestP227_DisabledIsTheCopiersModeNotTheGuards();
+            TestP227_TheValidatorAgreesWithPreflightOnEveryMode();
             TestP227_TheModeRefusalNamesTheValidModes();
             TestP227_AZeroTrailingDrawdownIsRefused();
             TestP227_ANegativeTrailingDrawdownIsRefused();
@@ -10520,15 +10522,115 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine("\n[TEST] P2-27: mode matching is case-insensitive");
             Assert(Accepted(CallRefuse("SHADOW", 1500.0, 5)),
                 "P2-27: mode matching is CASE-INSENSITIVE -- SHADOW is accepted");
-            Assert(Accepted(CallRefuse("Disabled", 1500.0, 5)),
-                "P2-27: mode matching is CASE-INSENSITIVE -- Disabled is accepted");
+            Assert(Accepted(CallRefuse("Live", 1500.0, 0)),
+                "P2-27: mode matching is CASE-INSENSITIVE -- Live is accepted");
+        }
+
+        /// <summary>
+        /// ⚠️ THE TICKET THAT COMMISSIONED THIS CLASS GOT THE LIST WRONG, and every gate passed
+        /// anyway. It said shadow / live / DISABLED, the loop implemented exactly that, 1792 tests
+        /// went green and a two-reviewer panel returned APPROVE(0)/APPROVE(0).
+        ///
+        /// `disabled` IS NOT A GUARD MODE. It is the COPIER's, and deliberately so -- P3-34 gave
+        /// TradeCopierEngine its own live/shadow/disabled precisely so the sim could keep copying
+        /// while the guard sat in shadow. `IsRecognisedCopierMode` is the only place the string
+        /// exists. The guard's own set is shadow / live / pure / override_with_friction, and a
+        /// mode outside it fails preflight with "Unrecognised mode".
+        ///
+        /// So the validator would have ACCEPTED a value that then fails preflight, and the guard
+        /// comes up DISARMED at the next restart with nothing about the file looking wrong -- the
+        /// exact defect this class was built to prevent, introduced BY it. P1-72 for the third
+        /// time. The acceptance tests encode the AUTHOR'S BELIEF about the domain and nothing in
+        /// the ladder checks that belief against the code; the agreement test below is what does.
+        /// </summary>
+        private static void TestP227_DisabledIsTheCopiersModeNotTheGuards()
+        {
+            Console.WriteLine("\n[TEST] P2-27: `disabled` is the COPIER's mode and the guard refuses it");
+            Assert(Refused(CallRefuse("disabled", 1500.0, 5)),
+                "P2-27: `disabled` is the COPIER's mode, not the guard's, and is REFUSED");
+            Assert(!Mentions(CallRefuse("enabled", 1500.0, 5), "disabled"),
+                "P2-27: the refusal does NOT offer `disabled` as a valid guard mode");
+        }
+
+        /// <summary>
+        /// The anti-drift half, and the reason this class owns the list rather than copying it.
+        ///
+        /// Every mode is driven through BOTH the validator and the real RunPreflight(), and they
+        /// must agree. A validator that accepts what preflight refuses writes a config that
+        /// disarms the guard; one that refuses what preflight accepts locks the operator out of a
+        /// working setting. Both directions are asserted, on the same list, in one loop -- so a
+        /// mode added to either side and not the other fails here.
+        ///
+        /// Driven in the P1-87 shape: one connected account, FirmMirror off, MinShadowSessions 0,
+        /// so the mode is the only thing that can fail preflight. PreflightResult.Fail overwrites,
+        /// and a second failure would hide this one.
+        /// </summary>
+        private static void TestP227_TheValidatorAgreesWithPreflightOnEveryMode()
+        {
+            Console.WriteLine("\n[TEST] P2-27: the validator and preflight agree on every mode");
+
+            string[] modes = { "shadow", "live", "pure", "override_with_friction", "disabled", "enabled", "SHADOW" };
+
+            var previousAccounts = Account.All;
+            try
+            {
+                Account.All = new List<Account> { new Account { Name = "P227Pre" } };
+                bool allAgree = true;
+                string disagreement = null;
+
+                foreach (string m in modes)
+                {
+                    var cfg = new RiskConfig();
+                    cfg.Mode = m;
+                    cfg.MinShadowSessions = 0;   // so the live gate cannot be what fails
+                    cfg.FirmMirror.Enabled = false;
+                    var addon = new RiskGuardAddOn();
+                    addon.SetConfigForTest(cfg);
+                    addon.SetModeForTest(m);
+
+                    bool preflightAccepts = addon.RunPreflight().Passed;
+                    bool validatorAccepts = Accepted(CallRefuse(m, 1500.0, 0));
+
+                    if (preflightAccepts != validatorAccepts)
+                    {
+                        allAgree = false;
+                        if (disagreement == null)
+                        {
+                            disagreement = string.Format(
+                                "'{0}': preflight {1}, validator {2}",
+                                m,
+                                preflightAccepts ? "ACCEPTS" : "refuses",
+                                validatorAccepts ? "ACCEPTS" : "refuses");
+                        }
+                    }
+                }
+
+                // The detail goes to the console, NOT into the assertion message. expect_green
+                // matches against failure lines, so a message that varies with the failure is a
+                // message the test-first gate cannot pin.
+                if (disagreement != null)
+                {
+                    Console.WriteLine("  first disagreement -- " + disagreement);
+                }
+                Assert(allAgree,
+                    "P2-27: the validator and preflight agree on every mode");
+            }
+            finally
+            {
+                Account.All = previousAccounts;
+            }
         }
 
         /// <summary>
         /// `enabled` is the exemplar deliberately: P1-72 has REGRESSED TWICE on this codebase and
-        /// it is always a surface accepting a value nothing implements. P2-93 is the same defect
-        /// inside the guard -- `pure` and `override_with_friction` passed preflight and then acted
-        /// on nothing, because IsActingMode() names only `live`.
+        /// it is always a surface accepting a value nothing implements.
+        ///
+        /// `pure` is the second exemplar and it is subtler. It IS a recognised guard mode -- it
+        /// survives preflight's check (c) -- and P2-93 then made preflight refuse it a few lines
+        /// later with MODE_NOT_IMPLEMENTED, because IsActingMode() returns true only for `live`,
+        /// so an operator who waited out five shadow sessions to reach it would get observation
+        /// only, wearing an acting-mode label. The validator must land on the same answer, which
+        /// is what TestP227_TheValidatorAgreesWithPreflightOnEveryMode pins.
         /// </summary>
         private static void TestP227_AnUnrecognisedModeIsRefused()
         {
@@ -10536,14 +10638,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(Refused(CallRefuse("enabled", 1500.0, 5)),
                 "P2-27: an unrecognised mode is REFUSED");
             Assert(Refused(CallRefuse("pure", 1500.0, 5)),
-                "P2-27: `pure` -- a mode that passes preflight and acts on nothing -- is REFUSED");
+                "P2-27: `pure` -- recognised, but refused by preflight as not implemented -- is REFUSED");
         }
 
         private static void TestP227_TheModeRefusalNamesTheValidModes()
         {
             Console.WriteLine("\n[TEST] P2-27: the mode refusal names the valid modes");
             string reason = CallRefuse("enabled", 1500.0, 5);
-            Assert(Mentions(reason, "shadow") && Mentions(reason, "live") && Mentions(reason, "disabled"),
+            Assert(Mentions(reason, "shadow") && Mentions(reason, "live"),
                 "P2-27: the refusal NAMES the valid modes");
         }
 
