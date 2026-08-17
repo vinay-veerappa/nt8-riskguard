@@ -106,16 +106,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // P2-134. The give-up line is said ONCE per episode; this records that it has been said.
         //
-        // ⚠️ There is NO clear anywhere, and that is the finding rather than an omission. The
-        // first draft cleared it from a SETTER on StopModifyAttempts, which fires on any
-        // assignment of 0 -- and `ActiveBracket` is serialised into the bridge's API payload, so a
-        // deserialiser writing the default would silently re-arm the announcement with nothing
-        // having recovered. Asking instead where the CONDITION resolves (P2-107) gives the real
-        // answer: it never does. Past MaxStopModifyAttempts `RequestStopMove` returns before it
-        // asks, a confirm needs an outstanding request, and the counter is reset only on a
-        // confirm. Abandonment is permanent for a bracket -- which is what "not asking again for
-        // this bracket" says -- so the episode boundary is the BRACKET, and a clear would be a
-        // line that can never run, reading as a release valve that works.
+        // It is cleared in exactly ONE place: the ATM_STOP_MOVE_CONFIRMED branch of
+        // ReconcileStopFromBroker, beside the `StopModifyAttempts = 0` that resolves the condition.
+        // Not from a SETTER on StopModifyAttempts -- the first draft did that, and it fires on any
+        // assignment of 0, including a deserialiser writing the default, since `ActiveBracket` is
+        // serialised into the bridge's API payload. That would silently re-arm the announcement
+        // with nothing having recovered.
+        //
+        // ⚠️ P2-134 ARGUED FOR NO CLEAR AT ALL, AND ITS REASONING WAS WRONG. It said the confirm
+        // branch is unreachable while the latch is set -- "past MaxStopModifyAttempts
+        // RequestStopMove returns before it asks, a confirm needs an outstanding request" -- so a
+        // clear would be a line that can never run. The missing step: the CHANGE_IGNORED branch
+        // does NOT clear `RequestedStopPrice`, so the request stays OUTSTANDING after the budget
+        // is spent. A provider that honours it late is then confirmed on a later sweep with no new
+        // RequestStopMove call at all. The branch is reachable, abandonment is NOT permanent for a
+        // bracket, and without the clear a bracket that recovered and later failed again would
+        // never announce the second failure -- on a position the operator believes is trailing.
+        // Found by the agent loop while fixing P2-135. [[a-green-that-can-never-be-red]] inverted:
+        // the argument that a line can never run is the one to check by asking what makes it run.
         public bool StopMoveAbandonAnnounced { get; set; }
 
         // P2-134. What was actually OBSERVED the last time a stop move failed. The abandon line
@@ -810,6 +818,47 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         /// <summary>
+        /// P2-135. Says, ONCE, that this bracket has stopped trying to move its stop.
+        ///
+        /// ⚠️ IT IS CALLED FROM THE SITES THAT SPEND THE BUDGET, NOT FROM THE TOP OF
+        /// RequestStopMove, AND THAT IS THE WHOLE FIX. Announcing from the top means the line is
+        /// said only if something CALLS RequestStopMove again after the budget is gone, and of the
+        /// two sites that spend it only one has a caller afterwards. ModifyStopPrice failing
+        /// returns false without setting BreakevenTriggered, so the breakeven branch asks again
+        /// next sweep. The reconciler's refusal is the other: the request had SUCCEEDED, so
+        /// BreakevenTriggered was set on it, and the re-arm is `attempts &lt; Max` -- false at
+        /// exactly the attempt that exhausts the budget. The latch stays set, the breakeven caller
+        /// stops calling, and the only caller left is the trailing branch, which needs price to run
+        /// a further full stop-distance. So the give-up line was reachable only when the trade was
+        /// WINNING and silent in exactly the case where a frozen stop costs money.
+        ///
+        /// Measured live on Sim101, bracket 75726b75: three ATM_STOP_CHANGE_IGNORED lines ending
+        /// "attempt 3 of 3", then nothing for the life of the position.
+        ///
+        /// Call it AFTER the reason has been recorded. Called before, it reports the previous
+        /// failure or "not recorded" instead of the one that just happened.
+        /// </summary>
+        private void AnnounceStopMoveAbandonmentIfNeeded(Account account, ActiveBracket bracket)
+        {
+            if (bracket.StopModifyAttempts < MaxStopModifyAttempts)
+                return;
+
+            if (bracket.StopMoveAbandonAnnounced)
+                return;
+
+            RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",
+                $"{bracket.BracketId}: {MaxStopModifyAttempts} stop moves failed, last observed "
+                // ⚠️ The fallback is not decoration. Both sites that spend the budget set
+                // the reason, but a bracket restored from the bridge's payload carries the
+                // count without it -- and "last observed reason: ." reads as a truth about
+                // the failure rather than as a gap in what we recorded.
+                + $"reason: {bracket.LastStopMoveFailureReason ?? "not recorded"}. Not asking again for this "
+                + $"bracket. The stop is still at {bracket.CurrentStopPrice} and will NOT trail. "
+                + "Intervene manually.");
+            bracket.StopMoveAbandonAnnounced = true;
+        }
+
+        /// <summary>
         /// P0-67. Requests a stop move and records it as OUTSTANDING. Deliberately does NOT touch
         /// `CurrentStopPrice`: that is assigned only from the live order, in ReconcileStopFromBroker.
         /// </summary>
@@ -835,19 +884,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (bracket.StopModifyAttempts >= MaxStopModifyAttempts)
             {
-                if (!bracket.StopMoveAbandonAnnounced)
-                {
-                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",
-                        $"{bracket.BracketId}: {MaxStopModifyAttempts} stop moves failed, last observed "
-                        // ⚠️ The fallback is not decoration. Both sites that spend the budget set
-                        // the reason, but a bracket restored from the bridge's payload carries the
-                        // count without it -- and "last observed reason: ." reads as a truth about
-                        // the failure rather than as a gap in what we recorded.
-                        + $"reason: {bracket.LastStopMoveFailureReason ?? "not recorded"}. Not asking again for this "
-                        + $"bracket. The stop is still at {bracket.CurrentStopPrice} and will NOT trail. "
-                        + "Intervene manually.");
-                    bracket.StopMoveAbandonAnnounced = true;
-                }
+                AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
                 return false;
             }
 
@@ -869,6 +906,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bracket.LastStopMoveFailureReason = failureReason;
                 bracket.StopModifyAttempts++;
+                AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
                 return false;
             }
 
@@ -903,16 +941,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_CONFIRMED",
                         $"{bracket.BracketId}: provider honoured the move; stop is at {brokerPrice}.");
                     bracket.StopModifyAttempts = 0;
-                    // P2-134. ⚠️ NO `StopMoveAbandonAnnounced = false` here, and the omission is
-                    // deliberate. The ticket's spec asked for one, by analogy to P2-107's "the
-                    // record clears when the CONDITION resolves" -- right in general and wrong
-                    // here, because this condition cannot resolve while the latch is set: past
-                    // MaxStopModifyAttempts `RequestStopMove` returns before it asks, a confirm
-                    // needs an outstanding request, and the counter is reset only here. So the
-                    // latch is only ever true when this line is unreachable, and the clear would
-                    // be a no-op that reads as a working release valve. Abandonment is permanent
-                    // for a bracket -- which is exactly what "not asking again for this bracket"
-                    // says -- and the episode boundary is the bracket itself.
+                    // P2-135. The abandonment episode ends where the CONDITION resolves, which is
+                    // here and only here. A later failure on the same bracket is a NEW episode and
+                    // must announce again -- it is a position the operator believes is trailing.
+                    // See StopMoveAbandonAnnounced's declaration for why P2-134 argued this line
+                    // could never run, and the step that argument missed.
+                    bracket.StopMoveAbandonAnnounced = false;
                 }
                 else
                 {
@@ -921,6 +955,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // code would have recorded `requested` and never looked again.
                     bracket.StopModifyAttempts++;
                     bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";
+                    AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
+
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_CHANGE_IGNORED",
                         $"{bracket.BracketId}: requested stop {requested} but the provider holds "
                         + $"{brokerPrice} (attempt {bracket.StopModifyAttempts} of "

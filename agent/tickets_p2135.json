@@ -1,0 +1,31 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P2-135: the bracket that gives up says so, on the path where nothing calls it again",
+      "defect": "ATM_STOP_MOVE_ABANDONED is emitted from the TOP of RequestStopMove, so it is said only if something CALLS RequestStopMove after the budget is already spent. Of the two sites that spend the budget, only one has a caller afterwards. ModifyStopPrice failing returns false without setting BreakevenTriggered, so the breakeven branch asks again next sweep and the announcement is reached. ReconcileStopFromBroker refusing is the other, and there the request had SUCCEEDED, so BreakevenTriggered was set on it; the re-arm that would clear it is `bracket.BreakevenTriggered && bracket.StopModifyAttempts < MaxStopModifyAttempts`, and `attempts < Max` is FALSE at exactly the attempt that exhausts the budget. So BreakevenTriggered stays latched true, the `!bracket.BreakevenTriggered` guard on the breakeven caller is false forever, and the only remaining caller is the trailing branch -- which needs price to run a further full stop-distance past entry. The give-up line is therefore reachable only when the trade is WINNING, and silent in exactly the case where a frozen stop costs money. Measured live on Sim101, bracket 75726b75: ATM_STOP_MOVE_REQUESTED / ATM_STOP_CHANGE_IGNORED three times, ending 'attempt 3 of 3', and then nothing for the life of the position -- the stop resting at its original price, no longer trailing, with the operator's last word being a numbered attempt that sounded like it would be followed by a fourth. P2-134 was filed because this line was said too often; this is the same defect inverted, on the neighbouring branch, and it is the worse direction.",
+      "spec": "One change in DynamicAtmManager.cs: the announcement is made BY the code that gives up, at the moment it gives up, instead of by the next caller of the method that gave up.\n\n(1) EXTRACT THE ANNOUNCEMENT. The block currently at the top of RequestStopMove -- guarded by StopMoveAbandonAnnounced, composing the message from StopModifyAttempts and LastStopMoveFailureReason, and setting the latch -- becomes a private method that announces only if the budget is exhausted AND the latch is clear, then sets the latch. Do not change the message text: P2-134 landed its exact wording, four assertions pin it, and TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing pins the 'not recorded' fallback for a bracket restored from the bridge payload with a null reason.\n\n(2) CALL IT AT BOTH SITES THAT SPEND THE BUDGET, immediately after the increment and after LastStopMoveFailureReason has been set -- after, or the line reports the previous failure or 'not recorded' instead of the one that just happened. Site A is RequestStopMove's ModifyStopPrice-failed branch. Site B is ReconcileStopFromBroker's ATM_STOP_CHANGE_IGNORED branch, which is the one with no subsequent caller and the whole reason for this ticket.\n\n(3) THE CHECK AT THE TOP OF RequestStopMove STILL RETURNS FALSE. Only the LOGGING moves. The bounded retry's behaviour must not change: a bracket whose budget is spent still refuses to ask again, and MaxStopModifyAttempts is not touched. Whether the now-redundant announcement call remains at the top is your choice, but the latch must keep it to one line per episode either way.\n\n(4) THE LATCH STILL CLEARS ONLY WHERE THE CONDITION RESOLVES -- ATM_STOP_MOVE_CONFIRMED in ReconcileStopFromBroker, where StopModifyAttempts is reset to 0. Do NOT clear it on a timer and do NOT clear it in the new code. A bracket that recovers and later fails again must announce a SECOND time, because that second failure is on a position the operator believes is being trailed; TestAtm_P2134_... pins exactly that.\n\nDo NOT 'fix' this by relaxing the re-arm condition to `<=`. That would re-arm BreakevenTriggered at the exhausting attempt and put the bracket back into requesting moves forever, which deletes the bounded retry P1-130 exists to provide. The retry is correct; the REPORTING of its termination is what is missing.",
+      "regions": [
+        {
+          "id": "TheMoveRequest",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)",
+          "kind": "decl",
+          "note": "Holds the announcement block being extracted AND budget site A. The message text is P2-134's and is pinned by four assertions -- move it, do not reword it."
+        },
+        {
+          "id": "TheReconciler",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void ReconcileStopFromBroker(Account account, ActiveBracket bracket)",
+          "kind": "decl",
+          "note": "Budget site B -- the one with no caller afterwards, which is the defect. It also holds the CONFIRMED branch that resets the counter and clears the latch: that is the ONE place the latch may be cleared, and a comment already in the code says so."
+        }
+      ],
+      "expect_green": [
+        "P2-135: the bracket that gave up SAID so",
+        "P2-135: and exactly once",
+        "P2-135: and it still names the provider refusal"
+      ]
+    }
+  ]
+}

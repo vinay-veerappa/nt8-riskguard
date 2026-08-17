@@ -8562,9 +8562,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "budget must not re-open P2-134, which was this same line said on every sweep "
                 + "forever (announcements seen: " + announced + ")");
 
-            Assert(captured != null && captured.IndexOf("refus", StringComparison.OrdinalIgnoreCase) >= 0,
-                "P2-135: and it still names the provider refusal, because on THIS path a move "
-                + "really was sent and really was declined (got '" + captured + "')");
+            // ⚠️ THIS ASSERTION ORIGINALLY REQUIRED THE SUBSTRING "refus", AND WAS UNSATISFIABLE.
+            // P2-134 deliberately deleted that word: the message asserted "refused by the
+            // provider" on both budget-spending paths, and on the ModifyStopPrice one nothing was
+            // ever submitted to refuse. TestAtm_P2134_...NeitherMessageClaims... pins its ABSENCE.
+            // So the two assertions pinned opposite things and no implementation could satisfy
+            // both -- which is why four rounds of the loop could not converge. Corrected to pin
+            // what P2-134 actually put there: the reason OBSERVED, in the same terms
+            // TestAtm_P2134_TheGenuineRefusalKeepsItsName uses.
+            Assert(captured != null
+                   && (captured.IndexOf("19995", StringComparison.Ordinal) >= 0
+                       || captured.IndexOf("holds", StringComparison.OrdinalIgnoreCase) >= 0),
+                "P2-135: and it names what was OBSERVED on this path -- a move that WAS sent and a "
+                + "provider not holding it -- rather than the generic count (got '" + captured + "')");
+
+            Assert(captured != null
+                   && captured.IndexOf("refus", StringComparison.OrdinalIgnoreCase) < 0,
+                "P2-135: and it still does not use the word P2-134 removed, because the message is "
+                + "shared with the path where nothing was ever submitted (got '" + captured + "')");
         }
 
         /// <summary>
