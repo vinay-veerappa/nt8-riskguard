@@ -7349,38 +7349,6 @@ that passes under both a stable and a re-issued id is not evidence about either.
 
 ---
 
-### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — OPEN, found 2026-08-16 (session 52), same run
-
-**Measured**, immediately after `P1-133`'s three not-found lines:
-
-```
-19:56:03  ATM_STOP_MOVE_ABANDONED  15bc730b: 3 consecutive stop moves were refused by the
-                                   provider; not asking again for this bracket.
-19:56:13  ATM_STOP_MOVE_ABANDONED  (same)
-19:56:18  ATM_STOP_MOVE_ABANDONED  (same)
-19:56:23  ATM_STOP_MOVE_ABANDONED  (same)
-```
-
-**Four in twenty seconds, from a line whose text promises it will not recur.** The attempt counter
-is correctly capped — the three `NOT_FOUND` lines stop exactly at the budget, which is `P1-130`'s
-bounded retry working — but the *announcement* of giving up is re-emitted on every sweep. **Ninth
-instance of *an alarm that is always on is off***, and the sharpest one yet, because the operator
-is told explicitly that this line will not repeat.
-
-⚠️ **`F-6`'s `GuardAlertSink` does not cover it**, for the same reason `P2-108` was not covered:
-this is a `LogEvent` with no action behind it, so `DispatchActions` never sees it. **That is now
-twice.** The de-duplication belongs where the *log* is written, not only where actions are
-dispatched — or every future give-up line arrives with this defect built in.
-
-**Second half — the message names the wrong cause.** *"refused by the provider"* is false here:
-the provider was never asked, because `P1-133` meant the order was never found. The counter is
-shared by two different failures and the text asserts one of them. Same class as `P1-130`'s
-*"the position may be unprotected"*, which was corrected for exactly this reason. **State what was
-observed — N attempts failed — and name the last observed reason rather than assuming it.**
-
-⚠️ **Do not fix this before `P1-133`.** Suppressing the repeat first would make the *only* visible
-symptom of a dead breakeven feature quieter.
-
 #### ✅ CLOSED 2026-08-17 (session 52) — five sites, and the fifth is the one grep does not find
 
 `addons/AtmOrderIdentity.cs` is now the ONE definition of what a bracket's legs are called and the
@@ -7448,3 +7416,42 @@ was repointed rather than retired both times.
 `Sim101` cannot produce evidence about it — that is the entire content of the defect. Until then
 this entry is closed on a suite, a battery and a compile, which is exactly the standard that let
 `P1-130` close with this hiding inside it. **Say which half was measured.**
+
+### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — OPEN, found 2026-08-16 (session 52), same run
+
+**Measured**, immediately after `P1-133`'s three not-found lines:
+
+```
+19:56:03  ATM_STOP_MOVE_ABANDONED  15bc730b: 3 consecutive stop moves were refused by the
+                                   provider; not asking again for this bracket.
+19:56:13  ATM_STOP_MOVE_ABANDONED  (same)
+19:56:18  ATM_STOP_MOVE_ABANDONED  (same)
+19:56:23  ATM_STOP_MOVE_ABANDONED  (same)
+```
+
+**Four in twenty seconds, from a line whose text promises it will not recur.** The attempt counter
+is correctly capped — the three `NOT_FOUND` lines stop exactly at the budget, which is `P1-130`'s
+bounded retry working — but the *announcement* of giving up is re-emitted on every sweep. **Ninth
+instance of *an alarm that is always on is off***, and the sharpest one yet, because the operator
+is told explicitly that this line will not repeat.
+
+⚠️ **`F-6`'s `GuardAlertSink` does not cover it**, for the same reason `P2-108` was not covered:
+this is a `LogEvent` with no action behind it, so `DispatchActions` never sees it. **That is now
+twice.** The de-duplication belongs where the *log* is written, not only where actions are
+dispatched — or every future give-up line arrives with this defect built in.
+
+**Second half — the message names the wrong cause.** *"refused by the provider"* is false here:
+the provider was never asked, because `P1-133` meant the order was never found. The counter is
+shared by two different failures and the text asserts one of them. Same class as `P1-130`'s
+*"the position may be unprotected"*, which was corrected for exactly this reason. **State what was
+observed — N attempts failed — and name the last observed reason rather than assuming it.**
+
+⚠️ **Do not fix this before `P1-133`.** Suppressing the repeat first would make the *only* visible
+symptom of a dead breakeven feature quieter. — **HOLD EXPIRED 2026-08-17**, `P1-133` is ✅ CLOSED.
+
+⚠️ **This entry spent a day reading as CLOSED and was not.** `P1-133`'s closure record was appended
+to the end of the file, which put it *under this heading* — so the first thing below "OPEN, found
+2026-08-16" was a `#### ✅ CLOSED` block describing a different defect. Corrected 2026-08-17.
+**A closure record must be filed under the ID it closes, not at EOF**, and the ordering surfaces
+are not the only place a status can be misread — see [[closures-do-not-propagate-backwards]].
+

@@ -96,8 +96,11 @@ MUTANTS = [
      "     the submission GUID -- into a ModifyStopPrice that now wants a NAME. The whole defect\n"
      "     is back while AtmOrderIdentity remains fully tested and every one of its own tests\n"
      "     passes. This is the exact shape that cost four loop rounds",
-     '            if (!ModifyStopPrice(account, AtmOrderIdentity.StopName(bracket.BracketId), newStopPrice))',
-     '            if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice))'),
+     # ⚠️ REPOINTED by P2-134, which added the out-parameter. Third repoint at this one site in
+     # two days, all three because a FIX changed the line rather than because the mutant went
+     # stale. Repointed, not retired: the defect it restores is still the sharpest one here.
+     '            if (!ModifyStopPrice(account, AtmOrderIdentity.StopName(bracket.BracketId), newStopPrice, out string failureReason))',
+     '            if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice, out string failureReason))'),
 
     (ATM,
      "the RECONCILER alone reverts to the stale id. The writer still moves the stop, so\n"

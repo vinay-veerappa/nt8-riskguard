@@ -1,0 +1,47 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P2-134: the abandon announcement fires once per episode and names the reason it observed",
+      "defect": "ATM_STOP_MOVE_ABANDONED is emitted on EVERY monitor sweep once StopModifyAttempts has reached MaxStopModifyAttempts, from a line whose own text promises 'not asking again for this bracket'. Measured live 2026-08-16: four identical lines in twenty seconds, and in the suite 17 lines across 20 sweeps. The attempt COUNTER is correctly capped -- that half is P1-130 working -- but the abandon branch sits on the path every sweep takes, so the ANNOUNCEMENT of giving up repeats forever. Second half: the message asserts '3 consecutive stop moves were refused by the provider', which is false on this path. StopModifyAttempts is incremented from TWO different failures: RequestStopMove increments when ModifyStopPrice could not find a live order (the provider was never asked -- nothing was submitted), and ReconcileStopFromBroker increments when a move WAS sent and the provider is not holding the price (a genuine refusal). The text asserts the second cause for both. Today the ABSENT and TERMINAL failures produce byte-identical messages.",
+      "spec": "Two changes in DynamicAtmManager.cs, plus one new field on ActiveBracket.\n\n(1) ANNOUNCE ONCE PER EPISODE. Add a bool to ActiveBracket that records that the give-up line has already been said for this bracket. In RequestStopMove, the branch that logs ATM_STOP_MOVE_ABANDONED must log only when that flag is false, then set it. It must STILL return false every time, so the behaviour of the bounded retry is unchanged -- only the logging is suppressed.\n\n(2) THE LATCH CLEARS WHEN THE CONDITION RESOLVES, NEVER ON A TIMER. The condition is StopModifyAttempts >= MaxStopModifyAttempts and it resolves in exactly one place: ReconcileStopFromBroker, where ATM_STOP_MOVE_CONFIRMED sets StopModifyAttempts = 0. Clear the flag there, in the same statement group. Do NOT clear it on a time interval and do NOT clear it anywhere else -- a bracket that recovers and later fails again must be able to announce a SECOND time, because that second failure is on a position the operator believes is being trailed.\n\n(3) NAME THE REASON THAT WAS OBSERVED. Add a string field to ActiveBracket holding the last observed stop-move failure. Set it at every site that spends the budget: the three failing branches of ModifyStopPrice (order not on the account at all; order present but no longer live; the attempt threw) and the ATM_STOP_CHANGE_IGNORED branch of ReconcileStopFromBroker. The abandon message must then state what was OBSERVED -- N attempts failed, and the last observed reason -- instead of asserting 'refused by the provider'. On the ModifyStopPrice paths the word 'refused' must not appear at all, because nothing was submitted. Keep the rest of the existing message: the price the stop is left at, and that it will not trail.\n\nModifyStopPrice currently returns bool and logs its own diagnosis. Report the reason back to RequestStopMove so the give-up line can quote it. Changing its signature is fine -- RequestStopMove is its only caller and is granted below as a region for exactly that reason.\n\nDo not change MaxStopModifyAttempts, do not change when the counter is incremented, and do not touch the ATM_STOP_ORDER_NOT_FOUND messages themselves -- P1-133 pinned those and they have their own tests.",
+      "regions": [
+        {
+          "id": "TheBracketFields",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public int StopModifyAttempts { get; set; }",
+          "kind": "line",
+          "note": "Add the announcement latch and the last-observed-reason field beside the counter they belong to. ActiveBracket is serialised into the bridge's API payload, so keep the types simple (bool and string)."
+        },
+        {
+          "id": "TheStopWriter",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool ModifyStopPrice(Account account, string orderName, double newStopPrice)",
+          "kind": "decl",
+          "note": "The three failing branches each know exactly what was observed: absent entirely, present but not live, or threw. Report that back to the caller. Do NOT alter the ATM_STOP_ORDER_NOT_FOUND text -- P1-133 pinned both variants and TestAtm_P1133_AbsentAndTerminalStopsSayDifferentThings asserts they differ."
+        },
+        {
+          "id": "TheMoveRequest",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)",
+          "kind": "decl",
+          "note": "Holds the abandon branch AND the ModifyStopPrice call site. It is granted as a region because it is the CALLER of a method whose signature changes -- P1-133 cost four identical rounds by granting the callee and not the caller."
+        },
+        {
+          "id": "TheReconciler",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void ReconcileStopFromBroker(Account account, ActiveBracket bracket)",
+          "kind": "decl",
+          "note": "Two things here: the CONFIRMED branch resets the counter and must clear the latch in the same place, and the CHANGE_IGNORED branch is the one failure where the provider really did decline -- record that as the observed reason."
+        }
+      ],
+      "expect_green": [
+        "P2-134: and says it EXACTLY once per episode",
+        "P2-134: neither message claims the provider REFUSED anything",
+        "P2-134: and the give-up line reports the reason it OBSERVED",
+        "P2-134: episode 1 announced once",
+        "P2-134: a bracket that recovered and then failed again announces a SECOND time"
+      ]
+    }
+  ]
+}

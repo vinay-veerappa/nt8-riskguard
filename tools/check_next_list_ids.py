@@ -37,6 +37,12 @@ import os
 import re
 import sys
 
+# ⚠️ Windows defaults stdout to cp1252. Every gate in this repo prints mutant
+# descriptions and plan text full of non-ASCII, and it only needs to print them
+# when it is FAILING -- so without this a gate dies exactly when it has something
+# to say, and the traceback reads as a defect in the script rather than a finding.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 PLAN = os.path.join(REPO, 'docs', 'RISKGUARD_COPIER_HARDENING_PLAN.md')
 HANDOVER = os.path.join(REPO, 'docs', 'RISKGUARD_HARDENING_HANDOVER.md')

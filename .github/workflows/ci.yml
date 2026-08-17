@@ -309,6 +309,17 @@ jobs:
       - name: Every mutation battery pins BOTH encodings and can reach its restore line
         run: python tools/check_batteries_pin_encoding.py
 
+      # ⚠️ The gate above walks `mutation/mutate_*.py` ONLY. `mutation/check_anchors.py` is in
+      # that same directory under a different prefix, and all of tools/ is outside it -- so
+      # TWELVE unpinned scripts sat behind a green gate whose own header describes their hazard.
+      # check_anchors.py was found dead: UnicodeEncodeError on print, checking NOTHING, with
+      # nothing saying so. The run after the fix reported 434 anchors, 1 BROKEN -- a real
+      # finding that had been sitting behind a crash. Fifth instance of "state the region a gate
+      # inspects", and a thirteenth script was caught by this gate that a text sweep for
+      # 'reconfigure' could not see, because that file contains the string it searches for.
+      - name: Every gate and battery can print a finding without dying on it
+        run: python tools/check_tools_pin_stdout.py
+
       # P2-24's class, made mechanical. Safety machinery that is written and never called
       # passes every other gate here -- it compiles, its own tests call it directly so the
       # suite is green, and the config surface advertising it looks configured. Session 34
@@ -753,7 +764,7 @@ jobs:
           # other lesson: the exit-alignment block can be deleted outright and only a test with the
           # follower on the OPPOSITE side to the leader notices -- the one case the block exists for.
           # Declares one EXPECTED SURVIVOR (the reconciler mutant; unreachable until P2-27).
-          - { label: "P2-92+UI5", batteries: "mutate_p292.py mutate_ui5.py" }   # 484s = P2-92 275s + UI5 209s
+          - { label: "P2-92+UI5+P2-134", batteries: "mutate_p292.py mutate_ui5.py mutate_p2134.py" }   # ~880s = P2-92 275s + UI5 209s + P2-134 ~400s (11 mutants; measure and correct on the first green run)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

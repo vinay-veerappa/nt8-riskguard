@@ -469,6 +469,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P0-67: the third Account.Change() site. MonitorTickCore had ZERO coverage.
             TestAtm_P1130_AStopRestingInAcceptedIsStillMovable();
             TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded();
+            TestAtm_P2134_TheAbandonAnnouncementFiresOncePerEpisode();
+            TestAtm_P2134_TheAbandonMessageNamesTheObservedCause();
+            TestAtm_P2134_TheLatchIsScopedToOneBracket();
+            TestAtm_P2134_AbandoningStillReportsFailureToTheCaller();
+            TestAtm_P2134_TheGenuineRefusalKeepsItsName();
+            TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
             TestAtm_P1133_TheReconcilerAlsoSurvivesAReId();
@@ -8208,6 +8214,354 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (evt == "ATM_STOP_ORDER_NOT_FOUND" && captured == null) captured = msg;
             };
             try { atm.MonitorTickForTest(); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            return captured ?? "";
+        }
+
+        /// <summary>
+        /// P2-134, first half. The give-up line promises IN ITS OWN TEXT that it will not repeat,
+        /// and then repeats every sweep.
+        ///
+        /// Measured live 2026-08-16, four in twenty seconds:
+        ///
+        ///     19:56:03  ATM_STOP_MOVE_ABANDONED  15bc730b: 3 consecutive stop moves were refused
+        ///                                        by the provider; not asking again for this bracket.
+        ///     19:56:13  (same)   19:56:18  (same)   19:56:23  (same)
+        ///
+        /// The attempt COUNTER is correctly capped -- that is P1-130's bounded retry working, and
+        /// the three NOT_FOUND lines do stop at the budget. It is the ANNOUNCEMENT of giving up
+        /// that is re-emitted, because the abandon branch is on the path every sweep takes.
+        ///
+        /// ⚠️ Ninth instance of *an alarm that is always on is off*, and the sharpest, because the
+        /// operator is told explicitly that this line will not recur. The comment above the
+        /// increment site already said "ATM_STOP_MOVE_ABANDONED says so once" -- the code and its
+        /// own comment disagreed and nothing compared them.
+        /// </summary>
+        private static void TestAtm_P2134_TheAbandonAnnouncementFiresOncePerEpisode()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: the give-up line is said ONCE, as its own text promises");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            acct.Orders.Clear();            // the stop is gone: every sweep fails the same way
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int abandoned = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED") abandoned++;
+            };
+            try
+            {
+                // Well past the cap. Live, this ran for the life of the position.
+                for (int i = 0; i < 20; i++) atm.MonitorTickForTest();
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            // ⚠️ POSITIVE CONTROL FIRST. "at most once" is satisfied by NEVER, and a detector that
+            // cannot fire passes every suppression test ever written for it.
+            Assert(abandoned >= 1,
+                "P2-134: the bracket IS abandoned and does say so (positive control -- got "
+                + abandoned + " ATM_STOP_MOVE_ABANDONED lines across 20 sweeps). If this fails the "
+                + "suppression has swallowed the announcement entirely, which is worse than the "
+                + "defect: the operator is then never told the trail has stopped.");
+
+            Assert(abandoned == 1,
+                "P2-134: and says it EXACTLY once per episode (got " + abandoned + " across 20 "
+                + "sweeps). At baseline the branch is on the path every sweep takes, so the line "
+                + "that says 'not asking again for this bracket' was measured four times in twenty "
+                + "seconds on the live box.");
+        }
+
+        /// <summary>
+        /// P2-134, second half: the message asserts a cause it did not observe.
+        ///
+        /// *"3 consecutive stop moves were refused by the provider"* is false on this path. The
+        /// provider was never ASKED -- `ModifyStopPrice` could not find the order, so nothing was
+        /// submitted. `StopModifyAttempts` is shared by two genuinely different failures:
+        ///
+        ///   RequestStopMove         the order could not be found / is not live / threw  -> not asked
+        ///   ReconcileStopFromBroker the move WAS sent and the provider is not holding it -> refused
+        ///
+        /// and the abandon text asserts the second for both. Same class as P1-130's "the position
+        /// may be unprotected", corrected for exactly this reason. **State what was observed -- N
+        /// attempts failed -- and name the LAST OBSERVED reason rather than assuming one.**
+        /// </summary>
+        private static void TestAtm_P2134_TheAbandonMessageNamesTheObservedCause()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: the give-up line names what was observed, not a guess");
+
+            string whenAbsent = CaptureAtmAbandonMessage(terminal: false);
+            string whenTerminal = CaptureAtmAbandonMessage(terminal: true);
+
+            Assert(!string.IsNullOrEmpty(whenAbsent) && !string.IsNullOrEmpty(whenTerminal),
+                "P2-134: both episodes produced an ATM_STOP_MOVE_ABANDONED message (positive "
+                + "control -- absent='" + whenAbsent + "', terminal='" + whenTerminal + "')");
+
+            Assert(whenAbsent.IndexOf("refused", StringComparison.OrdinalIgnoreCase) < 0
+                && whenTerminal.IndexOf("refused", StringComparison.OrdinalIgnoreCase) < 0,
+                "P2-134: neither message claims the provider REFUSED anything, because on both of "
+                + "these paths it was never asked -- ModifyStopPrice could not find a live order, so "
+                + "nothing was submitted. `StopModifyAttempts` is shared with ReconcileStopFromBroker, "
+                + "where a refusal IS what happened, and the text asserted that cause for both "
+                + "(absent='" + whenAbsent + "', terminal='" + whenTerminal + "')");
+
+            Assert(whenAbsent != whenTerminal,
+                "P2-134: and the give-up line reports the reason it OBSERVED, so two different "
+                + "failures do not read identically. ⚠️ An assertion that the message merely "
+                + "mentions the bracket passes under the defect -- a constant string mentions the "
+                + "bracket too. The discriminator is that the two answers DIFFER.");
+        }
+
+        /// <summary>
+        /// P2-134, third half. **What is an "episode"?** The suppression is worthless if it is
+        /// scoped wider than the thing it describes: a latch that is static, or keyed only by
+        /// account, silences the give-up line for the NEXT position too, and the operator is never
+        /// told that trailing died on a bracket that never got to speak. That is P2-107's
+        /// producer-scope lesson, where one producer's silence cleared another's record and every
+        /// single-producer test still passed.
+        ///
+        /// ⚠️ THIS TEST REPLACED ONE THAT ASSERTED A SCENARIO THAT CANNOT HAPPEN, and finding that
+        /// out is worth more than the test was. The spec said "the latch clears when the CONDITION
+        /// resolves" -- by analogy to P2-107, correctly in general and **false here**, because the
+        /// condition cannot resolve: `StopModifyAttempts` is reset only at ATM_STOP_MOVE_CONFIRMED,
+        /// a confirm requires an outstanding request, and past the cap `RequestStopMove` returns
+        /// before it makes one. Abandonment is PERMANENT for a bracket, which is exactly what "not
+        /// asking again for this bracket" says. So the episode boundary is the BRACKET, and the
+        /// clear the spec asked for would have been a line that can never run --
+        /// [[dead-safety-machinery-gate]] shipped in the act of preventing a repeat.
+        ///
+        /// ⚠️ It was only found because the recovery step carried a POSITIVE CONTROL. The first
+        /// draft "recovered" by assigning `bracket.StopModifyAttempts = 0`, which is not a recovery,
+        /// it is a poke -- and the first implementation answered it with a setter on that property
+        /// that cleared the latch on any assignment of zero. Test and fix agreed with each other
+        /// and both were wrong about the system. Asserting that ATM_STOP_MOVE_CONFIRMED actually
+        /// fired is what broke the agreement.
+        /// </summary>
+        private static void TestAtm_P2134_TheLatchIsScopedToOneBracket()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: the suppression is per BRACKET, not per account");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            var first = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(first);
+
+            int abandoned = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED") abandoned++;
+            };
+            try
+            {
+                acct.Orders.Clear();                        // bracket 1 gives up
+                for (int i = 0; i < 10; i++) atm.MonitorTickForTest();
+                Assert(abandoned == 1,
+                    "P2-134: the first bracket announced once (got " + abandoned + ")");
+
+                // A SECOND bracket on the SAME account, failing the same way. This is the next
+                // position the operator takes, and it has been told nothing.
+                var second = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                second.BracketId = "BR-P067-SECOND";
+                atm.AddBracketForTest(second);
+                for (int i = 0; i < 10; i++) atm.MonitorTickForTest();
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(abandoned == 2,
+                "P2-134: a SECOND bracket on the same account announces its own abandonment (got "
+                + abandoned + " total). If the latch were static or keyed by account, this reads 1 "
+                + "-- suppression turned into deletion for every position after the first, and "
+                + "every single-bracket test above still passes.");
+        }
+
+        /// <summary>
+        /// P2-134, and the survivor that mattered most. **The abandon branch suppresses the LOG,
+        /// not the refusal.**
+        ///
+        /// `RequestStopMove`'s return value is consumed: `if (RequestStopMove(...))
+        /// bracket.BreakevenTriggered = true;`. A give-up branch that returns true because it has
+        /// already announced would make the manager record a breakeven that never happened -- and
+        /// for a ScaledRunner the trailing block then runs `if (bracket.BreakevenTriggered)`,
+        /// advancing a stop that is not where it thinks it is. Quieting the announcement must not
+        /// quiet the FAILURE.
+        ///
+        /// ⚠️ Found by a mutant, not by review: `return false` -> `return
+        /// bracket.StopMoveAbandonAnnounced` passed 2063 green tests.
+        /// </summary>
+        private static void TestAtm_P2134_AbandoningStillReportsFailureToTheCaller()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: giving up still REFUSES -- only the log is suppressed");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            acct.Orders.Clear();
+            for (int i = 0; i < 20; i++) atm.MonitorTickForTest();
+
+            Assert(bracket.StopModifyAttempts >= DynamicAtmManager.MaxStopModifyAttempts,
+                "P2-134: precondition -- the bracket really is past its budget (got "
+                + bracket.StopModifyAttempts + ")");
+
+            Assert(!bracket.BreakevenTriggered,
+                "P2-134: a bracket that has GIVEN UP must not have recorded a breakeven. The "
+                + "caller writes BreakevenTriggered = true only when RequestStopMove reports "
+                + "success, and no stop was moved here -- the order is not even on the account. "
+                + "If the abandon branch returns true once it has announced, the manager believes "
+                + "the stop is at breakeven and a ScaledRunner starts TRAILING from a price that "
+                + "was never set.");
+        }
+
+        /// <summary>
+        /// P2-134. The one failure where "refused" is TRUE, and it must keep its name.
+        ///
+        /// `StopModifyAttempts` is spent from two sites. This is the other one: the move WAS sent,
+        /// and `ReconcileStopFromBroker` reads back a price the provider is holding instead. The
+        /// point of the fix is to stop GUESSING the cause, not to stop naming it -- so the give-up
+        /// line here must say what the provider did, where on the ModifyStopPrice paths it must
+        /// not claim a refusal at all.
+        /// </summary>
+        private static void TestAtm_P2134_TheGenuineRefusalKeepsItsName()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: a real provider refusal is still named as one");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            // Below the breakeven trigger, so the monitor does NOT request a move of its own and
+            // the reconcile path can be driven on its own terms.
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            string captured = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED" && captured == null) captured = msg;
+            };
+            try
+            {
+                // The stop stays live and resting at 19990 while a move to 19995 is outstanding,
+                // so every sweep reads back a provider that is not holding what was asked for.
+                for (int i = 0; i < DynamicAtmManager.MaxStopModifyAttempts; i++)
+                {
+                    bracket.RequestedStopPrice = 19995.00;
+                    atm.MonitorTickForTest();
+                }
+
+                Assert(bracket.StopModifyAttempts >= DynamicAtmManager.MaxStopModifyAttempts,
+                    "P2-134: precondition -- the REFUSAL path spent the budget (got "
+                    + bracket.StopModifyAttempts + "). This is the site the abandon message used "
+                    + "to describe, and the only one where it was telling the truth.");
+
+                inst.MarketData.Last.Price = 20010.00;   // now ask for a move, and be refused
+                for (int i = 0; i < 5; i++) atm.MonitorTickForTest();
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(!string.IsNullOrEmpty(captured),
+                "P2-134: the refusal episode produced an ATM_STOP_MOVE_ABANDONED line (positive "
+                + "control -- got '" + captured + "')");
+
+            Assert(captured.IndexOf("19995", StringComparison.Ordinal) >= 0
+                || captured.IndexOf("holds", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P2-134: and it names what the PROVIDER did, because here it really did decline a "
+                + "move that was sent. Recording no reason on this path leaves the one true "
+                + "'refused' reported as whatever ModifyStopPrice last said, or as 'not recorded' "
+                + "(got '" + captured + "')");
+        }
+
+        /// <summary>
+        /// P2-134. A bracket carrying a count with no reason must say so.
+        ///
+        /// Both sites that spend the budget record a reason, so this state is not reachable by
+        /// driving the monitor -- it is what a bracket RESTORED from the bridge's API payload
+        /// looks like, since `ActiveBracket` is serialised and a string comes back null. Without a
+        /// fallback the line reads "last observed reason: ." -- a well-formed sentence that states
+        /// a fact about the failure, when what it means is that we did not record one.
+        /// [[weigh-the-quiet-failure-above-the-loud]].
+        /// </summary>
+        private static void TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-134: an unrecorded reason is reported as unrecorded");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            // The shape a deserialised bracket arrives in: the count survived, the string did not.
+            bracket.StopModifyAttempts = DynamicAtmManager.MaxStopModifyAttempts;
+            bracket.LastStopMoveFailureReason = null;
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            string captured = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED" && captured == null) captured = msg;
+            };
+            try { for (int i = 0; i < 5; i++) atm.MonitorTickForTest(); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(!string.IsNullOrEmpty(captured),
+                "P2-134: the episode produced an ATM_STOP_MOVE_ABANDONED line (positive control)");
+
+            Assert(captured.IndexOf("reason: .", StringComparison.Ordinal) < 0,
+                "P2-134: the line does not read 'last observed reason: .', which is a sentence "
+                + "about the failure rather than about our record of it (got '" + captured + "')");
+
+            Assert(captured.IndexOf("not recorded", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P2-134: it says the reason was not recorded (got '" + captured + "')");
+        }
+
+        /// <summary>
+        /// Drives one abandonment episode and returns the ATM_STOP_MOVE_ABANDONED message.
+        /// `terminal: false` removes the stop from the account entirely; `terminal: true` leaves
+        /// it there in a terminal state. Both spend the budget through ModifyStopPrice, and on
+        /// BOTH the provider is never asked -- but they are not the same news, which is the whole
+        /// content of P1-130 and the reason the give-up line may not flatten them into one guess.
+        /// </summary>
+        private static string CaptureAtmAbandonMessage(bool terminal)
+        {
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            if (terminal) stop.OrderState = OrderState.Cancelled;
+            else acct.Orders.Remove(stop);
+
+            string captured = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED" && captured == null) captured = msg;
+            };
+            try { for (int i = 0; i < 10; i++) atm.MonitorTickForTest(); }
             finally { RiskGuardAddOn.LogEventMessageObserver = null; }
             return captured ?? "";
         }

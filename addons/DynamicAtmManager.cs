@@ -103,6 +103,26 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Bounded, because the retry is what makes a refused move recoverable, and an unbounded
         // retry against a provider that always refuses is an order flood.
         public int StopModifyAttempts { get; set; }
+
+        // P2-134. The give-up line is said ONCE per episode; this records that it has been said.
+        //
+        // ⚠️ There is NO clear anywhere, and that is the finding rather than an omission. The
+        // first draft cleared it from a SETTER on StopModifyAttempts, which fires on any
+        // assignment of 0 -- and `ActiveBracket` is serialised into the bridge's API payload, so a
+        // deserialiser writing the default would silently re-arm the announcement with nothing
+        // having recovered. Asking instead where the CONDITION resolves (P2-107) gives the real
+        // answer: it never does. Past MaxStopModifyAttempts `RequestStopMove` returns before it
+        // asks, a confirm needs an outstanding request, and the counter is reset only on a
+        // confirm. Abandonment is permanent for a bracket -- which is what "not asking again for
+        // this bracket" says -- so the episode boundary is the BRACKET, and a clear would be a
+        // line that can never run, reading as a release valve that works.
+        public bool StopMoveAbandonAnnounced { get; set; }
+
+        // P2-134. What was actually OBSERVED the last time a stop move failed. The abandon line
+        // used to assert "refused by the provider" for every failure, and this counter is spent by
+        // two different ones -- ModifyStopPrice never asking (no live order) and the provider
+        // declining a move that WAS sent. Name the observed reason; do not infer a cause.
+        public string LastStopMoveFailureReason { get; set; }
         public bool PartialProfitTaken { get; set; }
         public DateTime CreatedAt { get; set; }
         public bool IsComplete { get; set; }
@@ -739,8 +759,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// return void and swallow its own exceptions, so no caller could tell the difference between
         /// "moved", "no such order", and "threw".
         /// </summary>
-        private bool ModifyStopPrice(Account account, string orderName, double newStopPrice)
+        private bool ModifyStopPrice(Account account, string orderName, double newStopPrice, out string failureReason)
         {
+            failureReason = null;
             try
             {
                 Order live = AtmOrderIdentity.FindLiveByName(account, orderName);
@@ -760,6 +781,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 if (present == null)
                 {
+                    failureReason = $"no order with name '{orderName}' is on '{account.Name}' at all";
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
                         $"no order with name '{orderName}' is on '{account.Name}' at all, so the move to "
                         + $"{newStopPrice} was not requested. The bracket's stop cannot be located; "
@@ -767,6 +789,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else
                 {
+                    failureReason = $"the stop order '{orderName}' is {present.OrderState} and no longer live";
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
                         $"the stop order '{orderName}' on '{account.Name}' is {present.OrderState} and no "
                         + $"longer live, so the move to {newStopPrice} was not requested."
@@ -778,6 +801,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex)
             {
+                failureReason = $"requesting a stop move threw {ex.GetType().Name}";
                 RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MODIFY_THREW",
                     $"requesting a stop move to {newStopPrice} on order '{orderName}' threw "
                     + $"{ex.GetType().Name}: {ex.Message}");
@@ -811,10 +835,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (bracket.StopModifyAttempts >= MaxStopModifyAttempts)
             {
-                RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",
-                    $"{bracket.BracketId}: {MaxStopModifyAttempts} consecutive stop moves were refused "
-                    + $"by the provider; not asking again for this bracket. The stop is still at "
-                    + $"{bracket.CurrentStopPrice} and will NOT trail. Intervene manually.");
+                if (!bracket.StopMoveAbandonAnnounced)
+                {
+                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",
+                        $"{bracket.BracketId}: {MaxStopModifyAttempts} stop moves failed, last observed "
+                        // ⚠️ The fallback is not decoration. Both sites that spend the budget set
+                        // the reason, but a bracket restored from the bridge's payload carries the
+                        // count without it -- and "last observed reason: ." reads as a truth about
+                        // the failure rather than as a gap in what we recorded.
+                        + $"reason: {bracket.LastStopMoveFailureReason ?? "not recorded"}. Not asking again for this "
+                        + $"bracket. The stop is still at {bracket.CurrentStopPrice} and will NOT trail. "
+                        + "Intervene manually.");
+                    bracket.StopMoveAbandonAnnounced = true;
+                }
                 return false;
             }
 
@@ -832,8 +865,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // The cost of counting it is bounded and visible: three sweeps, fifteen seconds, and
             // then ATM_STOP_MOVE_ABANDONED says so once and names the price the stop is left at. A
             // bound that is occasionally early is a bound; one that cannot be reached is not.
-            if (!ModifyStopPrice(account, AtmOrderIdentity.StopName(bracket.BracketId), newStopPrice))
+            if (!ModifyStopPrice(account, AtmOrderIdentity.StopName(bracket.BracketId), newStopPrice, out string failureReason))
             {
+                bracket.LastStopMoveFailureReason = failureReason;
                 bracket.StopModifyAttempts++;
                 return false;
             }
@@ -869,6 +903,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_CONFIRMED",
                         $"{bracket.BracketId}: provider honoured the move; stop is at {brokerPrice}.");
                     bracket.StopModifyAttempts = 0;
+                    // P2-134. ⚠️ NO `StopMoveAbandonAnnounced = false` here, and the omission is
+                    // deliberate. The ticket's spec asked for one, by analogy to P2-107's "the
+                    // record clears when the CONDITION resolves" -- right in general and wrong
+                    // here, because this condition cannot resolve while the latch is set: past
+                    // MaxStopModifyAttempts `RequestStopMove` returns before it asks, a confirm
+                    // needs an outstanding request, and the counter is reset only here. So the
+                    // latch is only ever true when this line is unreachable, and the clear would
+                    // be a no-op that reads as a working release valve. Abandonment is permanent
+                    // for a bracket -- which is exactly what "not asking again for this bracket"
+                    // says -- and the episode boundary is the bracket itself.
                 }
                 else
                 {
@@ -876,6 +920,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // behaviour at the third call site, and the reason the trail latched: the old
                     // code would have recorded `requested` and never looked again.
                     bracket.StopModifyAttempts++;
+                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_CHANGE_IGNORED",
                         $"{bracket.BracketId}: requested stop {requested} but the provider holds "
                         + $"{brokerPrice} (attempt {bracket.StopModifyAttempts} of "

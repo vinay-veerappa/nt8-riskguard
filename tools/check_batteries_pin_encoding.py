@@ -47,6 +47,12 @@ import ast
 import os
 import sys
 
+# ⚠️ This gate enforces the DECODE half of the encoding hazard and was itself missing the
+# ENCODE half -- and a text sweep for 'reconfigure' could not see that, because this file
+# CONTAINS that string as the thing it searches for. Detection by substring over a region
+# nobody bounded; check_tools_pin_stdout.py parses instead, and found it.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 MUTATION = os.path.join(REPO, 'mutation')
 

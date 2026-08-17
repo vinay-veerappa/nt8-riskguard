@@ -47,6 +47,12 @@ WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_ci_runs_every_battery import MAX_BINS  # noqa: E402
 
+# ⚠️ Windows defaults stdout to cp1252. Every gate in this repo prints mutant
+# descriptions and plan text full of non-ASCII, and it only needs to print them
+# when it is FAILING -- so without this a gate dies exactly when it has something
+# to say, and the traceback reads as a defect in the script rather than a finding.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 # Matches BOTH shapes on purpose: the pre-packing `battery: x.py` and the packed
 # `batteries: "x.py y.py"`. Not for compatibility -- so that --apply is re-runnable
 # against a file it has already rewritten. A packer that can only read the shape it
