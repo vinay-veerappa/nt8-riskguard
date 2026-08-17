@@ -476,6 +476,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P2134_TheGenuineRefusalKeepsItsName();
             TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling();
             TestAtm_P2136_ABracketLeavingManagementSaysSo();
+            TestAtm_P2136_TheOrphanBranchSaysSomethingDIFFERENT();
+            TestAtm_P2135_TheGiveUpLineWaitsForTheBudgetAndForRecovery();
             TestAtm_P3137_TheStatusAnswersWhetherItGaveUp();
             TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
@@ -8558,6 +8560,176 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         /// <summary>
+        /// P2-136, the ORPHAN branch and the requirement that the two branches differ.
+        ///
+        /// ⚠️ ADDED BECAUSE MUTATION TESTING FOUND THE GAP, not because it was designed in. The
+        /// first version of TestAtm_P2136_... drove only the flat-position branch, so
+        /// `mutate_p2135.py`'s "wrong sink on the orphan branch" and "both branches say the same
+        /// sentence" mutants both SURVIVED against a green suite. A flat position with no working
+        /// entry is a finished trade and is routine; an account absent from Account.All is a
+        /// bracket orphaned while its position may still be OPEN. One sentence for both turns a
+        /// routine event and a serious one into the same line.
+        /// </summary>
+        private static void TestAtm_P2136_TheOrphanBranchSaysSomethingDIFFERENT()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: an orphaned bracket does not read like a finished trade");
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+
+            Func<bool, string> episode = orphanTheAccount =>
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                atm.AddBracketForTest(bracket);
+                RiskGuardAddOn.SetInstanceForTest(guard);
+
+                if (orphanTheAccount)
+                {
+                    // The account is gone from Account.All while its position is untouched --
+                    // the bracket is orphaned and its position may still be open.
+                    Account.All.Clear();
+                }
+                else
+                {
+                    acct.Positions.Clear();
+                    acct.Orders.Clear();
+                }
+
+                string msg = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, evt, m) =>
+                {
+                    if (evt == "ATM_BRACKET_RELEASED" && msg == null) msg = m;
+                };
+                try { atm.MonitorTickForTest(); }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+                return msg;
+            };
+
+            string finished = episode(false);
+            string orphaned = episode(true);
+
+            Assert(!string.IsNullOrEmpty(orphaned),
+                "P2-136: the ORPHAN branch announces too. It was the untested one, and it is the "
+                + "branch where the position may still be OPEN with nothing managing its stop "
+                + "(got '" + orphaned + "')");
+
+            Assert(!string.IsNullOrEmpty(finished) && !string.IsNullOrEmpty(orphaned)
+                   && finished != orphaned,
+                "P2-136: and the two branches do not say the SAME thing. A routine finished trade "
+                + "and an orphaned bracket reading identically is worse than either alone, and "
+                + "every assertion that 'a release was announced' passes under it\n"
+                + "      finished='" + finished + "'\n      orphaned='" + orphaned + "'");
+
+            Assert(orphaned != null
+                   && (orphaned.IndexOf("orphan", StringComparison.OrdinalIgnoreCase) >= 0
+                       || orphaned.IndexOf("no longer in", StringComparison.OrdinalIgnoreCase) >= 0),
+                "P2-136: and the orphan line says the account went away, which is the actionable "
+                + "half (got '" + orphaned + "')");
+        }
+
+        /// <summary>
+        /// P2-135, the two things the announcement's TIMING must satisfy. Both added after
+        /// mutation testing: "announce before the reason is recorded" and "announce on the FIRST
+        /// failure" both survived a green suite, because a test that counts announcements after
+        /// the budget is spent cannot see either.
+        /// </summary>
+        private static void TestAtm_P2135_TheGiveUpLineWaitsForTheBudgetAndForRecovery()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-135: the give-up line waits for the budget, and returns after a recovery");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int announced = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_MOVE_ABANDONED") announced++;
+            };
+            try
+            {
+                // ONE refusal. The budget is 3, so nothing has been given up on and saying
+                // "not asking again for this bracket" here would contradict what happens next.
+                bracket.RequestedStopPrice = 19995.00;
+                atm.MonitorTickForTest();
+
+                Assert(bracket.StopModifyAttempts == 1 && announced == 0,
+                    "P2-135: nothing is announced on the FIRST failure -- the budget is 3 and the "
+                    + "message promises not to ask again, while it goes on to ask twice more "
+                    + "(attempts=" + bracket.StopModifyAttempts + ", announced=" + announced + ")");
+
+                // ⚠️ THE BROKER PRICE CHANGES ON THE LAST ATTEMPT, and that is the point. Every
+                // attempt otherwise records an IDENTICAL reason, so announcing BEFORE the reason
+                // is recorded produces a byte-identical message and no assertion can see it --
+                // measured: that mutant survived a green suite. Moving a call one line is the
+                // smallest edit that keeps a feature working and makes it lie, and it is only
+                // detectable when consecutive failures differ.
+                string lastMessage = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+                {
+                    if (evt != "ATM_STOP_MOVE_ABANDONED") return;
+                    announced++;
+                    lastMessage = msg;
+                };
+
+                for (int i = 0; i < DynamicAtmManager.MaxStopModifyAttempts; i++)
+                {
+                    // Keyed to the bracket's OWN counter, not the loop index: one attempt was
+                    // already spent by the first-failure check above, so `i` is off by one from
+                    // the attempt that exhausts the budget -- and a test that marks the wrong
+                    // sweep asserts the wrong message and reads as a defect in the code.
+                    stop.StopPrice = (bracket.StopModifyAttempts == DynamicAtmManager.MaxStopModifyAttempts - 1)
+                        ? 19991.00     // the failure that EXHAUSTS the budget observes this
+                        : 19990.00;
+                    bracket.RequestedStopPrice = 19995.00;
+                    atm.MonitorTickForTest();
+                }
+                Assert(announced == 1,
+                    "P2-135: precondition -- episode 1 announced exactly once (got " + announced + ")");
+
+                Assert(lastMessage != null && lastMessage.IndexOf("19991", StringComparison.Ordinal) >= 0,
+                    "P2-135: the give-up line reports the reason observed on the failure that "
+                    + "EXHAUSTED the budget, not the one before it. Announcing one line earlier "
+                    + "still fires, still counts once, and reports the PREVIOUS failure -- and "
+                    + "with identical consecutive reasons nothing can tell (got '" + lastMessage + "')");
+
+                // THE RECOVERY. The provider honours the outstanding request, which is reachable
+                // with the budget spent precisely because the CHANGE_IGNORED branch never cleared
+                // RequestedStopPrice -- the step P2-134's "this line can never run" argument
+                // missed. The confirm resets the counter and clears the latch.
+                stop.StopPrice = 19995.00;
+                bracket.RequestedStopPrice = 19995.00;
+                atm.MonitorTickForTest();
+
+                Assert(bracket.StopModifyAttempts == 0 && !bracket.StopMoveAbandonAnnounced,
+                    "P2-135: the confirm resolved the condition -- counter reset AND latch cleared "
+                    + "(attempts=" + bracket.StopModifyAttempts
+                    + ", announced=" + bracket.StopMoveAbandonAnnounced + ")");
+
+                // A SECOND episode on the same bracket, now that it recovered.
+                stop.StopPrice = 19995.00;
+                for (int i = 0; i < DynamicAtmManager.MaxStopModifyAttempts; i++)
+                {
+                    bracket.RequestedStopPrice = 20005.00;
+                    atm.MonitorTickForTest();
+                }
+
+                Assert(announced == 2,
+                    "P2-135: a bracket that RECOVERED and then failed again announces a SECOND "
+                    + "time. Without the latch clear the operator is told once, ever, while the "
+                    + "position they believe is trailing has stopped (got " + announced + ")");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
         /// P3-137 + P3-137a. `IsComplete` is never assigned true -- two filters and one API field
         /// are inert -- and the three fields an operator actually needs are not exposed at all.
         ///
@@ -8623,7 +8795,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(File.Exists(src), "the ATM manager source is readable at " + src);
             if (!File.Exists(src)) return;
 
-            string code = File.ReadAllText(src);
+            // Comments stripped: two remain, both recording WHY the field went, and a note that
+            // says "IsComplete removed per P3-137" is the opposite of the thing being gated
+            // against. What must be zero is CODE naming it.
+            string code = System.Text.RegularExpressions.Regex.Replace(
+                File.ReadAllText(src), @"//[^\n]*", "");
             int hits = System.Text.RegularExpressions.Regex.Matches(code, @"\bIsComplete\b").Count;
 
             Assert(hits == 0, string.Format(
@@ -22777,8 +22953,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(status != null, "GetBracketStatus returns an object for a registered bracket");
             string statusBracketId = status.bracketId;
             Assert(statusBracketId == result.BracketId, "Status bracketId matches result BracketId");
-            bool isComplete = status.isComplete;
-            Assert(isComplete == false, "Newly registered bracket is not complete");
+            // P3-137. This read `status.isComplete` and asserted it was false -- an assertion no
+            // input could fail, because IsComplete was assigned true nowhere in the codebase. The
+            // field is gone; what a newly registered bracket can meaningfully be asked is whether
+            // it has spent any of its stop-move budget, which is the question P3-137a made
+            // answerable. ⚠️ It is read through `dynamic`, so a missing member is a
+            // RuntimeBinderException that kills the RUNNER rather than failing a test -- which is
+            // exactly what it did, and why the loop saw "no parseable result summary" twice.
+            int attempts = status.stopModifyAttempts;
+            Assert(attempts == 0, "Newly registered bracket has spent none of its stop-move budget");
+            bool announced = status.stopMoveAbandonAnnounced;
+            Assert(!announced, "and has not announced giving up");
             var missing = DynamicAtmManager.Instance.GetBracketStatus("does-not-exist");
             Assert(missing is dynamic && ((dynamic)missing).error != null, "Unknown bracketId returns error payload");
 

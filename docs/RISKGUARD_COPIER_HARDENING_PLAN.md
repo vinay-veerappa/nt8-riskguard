@@ -7673,7 +7673,7 @@ same move was accepted. **So "the Simulator honours everything" is false, and th
 variable is whether the resulting stop is valid against the current market, not the provider.**
 
 
-### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — OPEN, found 2026-08-17 (session 54)
+### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ⚠️ HALF FIXED 2026-08-17 (session 55): it is now SAID, not survived
 
 A **successful** compile hot-swaps `bin/Custom` into a new assembly. `DynamicAtmManager`'s registry
 lives behind `private static readonly Lazy<DynamicAtmManager> _instance` (`:160`) — which reads as
@@ -7715,7 +7715,7 @@ produced a fix for a defect that is not there. The compile timestamp matched to 
 deliberate disarm does not survive somebody else's compile. Fold into the same fix or give it an ID.
 
 
-### P3-137. `ActiveBracket.IsComplete` is never set true — two filters and one API field are inert — OPEN, found 2026-08-17 (session 54)
+### P3-137. `ActiveBracket.IsComplete` is never set true — two filters and one API field are inert — ✅ FIXED 2026-08-17 (session 55)
 
 `grep -rn "IsComplete" addons/*.cs` returns five lines and **not one of them assigns `true`**:
 
@@ -7897,3 +7897,98 @@ test against the assertions that already exist before handing it to the loop.
 ⚠️ **Not live-validated.** The fix is deployed and compiled, but reproducing it needs a position
 whose stop the provider declines to move, three times. It is reproduced deterministically in the
 suite from the live measurement (`Sim101`, bracket `75726b75`), which is the evidence that exists.
+
+
+#### P2-136 + P3-137 + P3-137a closure — 2026-08-17 (session 55)
+
+All three fixed in one slice, driven by the agent loop (`agent/tickets_p2136.json`), finished by
+hand where the loop could not reach. Suite 2079 → **2096 / 0**.
+
+| | what landed |
+|---|---|
+| `P2-136` "say it" | `ATM_BRACKET_RELEASED` at both removal branches, naming the bracket and **which** condition — the two branches say different things |
+| `P2-136` "survive it" | **NOT done.** Still open; see below |
+| `P3-137` | `IsComplete` deleted — the property, its one construction-time write, both `Where(b => !b.IsComplete)` filters, and the `isComplete` API field |
+| `P3-137a` | `GetBracketStatus` gains `stopModifyAttempts`, `stopMoveAbandonAnnounced`, `lastStopMoveFailureReason` |
+
+⚠️ **THE LOOP WIRED THE ANNOUNCEMENT TO THE WRONG SINK, AND IT COMPILED, AND THE FIX WAS PRESENT.**
+It used `NinjaTrader.Code.Output.Process` — the NT8 output tab, which **no operator surface and no
+audit query reads** — rather than `RiskGuardAddOn.LogFromComponent`, which every other `ATM_*`
+event uses. The line existed, was correct, named the right bracket, and reached nobody: the defect
+it was added to fix, reintroduced by the fix. The acceptance test caught it only because it
+observes `LogEventMessageObserver`. **A gate that checks a fix is PRESENT cannot see which sink it
+writes to** — name the reader before writing the string.
+[[an-alarm-wired-to-a-dead-output]].
+
+⚠️ **`isComplete` HAD a consumer, and the grep that said otherwise was scoped too narrowly.**
+`grep IsComplete` over both repos' `addons/` and the MCP wrapper returned five hits, all in
+`DynamicAtmManager.cs` — and `tests/` was not searched. `TestAtm_ActiveBracketStatus` read
+`status.isComplete` through **`dynamic`**, so removing the field did not fail a test: it threw
+`RuntimeBinderException` and **killed the runner**, which is why the loop reported *"no parseable
+result summary"* twice and never reached an arbiter. The assertion it was making —
+`isComplete == false` on a new bracket — was itself a green that could never be red. Replaced with
+one that can fail.
+
+#### The mutation battery, and what it found — `mutation/mutate_p2135.py`, 12 mutants
+
+⚠️ **FIRST RUN: 5 of 13 killed. The green suite was hiding four real gaps and three bad mutants.**
+This is the clearest case yet for [[mutation-testing-beats-review]] in this repo: every test above
+passed, and the battery showed the tests could not tell.
+
+The four **real** gaps, all now closed with tests:
+
+1. the **orphan branch had no test at all** — only the flat-position branch was driven
+2. nothing asserted the two branches say **different** things
+3. nothing asserted the line waits for the budget — announcing on failure **1 of 3** still yields
+   one announcement, so a counting assertion cannot see it
+4. nothing asserted the **latch clear** works, so a bracket that recovered and failed again could
+   silently never announce the second episode
+
+And one gap that needed the test to be **constructed differently**, not merely added: "announce
+one line EARLIER, before the reason is recorded" survived because every attempt records an
+*identical* reason, so the message is byte-identical either way. It is detectable only when
+consecutive failures **differ** — the test now makes the broker hold a different price on the
+attempt that exhausts the budget. ⚠️ And that test was **off by one on its first write**, because
+an attempt had already been spent earlier in the same test; it is now keyed to the bracket's own
+counter rather than the loop index.
+
+⚠️ **THREE OF MY OWN MUTANTS WERE UNKILLABLE BY CONSTRUCTION AND ARE REMOVED.** Two mutated TESTS:
+one re-added a line whose absence is a test's whole point (with the fix in place, it passes either
+way), the other replaced a passing precondition with `Assert(true, ...)` — and **deleting a passing
+assertion can never fail a suite**. A mutant whose kill condition cannot occur is a permanent
+survivor wearing the costume of a finding. Whether an assertion RUNS is proved by *source* mutants.
+One genuine **`EXPECTED SURVIVOR`** is declared and paired through `_battery.finish`: the
+`ModifyStopPrice` call site is redundant with the top-of-method check on that path, kept because it
+announces one 5-second sweep earlier.
+
+⚠️ **THE BATTERY LEFT A LIVE MUTANT IN THE TREE ON ITS FIRST RUN.** It shipped without
+`sys.stdout.reconfigure(...)`, crashed on `⚠️` in a mutant description **between applying a mutant
+and restoring it**, and left the P2-135 defect itself in `DynamicAtmManager.cs` — the announce call
+gone from the reconciler branch, three call sites down to two. **A commit at that moment would have
+shipped the bug back in the same commit as the battery proving it fixed.** Second measured instance
+(the first was `mutate_p182.py` in CI, 2026-08-15). `tools/check_batteries_pin_encoding.py` names
+this exact failure and I ran it *after* the battery rather than before. It now has the pin **and** a
+`try/finally`, because the pin closes the one failure that has happened twice and the `finally`
+closes the class. [[a-battery-must-reach-its-restore-line]].
+
+#### CI
+
+`mutate_p2135.py` is appended to the `UI6+P2-112` bin rather than given its own, and **that bin
+becomes the critical path** (~524s → ~1024s, roughly 3 minutes onto CI). The ceiling is **19** bins
+— 20 concurrent jobs account-wide, shared with `nt8-mcp-bridge` — and the existing bins already
+span 524s..842s, so ~500s cannot be absorbed anywhere for free. A re-pack is the right answer and
+is deliberately **not** done here: `tools/pack_ci_matrix.py` refuses to pack on guessed weights and
+this battery has never run in CI, so its weight does not exist yet. Re-pack after the first green
+run; the command is recorded in `ci.yml` beside the bin.
+
+#### Still open
+
+* **`P2-136` "survive it".** A recompile still discards every tracked bracket; it is now *said*,
+  not survived. `ActiveBracket` is serialised into the bridge payload, so the shape for rehydration
+  exists — and `P3-137a` just put the retry state into that payload, which the abandon message's
+  own fallback comment already assumed was there.
+* `ARMED_ON_START` still re-fires on every recompile. Noise in `shadow`; in `live` it means a
+  deliberate disarm does not survive somebody else's compile. Still needs an ID.
+* `P2-135`/`P2-136` are **not live-validated**. Reproducing either needs a provider that declines a
+  stop move three times, or a bracket dropped with a position open. Both are reproduced
+  deterministically in the suite from the live measurements (`75726b75`, `1a48f3cf`).

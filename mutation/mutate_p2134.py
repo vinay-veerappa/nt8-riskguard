@@ -28,13 +28,18 @@ are the kind that pass when the subject disappears: "exactly once" is satisfied 
 "the two messages differ" is satisfied by two different constants. If the positive controls can
 be deleted without the suite noticing, the tests are decoration.
 
-⚠️ AND ONE THING IS DELIBERATELY NOT MUTATED. There is no `StopMoveAbandonAnnounced = false` in
-ReconcileStopFromBroker to revert, because the ticket's spec asked for one and it would have been
-unreachable: past the cap `RequestStopMove` returns before it asks, a confirm needs an
-outstanding request, and the counter resets only on a confirm. Abandonment is permanent for a
-bracket. A mutant cannot test a line that should not exist; the comment at that site is what
-keeps it from being re-added, and `check_no_dead_safety_machinery.py` is the gate that would
-catch it if it were.
+⚠️ THIS BATTERY USED TO SAY A LATCH CLEAR WAS DELIBERATELY NOT MUTATED BECAUSE IT COULD NOT
+EXIST. That was wrong, and the correction is the most useful thing here. The claim was: past the
+cap `RequestStopMove` returns before it asks, a confirm needs an outstanding request, and the
+counter resets only on a confirm -- so abandonment is permanent for a bracket and a clear would
+be a line that can never run. **The step it missed:** the `CHANGE_IGNORED` branch does not clear
+`RequestedStopPrice`, so the request stays OUTSTANDING after the budget is spent, and a provider
+that honours it late is confirmed on a later sweep with **no new `RequestStopMove` call at all**.
+The clear exists as of P2-135 and `mutate_p2135.py` carries the mutant for it.
+
+The lesson is not about this latch. **An argument that a line can never run is exactly the
+argument to check by naming the input that runs it** -- and if you cannot, that is a finding
+either way. [[a-green-that-can-never-be-red]] inverted.
 
 A crash counts as a kill (handover section 5.14).
 
@@ -67,15 +72,15 @@ MUTANTS = [
      "⚠️ THE DEFECT, RESTORED IN ONE LINE: the latch is never consulted, so the give-up line\n"
      "     goes back onto the path every sweep takes. 17 lines across 20 sweeps in the suite,\n"
      "     four in twenty seconds live, from a message that says it will not repeat",
-     '                if (!bracket.StopMoveAbandonAnnounced)',
-     '                if (true)'),
+     '            if (bracket.StopMoveAbandonAnnounced)\n                return;',
+     '            if (false)\n                return;'),
 
     (ATM,
      "the latch is READ but never SET, which is the same defect one statement later and is\n"
      "     the shape a careless edit produces. The first sweep's announcement no longer records\n"
      "     itself, so every subsequent sweep believes it is the first",
-     '                    bracket.StopMoveAbandonAnnounced = true;',
-     '                    bracket.StopMoveAbandonAnnounced = false;'),
+     '            bracket.StopMoveAbandonAnnounced = true;',
+     '            bracket.StopMoveAbandonAnnounced = false;'),
 
     (ATM,
      "the suppression swallows the RETURN as well as the log, so a bracket past its budget\n"
@@ -141,8 +146,8 @@ MUTANTS = [
      "     direction that is WORSE than the defect: the trail has stopped and the operator is\n"
      "     never told. This is what the positive controls in all three tests are for, so if it\n"
      "     survives, 'exactly once' is being satisfied by never",
-     '                if (!bracket.StopMoveAbandonAnnounced)',
-     '                if (false)'),
+     '            RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",',
+     '            if (false) RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_ABANDONED",'),
 
     (ATM,
      "the latch is keyed by ACCOUNT rather than by bracket, which is the realistic version of\n"

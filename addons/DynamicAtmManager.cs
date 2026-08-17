@@ -133,7 +133,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string LastStopMoveFailureReason { get; set; }
         public bool PartialProfitTaken { get; set; }
         public DateTime CreatedAt { get; set; }
-        public bool IsComplete { get; set; }
+        // IsComplete removed per P3-137: the property was always false and added no information to the bridge payload.
     }
 
     public class BracketResult
@@ -441,7 +441,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         BreakevenTriggered = false,
                         PartialProfitTaken = false,
                         CreatedAt = DateTime.UtcNow,
-                        IsComplete = false
+                        // IsComplete removed per P3-137; completion is expressed by removal from _activeBrackets.
                     };
                     RegisterBracket(bracket);
                     EnsureMonitor();
@@ -489,7 +489,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (_bracketLock)
             {
-                return _activeBrackets.Values.Where(b => !b.IsComplete).ToList();
+                return _activeBrackets.Values.ToList();
             }
         }
 
@@ -513,7 +513,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                         currentTarget = b.CurrentTargetPrice,
                         breakevenTriggered = b.BreakevenTriggered,
                         partialProfitTaken = b.PartialProfitTaken,
-                        isComplete = b.IsComplete,
+                        stopModifyAttempts = b.StopModifyAttempts,
+                        stopMoveAbandonAnnounced = b.StopMoveAbandonAnnounced,
+                        lastStopMoveFailureReason = b.LastStopMoveFailureReason,
                         ageSeconds = (DateTime.UtcNow - b.CreatedAt).TotalSeconds
                     };
                 }
@@ -633,7 +635,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             lock (_bracketLock)
             {
-                active = _activeBrackets.Values.Where(b => !b.IsComplete).ToList();
+                active = _activeBrackets.Values.ToList();
             }
 
             foreach (var bracket in active)
@@ -644,6 +646,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (account == null)
                     {
                         toRemove.Add(bracket);
+                        // ⚠️ LogFromComponent, NOT Code.Output.Process. They are DIFFERENT SINKS:
+                        // Output.Process writes the NT8 output tab, which no operator surface and
+                        // no audit query reads, so the announcement would exist and reach nobody --
+                        // the same shape as the defect this line was added to fix.
+                        // [[an-alarm-wired-to-a-dead-output]]. Every other ATM_* event uses this one.
+                        RiskGuardAddOn.LogFromComponent(bracket.AccountName, "ATM_BRACKET_RELEASED",
+                            $"{bracket.BracketId}: account '{bracket.AccountName}' is no longer in "
+                            + "Account.All, so this bracket is ORPHANED and no longer managed. Its "
+                            + "position may still be open, and its stop will not move again.");
                         continue;
                     }
 
@@ -658,6 +669,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (!entryStillWorking)
                         {
                             toRemove.Add(bracket);
+                            // The NORMAL exit, and it must not read like the orphan above: a flat
+                            // position with no working entry is a finished trade. Said anyway,
+                            // because "this bracket stopped being managed" is the fact, and an
+                            // operator cannot tell a finished trade from a dropped one otherwise.
+                            RiskGuardAddOn.LogFromComponent(bracket.AccountName, "ATM_BRACKET_RELEASED",
+                                $"{bracket.BracketId}: {bracket.Symbol} position is flat and no entry "
+                                + "order is still working, so the trade is finished and the bracket "
+                                + "is released. Nothing further is managed for it.");
                         }
                         continue;
                     }

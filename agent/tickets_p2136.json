@@ -1,0 +1,57 @@
+{
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P2-136 + P3-137: a bracket leaving management says so, and the status answers whether it gave up",
+      "defect": "THREE findings in DynamicAtmManager, all of the same shape -- state that exists and is reported to nobody.\n\n(1) P2-136. Both removal branches in MonitorTickCore drop a bracket SILENTLY. The account-not-found branch adds to toRemove and continues; the flat-position branch does the same when no entry order is still working. Neither logs anything, so a bracket that has stopped being managed is indistinguishable from one that was never added. Measured live 2026-08-17: bracket 1a48f3cf was registered at 23:16 with an OPEN 1-lot position and was absent from the registry by 23:17:3x with the position still long 1. Breakeven and trailing were over, permanently, with no operator-visible symptom -- the stop and target still rest at the broker, so every surface an operator would check reports the trade as protected. It is protected at its ORIGINAL price and will never move again.\n\n(2) P3-137. ActiveBracket.IsComplete is never assigned true. Five occurrences: declared, set false once at construction, read by GetActiveBrackets' Where(b => !b.IsComplete), read by MonitorTickCore's identical filter, and returned as isComplete by GetBracketStatus. Both filters read as 'skip finished brackets' and are no-ops that pass everything; the API field is advertised to every consumer as a constant false. Removal from management is done entirely by RemoveBracket and toRemove, which is why nobody noticed.\n\n(3) P3-137a. GetBracketStatus returns thirteen fields and none of them is StopModifyAttempts, StopMoveAbandonAnnounced or LastStopMoveFailureReason. So the single question an operator has about a bracket that has stopped trailing -- has this given up, and why? -- cannot be asked of the running system at all. The only other evidence is a log line which, before P2-135, might never have been emitted.",
+      "spec": "All three changes are in addons/DynamicAtmManager.cs.\n\n(1) ANNOUNCE THE REMOVAL, AT BOTH BRANCHES. Log an ATM_BRACKET_RELEASED event naming the bracket id and WHY it was released. The two branches mean different things and must not produce the same sentence: a flat or absent position with no working entry is a FINISHED TRADE and is entirely normal, while an account that is not in Account.All is a bracket orphaned whose position may still be open. Say which happened. Log it where the removal is decided, so the message can name the condition that was observed; the account-missing branch has no Account object to hand, so use the bracket's own AccountName. Keep it to ONE line per removal -- a bracket is removed once.\n\n(2) DELETE IsComplete AND BOTH FILTERS THAT READ IT. Remove the property, the construction-time assignment, the isComplete field from GetBracketStatus's payload, and both Where(b => !b.IsComplete) clauses -- the sequences they filter are returned/iterated unchanged. Nothing outside this file names it: grep across both repos' addons and the MCP wrapper returns five hits, all in DynamicAtmManager.cs. Ask what input makes a status boolean true; if none can be named, delete it rather than leave a mechanism that looks load-bearing. Do NOT replace it with a working completion flag -- removal is already done by RemoveBracket and toRemove, and a second mechanism for the same fact is what this file has too many of.\n\n(3) EXPOSE THE RETRY STATE in GetBracketStatus, as stopModifyAttempts, stopMoveAbandonAnnounced and lastStopMoveFailureReason, keeping the existing camelCase style of that anonymous object. These three answer 'has this given up, and why?'. Note the abandon message's own fallback already reasons about 'a bracket restored from the bridge's payload' carrying the count -- the payload does not carry the count, and this is what makes that comment true.\n\nDo not change WHEN a bracket is removed, do not change the retry budget, and do not touch the ATM_STOP_* messages -- P1-133, P2-134 and P2-135 pin those and they have their own tests.",
+      "regions": [
+        {
+          "id": "TheBracketFields",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public bool IsComplete { get; set; }",
+          "kind": "line",
+          "note": "The declaration to delete. ActiveBracket is serialised into the bridge's API payload, so removing a field changes that payload -- which is intended here: it was a constant."
+        },
+        {
+          "id": "TheActiveList",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public List<ActiveBracket> GetActiveBrackets()",
+          "kind": "decl",
+          "note": "One of the two inert filters."
+        },
+        {
+          "id": "TheStatus",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public object GetBracketStatus(string bracketId)",
+          "kind": "decl",
+          "note": "Drops isComplete and gains the three retry fields. Keep the anonymous object's existing camelCase naming -- the bridge serves this shape straight through."
+        },
+        {
+          "id": "TheSweep",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void MonitorTickCore()",
+          "kind": "decl",
+          "note": "Holds the second inert filter AND both silent removal branches. The account-missing branch has no Account object, so the announcement there must use bracket.AccountName."
+        },
+        {
+          "id": "TheConstruction",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "IsComplete = false",
+          "kind": "line",
+          "note": "The only write the field has ever had."
+        }
+      ],
+      "expect_green": [
+        "P2-136: the bracket said it was leaving management",
+        "P2-136: and it names WHICH bracket",
+        "P2-136: and WHY it left",
+        "P3-137a: the status reports how many stop moves have failed",
+        "P3-137a: and whether it has already announced giving up",
+        "P3-137a: and the reason it last OBSERVED",
+        "P3-137: and `isComplete` is gone rather than advertised",
+        "P3-137: nothing names IsComplete any more"
+      ]
+    }
+  ]
+}
