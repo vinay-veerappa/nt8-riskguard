@@ -788,7 +788,13 @@ jobs:
           # was deleted rather than declared, because the finding it defended against was measured
           # unreachable -- LogFromComponent cannot throw -- and the duplicate write it added broke
           # two mutate_p0_67.py anchors by making a unique line non-unique.
-          - { label: "P2-116+P1-84+P1-139", batteries: "mutate_p2116.py mutate_p184.py mutate_p1139.py" }   # ~906s = P2-116 292s + P1-84 194s + P1-139 ~420s (13 mutants; measure and correct on the first green run)
+          # ⚠️ MEASURED, run 32046508202: this bin is now the CRITICAL PATH at 848s, by ELEVEN
+          # SECONDS over the next one (F-6+P1-99+P1-133 at 837s). Wall clock 15m55s. So do NOT add a
+          # battery here -- the margin is noise, and the next addition should go to whichever bin the
+          # packer picks, on weights from a run, not to whichever looks short in this file.
+          # P1-139 measured 289s against a ~420s estimate: 13 C# mutants came in at ~22s each, so
+          # estimating a battery at 30s/mutant overshoots by roughly half.
+          - { label: "P2-116+P1-84+P1-139", batteries: "mutate_p2116.py mutate_p184.py mutate_p1139.py" }   # 848s job / 800s batteries = P2-116 310s + P1-84 201s + P1-139 289s (measured 2026-08-17, run 32046508202)
 
           # P2-92, 285s. Shadow mode must be observation-only. Eleven mutants, and the two worth
           # naming are the ones that look like the fix. Mutant 2 makes CanTrade consult the CURRENT
