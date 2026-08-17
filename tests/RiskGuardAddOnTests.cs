@@ -492,6 +492,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1139_TheGuardItselfRefusesEveryWrongWayPrice();
             TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag();
             TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped();
+            // P1-140: the partial-profit order joins the protective OCO group. Needs 2+ lots, which
+            // is why nothing has ever reached the block.
+            TestAtm_P1140_TheProtectiveGroupNeverGainsAThirdMember();
+            TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket();
+            TestAtm_P1140_AOneLotBracketSaysNothing();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8962,6 +8967,199 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "the bracket must record that. Refusing the wrong-way move without recording it "
                 + "leaves this flag false, and the trailing block is gated on it -- so the position "
                 + "never trails again and the guard has traded one silent failure for another.");
+        }
+
+        /// <summary>
+        /// P1-140. A TWO-LOT DrawdownShield bracket past its partial-profit trigger -- the state no
+        /// test and no measured live bracket has ever reached, because
+        /// `partialQty = (int)Math.Floor(1 * 0.50)` is ZERO for one lot and `if (partialQty > 0)`
+        /// skips the entire block. DrawdownShield is the DEFAULT AtmStrategyConfig.Type.
+        ///
+        /// entry 20000.00, target 20050.00, PartialProfitPct 0.50 -> partialTarget 20025.00; last
+        /// 20030.00 is past it. Breakeven is pre-marked with the stop already at 20000.50, so the
+        /// breakeven branch is skipped and the partial block is the only thing in the sweep that acts.
+        ///
+        /// ⚠️ THE STOP AND TARGET ARE BOTH SIZED FOR THE FULL TWO LOTS and both carry the bracket's
+        /// OCO id, which is deliberate and correct for a bracket of two -- `TestBracket_TargetIsMirrored...`
+        /// states why: "without it the stop survives the target's fill and opens a fresh position".
+        /// A THIRD member sized differently turns that mechanism into the thing that removes the
+        /// protection.
+        /// </summary>
+        private static Account AtmSetupTwoLot(out Instrument inst, out Order stop, out Order target,
+            out DynamicAtmManager atm)
+        {
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+            RiskGuardAddOn.SetInstanceForTest(null);
+
+            inst = new Instrument("MNQ 03-26");
+            inst.MasterInstrument = new MasterInstrument { Name = "MNQ", TickSize = 0.25 };
+            inst.MarketData = new MarketData { Last = new Last { Price = 20030.00 } };
+
+            var acct = new Account { Name = "SimAtm", Provider = Provider.Simulator };
+            Account.All.Add(acct);
+            acct.Positions.Add(new Position
+            {
+                Instrument = inst, MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 20000.00
+            });
+
+            stop = acct.CreateOrder(inst, OrderAction.Sell, OrderType.StopMarket, TimeInForce.Day,
+                2, 0, 20000.50, "OCO-P140", "Stop_BR-P067", null);
+            target = acct.CreateOrder(inst, OrderAction.Sell, OrderType.Limit, TimeInForce.Day,
+                2, 20050.00, 0, "OCO-P140", "Target_BR-P067", null);
+            acct.Submit(new[] { stop, target });
+            stop.OrderState = OrderState.Working;
+            target.OrderState = OrderState.Working;
+
+            atm = new DynamicAtmManager();
+            return acct;
+        }
+
+        private static ActiveBracket AtmTwoLotBracket(Account acct, Instrument inst, Order stop)
+        {
+            var b = AtmBracketFor(acct, inst, stop, 20000.00, 20000.50);
+            b.Quantity = 2;
+            b.OcoId = "OCO-P140";
+            b.Config.Type = AtmStrategyType.DrawdownShield;
+            b.Config.PartialProfitPct = 0.50;
+            b.CurrentStopPrice = 20000.50;
+            b.CurrentTargetPrice = 20050.00;
+            b.BreakevenTriggered = true;         // already reached; the partial block is gated on it
+            b.PartialProfitTaken = false;
+            return b;
+        }
+
+        /// <summary>
+        /// P1-140. The protective OCO group must never gain a third member.
+        ///
+        /// If the partial joins the group -- which this repo has live-validated that a new order
+        /// DOES, and which the copier is built on -- then when it fills, OCO cancels the stop AND the
+        /// target and the remaining lot is completely unprotected, with no operator-visible symptom.
+        /// If it somehow does not cancel, the stop is still sized for TWO against a position of ONE
+        /// and firing it FLIPS the position: P1-56's exact shape, already found in the copier.
+        /// </summary>
+        private static void TestAtm_P1140_TheProtectiveGroupNeverGainsAThirdMember()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-140: the protective OCO group never gains a third member");
+
+            Instrument inst; Order stop; Order target; DynamicAtmManager atm;
+            var acct = AtmSetupTwoLot(out inst, out stop, out target, out atm);
+            var bracket = AtmTwoLotBracket(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            atm.MonitorTickForTest();
+
+            int inProtectiveGroup = 0;
+            foreach (var o in acct.Orders)
+                if (string.Equals(o.Oco, "OCO-P140", StringComparison.Ordinal)) inProtectiveGroup++;
+
+            Assert(inProtectiveGroup == 2,
+                "P1-140: exactly the stop and the target carry the bracket's OCO id (found "
+                + inProtectiveGroup + "). A third member sized for HALF the position means its fill "
+                + "cancels both protective legs and leaves the remaining lot naked -- and if the "
+                + "group does not cancel, a two-lot stop against a one-lot position FLIPS it.");
+
+            Assert(stop.Quantity == 2 && target.Quantity == 2,
+                "P1-140: and neither protective leg was resized. Correcting them after the fact is "
+                + "a second write to a leg whose first may still be in flight, which P0-61 "
+                + "establishes reverts the order and loses both (stop=" + stop.Quantity
+                + ", target=" + target.Quantity + ")");
+        }
+
+        /// <summary>
+        /// P1-140. `PartialProfitTaken = true` sat on the line after `account.Submit(...)`, recording
+        /// that the line was REACHED rather than what the submission did. Whatever the partial's fate
+        /// -- refused OCO id, rejection, or not attempted at all -- it was never retried and nothing
+        /// was said. A risk-reduction feature that is dead and reports success.
+        /// [[report-the-outcome-not-the-call]].
+        ///
+        /// So the partial must SAY it did not happen, once per bracket, naming the quantity it would
+        /// have taken. Once, not every five seconds: this fires on every sweep for the life of a
+        /// winning trade otherwise, which is the spam P2-134 and P2-135 were about.
+        /// </summary>
+        private static void TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-140: an unavailable partial says so, once");
+
+            Instrument inst; Order stop; Order target; DynamicAtmManager atm;
+            var acct = AtmSetupTwoLot(out inst, out stop, out target, out atm);
+            var bracket = AtmTwoLotBracket(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int said = 0;
+            string message = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_PARTIAL_PROFIT_UNAVAILABLE") return;
+                said++;
+                message = msg;
+            };
+            try
+            {
+                for (int i = 0; i < 4; i++) atm.MonitorTickForTest();
+
+                Assert(said == 1,
+                    "P1-140: said exactly ONCE across four sweeps (got " + said + "). The condition "
+                    + "holds for the life of a winning trade, so a line without a latch is a line "
+                    + "every five seconds.");
+                Assert(message != null && message.IndexOf("1", StringComparison.Ordinal) >= 0
+                       && message.IndexOf("OCO", StringComparison.Ordinal) >= 0,
+                    "P1-140: and it names the quantity it would have taken (1 of 2) and the reason -- "
+                    + "the OCO group it would have had to join. 'A partial did not happen' with no "
+                    + "quantity and no reason is indistinguishable from never having tried (msg='"
+                    + message + "')");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
+        /// P1-140, the negative control. A detector that fires on everything passes every positive
+        /// test ever written for it ([[detector-needs-a-negative-test]]). A ONE-lot bracket has
+        /// `partialQty == 0` -- there is no partial to take and nothing to report -- and that is the
+        /// overwhelming majority of brackets this box has ever placed. If the new line fires there,
+        /// it is noise on every trade.
+        /// </summary>
+        private static void TestAtm_P1140_AOneLotBracketSaysNothing()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-140: a one-lot bracket reports no unavailable partial");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20030.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 20000.50);
+            bracket.Config.Type = AtmStrategyType.DrawdownShield;
+            bracket.Config.PartialProfitPct = 0.50;
+            bracket.CurrentStopPrice = 20000.50;
+            bracket.CurrentTargetPrice = 20050.00;
+            bracket.BreakevenTriggered = true;
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int said = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_PARTIAL_PROFIT_UNAVAILABLE") said++;
+            };
+            try
+            {
+                for (int i = 0; i < 3; i++) atm.MonitorTickForTest();
+                Assert(said == 0,
+                    "P1-140: a ONE-lot bracket has no partial to take (floor(1 * 0.50) == 0), so "
+                    + "there is nothing unavailable and nothing to report. Every bracket measured on "
+                    + "this box so far has been one lot -- a line here is a line on every trade (got "
+                    + said + ")");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
         }
 
         /// <summary>
