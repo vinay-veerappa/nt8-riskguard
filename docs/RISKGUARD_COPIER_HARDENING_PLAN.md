@@ -7575,7 +7575,7 @@ box disagree on this path** and the discrepancy is unexplained — do not close 
 it again and instrument `StopModifyAttempts`, which `GetBracketStatus` does not expose (`P3-137a`).
 
 
-### P2-135. `ATM_STOP_MOVE_ABANDONED` cannot be said on the path that spends its budget by refusal — OPEN, found 2026-08-17 (session 54) while live-validating `P2-134`
+### P2-135. `ATM_STOP_MOVE_ABANDONED` cannot be said on the path that spends its budget by refusal — ✅ FIXED 2026-08-17 (session 55), found session 54 while live-validating `P2-134`
 
 **Measured on `Sim101`, bracket `75726b75`, MNQ SEP26, one contract:**
 
@@ -7748,3 +7748,152 @@ Found while trying to settle `P2-134`'s unexplained `b604e308` measurement from 
 not be done for exactly this reason. Swap `isComplete` for the three retry fields, or add them.
 Note the abandon message's own fallback comment (`:842`-`:845`) already reasons about "a bracket
 restored from the bridge's payload" carrying the count — **the payload does not carry the count.**
+
+
+### P2-138. The fleet tree was built, tested, mutation-covered, deployed — and served to nobody — OPEN→FIXED 2026-08-17 (session 55)
+
+`BridgeFleetView.Build` had **no caller outside its own test file**. Measured:
+
+```
+$ grep -rn "BridgeFleetView\.\|FleetNode" --include=*.cs --include=*.js --include=*.html .
+    38 hits, ALL of them in tests/BridgeSourceTests.cs
+```
+
+199 lines of view logic, 137 lines of acceptance tests, a 253-line mutation battery, wired into
+CI, green — and **no endpoint returned the tree, and the commit that added the class did not touch
+`ui/index.html`**. `P2-127`'s ticket was scoped to *"build the fleet tree ... in a class the
+harness executes"*, deliberately and correctly; the **wiring slice was never filed.** The file says
+so itself, in the doc comment on `NotApplicableRank`: *"⚠️ TEMPORARY, AND THE NEXT SLICE OF P2-127
+REPLACES IT."*
+
+⚠️ **The only surface this was detectable on was the operator saying they still could not see it.**
+Every gate this repo has was green: build, 481 tests, 11 mutation batteries, `check_anchors`,
+`deploy --verify`, CI. This is [[dead-safety-machinery-gate]] in the bridge repo — written, tested,
+deployed, wired to nothing — and the gate that catches it in `nt8-riskguard` has no counterpart
+here, which is [[a-gate-is-per-repo]] for the fourth time.
+
+**Two smaller findings inside the same slice:**
+
+* `FleetNode.Badge` was **declared and assigned nowhere**, so every node's badge was null. Same
+  never-set-field shape as `P3-137`'s `ActiveBracket.IsComplete`, in the fleet view itself. §4's
+  rows read `follower_1 1.0x ✔MATCH`, so a tree of bare names is not that pane. Fixed by folding
+  the badge out of `FleetCopierRow.NotEnforcingLabel`, which the row already carried — not a fourth
+  vocabulary.
+* **§4's layout had never been built at all.** `docs/UI_REDESIGN_DESIGN.md` §10 item 4 says so in
+  terms, and the operator called the shipped stacked-sections page *"cluttered"* on 2026-08-16.
+  What they were reacting to is the **absence** of §4, not §4 — which is why the tree needed a
+  *pane* to live in and not a fifth stacked section.
+
+#### What landed
+
+| half | where | how |
+|---|---|---|
+| mapping | `BridgeFleetView.RowsFromSnapshot` | agent-loop, `agent/tickets_p2138.json` |
+| badge | `BridgeFleetView.Build` | agent-loop, same ticket |
+| route | `McpBridgeAddOn.GetCopierSnapshot` → `payload["fleet"]` | agent-loop, same ticket |
+| page | `ui/index.html` — §4's two panes | **by hand** |
+
+The page half is hand-written because the loop's profile for this repo is
+`file_suffixes=(".cs",)` and **cannot edit `index.html`**. That is not an oversight in the profile:
+it is the same fact that makes the page gate weak, and it is why `RowsFromSnapshot` lives in
+`BridgeFleetView.cs` rather than inline in the route. `McpBridgeAddOn.cs` is the one bridge source
+`BridgeTests.csproj` cannot compile, so a mistyped field name mapped *there* deserialises to
+`null`/`0` and the tree renders a **healthy-looking lie with every test still green**.
+
+#### The evidence is a payload, not a shape I wrote down
+
+`tests/fixtures/copier_snapshot_live_20260817.json` is captured from the deployed box — 2
+relationships, 97 accounts, 25 fields per row — and the mapping test maps *it*. A field rename in
+core now breaks a test instead of blanking a column. [[measure-the-deployed-system]].
+
+#### ⚠️ One acceptance assertion was WRONG, and was corrected rather than satisfied
+
+It demanded the page read the node's `rank`. That is the **opposite** of the design: core sorts the
+tree — that is what `BridgeFleetView`'s 199 lines and its mutation battery are *for*, because two
+incoming severity scales disagree about which end is bad — so a page that touched the rank would be
+the second copy of an ordering this whole file exists to keep single. It now asserts the renderer
+sorts **nothing**, over a stated 1611-char region.
+
+Had it gone to the loop unfixed, **the loop would have implemented a defect to turn a gate green.**
+That is the risk that comes with writing the tests first, and it is worth stating plainly: a red
+test is a specification, and a wrong one is a wrong specification with a mechanism for enforcing
+itself. [[a-fix-can-commit-its-own-defect]].
+
+#### Still open after this
+
+* The **inspector** is still the old stacked sections, now filtered by the fleet selection. §4 puts
+  set-rarely config there behind tabs; that is not built.
+* **Inline row actions** — arm/disarm, enable/disable, ratio — are §4 decision 3 and remain `P2-126`
+  (the page dispatches 2 of the 14 actions `/api/copier/config` accepts).
+* The **events pane** (§4's bottom strip) exists nowhere.
+* `NotApplicableRank` is still the stand-in its comment describes: an unlinked account has a GUARD
+  state, and folding that in is what removes it.
+
+#### Live-verified 2026-08-17, after deploy + `nt_compile` (0 errors)
+
+The suite proves none of this: `FleetNode`'s members are public **fields**, and nothing in the
+harness asserts what the camel-case resolver does with them. Read from the running box instead.
+
+```
+/api/copier/snapshot -> keys [takenUtc, rows, system, fleet]
+node keys            : kind, name, role, rank, badge, children
+Sim101             kind=group     rank=5  children=2
+   - Sim-ORB       role=follower  rank=5  badge=disabled
+   - SimCopy2      role=follower  rank=5  badge=disabled
+Unlinked accounts  kind=unlinked  rank=6  children=94
+```
+
+And the **rendered page**, which b32d151 had to record as *"Nobody has LOOKED at the rendered
+page"*:
+
+| checked | result |
+|---|---|
+| layout | `main.shell` `display:flex`, fleet pane 300px, inspector 909px |
+| tree | 98 `.fnode` rows, 2 top-level nodes |
+| select `Sim-ORB` | `Copier (1 of 2, for Sim-ORB)`, `Accounts (1 of 97)`, 1 row highlighted |
+| select an unlinked account | `Copier (0 of 2, for APEX…)` + the system banner, `Accounts (1 of 97)` |
+| deselect | `Copier (2)`, `Accounts (7 of 97)`, 0 highlighted |
+
+⚠️ The unlinked case is the one worth keeping: that APEX account has no equity and no trades, so
+the hide-empty filter would have hidden it — **selecting a row and getting an empty table is
+indistinguishable from a broken page**, which is why the selection overrides that filter.
+
+#### ⚠️ Measured cost, recorded rather than fixed
+
+The fleet adds **10 477 bytes to a payload that was 1 793** — a 6× increase, ~123 KB/min at the 5s
+poll. Almost all of it is 94 leaf nodes carrying `role: null`, `badge: null` and `children: []`.
+That is affordable today and is **not** the 648 KB the inventory once returned, but it is the same
+shape, and the remedy is the same one: omit nulls and empty children. Left alone deliberately —
+recorded so the next person measuring does not think it went unnoticed.
+
+#### P2-135 closure — 2026-08-17 (session 55)
+
+Fixed by moving the announcement to the sites that **spend** the budget, called after the reason is
+recorded, latched once per episode. Only the logging moved: the bounded retry still refuses and
+`MaxStopModifyAttempts` is untouched. Driven by the agent loop
+(`agent/tickets_p2135.json`). Suite 2072 → **2076 / 0**, tagged `v1.37.0`, deployed, `nt_compile` 0
+errors.
+
+⚠️ **The loop found a second defect — in `P2-134`'s own reasoning — and it is right.** P2-134
+argued for **no latch clear at all**: the confirm branch is unreachable while the latch is set,
+*"past MaxStopModifyAttempts RequestStopMove returns before it asks, a confirm needs an outstanding
+request"*, so a clear would be a line that can never run. **The step it missed:** the
+`CHANGE_IGNORED` branch does not clear `RequestedStopPrice`, so the request stays **outstanding**
+after the budget is spent, and a provider that honours it late is confirmed on a later sweep with
+no new `RequestStopMove` call at all. The branch is reachable, abandonment is **not** permanent for
+a bracket, and without the clear a bracket that recovered and failed again would never announce the
+second failure — on a position the operator believes is trailing. Both stale comments are corrected
+in place rather than left contradicting the code.
+
+⚠️ **One of my own acceptance assertions was UNSATISFIABLE, and is why four rounds could not
+converge.** It required the substring `refus`. `P2-134` deliberately **deleted** that word, because
+the message is shared with the path where nothing was ever submitted, and
+`TestAtm_P2134_...NeitherMessageClaims...` pins its **absence**. Two tests pinning opposite things:
+no implementation satisfies both. **Second wrong red test in one session** (the other is `P2-138`'s
+`.rank` assertion). A red test is a specification, and a wrong one is a wrong specification *with a
+mechanism for enforcing itself* — the loop will implement a defect to turn a gate green. Read a red
+test against the assertions that already exist before handing it to the loop.
+
+⚠️ **Not live-validated.** The fix is deployed and compiled, but reproducing it needs a position
+whose stop the provider declines to move, three times. It is reproduced deterministically in the
+suite from the live measurement (`Sim101`, bracket `75726b75`), which is the evidence that exists.
