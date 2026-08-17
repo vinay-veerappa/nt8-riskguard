@@ -7745,6 +7745,54 @@ same move was accepted. **So "the Simulator honours everything" is false, and th
 variable is whether the resulting stop is valid against the current market, not the provider.**
 
 
+### P2-141. `BreakevenOffsetTicks >= BreakevenTriggerTicks` is a configuration that CANNOT be honoured, and it is accepted in silence — measured on the FUNDED account 2026-08-17 (session 56) — OPEN
+
+**A breakeven stop placed `offset` ticks past entry, triggered `trigger` ticks past entry, is above
+the market whenever `offset >= trigger`.** For a long, a sell-stop at or above the bid is invalid,
+so the provider holds the old price — every time, structurally, for the life of the position.
+
+**Measured live on `TAKEPROFITPRO524207503` (Provider31), bracket `302e7759`**, placed with
+`breakevenTriggerTicks: 1` and `breakevenOffsetTicks: 2` — values `nt_place_atm_order` accepted
+without comment:
+
+```
+19:06:20  ATM_STOP_MOVE_REQUESTED   302e7759: breakeven trigger reached -- requested stop 30067 -> 30077.5
+19:06:25  ATM_STOP_CHANGE_IGNORED   provider holds 30067 (attempt 1 of 3)
+19:06:25  ATM_STOP_MOVE_REQUESTED   ... 30067 -> 30077.5          <- re-arm, same price
+19:06:30  ATM_STOP_CHANGE_IGNORED   provider holds 30067 (attempt 2 of 3)
+19:06:35  ATM_STOP_MOVE_REQUESTED   ... 30067 -> 30077.5
+19:06:40  ATM_STOP_MOVE_ABANDONED   3 stop moves failed ... The stop is still at 30067
+```
+
+Entry 30077.25, so breakeven fired at 30077.25 and asked for **30077.5** — a quarter-point *above*
+the price that triggered it. **Twenty seconds from fill to a permanently abandoned stop, on a healthy
+winning position.** The trade later closed +$12 with its stop never having moved off the initial
+10-point distance.
+
+⚠️ **THE CONFIG SURFACE IS THE DEFECT, NOT THE PROVIDER.** `P2-136`'s addendum already established
+that *"the distinguishing variable is whether the resulting stop is valid against the current market,
+not the provider"*. What is new is that nothing anywhere refuses, clamps or warns about a combination
+that **cannot succeed on any provider**: not `nt_place_atm_order`'s schema, not `PlaceBracket`, not
+`AtmStrategyConfig`. The defaults (`trigger 12` / `offset 2`) are fine, which is why this has never
+been hit — it needs an operator to tighten the trigger, which is a natural thing to want.
+
+⚠️ **AND IT SPENDS `MaxStopModifyAttempts` ON SOMETHING UNACHIEVABLE.** The 3-attempt budget exists so
+a *transient* refusal can recover. Here the condition is permanent, so the budget is guaranteed to be
+consumed and `ATM_STOP_MOVE_ABANDONED` is guaranteed to fire — the alarm is correct and the operator
+can do nothing with it, which over time is how a real alarm gets discounted.
+[[a-recovery-budget-is-not-a-policy]].
+
+**Where**: `addons/DynamicAtmManager.cs` `PlaceBracket` (validate before registering) and
+`nt8-mcp-bridge` `nt_place_atm_order`'s schema. **Refuse at placement, naming both values** — a stop
+that cannot be placed is not something to discover twenty seconds later from an abandonment line.
+⚠️ Do NOT "fix" it by clamping silently: a caller who asked for a 1-tick trigger and got 12 has been
+answered a different question, which is `P1-102`'s lesson about defaulting in the wrapper.
+
+**Found by the operator watching the live run** — *"the stop did not go to BE and it just exited
+now"* — which is the same detection surface that found `P2-138`. Both `P1-139`'s and `P2-135`'s live
+halves were confirmed by the same bracket; see `P1-139`'s closure.
+
+
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID
 
 `PlaceBracket` submits the stop and the target with **`calculatedQty`** — the whole position — and
@@ -7972,10 +8020,28 @@ stop at 0.00 is a valid baseline"*, and the patch honoured it by defaulting `Cur
 a number. The file had already decided the opposite ten lines from the guard —
 `&& bracket.CurrentStopPrice > 0` — and the other reading refuses every short's first move forever.
 
-⚠️ **NOT LIVE-VALIDATED, and `Sim101` alone cannot do it.** The whole defect starts with a provider
-DECLINING a stop move; the Simulator's behaviour on that is `P0-63`'s and is not the same event. The
-confirmation run needs a non-Simulator account and a trade whose stop has trailed past breakeven.
-[[the-simulator-re-ids-nothing]].
+🔶 **PARTLY LIVE-VALIDATED ON THE FUNDED ACCOUNT, 2026-08-17 (session 56)** — `TAKEPROFITPRO524207503`,
+Provider31, bracket `302e7759`, 2 lots MNQ SEP26 from 30077.25. The refusal arrived without being
+engineered (see ✅ `P2-141`, which is what caused it), and it settles **part two**:
+
+| | |
+|---|---|
+| ✅ **the re-arm retries the move that was LOST** | three refused breakeven requests, and every one asked for **the same 30077.5** — never a price computed from somewhere else |
+| ✅ **no wrong-way request, at all** | every request improved on the 30067 the broker held; `ATM_STOP_MOVE_WRONG_WAY` never fired |
+| ✅ **`P0-67`'s legitimate re-arm survives the fix** | which is what `TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice` pins, now seen on a real provider |
+| ✅ **`P2-135` + `P2-134`, LIVE** | `ATM_STOP_MOVE_ABANDONED` said **once**, after the budget, naming the reason it OBSERVED on the failure that exhausted it |
+| ✅ **`P3-137a`, LIVE** | `stopModifyAttempts: 3`, `stopMoveAbandonAnnounced: true`, `lastStopMoveFailureReason` — *"has this given up, and why?"* answered from the running system |
+| ✅ **`P1-133` re-confirmed** | placement returned `stopOrderId: cde35048…`; the broker reported that order as `613562532221`. The lookup worked only because it keys on the NAME `Stop_302e7759` |
+
+⚠️ **WHAT IS STILL NOT VALIDATED, AND IT IS THE ORIGINAL DEFECT'S OWN PRECONDITION.** The loosening
+needs a stop that has **trailed PAST breakeven** and then a refused **TRAIL** move. On this run the
+stop never moved at all, so the wrong-way branch was never reachable — the evidence above is about a
+refused **breakeven** move, where the re-requested price is *correct by construction*. The remaining
+confirmation needs a valid breakeven (`offset < trigger`, per ✅ `P2-141`), at least one accepted trail
+advance, and then a refusal. That sequence cannot be scheduled: it depends on the market putting the
+trailed stop close enough to the bid to be declined. **Do not record this entry as live-validated
+until that specific order of events is in a log.** [[the-simulator-re-ids-nothing]] — and note the
+evidence above names its provider, which is the point.
 
 
 ### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ⚠️ HALF FIXED 2026-08-17 (session 55): it is now SAID, not survived
