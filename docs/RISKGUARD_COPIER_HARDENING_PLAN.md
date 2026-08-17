@@ -5005,8 +5005,51 @@ this entry never filed. Re-verified against the deployed box **2026-08-17 (sessi
 `GET /api/copier/snapshot` on `localhost:7890` returns **10 969 bytes** with a `fleet` array the
 page renders — one `group` node (`Sim101`, rank 5) holding two `disabled` followers, and an
 `unlinked` node (rank 6, `NotApplicableRank`) holding the rest. `#config` now lives inside
-`#inspector`, so the ~28 config rows are off the top level. **What is still missing from §4 is the
-inspector's three tabs, the events pane, and §4 decision 4's system row.**
+`#inspector`, so the ~28 config rows are off the top level.
+
+🔶 **SLICE 3 LANDED (session 56): the INSPECTOR'S THREE TABS** — `addons/BridgeInspectorTabs.cs` in
+`nt8-mcp-bridge`, served by a new `GET /api/ui/inspector` route and rendered by the page. Bridge
+harness **506 → 542 / 0** across 93 declared tests, battery `mutate_p2127tabs.py` **8 mutants**.
+**Live-validated on the deployed box**, which is the part that matters:
+
+| tab | badge | rank |
+|---|---|---|
+| copier | `Severity 5 (2)` | 5 |
+| **risk** | **`Inert (559)`** | **1** |
+| rare | `No conflicts (0)` | 5 |
+
+…and in the page's DOM: three tabs in §4's order, the risk tab amber **without being clicked**,
+`#config`/`#content` hidden behind their tabs, clicking swaps panes, and selecting `Sim-ORB` in the
+fleet tree narrows the risk badge **`Inert (559)` → `Inert (3)`**.
+
+⚠️ **`Inert (559)` IS THE WHOLE POINT AND IT VINDICATES THE MEASUREMENT ABOVE.** `unevaluatedRules`
+— the field this page was built to surface — is **empty** on this box, so a strip folding it would
+render three clean tabs over 559 rules that cannot fire.
+
+⚠️ **THE PANEL'S ONE GOOD FINDING, AND THE FIRST IMPLEMENTATION SHIPPED THE DEFECT.** A rare tab with
+zero config conflicts folded `BridgeFleetView.WorstOf(new int[0])`, which returns `UnknownRank` —
+and `UnknownRank == WorstRank` — so it rendered as the **worst item on the always-visible strip while
+its own badge read "No conflicts"**. A surface whose report contradicts its rank, in the direction
+that teaches an operator to discount the strip. Fixed with a named `CleanRank` (5, above every real
+severity and below `NotApplicableRank`). `WorstOf`'s pessimistic empty answer is right for a set that
+could not be READ; zero conflicts is a set that WAS read and was empty.
+[[an-inapplicable-state-is-not-unreadable]]. The loop ended `MAX_ROUNDS_EXHAUSTED` and **four of the
+five upheld findings failed** — #1 claimed `Inert` ranked *better* than `EvaluatedNotEnforcing`,
+having read the lower-is-worse scale backwards.
+
+⚠️ **THE ROUTE IS GATED AT THE SOURCE FOR *SERVING* THE CLASS, BECAUSE `P2-138` WAS THE OPPOSITE.**
+`McpBridgeAddOn.cs` is the one bridge source the test project cannot compile, so
+`TestP2127_TheRouteServesTheTabsAndDecidesNothing` asserts it calls `Build`, `RuleRowsFromInventory`
+and `RowsFromSnapshot` — and, as negative controls, that it assigns **no** rank, names **no** tab id
+and **re-sorts nothing**. Anything that file decides is untestable by construction. **The wiring
+landed in the same commit as the class**, deliberately.
+
+⚠️ **THE BATTERY FOUND A REAL TEST GAP, NOT A CODE DEFECT:** 6/8 first run, both survivors being
+states this class **cannot read** — an unrecognised state and an empty one — which no test exercised,
+so mutants making them read as CLEAN survived a green suite. That is the fail-OPEN direction. Closed
+by `TestP2127_AnUnreadableRuleStateRanksWorstNotBest`.
+
+**What is still missing from §4 is the events pane and §4 decision 4's system row.**
 
 ⚠️ **THE TABS ARE THE REMAINING DE-CLUTTERING, and the payload for them is now MEASURED** — do not
 design them from the shape of the code. Session 56, from the running bridge:
