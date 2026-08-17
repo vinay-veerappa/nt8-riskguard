@@ -485,7 +485,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove();
             TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop();
             TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice();
-            TestAtm_P1139_TheWrongWayRefusalIsSaidAndCostsNothing();
+            TestAtm_P1139_AStopAlreadyBetterThanBreakevenIsNotPulledBack();
+            TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8900,59 +8901,130 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         /// <summary>
-        /// P1-139. A refusal this class makes on its own behalf is not a provider refusal: it must
-        /// not spend the retry budget, must not leave a phantom request outstanding, and must be
-        /// SAID -- a stop move that silently does not happen is the exact shape of every defect this
-        /// file has produced.
+        /// P1-139. A stop that is ALREADY better than breakeven, on a bracket that does not know
+        /// breakeven was reached. Reachable two ways: something outside this monitor moved the stop
+        /// up (the reconciler has an ATM_STOP_MOVED_EXTERNALLY branch for exactly that), or the
+        /// bracket was re-adopted after P2-136's recompile drop.
+        ///
+        /// The breakeven branch computes its target from ENTRY, so it wants 20000.50 while the broker
+        /// holds 20010.00. Refusing that is necessary but NOT sufficient: leaving BreakevenTriggered
+        /// false latches the trailing block off for the life of the position, because that flag is
+        /// its gate. A stop 38 ticks better than the breakeven price HAS reached breakeven, and the
+        /// bracket must record it rather than argue with the broker every five seconds.
+        ///
+        /// ⚠️ ISOLATED ON PURPOSE: last = 20011.00 puts the trail's own target at 20009.00, which its
+        /// existing `stopMoved` check declines, so the breakeven branch is the ONLY thing in the sweep
+        /// that can touch the order. Written first at 20015.00, where the trail legitimately advances
+        /// the stop to 20013.00 in the same sweep -- and an assertion that the order is untouched then
+        /// forbids a CORRECT move and reads as a defect in the fix.
         /// </summary>
-        private static void TestAtm_P1139_TheWrongWayRefusalIsSaidAndCostsNothing()
+        private static void TestAtm_P1139_AStopAlreadyBetterThanBreakevenIsNotPulledBack()
         {
-            Console.WriteLine("\n[TEST] ATM P1-139: refusing a wrong-way move is announced and free");
+            Console.WriteLine("\n[TEST] ATM P1-139: a stop already past breakeven is not pulled back to it");
 
             Instrument inst; Order stop; DynamicAtmManager atm;
-            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20011.00);
             var bracket = AtmTrailedPastBreakeven(acct, inst, stop);
+            bracket.BreakevenTriggered = false;
             atm.AddBracketForTest(bracket);
 
-            var guard = new RiskGuardAddOn();
-            guard.SetConfigForTest(new RiskConfig());
-            RiskGuardAddOn.SetInstanceForTest(guard);
+            atm.MonitorTickForTest();
 
-            int refusals = 0;
-            string message = null;
-            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
-            {
-                if (evt != "ATM_STOP_MOVE_WRONG_WAY") return;
-                refusals++;
-                message = msg;
-            };
-            try
-            {
-                // The wrong-way request in ISOLATION: no provider refusal anywhere in the picture, so
-                // nothing but the guard itself can account for what happens. A bracket whose stop has
-                // trailed to 20010.00 with BreakevenTriggered false is what the reconcile's re-arm
-                // produces, and the breakeven branch's target is computed from ENTRY regardless.
-                bracket.BreakevenTriggered = false;
-                atm.MonitorTickForTest();
+            Assert(stop.StopPrice >= 20010.00 - 1e-9,
+                "P1-139: the broker is not asked for the 20000.50 the breakeven branch computed from "
+                + "entry while it holds 20010.00 (got " + stop.StopPrice + ")");
+            Assert(double.IsNaN(bracket.RequestedStopPrice),
+                "P1-139: and no phantom request is left outstanding -- one would block every real "
+                + "move for the life of the position, since RequestStopMove returns early while a "
+                + "move is in flight (got " + bracket.RequestedStopPrice + ")");
+            Assert(bracket.StopModifyAttempts == 0,
+                "P1-139: a refusal this class makes on its own behalf is not a provider refusal and "
+                + "must not spend the retry budget -- three of them would abandon a bracket whose "
+                + "stop is in perfect shape (got " + bracket.StopModifyAttempts + ")");
+            Assert(bracket.BreakevenTriggered,
+                "P1-139: a stop 38 ticks BETTER than the breakeven price has reached breakeven, and "
+                + "the bracket must record that. Refusing the wrong-way move without recording it "
+                + "leaves this flag false, and the trailing block is gated on it -- so the position "
+                + "never trails again and the guard has traded one silent failure for another.");
+        }
 
-                Assert(Math.Abs(stop.StopPrice - 20010.00) < 1e-9,
-                    "P1-139: the broker was never asked -- the order still holds 20010.00, not the "
-                    + "20000.50 the breakeven branch computed from entry (got " + stop.StopPrice + ")");
-                Assert(double.IsNaN(bracket.RequestedStopPrice),
-                    "P1-139: no phantom request is left outstanding, which would block the next real "
-                    + "move for the life of the position (got " + bracket.RequestedStopPrice + ")");
-                Assert(bracket.StopModifyAttempts == 0,
-                    "P1-139: our own invariant is not a provider refusal and must not spend the "
-                    + "retry budget -- three of these would abandon a healthy bracket (got "
-                    + bracket.StopModifyAttempts + ")");
-                Assert(refusals == 1 && message != null
-                       && message.IndexOf("20010", StringComparison.Ordinal) >= 0
-                       && message.IndexOf("20000.5", StringComparison.Ordinal) >= 0,
-                    "P1-139: it is said once and names BOTH prices, because 'the stop did not move' "
-                    + "is indistinguishable from a latched trail otherwise (count=" + refusals
-                    + ", msg='" + message + "')");
+        /// <summary>
+        /// P1-139, the backstop. Once the breakeven branch stops asking for a wrong-way move, the
+        /// guard inside RequestStopMove is unreachable through MonitorTickCore -- both callers now
+        /// decline on their own. That is the correct design and it is also how a guard becomes
+        /// decoration: nothing exercises it, so nothing notices when it stops working.
+        ///
+        /// So it is pinned at the source, positionally: the direction test must come BEFORE the one
+        /// call that reaches the broker. A guard that runs after ModifyStopPrice is not a guard.
+        /// The single-call-site count is the negative control -- adding a second, unguarded
+        /// ModifyStopPrice call would otherwise satisfy an ordering check.
+        /// </summary>
+        private static void TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: the direction guard precedes the broker call (source gate)");
+
+            string src = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons", "DynamicAtmManager.cs"));
+            Assert(File.Exists(src), "the ATM manager source is readable at " + src);
+            if (!File.Exists(src)) return;
+
+            // Comments stripped FIRST. Every claim below is about code: this method's own comment
+            // block names ModifyStopPrice three times while explaining P1-130, so a gate that reads
+            // the raw text counts prose as call sites and the negative control below is vacuous.
+            string code = System.Text.RegularExpressions.Regex.Replace(
+                File.ReadAllText(src), @"//[^\n]*", "");
+
+            // Brace-matched, not a fixed window: the body is the region being judged, so its extent
+            // has to be derived rather than guessed. A window that overshoots into
+            // ReconcileStopFromBroker picks up ITS ModifyStopPrice-free body and its IsLong-free
+            // comparisons, and the ordering assertion then measures the wrong method.
+            int decl = code.IndexOf("private bool RequestStopMove(", StringComparison.Ordinal);
+            Assert(decl >= 0, "P1-139: precondition -- RequestStopMove is declared in " + src);
+            if (decl < 0) return;
+
+            int open = code.IndexOf('{', decl);
+            int depth = 0, close = -1;
+            for (int i = open; i >= 0 && i < code.Length; i++)
+            {
+                if (code[i] == '{') depth++;
+                else if (code[i] == '}' && --depth == 0) { close = i; break; }
             }
-            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            Assert(close > open, "P1-139: precondition -- RequestStopMove's body closes (braces balance)");
+            if (close <= open) return;
+
+            string body = code.Substring(open, close - open + 1);
+            Assert(body.Length > 400,
+                "P1-139: precondition -- RequestStopMove's body was located and is substantial ("
+                + body.Length + " chars inspected)");
+
+            int guardAt = body.IndexOf("IsLong", StringComparison.Ordinal);
+            int brokerAt = body.IndexOf("ModifyStopPrice(", StringComparison.Ordinal);
+
+            Assert(guardAt >= 0,
+                "P1-139: RequestStopMove decides direction from bracket.IsLong. 'Better' is HIGHER "
+                + "for a long and LOWER for a short; there is no sign to read off a quantity here, "
+                + "and Position.Quantity is absolute in NT8 anyway.");
+            Assert(brokerAt >= 0,
+                "P1-139: precondition -- the ModifyStopPrice call is in this body");
+            // ⚠️ `guardAt >= 0` is repeated here deliberately. IndexOf returns -1 when absent, and
+            // -1 < brokerAt is TRUE -- so a bare ordering comparison PASSES on the baseline where
+            // the guard does not exist at all, which is the one state this gate exists to reject.
+            // [[a-green-that-can-never-be-red]].
+            Assert(guardAt >= 0 && guardAt < brokerAt,
+                "P1-139: the direction test precedes the ONE call that reaches the broker (IsLong at "
+                + guardAt + ", ModifyStopPrice at " + brokerAt + "). A check that runs afterwards "
+                + "cannot prevent anything.");
+
+            int calls = 0;
+            for (int i = body.IndexOf("ModifyStopPrice(", StringComparison.Ordinal); i >= 0;
+                 i = body.IndexOf("ModifyStopPrice(", i + 1, StringComparison.Ordinal))
+                calls++;
+            Assert(calls == 1,
+                "P1-139: exactly ONE path from here reaches the broker (found " + calls + "). The "
+                + "ordering assertion above is satisfied by a second, UNGUARDED call site, so the "
+                + "count is what makes it mean something. If you are adding one deliberately, guard "
+                + "it and raise this number in the same edit.");
         }
 
         /// <summary>

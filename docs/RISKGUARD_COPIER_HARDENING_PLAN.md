@@ -5000,6 +5000,35 @@ applies to this account"). Section tabs answer a question nobody asks.
 §4 puts set-rarely config in the inspector. Nothing else on the page accounts for the scroll the
 operator reported.
 
+🔶 **SLICE 2 LANDED (session 55): the tree is WIRED and rendering** — `P2-138`, the wiring slice
+this entry never filed. Re-verified against the deployed box **2026-08-17 (session 56)**:
+`GET /api/copier/snapshot` on `localhost:7890` returns **10 969 bytes** with a `fleet` array the
+page renders — one `group` node (`Sim101`, rank 5) holding two `disabled` followers, and an
+`unlinked` node (rank 6, `NotApplicableRank`) holding the rest. `#config` now lives inside
+`#inspector`, so the ~28 config rows are off the top level. **What is still missing from §4 is the
+inspector's three tabs, the events pane, and §4 decision 4's system row.**
+
+⚠️ **THE TABS ARE THE REMAINING DE-CLUTTERING, and the payload for them is now MEASURED** — do not
+design them from the shape of the code. Session 56, from the running bridge:
+
+| source | measured |
+|---|---|
+| `GET /api/riskguard/inventory` | **549 271 bytes**, `mode: shadow`, `isArmed: true`, **97** accounts × **23** rules = **2 231** rule rows |
+| rule `state` histogram | `EvaluatedNotEnforcing` **1 129** · `Inert` **559** · `Disabled` **543** |
+| `unevaluatedRules` | **0** — so on a box with accounts loaded, **`Inert` is the worst state that exists**, and it is the one a tab would hide |
+| `GET /api/copier/snapshot` `system` | `mode: live`, `isActing: true`, `severity: warn`, `[ COPIER LIVE - NOTHING ENABLED ]` |
+| `GET /api/riskguard/config` | 7 276 bytes, 17 config keys |
+
+⚠️ **So the tab strip's badge must fold `Inert`, not `ConfiguredNotEvaluated`.** The state this page
+was built to make unmissable is empty on the live box while **559 rules are `Inert`** — a strip that
+watches only `unevaluatedRules` would render three clean tabs over the exact condition the hazard
+note below is about. Fold from the **2 231 detail rows**, never from a counter (`F-9`, `P2-103`).
+
+⚠️ An unknown endpoint answers **HTTP 500 with a stack trace** naming the absolute source path,
+rather than 404. Seen while measuring the above (`/api/riskguard/state` does not exist; the routes
+are `riskguard/config`, `riskguard/inventory`, `riskguard/version`). Localhost and behind the Bearer
+token, so it is small — **it gets its own ID when it is taken**, and it is not folded in here.
+
 ⚠️ **`P1-125` HAS A DESIGNATED HOME IN §4 AND IT IS NOT THE COPIER SECTION HEADER.** §4 decision 4:
 *"Selecting nothing shows the system row (feed / guard / copier) — which is where `P3-34`'s
 two-or-three-indicator problem lives."* The copier's global mode belongs in that system row,
@@ -7671,6 +7700,55 @@ landed at 30232.5 with the market at 30232.5-30233.5 — a sell-stop at or above
 Simulator refuses that and holds the old price; with a trigger of 8 ticks against an offset of 2 the
 same move was accepted. **So "the Simulator honours everything" is false, and the distinguishing
 variable is whether the resulting stop is valid against the current market, not the provider.**
+
+
+### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — OPEN, found 2026-08-17 (session 56) while reading `P1-139`'s neighbourhood
+
+`PlaceBracket` submits the stop and the target with **`calculatedQty`** — the whole position — and
+both carry the same `ocoId` (`:401`-`:402`). `MonitorTickCore`'s partial-profit block then submits a
+**third** order into that same group (`:726`):
+
+```csharp
+var partialOrder = account.CreateOrder(position.Instrument, exitAction, OrderType.Limit,
+    TimeInForce.Day, partialQty, partialTarget, 0, bracket.OcoId, "Partial_" + bracket.BracketId, null);
+account.Submit(new[] { partialOrder });
+bracket.PartialProfitTaken = true;        // <-- whatever the broker does with it
+```
+
+**There are exactly three things NT8 can do with that, and all three are defects:**
+
+| NT8's behaviour | result |
+|---|---|
+| the new order **joins** the live OCO group — which is what this repo has already measured (`[[the-simulator-re-ids-nothing]]`, "an OCO id joins while live but cannot be resurrected") | the partial fills → **OCO cancels the stop AND the target** → the remaining half of the position is **completely unprotected**, with no operator-visible symptom |
+| the group does **not** cancel | the partial fills half, and the stop is still sized for the **full** quantity → it fires and **FLIPS the position** the other way. This is `P1-56`'s exact shape, already found in the copier: *"qty 1 AND qty 2 behind 2 lots, which FLIPS the follower when both fire"* |
+| the OCO id is **refused** on a new order | the partial silently never happens, and `PartialProfitTaken = true` on the line after `Submit` means **it is never retried** — a risk-reduction feature that is dead and reports success |
+
+⚠️ **`PartialProfitTaken = true` records reaching the line, not the outcome.** Set immediately after
+`Submit`, outside any check on what the submission did. [[report-the-outcome-not-the-call]] — the same
+shape as the panic kill-switch that cancelled its own flatten and reported success.
+
+⚠️ **`partialTarget` is computed from a cache nothing ever reconciles.** `CurrentTargetPrice` is
+written **once**, at construction (`:440`), and read only at `:717`-`:718`. `ReconcileStopFromBroker`
+fixed exactly this for the stop — *"a polling monitor does not need settle events; it needs to stop
+believing its own writes"* — and **the target leg never got that fix**. If the broker adjusted or
+refused the target at placement (`P0-63`'s behaviour, and `P2-136`'s addendum measured a *stop*
+refused for being invalid against the market), the partial's limit price is derived from fiction —
+and unlike the stop cache, this one is used to **submit a live order**.
+
+⚠️ **WHY NOTHING HAS EVER SEEN IT: `partialQty = (int)Math.Floor(bracket.Quantity * 0.50)` is ZERO
+for a 1-lot position**, and `if (partialQty > 0)` skips the whole block. Every ATM test in the suite
+and every live bracket measured so far has been **1 lot**, so the entire path is unreached. It needs
+**2+ contracts** — and `DrawdownShield`, the only type with a partial block, is the **default**
+`AtmStrategyConfig.Type`. [[an-order-is-not-one-fill]] is the neighbouring lesson: every copy-path
+test sent one execution for the full quantity and hid a defect on each side.
+
+**Do NOT fix this by sizing the stop down after the partial** — that is a second write to a leg whose
+first write may still be in flight, which `P0-61` establishes reverts the order and loses both. The
+shape to reach for is what NT8's own ATM strategies do: **separate OCO groups per target**, so no
+fill can cancel the protection for the quantity that remains.
+
+**Where**: `addons/DynamicAtmManager.cs` `:401`-`:402` (the full-quantity legs), `:714`-`:731` (the
+partial block), `:440` + `:717`-`:718` (the unreconciled target cache).
 
 
 ### P1-139. One refused trailing move asks the broker to put the stop BACK at breakeven — the re-arm `P0-67` added to un-latch the trail is what loosens it, and there is no monotonic guard anywhere — OPEN, found 2026-08-17 (session 56) by reading `P2-136`'s neighbourhood
