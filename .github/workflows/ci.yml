@@ -663,7 +663,18 @@ jobs:
           # (delete the authority clause; key it on the current mode) now live in mutate_p292.py,
           # whose anchors were REPOINTED at that predicate. check_anchors.py is what caught them
           # going stale, in the same commit that moved them.
-          - { label: "P2-98+P2-101", batteries: "mutate_p298.py mutate_p2101.py" }   # 492s = P2-98 315s + P2-101 177s
+          # ⚠️ P1-140 GOES HERE because 19 bins is the ceiling (20 concurrent jobs ACCOUNT-WIDE,
+          # shared with nt8-mcp-bridge; a 20th measured 726s and a 21st 853s, both WORSE), and this
+          # was the shortest bin at 492s. The weight is DERIVED FROM A MEASUREMENT rather than
+          # guessed: P1-139 measured 289s for 13 mutants in run 32046508202, i.e. 22.2s per mutant,
+          # so 10 mutants + baseline + restore is ~266s. That puts this bin at ~758s, comfortably
+          # under the 848s critical path, which is why it does not go in the P1-139 bin.
+          #
+          # Group 1 is the one to know: it puts the partial-profit SUBMISSION back. A fix that only
+          # stops SAYING something is not a fix that stops submitting. Group 4's guard mutant is the
+          # one no positive test can see -- removing `partialQty > 0` makes the line fire on every
+          # ONE-LOT bracket, which is every bracket this box has ever placed.
+          - { label: "P2-98+P2-101+P1-140", batteries: "mutate_p298.py mutate_p2101.py mutate_p1140.py" }   # ~758s = P2-98 315s + P2-101 177s + P1-140 ~266s (10 mutants; measure and correct on the first green run)
 
           # UI6 (the copier half), 311s. The mutant this battery exists for casts CopierConformance
           # to an int for sorting: that enum's numbering is HISTORICAL, not severity, so casting

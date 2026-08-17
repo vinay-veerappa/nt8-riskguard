@@ -7702,7 +7702,7 @@ same move was accepted. **So "the Simulator honours everything" is false, and th
 variable is whether the resulting stop is valid against the current market, not the provider.**
 
 
-### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — OPEN, found 2026-08-17 (session 56) while reading `P1-139`'s neighbourhood
+### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID
 
 `PlaceBracket` submits the stop and the target with **`calculatedQty`** — the whole position — and
 both carry the same `ocoId` (`:401`-`:402`). `MonitorTickCore`'s partial-profit block then submits a
@@ -7765,6 +7765,54 @@ target.
 
 **Where**: `addons/DynamicAtmManager.cs` `:401`-`:402` (the full-quantity legs), `:714`-`:731` (the
 partial block), `:440` + `:717`-`:718` (the unreconciled target cache).
+
+#### P1-140 closure — 2026-08-17 (session 56)
+
+Slice 1 landed (the hazard removed; the native implementation is still a follow-on ID, unfiled until
+taken). Driven by the agent loop (`agent/tickets_p1140.json`), verdict **`APPROVE_PARTIAL`** in
+**2 rounds**. Suite **2134 → 2139 / 0**, battery `mutate_p1140.py` **10 mutants**.
+
+**The number that matters: `found 3` → `found 2`.** A two-lot bracket past its partial trigger no
+longer puts a third order into the stop and target's OCO group. ⚠️ **That block had never executed,
+anywhere, ever** — `(int)Math.Floor(1 * 0.50)` is `0` and `if (partialQty > 0)` skips it, so every
+test in the suite and every live bracket measured on this box walked past it, on `DrawdownShield`,
+which is the **default** type.
+
+⚠️ **`APPROVE_PARTIAL` MEANS ONE REVIEWER, AND THAT IS WHEN TO REVIEW BY HAND.**
+`deepseek-v4-flash` returned **1449 findings against a cap of 60**, was scored `UNPARSEABLE` and
+dropped; `glm-5.2` approved with **0 findings**. That degeneration is now measured at **373 → 853 →
+1449** across sessions. A patch with one zero-finding review has effectively had none.
+
+**Two things that review found, both real:**
+
+| | |
+|---|---|
+| four `⚠️` markers **stripped** from comments the ticket explicitly protected, including `P1-133`'s *REPORTING FIELDS ONLY* and the *`LogFromComponent`, NOT `Code.Output.Process`* note | restored; this is the third session in a row the loop has altered these glyphs, each time by a different substitution (`WARNING:`, `(!)`, deletion) |
+| ⚠️ **the block's gate was swapped from `!PartialProfitTaken` to `!PartialProfitUnavailableAnnounced`** | correct **today** only because nothing assigns `PartialProfitTaken` any more. The follow-on ID assigns it again, and then a gate asking only *"have we announced?"* re-evaluates a partial that has **already been taken** and reports it unavailable. Both clauses now, pinned by `TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken` |
+
+⚠️ **`PartialProfitTaken` IS NOW INERT, AND THAT IS `P3-137`'S SHAPE.** Its only writer was the line
+after `account.Submit(...)` — which recorded *reaching the line*, not the outcome
+([[report-the-outcome-not-the-call]]) — and that line is gone. The field is still serialised into the
+bridge payload by `GetBracketStatus` as `partialProfitTaken` and **can no longer be true**. It is
+**kept rather than deleted** because a writer is coming with the follow-on ID, and pinned by a test so
+that stays a recorded decision instead of something nobody notices.
+[[a-green-that-can-never-be-red]].
+
+⚠️ **THE BATTERY FOUND A WEAK ASSERTION OF MINE, WHICH IS THE MORE USEFUL LESSON.** The test checked
+that the message contains `"1"` — and a mutant printing the FULL quantity twice (`"2 of 2"` instead of
+`"1 of 2"`) **SURVIVED**, because the OCO group named in the same sentence is `OCO-P140`, which
+contains a `1`. **A substring assertion over a message that also carries identifiers is satisfied by
+the identifiers.** Now asserts the phrase `"1 of 2"`. 9/10 → 10/10.
+
+⚠️ **`CurrentTargetPrice` STILL HAS NO RECONCILER and it needs its own ID.** Written once at
+construction (`:440`), read at `:717`-`:718`, and `P0-67`'s fix for the stop cache was never applied
+to the target leg. Its consequence **dropped** with this fix — it used to determine the limit price of
+a **submitted order**, and now only decides when a log line fires — which is why it is not folded in
+here.
+
+⚠️ **NOT LIVE-VALIDATED, and it needs 2+ CONTRACTS**, which is the whole reason nothing found it: one
+lot cannot reach the block. The confirmation run is a two-lot `DrawdownShield` bracket carried past
+`PartialProfitPct` of its target.
 
 
 ### P1-139. One refused trailing move asks the broker to put the stop BACK at breakeven — the re-arm `P0-67` added to un-latch the trail is what loosens it, and there is no monotonic guard anywhere — ✅ FIXED 2026-08-17 (session 56), found by reading `P2-136`'s neighbourhood

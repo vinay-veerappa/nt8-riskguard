@@ -497,6 +497,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1140_TheProtectiveGroupNeverGainsAThirdMember();
             TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket();
             TestAtm_P1140_AOneLotBracketSaysNothing();
+            TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -9110,12 +9111,78 @@ namespace NinjaTrader.NinjaScript.AddOns
                     "P1-140: said exactly ONCE across four sweeps (got " + said + "). The condition "
                     + "holds for the life of a winning trade, so a line without a latch is a line "
                     + "every five seconds.");
-                Assert(message != null && message.IndexOf("1", StringComparison.Ordinal) >= 0
+                // ⚠️ "1 of 2" AS A PHRASE, not the digit 1 anywhere in the string. The first draft
+                // asserted `IndexOf("1") >= 0` and a mutant that printed the FULL quantity twice
+                // ("2 of 2") SURVIVED it -- because the OCO group in the same sentence is named
+                // `OCO-P140`, which contains a 1. Found by the battery, not by reading.
+                Assert(message != null && message.IndexOf("1 of 2", StringComparison.Ordinal) >= 0
                        && message.IndexOf("OCO", StringComparison.Ordinal) >= 0,
-                    "P1-140: and it names the quantity it would have taken (1 of 2) and the reason -- "
-                    + "the OCO group it would have had to join. 'A partial did not happen' with no "
-                    + "quantity and no reason is indistinguishable from never having tried (msg='"
+                    "P1-140: and it names the quantity it would have taken as '1 of 2', plus the "
+                    + "reason -- the OCO group it would have had to join. 'A partial did not happen' "
+                    + "with no quantity and no reason is indistinguishable from never having tried, "
+                    + "and a message naming the WRONG quantity is worse than one naming none (msg='"
                     + message + "')");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
+        /// P1-140. `PartialProfitTaken` must stay FALSE, and the gate must still consult it.
+        ///
+        /// Written from reviewing the loop's patch, not from the ticket. It replaced the block's
+        /// `!bracket.PartialProfitTaken` gate with `!bracket.PartialProfitUnavailableAnnounced`,
+        /// which is correct ONLY because nothing assigns PartialProfitTaken any more -- and the
+        /// follow-on ID that makes partials real assigns it again, at which point a gate asking only
+        /// "have we announced?" re-evaluates a partial that has already been taken. Both clauses.
+        ///
+        /// ⚠️ AND THE FLAG ITSELF IS NOW INERT, which is P3-137's shape: it is serialised into the
+        /// bridge payload as `partialProfitTaken` by GetBracketStatus and can no longer be true.
+        /// It is kept because a writer is coming, and pinned here so that stays a decision rather
+        /// than something nobody notices. [[a-green-that-can-never-be-red]].
+        /// </summary>
+        private static void TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-140: PartialProfitTaken stays false, and still gates the block");
+
+            Instrument inst; Order stop; Order target; DynamicAtmManager atm;
+            var acct = AtmSetupTwoLot(out inst, out stop, out target, out atm);
+            var bracket = AtmTwoLotBracket(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            atm.MonitorTickForTest();
+
+            Assert(!bracket.PartialProfitTaken,
+                "P1-140: no partial was taken, so the flag that says one was must read false. Its "
+                + "only writer was the line after account.Submit(), which recorded reaching the line "
+                + "rather than the outcome -- and reusing it as the announcement latch would give one "
+                + "flag two meanings, which is what P1-139 had just removed from this file.");
+
+            // A bracket whose partial HAS been taken -- the state the follow-on ID produces -- must
+            // not be re-evaluated, whatever the announcement latch says.
+            int said = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_PARTIAL_PROFIT_UNAVAILABLE") said++;
+            };
+            try
+            {
+                var taken = AtmTwoLotBracket(acct, inst, stop);
+                taken.BracketId = bracket.BracketId;
+                taken.PartialProfitTaken = true;                 // as the follow-on ID will set it
+                taken.PartialProfitUnavailableAnnounced = false; // and nothing has been announced
+                atm.AddBracketForTest(taken);
+
+                atm.MonitorTickForTest();
+
+                Assert(said == 0,
+                    "P1-140: a bracket whose partial has ALREADY been taken is not re-evaluated, so "
+                    + "nothing is announced about it (got " + said + "). A gate that asks only "
+                    + "'have we announced?' reports a partial as unavailable after taking it -- which "
+                    + "is unreachable today and is exactly what the follow-on ID makes reachable.");
             }
             finally { RiskGuardAddOn.LogEventMessageObserver = null; }
         }

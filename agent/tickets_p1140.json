@@ -1,0 +1,32 @@
+{
+  "_comment": "P1-140 slice 1 of 2: REMOVE THE HAZARD and state the feature unavailable. Do NOT attempt to make partials work here -- protection cannot be resized safely at trigger time (P0-61 makes a second write revert the order, and a full-size stop against a half position flips it), so it must be PARTITIONED at placement, one OCO group per target. That needs TWO stops, and AtmOrderIdentity.StopName(bracketId) returns ONE name that P1-133's five call sites and its whole mutation battery are keyed to. It gets its own ID. TestAtm_P1140_AOneLotBracketSaysNothing is GREEN at baseline and is the negative control -- do not delete or weaken it.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "The partial-profit order stops joining the protective OCO group, and says it did not happen",
+      "defect": "MonitorTickCore's DrawdownShield partial-profit block submits a THIRD order into the stop and target's own OCO group, while both of those are sized for the FULL position. PlaceBracket creates them with `calculatedQty` and the same `ocoId`; the partial is created with `partialQty` (half) and `bracket.OcoId`. Measured red: a two-lot bracket past its partial trigger leaves THREE orders carrying the bracket's OCO id. Every outcome NT8 can pick is a defect. (1) The new order JOINS the live group -- live-validated in this repo by TestBracket_P0_9_ALateTargetJoinsTheLiveStopsOcoGroup, and the copier is built on it -- so the partial's fill cancels the stop AND the target, leaving the remaining lot completely unprotected with no operator-visible symptom. (2) If it does not cancel, the stop is still sized for two against a position of one, and firing it FLIPS the position: P1-56's exact shape, already found in the copier. (3) If the OCO id is refused on a new order, the partial silently never happens -- and `bracket.PartialProfitTaken = true` sits on the line immediately after `account.Submit(...)`, outside any check on what the submission did, so it is never retried and nothing is logged. Nothing has ever seen any of this because `partialQty = (int)Math.Floor(bracket.Quantity * bracket.Config.PartialProfitPct)` is ZERO for a one-lot position and `if (partialQty > 0)` skips the whole block; every test and every measured live bracket has been one lot. DrawdownShield is the DEFAULT AtmStrategyConfig.Type. Separately, `partialTarget` is computed from `bracket.CurrentTargetPrice`, which is written once at construction and reconciled from the broker by NOTHING -- P0-67 fixed exactly that for the stop cache and the target leg never got the fix.",
+      "spec": "Do NOT submit the partial-profit order. Delete the CreateOrder/Submit pair and the `PartialProfitTaken = true` that follows it, and in their place log event name ATM_PARTIAL_PROFIT_UNAVAILABLE via RiskGuardAddOn.LogFromComponent. The message must name the quantity that would have been taken and the total (e.g. '1 of 2'), and must name the OCO group as the reason it cannot be taken -- 'a partial did not happen', with no quantity and no reason, is indistinguishable from never having tried. Say it ONCE PER BRACKET: the condition holds for the life of a winning trade, so an unlatched line is a line every five seconds, which is the log spam P2-134 and P2-135 were about. Use a NEW bool member on ActiveBracket for that latch, e.g. PartialProfitUnavailableAnnounced. Do NOT reuse PartialProfitTaken as the latch: no partial was taken, so it must stay FALSE, and giving one flag a second meaning is precisely the defect P1-139 just fixed in this same file. Keep the guard that decides whether there is anything to report exactly where it is: the whole block must stay behind `partialQty > 0`, so a ONE-LOT bracket -- which is every bracket this box has placed so far -- reports nothing at all. Change nothing else: the stop and the target must NOT be resized (a second write to a leg whose first may be in flight reverts the order, P0-61), the breakeven and trailing branches are untouched, and P1-139's RequestStopMove call sites and StopMoveKind plumbing must be left exactly as they are.",
+      "regions": [
+        {
+          "id": "ThePartialBlock",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void MonitorTickCore()",
+          "kind": "decl",
+          "note": "Holds the DrawdownShield partial-profit block to be replaced. ⚠️ This method also holds P1-139's THREE RequestStopMove call sites and both alreadyAtBreakeven pre-checks, all landed in the previous commit and all pinned by tests and by mutate_p1139.py -- do not touch them, and do not reword their comments. The trailing branch's stopMoved comparison is not yours either."
+        },
+        {
+          "id": "TheBracketState",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public class ActiveBracket",
+          "kind": "decl",
+          "note": "Where the new announce latch goes, beside PartialProfitTaken. ⚠️ The comments on StopMoveAbandonAnnounced, RequestedStopPrice, OutstandingStopMoveKind and the P1-133 REPORTING FIELDS ONLY block are pinned by assertions and by three mutation batteries -- add a member, reword nothing. CurrentTargetPrice's lack of a reconciler is real and is NOT in scope: it gets its own ID."
+        }
+      ],
+      "expect_green": [
+        "P1-140: exactly the stop and the target carry the bracket's OCO id",
+        "P1-140: said exactly ONCE across four sweeps",
+        "P1-140: and it names the quantity it would have taken"
+      ]
+    }
+  ]
+}

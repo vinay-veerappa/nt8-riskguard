@@ -142,7 +142,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         // two different ones -- ModifyStopPrice never asking (no live order) and the provider
         // declining a move that WAS sent. Name the observed reason; do not infer a cause.
         public string LastStopMoveFailureReason { get; set; }
+
+        // ⚠️ P1-140: NOTHING ASSIGNS THIS TRUE ANY MORE, and that is deliberate rather than an
+        // oversight. Its only writer was the line after the partial-profit `account.Submit(...)`,
+        // which recorded reaching the line rather than the outcome; P1-140 deleted the submission
+        // because the order joined the stop and target's own OCO group. No partial IS taken, so this
+        // must read false -- reusing it as the announcement latch would give one flag two meanings,
+        // which is the defect P1-139 had just finished removing from this same file.
+        //
+        // ⚠️ It is KEPT, not deleted, and P3-137 is the reason to be uneasy about that: an inert
+        // field serialised into the bridge payload (`partialProfitTaken` in GetBracketStatus) is
+        // exactly the shape of `IsComplete`, which was removed for being always false. The
+        // difference is that a writer is COMING -- the follow-on ID partitions protection into one
+        // OCO group per target, and then partials are real and this is true again. Pinned by
+        // TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken so it cannot quietly become
+        // load-bearing in between.
         public bool PartialProfitTaken { get; set; }
+
+        // P1-140. The announcement latch: the condition holds for the LIFE of a winning trade, so an
+        // unlatched line is a line every five seconds. Separate from PartialProfitTaken above,
+        // because "we could not take a partial and said so" and "a partial was taken" are different
+        // facts and one bool cannot carry both.
+        public bool PartialProfitUnavailableAnnounced { get; set; }
         public DateTime CreatedAt { get; set; }
         // IsComplete removed per P3-137: the property was always false and added no information to the bridge payload.
     }
@@ -768,7 +789,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                             }
                         }
 
-                        if (!bracket.PartialProfitTaken && bracket.BreakevenTriggered)
+                        // ⚠️ BOTH CLAUSES, and the second is not redundant yet -- it is redundant
+                        // TODAY. The loop's patch replaced `!PartialProfitTaken` with
+                        // `!PartialProfitUnavailableAnnounced`, which works only because nothing sets
+                        // PartialProfitTaken any more; the moment the follow-on ID makes partials real
+                        // again, a gate that asks only "have we announced?" re-evaluates a partial
+                        // that has already been taken. Asking both questions costs one clause and
+                        // survives that change. [[a-second-reader-of-the-same-state]].
+                        if (!bracket.PartialProfitTaken
+                            && !bracket.PartialProfitUnavailableAnnounced
+                            && bracket.BreakevenTriggered)
                         {
                             double partialTarget = isLong
                                 ? (entryPrice + (bracket.CurrentTargetPrice - entryPrice) * bracket.Config.PartialProfitPct)
@@ -779,11 +809,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 int partialQty = (int)Math.Floor(bracket.Quantity * bracket.Config.PartialProfitPct);
                                 if (partialQty > 0)
                                 {
-                                    var exitAction = isLong ? OrderAction.Sell : OrderAction.Buy;
-                                    var partialOrder = account.CreateOrder(position.Instrument, exitAction, OrderType.Limit, TimeInForce.Day, partialQty, partialTarget, 0, bracket.OcoId, "Partial_" + bracket.BracketId, null);
-                                    account.Submit(new[] { partialOrder });
+                                    // T1. A partial-profit order cannot be submitted into the
+                                    // protective OCO group: it would either cancel the remaining
+                                    // stop and target, or the stop would remain sized for the full
+                                    // position and flip the remaining lot. Announce once.
+                                    RiskGuardAddOn.LogFromComponent(bracket.AccountName, "ATM_PARTIAL_PROFIT_UNAVAILABLE",
+                                        $"{bracket.BracketId}: partial profit of {partialQty} of {bracket.Quantity} cannot be taken "
+                                        + $"because the order would join the protective OCO group '{bracket.OcoId}' and cancel the "
+                                        + "remaining stop and target, leaving the rest of the position unprotected.");
+                                    bracket.PartialProfitUnavailableAnnounced = true;
                                 }
-                                bracket.PartialProfitTaken = true;
                             }
                         }
                     }
