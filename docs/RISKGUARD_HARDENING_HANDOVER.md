@@ -3348,8 +3348,8 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next: `P1-133` (🆕 **session 52 ran the ✅ CLOSED `P1-130`'s missing end-to-end half on the FUNDED 50K and it was not a confirmation run — it was a second defect.** The ATM manager looks its own stop up by an id **the broker replaces on accept**, so breakeven and trailing have never worked anywhere but `Sim101`. §5.84. ✅ `P1-130` itself FIXED and its bounded-retry half now genuinely live-validated — `ATM_STOP_MOVE_ABANDONED` fired for the first time in the log's history), then `P2-134` (deliberately second — it is the only visible symptom), then `P2-127` (⚠️ **§5.82: the commit that CLOSED `P1-130` broke a `mutate_p0_67.py` anchor by SPLITTING one log call into two, so CI was RED on both of those pushes — including the `v1.35.0` tag push — and the whole 27-job matrix behind that gate never ran. Repointed, battery re-run 10/10 KILLED.**) — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui, slice 1 landed session 52 (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
-> ### (order of work lives in §5.81's `Order from here`, updated session 52: `P1-133` → `P2-134` → `P2-127`'s §4 layout — the layout is SETTLED, do not re-open it — then `P2-126`'s write surface, `P2-132`, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
+> ### Do next: `P2-134`, then `P2-127` (✅ **`P1-133` CLOSED session 52** — five sites, one identity class, suite **2056/0**, battery **14/14**; ⚠️ its live half is an open CONFIRMATION RUN needing one filled contract on a non-Simulator account, and `Sim101` cannot produce evidence about it. 🆕 **session 52 ran the ✅ CLOSED `P1-130`'s missing end-to-end half on the FUNDED 50K and it was not a confirmation run — it was a second defect.** The ATM manager looks its own stop up by an id **the broker replaces on accept**, so breakeven and trailing have never worked anywhere but `Sim101`. §5.84. ✅ `P1-130` itself FIXED and its bounded-retry half now genuinely live-validated — `ATM_STOP_MOVE_ABANDONED` fired for the first time in the log's history), then `P2-134` (deliberately second — it is the only visible symptom), then `P2-127` (⚠️ **§5.82: the commit that CLOSED `P1-130` broke a `mutate_p0_67.py` anchor by SPLITTING one log call into two, so CI was RED on both of those pushes — including the `v1.35.0` tag push — and the whole 27-job matrix behind that gate never ran. Repointed, battery re-run 10/10 KILLED.**) — build §4's fleet/inspector layout on the BROWSER UI at :7890/ui, slice 1 landed session 52 (✅ `P1-125`, `P3-122`, `P2-129` and `P3-128` ALL CLOSED in session 51 and live-validated; see §5.78 and §5.79)
+> ### (order of work lives in §5.81's `Order from here`, updated session 52: `P2-134` → `P2-127`'s §4 layout — the layout is SETTLED, do not re-open it — then `P2-126`'s write surface, `P2-132`, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`)
 > ### (✅ `P3-128` CLOSED v1.34.0 session 51 — was `[ COPIER LIVE - SIM ONLY ]` over a copier whose every relationship is OFF; found by reading the live payload of the ticket that put that sentence on screen, fixed by the agent loop, live-validated)
 > ### (✅ `P2-115` closed 2026-08-15 — §5.67; ⚠️ only the POSITIVE live half is measured)
 > ### (✅ `P2-112` closed 2026-08-15 — §5.64; ⚠️ its stop-MOVE half is still unmeasured)
@@ -10993,7 +10993,7 @@ to measure a lockout gate on.
    remainder needs a **non-Simulator account** and is a confirmation run, not work — unless it
    turns out to be more, in which case it gets its own ID.
    🆕 **SESSION 52 RAN IT ON THE FUNDED 50K AND IT WAS MORE** (✅ `P1-130` stays CLOSED; this is
-   its remainder, not a re-open). It got its own ID: **`P1-133`** —
+   its remainder, not a re-open). It got its own ID — **`P1-133`**, itself now ✅ CLOSED —
    the manager searches `account.Orders` for the id captured at placement, and **the broker
    REPLACES `Order.OrderId` once it accepts**, so the lookup can only ever succeed on `Sim101`.
    ⚠️ **The prediction in this very item was wrong in an instructive direction**: it expected the
@@ -11001,12 +11001,18 @@ to measure a lockout gate on.
    defect ✅ CLOSED `P1-130` fixed (`Accepted` vs `Working`) **would never have bitten on a real connection
    at all**, because there a resting stop sits in `Working`. `Accepted` was the *Simulator's*
    behaviour. See §5.84.
-2. **`P1-133`** — the ATM stop lookup. It takes the head of the queue because breakeven and
-   trailing are **inert on every account that matters** until it lands, and because the evidence
-   is obtainable: it needs one filled contract, not a market condition.
-3. **`P2-134`** — the abandon announcement that repeats every 5s. ⚠️ **Deliberately AFTER
-   `P1-133`**: it is the only visible symptom of a dead feature, so silencing it first would buy
-   quiet at the cost of the alarm.
+2. ✅ **`P1-133` CLOSED session 52** — five sites, one identity class, suite 2038 → **2056/0**,
+   battery **14/14**, `nt_compile` 0 errors. ⚠️ **Its live half is OPEN and is a CONFIRMATION RUN,
+   not an ID**: one filled contract on a **non-Simulator** account. `Sim101` cannot produce
+   evidence about it — that is the entire content of the defect. **This is the same shape as item
+   1 above, which is how the now-✅-CLOSED `P1-133` was found**, so run it and expect it to be
+   more; if it is, it
+   gets its own ID.
+3. **`P2-134`** — the abandon announcement that repeats every 5s. Now at the head. It was
+   deliberately held behind the ✅ CLOSED `P1-133` because it was the only visible symptom;
+   that reason has expired. ⚠️ Its `LogEvent`-with-no-action shape means `F-6`'s `GuardAlertSink`
+   cannot reach it — same as the ✅ CLOSED `P2-108`, so that is twice, and the de-duplication belongs where the
+   log is WRITTEN.
 4. **`P2-127`** (§4 layout, settled — slice 1 landed session 52; the decision class ships and
    the page does not consume it yet), **`P2-126`**, **`P2-132`**, then `P2-29`'s remainder,
    `P3-118`, `P3-124`, `P3-110`, `P3-33`.

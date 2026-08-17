@@ -7269,7 +7269,7 @@ protective order rests in a state the bridge cannot see.
 
 ---
 
-### P1-133. The ATM manager looks its own stop up by an id the BROKER replaces, so breakeven and trailing can never work on any live account — the Simulator is the only place they have ever worked — OPEN, found 2026-08-16 (session 52), live on the funded 50K
+### P1-133. The ATM manager looks its own stop up by an id the BROKER replaces, so breakeven and trailing can never work on any live account — the Simulator is the only place they have ever worked — ✅ CLOSED 2026-08-17 (session 52), found live on the funded 50K
 
 **Where**: `nt8-riskguard/addons/DynamicAtmManager.cs` — `ActiveBracket.StopOrderId` and every lookup
 keyed on it (`ModifyStopPrice`, `ReconcileStopFromBroker`).
@@ -7380,3 +7380,71 @@ observed — N attempts failed — and name the last observed reason rather than
 
 ⚠️ **Do not fix this before `P1-133`.** Suppressing the repeat first would make the *only* visible
 symptom of a dead breakeven feature quieter.
+
+#### ✅ CLOSED 2026-08-17 (session 52) — five sites, and the fifth is the one grep does not find
+
+`addons/AtmOrderIdentity.cs` is now the ONE definition of what a bracket's legs are called and the
+only place one is looked up. **Names, not reference identity** — the copier's `OrderReferenceComparer`
+is the stronger tool and the wrong one here, because `ActiveBracket` is serialised into the bridge's
+API payload and an `Order` reference cannot go in it. The three `…OrderId` fields stay, as REPORTING
+fields, and now say so at the declaration.
+
+⚠️ **FIVE sites, not the four the sweep counted.** The fifth is `RequestStopMove`, which *passes*
+`bracket.StopOrderId` into `ModifyStopPrice` and compares nothing — so a grep for `OrderId ==` finds
+four and misses the one that feeds them all. It cost four agent-loop rounds: the ticket granted the
+callee whose signature changed and not its caller, and the model produced the identical 21
+regressions four times because the line it needed was outside every editable region. **When a fix
+changes a signature, the site list is the comparisons PLUS the callers.**
+
+**Evidence.** Suite **2038 → 2056 / 0**. Battery `mutate_p1133.py` **14/14**. `nt_compile` 0 errors,
+`sync_nt8.py --verify` 17/17. Anchors **423 / 0**.
+
+⚠️ **The battery is aimed at the EVIDENCE as much as the fix, and that is where it paid.** Two of
+the fourteen mutants attack the test stub rather than the addon, because a green suite is the
+weakest possible evidence for this defect — 2038 tests were green while it was live, for exactly
+one reason. **Four mutants survived the first run and all four were real gaps:**
+
+1. **A blank name matched everything** — `FindLiveByName("")` resolving to the FIRST order on the
+   account, which on the funded 50K is somebody else's working order that this class then MOVES.
+   `P1-105`'s `WantsEverySymbol` at a second site. The two directions do not cost the same.
+2. **The comparison could go case-insensitive.** Not reachable today (bracket ids are lowercase
+   hex) but pinned, because widening a match here can only ADMIT something we did not place.
+3. **`P1-130`'s absent-vs-terminal distinction was UNASSERTABLE** — see below.
+4. **The re-id helper could be neutered while still being called**, and all three `P1-133` tests
+   still passed. ⚠️ **That is what success looks like** — once the lookup is by name, the re-id is
+   irrelevant — so the helper's protection is entirely INDIRECT: it is what makes those tests fail
+   when the FIX is reverted. Nothing asserted it worked, so a silent no-op would have disarmed the
+   regression guard without failing anything. Third instance of *read what a surviving mutant DOES*,
+   and this time the answer was "a test is genuinely missing".
+
+#### ⚠️ `P1-130` shipped a distinction nothing could observe, for a week
+
+`P1-130` split `ATM_STOP_ORDER_NOT_FOUND` into two MESSAGES under one event type, because "absent
+entirely" and "present but no longer live" are not the same news and only one means the position may
+be unprotected. **The only test probe carried `(account, eventType)`**, and its comment says that is
+"deliberately the whole signature" — correct for the case it was written for, and wrong for this
+one. A mutant collapsing the two branches survived the entire suite with both messages still in the
+source.
+
+`LogEventMessageObserver` now fires from the same statement as the existing probe, so the two cannot
+disagree about whether an event happened. The boundary is written at the declaration: use it only
+where two branches share a type and the MESSAGE is the product, and assert on the distinguishing
+phrase, not the sentence.
+
+⚠️ **The assertion has to be that the two answers DIFFER.** "The message mentions the stop" passes
+under the collapse — one message describes both situations perfectly well. `P2-109`'s lesson at a
+third site, after "the filter returns a subset".
+
+⚠️ **And the first run of that test captured two EMPTY strings**, because `LogFromComponent` is a
+no-op when `Instance` is null and `AtmSetup` clears it. That is why no existing ATM test asserts on
+a log line at all, and part of why this went unobserved. The positive control is what said so.
+
+⚠️ **`mutate_p0_67.py`'s anchor broke for the SECOND time in one day** — this morning `P1-130` ADDED
+a second match (ambiguous), tonight `P1-133` REMOVED the only one (matched 0). An anchor is a claim
+of uniqueness and both directions break it; the mutant and its insertion point never moved, so it
+was repointed rather than retired both times.
+
+⚠️ **NOT LIVE-VALIDATED.** The fix needs one filled contract on a **non-Simulator** account, and
+`Sim101` cannot produce evidence about it — that is the entire content of the defect. Until then
+this entry is closed on a suite, a battery and a compile, which is exactly the standard that let
+`P1-130` close with this hiding inside it. **Say which half was measured.**
