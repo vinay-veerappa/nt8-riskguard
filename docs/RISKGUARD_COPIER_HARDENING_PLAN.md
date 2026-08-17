@@ -7673,6 +7673,60 @@ same move was accepted. **So "the Simulator honours everything" is false, and th
 variable is whether the resulting stop is valid against the current market, not the provider.**
 
 
+### P1-139. One refused trailing move asks the broker to put the stop BACK at breakeven — the re-arm `P0-67` added to un-latch the trail is what loosens it, and there is no monotonic guard anywhere — OPEN, found 2026-08-17 (session 56) by reading `P2-136`'s neighbourhood
+
+**`RequestStopMove` will ask the broker to move a stop the wrong way and call it a success.** There
+is no comparison against the price the broker holds at any of the three call sites nor inside the
+one function they all route through — and its own log line prints the loosening as though it were
+an advance: `ATM_STOP_MOVE_REQUESTED ... requested stop 20010 -> 20000.5`.
+
+**Reproduced deterministically** (`TestAtm_P1139_ARefusedTrailMoveNeverAsksTheStopBackDown`,
+red at baseline, `Order is at 20000.5`):
+
+| step | |
+|---|---|
+| 1 | Long MNQ, entry 20000.00, `ScaledRunner`. Breakeven fired long ago; the trail has advanced the stop to **20010.00**, confirmed by the broker each time, so `StopModifyAttempts == 0` |
+| 2 | A trail move to 20013.00 is **refused** — the provider holds 20010.00 |
+| 3 | `ReconcileStopFromBroker` counts it and re-arms: `if (BreakevenTriggered && attempts < Max) BreakevenTriggered = false;` |
+| 4 | ⚠️ **The SAME sweep** then reaches the breakeven branch. `!BreakevenTriggered` is now true, and `ShouldTriggerBreakeven` compares price to **ENTRY** and knows nothing about the stop — so it is true and stays true for the life of a winning trade |
+| 5 | `beStop = CalculateBreakevenStopPrice(entry, …)` = **20000.50**, computed from entry, and `RequestStopMove` asks for it |
+| 6 | **9.5 points of locked profit handed back, on a live position, five seconds after a single refusal** |
+
+**The flag has two meanings and that is the whole defect.** `BreakevenTriggered` is *"breakeven has
+been reached"* to the breakeven branch, *"the trail may run"* to the trailing branch, and `P0-67`
+made it *"retry the outstanding move"* to the reconciler. Clearing it to retry a **breakeven** move
+is correct and is what `P0-67` was for; clearing it to retry a **trail** move recomputes the target
+from the wrong origin. [[a-second-reader-of-the-same-state]], and
+[[a-fix-can-commit-its-own-defect]] — the re-arm is `P0-67`'s own fix.
+
+⚠️ **The direction guard alone is NOT sufficient, and getting only half of this is worse than
+either half.** If the wrong-way request is merely refused, `BreakevenTriggered` stays false, and the
+trailing block is gated on exactly that flag — so the trail never runs again and the position rides
+to its original stop. **That is `P0-67`'s defect restored by its own repair.** Both halves are
+required and each is pinned by a test that the other half fails
+(`TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove`).
+
+⚠️ **`CurrentStopPrice` is `0` on a bracket that has never reconciled, and a bare comparison kills
+every SHORT.** "Better" is higher for a long and *lower* for a short, so a short's first move —
+19999.50 against a baseline of 0 — reads as wrong-way and is refused forever. An unset baseline is
+*"no baseline"*, not *"the best possible stop"*. [[an-inapplicable-state-is-not-unreadable]], which
+painted 95 of 97 accounts worst for the same reason. `TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop`
+is the negative control.
+
+⚠️ **Our own refusal is not a provider refusal.** It must not spend `MaxStopModifyAttempts` — three
+of them would abandon a perfectly healthy bracket — must not leave `RequestedStopPrice` set, which
+would block the next real move for the life of the position, and must be **said**, because "the stop
+did not move" is otherwise indistinguishable from the latched trail this whole file exists to
+prevent.
+
+**Why no test caught it:** every one of the eleven existing ATM sweep tests starts with the stop
+**below** the breakeven price, where `beStop` is a genuine improvement and the guard is invisible.
+The defect needs a stop that has already trailed *past* breakeven, which no test reached.
+
+**Where**: `addons/DynamicAtmManager.cs` — `RequestStopMove`, `ReconcileStopFromBroker`, and one new
+field on `ActiveBracket`.
+
+
 ### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ⚠️ HALF FIXED 2026-08-17 (session 55): it is now SAID, not survived
 
 A **successful** compile hot-swaps `bin/Custom` into a new assembly. `DynamicAtmManager`'s registry

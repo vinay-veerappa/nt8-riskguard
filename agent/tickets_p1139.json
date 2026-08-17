@@ -1,0 +1,47 @@
+{
+  "_comment": "P1-139. Two halves that must land together: a direction invariant at the single choke point every stop move routes through, and a re-arm that retries the move it actually lost instead of resetting a flag that recomputes a different price. Landing only the first LATCHES THE TRAIL OFF, which is P0-67's original defect restored -- TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove is green at baseline precisely so it goes red if you do that. Three of the five P1-139 tests are green at baseline and are regression guards; do not delete or weaken any of them.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "A stop never moves against the position, and a refused trail move retries the trail",
+      "defect": "RequestStopMove will ask the broker to move a stop the WRONG WAY and report it as an advance. Measured, red at baseline: a long MNQ from 20000.00 whose trail has carried the stop to 20010.00 has ONE trail move to 20013.00 refused by the provider; ReconcileStopFromBroker counts the refusal and re-arms with `if (bracket.BreakevenTriggered && bracket.StopModifyAttempts < MaxStopModifyAttempts) bracket.BreakevenTriggered = false;`, and the SAME sweep then falls into the breakeven branch, whose target is CalculateBreakevenStopPrice(entryPrice, ...) = 20000.50 -- computed from ENTRY, with no knowledge of the stop. ShouldTriggerBreakeven compares current price to ENTRY only, so it is true and stays true for the life of a winning trade. The result is a request to move the stop DOWN 9.5 points on a live position, and ATM_STOP_MOVE_REQUESTED prints 'requested stop 20010 -> 20000.5' as if it were progress. There is no monotonic comparison at any of the three call sites nor inside RequestStopMove itself. Root cause: BreakevenTriggered carries three meanings -- 'breakeven has been reached' (breakeven branch), 'the trail may run' (trailing branch), and since P0-67 'retry the outstanding move' (reconciler). Clearing it to retry a BREAKEVEN move is correct and is what P0-67 was for. Clearing it to retry a TRAIL move recomputes the target from the wrong origin.",
+      "spec": "Land BOTH halves. HALF ONE, the invariant: RequestStopMove must refuse any newStopPrice that is not strictly better than the price the broker holds, before it calls ModifyStopPrice. Better is HIGHER for a long and LOWER for a short -- read bracket.IsLong, never the sign of a quantity. Equal prices are refused too: a redundant Change() is an order the provider can revert (P0-61) with nothing to gain. The baseline is bracket.CurrentStopPrice, and a bracket that has never reconciled holds 0 -- treat a non-positive or NaN baseline as NO BASELINE and allow the move, otherwise every SHORT's first move (19999.50 against 0) reads as wrong-way and the feature dies on half of all trades. A refusal made on our own behalf is not a provider refusal: it must NOT increment StopModifyAttempts, must NOT call AnnounceStopMoveAbandonmentIfNeeded, must leave RequestedStopPrice as NaN, must return false, and must log event name ATM_STOP_MOVE_WRONG_WAY via RiskGuardAddOn.LogFromComponent naming BOTH the price held and the price refused. HALF TWO, the re-arm: only clear BreakevenTriggered when the move that was refused WAS the breakeven move. Record which kind of move is outstanding at the point RequestStopMove sets RequestedStopPrice, on a new ActiveBracket member, and clear it wherever RequestedStopPrice is cleared. Do NOT decide this by inspecting the `reason` string -- a display string driving control flow is a defect in its own right. Pass the kind explicitly from each of the three call sites. Everything else about the reconciler stays exactly as it is: the CONFIRMED branch is still the only place StopModifyAttempts resets and the only place StopMoveAbandonAnnounced clears (P2-135 pins that with four assertions), and a refused BREAKEVEN move must still re-arm and re-request the same 20000.50 it was refused.",
+      "regions": [
+        {
+          "id": "TheBracketState",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public class ActiveBracket",
+          "kind": "decl",
+          "note": "RequestedStopPrice's NaN sentinel lives here and is documented at length; the new member recording WHICH move is outstanding belongs beside it and must be cleared wherever RequestedStopPrice is. StopModifyAttempts and StopMoveAbandonAnnounced are also here -- their comments are pinned by P2-134/P2-135 assertions, do not reword them."
+        },
+        {
+          "id": "TheMoveRequest",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)",
+          "kind": "decl",
+          "note": "The single choke point all three call sites route through, so the invariant goes here and nowhere else. Note the ORDER of the existing early returns: the in-flight check must stay first (a second Change() reverts the order), and the budget check must keep spending on every provider-side failure including the not-found one -- P1-130's whole content. The new guard is our own refusal and sits outside that budget."
+        },
+        {
+          "id": "TheReconciler",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void ReconcileStopFromBroker(Account account, ActiveBracket bracket)",
+          "kind": "decl",
+          "note": "Holds the re-arm line to be made conditional. The CONFIRMED branch above it is P2-135's and must not change: it is the ONE place StopModifyAttempts resets and StopMoveAbandonAnnounced clears."
+        },
+        {
+          "id": "TheCallSites",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void MonitorTickCore()",
+          "kind": "decl",
+          "note": "The three RequestStopMove calls: two breakeven (DrawdownShield and ScaledRunner) and one trail. Each must state which kind of move it is asking for. The trailing branch's own `stopMoved` comparison against CurrentStopPrice stays -- it is a different question (is there anything to ask for) from the invariant (is what we are asking for safe)."
+        }
+      ],
+      "expect_green": [
+        "P1-139: the stop on a LONG must never be asked to move down",
+        "P1-139: the broker was never asked -- the order still holds 20010.00",
+        "P1-139: no phantom request is left outstanding",
+        "P1-139: it is said once and names BOTH prices"
+      ]
+    }
+  ]
+}

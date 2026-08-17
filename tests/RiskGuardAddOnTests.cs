@@ -480,6 +480,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P2135_TheGiveUpLineWaitsForTheBudgetAndForRecovery();
             TestAtm_P3137_TheStatusAnswersWhetherItGaveUp();
             TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource();
+            // P1-139: the re-arm P0-67 added to un-latch the trail is also what loosens the stop.
+            TestAtm_P1139_ARefusedTrailMoveNeverAsksTheStopBackDown();
+            TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove();
+            TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop();
+            TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice();
+            TestAtm_P1139_TheWrongWayRefusalIsSaidAndCostsNothing();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8725,6 +8731,226 @@ namespace NinjaTrader.NinjaScript.AddOns
                     "P2-135: a bracket that RECOVERED and then failed again announces a SECOND "
                     + "time. Without the latch clear the operator is told once, ever, while the "
                     + "position they believe is trailing has stopped (got " + announced + ")");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
+        /// P1-139. Builds a ScaledRunner whose stop has ALREADY TRAILED well past breakeven, which is
+        /// the state no existing ATM test reaches: every one of them starts with the stop below the
+        /// breakeven price, so the guard the trail needs has never been exercised.
+        ///
+        /// entry 20000, tick 0.25, BreakevenTriggerTicks 12 (= 3.00 points) so breakeven's target is
+        /// 20000.50; last 20015.00, which is 60 ticks up and keeps ShouldTriggerBreakeven true
+        /// FOREVER -- it compares price to ENTRY and knows nothing about the stop. The broker holds
+        /// the stop at 20010.00, 38 ticks better than breakeven.
+        /// </summary>
+        private static ActiveBracket AtmTrailedPastBreakeven(Account acct, Instrument inst, Order stop)
+        {
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 20010.00);
+            bracket.Config.Type = AtmStrategyType.ScaledRunner;
+            bracket.Config.StopTicks = 8;
+            bracket.Config.TrailMultiplier = 1.0;      // trailDist = 0.25 * 8 * 1.0 = 2.00 points
+            bracket.BreakevenTriggered = true;
+            bracket.CurrentStopPrice = 20010.00;
+            stop.StopPrice = 20010.00;
+            return bracket;
+        }
+
+        /// <summary>
+        /// P1-139. ONE refused trailing move asks the broker to put the stop BACK at breakeven.
+        ///
+        /// The reconcile's re-arm (`BreakevenTriggered = false`) was added by P0-67 so a refused
+        /// BREAKEVEN move retries. But the flag is also the trail's gate, and the breakeven branch
+        /// recomputes its target from ENTRY -- so clearing it after a refused TRAIL move sends the
+        /// stop back down. Worse, the re-evaluation happens in the SAME sweep, so the loosening
+        /// request is issued immediately rather than 5 seconds later.
+        ///
+        /// The assertion is on the ORDER, not on any flag: a long's stop must never be asked to go
+        /// down. `ModifyStopPrice` writes `live.StopPrice` before calling Change(), so what the
+        /// broker was asked for is directly observable.
+        /// </summary>
+        private static void TestAtm_P1139_ARefusedTrailMoveNeverAsksTheStopBackDown()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: a refused trailing move does not loosen the stop");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+            var bracket = AtmTrailedPastBreakeven(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            // A trailing move to 20013.00 was requested last sweep and the provider did not take it.
+            bracket.RequestedStopPrice = 20013.00;
+
+            atm.MonitorTickForTest();
+
+            Assert(stop.StopPrice >= 20010.00 - 1e-9,
+                "P1-139: the stop on a LONG must never be asked to move down. The provider refused a "
+                + "trail move to 20013.00 while holding 20010.00; the reconcile cleared "
+                + "BreakevenTriggered, and the same sweep's breakeven branch then recomputed its "
+                + "target from ENTRY (20000.50) and requested it -- handing back 9.5 points of "
+                + "locked profit on a live position. Order is at " + stop.StopPrice + ".");
+        }
+
+        /// <summary>
+        /// P1-139, the half that makes the fix hard. Guarding the direction alone LATCHES THE TRAIL
+        /// OFF: the breakeven branch keeps being refused, so `BreakevenTriggered` stays false, and
+        /// the trailing block is gated on exactly that flag. That is P0-67's original defect
+        /// restored by its own fix -- so the direction guard is necessary and not sufficient.
+        /// </summary>
+        private static void TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: the trail is not latched off by a refused trail move");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+            var bracket = AtmTrailedPastBreakeven(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            bracket.RequestedStopPrice = 20013.00;      // refused: broker still holds 20010.00
+            atm.MonitorTickForTest();
+
+            // Price runs further, so the trail's own target (20020 - 2.00) is a genuine improvement
+            // on the 20010.00 the broker holds.
+            inst.MarketData.Last.Price = 20020.00;
+            atm.MonitorTickForTest();
+
+            Assert(!double.IsNaN(bracket.RequestedStopPrice) && bracket.RequestedStopPrice >= 20017.00 - 1e-9,
+                "P1-139: after a refused trail move the trail must still advance. A fix that only "
+                + "refuses the wrong-way request leaves BreakevenTriggered false, and the trailing "
+                + "block is gated on it -- so the stop never moves again and the position rides to "
+                + "its original stop. Requested = " + bracket.RequestedStopPrice + ".");
+        }
+
+        /// <summary>
+        /// P1-139, negative control on the direction guard. "Better" is HIGHER for a long and LOWER
+        /// for a short, and the baseline is `CurrentStopPrice`, which is 0 on a bracket that has
+        /// never reconciled. A guard written as a bare comparison refuses every first move on a
+        /// SHORT -- 0 is lower than any real price -- so the whole feature dies silently on half of
+        /// all trades. This is the mutant that a long-only suite cannot see.
+        /// </summary>
+        private static void TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: an unreconciled SHORT bracket can still move its stop");
+
+            Account.All.Clear();
+            Instrument.Registry.Clear();
+            RiskGuardAddOn.SetInstanceForTest(null);
+
+            var inst = new Instrument("MNQ 03-26");
+            inst.MasterInstrument = new MasterInstrument { Name = "MNQ", TickSize = 0.25 };
+            inst.MarketData = new MarketData { Last = new Last { Price = 19985.00 } };
+
+            var acct = new Account { Name = "SimAtm", Provider = Provider.Simulator };
+            Account.All.Add(acct);
+            acct.Positions.Add(new Position
+            {
+                Instrument = inst, MarketPosition = MarketPosition.Short, Quantity = 1, AveragePrice = 20000.00
+            });
+
+            var stop = acct.CreateOrder(inst, OrderAction.Buy, OrderType.StopMarket, TimeInForce.Day,
+                1, 0, 20010.00, "OCO-P139", "Stop_BR-P067", null);
+            acct.Submit(new[] { stop });
+            stop.OrderState = OrderState.Working;
+
+            var atm = new DynamicAtmManager();
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 20010.00);
+            bracket.IsLong = false;
+            bracket.CurrentStopPrice = 0;               // never reconciled -- no baseline yet
+            atm.AddBracketForTest(bracket);
+
+            atm.MonitorTickForTest();
+
+            Assert(Math.Abs(stop.StopPrice - 19999.50) < 1e-9,
+                "P1-139: a SHORT that is 60 ticks in profit with no reconciled baseline must still "
+                + "get its breakeven move (entry 20000.00 minus 2 ticks = 19999.50). An unset "
+                + "CurrentStopPrice is 'no baseline', not 'the best possible stop' -- read as a "
+                + "price it refuses every short's first move. Order is at " + stop.StopPrice + ".");
+        }
+
+        /// <summary>
+        /// P1-139. The re-arm's LEGITIMATE case, which the fix must not break: when the move the
+        /// provider refused was the BREAKEVEN move, retrying it is exactly right, and P0-67's
+        /// `TestAtm_P067_ARefusedStopMoveIsNotCachedAsSuccess` pins it. Restated here against the
+        /// state that distinguishes the two -- so a fix that clears the flag unconditionally and one
+        /// that never clears it both fail something.
+        /// </summary>
+        private static void TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: a refused BREAKEVEN move still retries, unchanged");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20003.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            atm.MonitorTickForTest();                   // requests breakeven at 20000.50
+            Assert(Math.Abs(bracket.RequestedStopPrice - 20000.50) < 1e-9,
+                "P1-139: precondition -- the breakeven move is outstanding (got "
+                + bracket.RequestedStopPrice + ")");
+
+            stop.StopPrice = 19990.00;                  // the provider put it back / never took it
+            atm.MonitorTickForTest();
+
+            Assert(!double.IsNaN(bracket.RequestedStopPrice)
+                   && Math.Abs(bracket.RequestedStopPrice - 20000.50) < 1e-9,
+                "P1-139: a refused BREAKEVEN move re-arms and asks for the same price again. This is "
+                + "the case the re-arm was written for and it must survive the fix (got "
+                + bracket.RequestedStopPrice + ").");
+        }
+
+        /// <summary>
+        /// P1-139. A refusal this class makes on its own behalf is not a provider refusal: it must
+        /// not spend the retry budget, must not leave a phantom request outstanding, and must be
+        /// SAID -- a stop move that silently does not happen is the exact shape of every defect this
+        /// file has produced.
+        /// </summary>
+        private static void TestAtm_P1139_TheWrongWayRefusalIsSaidAndCostsNothing()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: refusing a wrong-way move is announced and free");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+            var bracket = AtmTrailedPastBreakeven(acct, inst, stop);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int refusals = 0;
+            string message = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_STOP_MOVE_WRONG_WAY") return;
+                refusals++;
+                message = msg;
+            };
+            try
+            {
+                // The wrong-way request in ISOLATION: no provider refusal anywhere in the picture, so
+                // nothing but the guard itself can account for what happens. A bracket whose stop has
+                // trailed to 20010.00 with BreakevenTriggered false is what the reconcile's re-arm
+                // produces, and the breakeven branch's target is computed from ENTRY regardless.
+                bracket.BreakevenTriggered = false;
+                atm.MonitorTickForTest();
+
+                Assert(Math.Abs(stop.StopPrice - 20010.00) < 1e-9,
+                    "P1-139: the broker was never asked -- the order still holds 20010.00, not the "
+                    + "20000.50 the breakeven branch computed from entry (got " + stop.StopPrice + ")");
+                Assert(double.IsNaN(bracket.RequestedStopPrice),
+                    "P1-139: no phantom request is left outstanding, which would block the next real "
+                    + "move for the life of the position (got " + bracket.RequestedStopPrice + ")");
+                Assert(bracket.StopModifyAttempts == 0,
+                    "P1-139: our own invariant is not a provider refusal and must not spend the "
+                    + "retry budget -- three of these would abandon a healthy bracket (got "
+                    + bracket.StopModifyAttempts + ")");
+                Assert(refusals == 1 && message != null
+                       && message.IndexOf("20010", StringComparison.Ordinal) >= 0
+                       && message.IndexOf("20000.5", StringComparison.Ordinal) >= 0,
+                    "P1-139: it is said once and names BOTH prices, because 'the stop did not move' "
+                    + "is indistinguishable from a latched trail otherwise (count=" + refusals
+                    + ", msg='" + message + "')");
             }
             finally { RiskGuardAddOn.LogEventMessageObserver = null; }
         }
