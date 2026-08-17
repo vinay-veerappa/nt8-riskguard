@@ -7719,7 +7719,7 @@ bracket.PartialProfitTaken = true;        // <-- whatever the broker does with i
 
 | NT8's behaviour | result |
 |---|---|
-| the new order **joins** the live OCO group — which is what this repo has already measured (`[[the-simulator-re-ids-nothing]]`, "an OCO id joins while live but cannot be resurrected") | the partial fills → **OCO cancels the stop AND the target** → the remaining half of the position is **completely unprotected**, with no operator-visible symptom |
+| the new order **joins** the live OCO group — ⚠️ **not a guess: this repo live-validated it and then built on it.** `TestBracket_P0_9_ALateTargetJoinsTheLiveStopsOcoGroup` says *"an id can be joined while its group still has a live member"*, citing the live test in handover 4p | the partial fills → **OCO cancels the stop AND the target** → the remaining half of the position is **completely unprotected**, with no operator-visible symptom |
 | the group does **not** cancel | the partial fills half, and the stop is still sized for the **full** quantity → it fires and **FLIPS the position** the other way. This is `P1-56`'s exact shape, already found in the copier: *"qty 1 AND qty 2 behind 2 lots, which FLIPS the follower when both fire"* |
 | the OCO id is **refused** on a new order | the partial silently never happens, and `PartialProfitTaken = true` on the line after `Submit` means **it is never retried** — a risk-reduction feature that is dead and reports success |
 
@@ -7742,10 +7742,26 @@ and every live bracket measured so far has been **1 lot**, so the entire path is
 `AtmStrategyConfig.Type`. [[an-order-is-not-one-fill]] is the neighbouring lesson: every copy-path
 test sent one execution for the full quantity and hid a defect on each side.
 
+⚠️ **THE COPIER PROVES THE MECHANISM BY RELYING ON IT, IN THE OPPOSITE DIRECTION.**
+`TestBracket_TargetIsMirroredAsAnOcoPairWithTheStop` asserts the follower's stop and target share
+**one** id, and states why: *"Without it the stop survives the target's fill and opens a fresh
+position when it triggers."* That is the whole argument. A group of two is a bracket; adding a
+**third** member sized differently from the other two turns the same mechanism into the thing that
+removes the protection.
+
 **Do NOT fix this by sizing the stop down after the partial** — that is a second write to a leg whose
-first write may still be in flight, which `P0-61` establishes reverts the order and loses both. The
-shape to reach for is what NT8's own ATM strategies do: **separate OCO groups per target**, so no
-fill can cancel the protection for the quantity that remains.
+first write may still be in flight, which `P0-61` establishes reverts the order and loses both. And
+there is no version of "partial fills, protection stays full-size" that is safe either: a full-size
+stop against a half position **flips** it. **Protection cannot be resized safely at trigger time, so
+it must be PARTITIONED at placement** — which is what NT8's own ATM strategies do, one OCO group per
+target.
+
+**Proposed decomposition, because the safe fix and the real fix are different sizes:**
+
+| | |
+|---|---|
+| **`P1-140`, this entry** | remove the hazard. The partial must not join the protective group, and since the remaining protection cannot then be corrected, the partial is **not submitted at all** — `ATM_PARTIAL_PROFIT_UNAVAILABLE` is said once per bracket, naming the quantity it would have taken and why it did not. The feature becomes **stated as unavailable** instead of silently producing a naked or flipped position. `PartialProfitTaken` must record the outcome, not the line |
+| **follow-on, its own ID when taken** | partials done natively: at placement, split into one OCO group per target so nothing needs resizing. ⚠️ That means **two stops**, and `AtmOrderIdentity.StopName(bracketId)` returns **one** name that `P1-133`'s five call sites and its whole battery are keyed to — which is why it is not this ticket |
 
 **Where**: `addons/DynamicAtmManager.cs` `:401`-`:402` (the full-quantity legs), `:714`-`:731` (the
 partial block), `:440` + `:717`-`:718` (the unreconciled target cache).
