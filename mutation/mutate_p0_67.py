@@ -65,13 +65,24 @@ MUTANTS = [
      '                    ReconcileStopFromBroker(account, bracket);',
      ''),
 
-    # REPOINTED by P1-130, not retired. The old anchor was the ATM_STOP_ORDER_NOT_FOUND log call,
-    # which P1-130 split into TWO (absent vs present-but-terminal say different things), so the
-    # find-string went ambiguous and check_anchors.py refused it -- the gate working. The insertion
-    # point is unchanged: the first statement after the search loop has failed to find a live stop.
+    # REPOINTED TWICE, not retired, and the two moves are worth reading together.
+    #
+    # 1. P1-130. The original anchor was the ATM_STOP_ORDER_NOT_FOUND log call, which P1-130 SPLIT
+    #    into two (absent vs present-but-terminal are not the same news), so the find-string went
+    #    ambiguous and check_anchors.py refused it.
+    # 2. P1-133. The replacement -- `Order present = null;` -- was the head of a hand-rolled search
+    #    loop, and P1-133 replaced the whole loop with one call to AtmOrderIdentity.FindByName.
+    #    Matched 0 times; refused again.
+    #
+    # ⚠️ TWO OPPOSITE FAILURES OF THE SAME ANCHOR IN ONE DAY: once because a fix ADDED a second
+    # match, once because a fix REMOVED the only one. An anchor is a claim of uniqueness and both
+    # directions break it. The MUTANT has never changed and neither has its insertion point -- the
+    # first statement after the live-stop search has failed -- which is why this is repointed
+    # rather than retired each time.
     ("ModifyStopPrice reports success even when no working stop order exists",
-     '                Order present = null;',
-     '                if (true) return true;\n                Order present = null;'),
+     '                Order present = AtmOrderIdentity.FindByName(account, orderName);',
+     '                if (true) return true;\n'
+     '                Order present = AtmOrderIdentity.FindByName(account, orderName);'),
 
     # ---- the in-flight reservation, found by the trail test rather than by reading ----
     ("two Change() calls can land on one stop order in a single sweep again -- which per P0-61 "

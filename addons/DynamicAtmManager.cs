@@ -67,6 +67,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         public int Quantity { get; set; }
         public AtmStrategyConfig Config { get; set; }
         public string OcoId { get; set; }
+        // ⚠️ P1-133: REPORTING FIELDS ONLY. These hold the id NT8 assigned at SUBMISSION, and the
+        // broker replaces `Order.OrderId` with its own the moment it accepts -- so after that
+        // instant these three strings match nothing on any real connection. They are kept because
+        // the bridge's API payload returns them. NEVER feed one to a lookup: use
+        // `AtmOrderIdentity.FindLiveByName(account, AtmOrderIdentity.StopName(BracketId))`.
+        // Keying on these is what made breakeven and trailing work on `Sim101` and nowhere else.
         public string EntryOrderId { get; set; }
         public string StopOrderId { get; set; }
         public string TargetOrderId { get; set; }
@@ -350,7 +356,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             string ocoId = Guid.NewGuid().ToString();
             string bracketId = Guid.NewGuid().ToString().Substring(0, 8);
-            string entryName = "AtmEntry_" + bracketId;
+            string entryName = AtmOrderIdentity.EntryName(bracketId);
 
             var entryAction = isLong ? OrderAction.Buy : OrderAction.Sell;
             var exitAction = isLong ? OrderAction.Sell : OrderAction.Buy;
@@ -364,8 +370,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     result.Error = "Failed to create entry order";
                     return result;
                 }
-                var stopOrder = account.CreateOrder(instrument, exitAction, OrderType.StopMarket, TimeInForce.Day, calculatedQty, 0, stopPrice, ocoId, "Stop_" + bracketId, null);
-                var targetOrder = account.CreateOrder(instrument, exitAction, OrderType.Limit, TimeInForce.Day, calculatedQty, targetPrice, 0, ocoId, "Target_" + bracketId, null);
+                var stopOrder = account.CreateOrder(instrument, exitAction, OrderType.StopMarket, TimeInForce.Day, calculatedQty, 0, stopPrice, ocoId, AtmOrderIdentity.StopName(bracketId), null);
+                var targetOrder = account.CreateOrder(instrument, exitAction, OrderType.Limit, TimeInForce.Day, calculatedQty, targetPrice, 0, ocoId, AtmOrderIdentity.TargetName(bracketId), null);
 
                 var validOrders = new[] { entryOrder, stopOrder, targetOrder }
                     .Where(o => o != null && o.OrderState != OrderState.CancelPending && o.OrderState != OrderState.Cancelled)
@@ -619,7 +625,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (position == null || Math.Abs(position.Quantity) == 0)
                     {
                         bool entryStillWorking = account.Orders.Any(o =>
-                            o.OrderId == bracket.EntryOrderId &&
+                            AtmOrderIdentity.NameMatches(o, AtmOrderIdentity.EntryName(bracket.BracketId)) &&
                             (o.OrderState == OrderState.Working || o.OrderState == OrderState.Submitted || o.OrderState == OrderState.Accepted));
                         if (!entryStillWorking)
                         {
@@ -733,18 +739,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// return void and swallow its own exceptions, so no caller could tell the difference between
         /// "moved", "no such order", and "threw".
         /// </summary>
-        private bool ModifyStopPrice(Account account, string orderId, double newStopPrice)
+        private bool ModifyStopPrice(Account account, string orderName, double newStopPrice)
         {
             try
             {
-                foreach (Order order in account.Orders)
+                Order live = AtmOrderIdentity.FindLiveByName(account, orderName);
+                if (live != null)
                 {
-                    if (order.OrderId == orderId && RiskGuardAddOn.OccupiesSlot(order.OrderState))
-                    {
-                        order.StopPrice = newStopPrice;
-                        account.Change(new[] { order });
-                        return true;
-                    }
+                    live.StopPrice = newStopPrice;
+                    account.Change(new[] { live });
+                    return true;
                 }
 
                 // P1-130. The two ways this fails are NOT the same news, and the old message
@@ -752,23 +756,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // printed 55 times against a stop that was resting perfectly and had merely not
                 // been ADVANCED. A risk surface that cries naked at a protected position trains
                 // the operator to discount the line that will one day be true.
-                Order present = null;
-                foreach (Order o in account.Orders)
-                {
-                    if (o.OrderId == orderId) { present = o; break; }
-                }
+                Order present = AtmOrderIdentity.FindByName(account, orderName);
 
                 if (present == null)
                 {
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
-                        $"no order with id '{orderId}' is on '{account.Name}' at all, so the move to "
+                        $"no order with name '{orderName}' is on '{account.Name}' at all, so the move to "
                         + $"{newStopPrice} was not requested. The bracket's stop cannot be located; "
                         + "check the account for an unmanaged position.");
                 }
                 else
                 {
                     RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_ORDER_NOT_FOUND",
-                        $"the stop order '{orderId}' on '{account.Name}' is {present.OrderState} and no "
+                        $"the stop order '{orderName}' on '{account.Name}' is {present.OrderState} and no "
                         + $"longer live, so the move to {newStopPrice} was not requested."
                         + (RiskGuardAddOn.IsTerminal(present.OrderState)
                             ? " It is terminal, so THE POSITION MAY BE UNPROTECTED."
@@ -779,7 +779,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex)
             {
                 RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MODIFY_THREW",
-                    $"requesting a stop move to {newStopPrice} on order '{orderId}' threw "
+                    $"requesting a stop move to {newStopPrice} on order '{orderName}' threw "
                     + $"{ex.GetType().Name}: {ex.Message}");
                 return false;
             }
@@ -832,7 +832,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // The cost of counting it is bounded and visible: three sweeps, fifteen seconds, and
             // then ATM_STOP_MOVE_ABANDONED says so once and names the price the stop is left at. A
             // bound that is occasionally early is a bound; one that cannot be reached is not.
-            if (!ModifyStopPrice(account, bracket.StopOrderId, newStopPrice))
+            if (!ModifyStopPrice(account, AtmOrderIdentity.StopName(bracket.BracketId), newStopPrice))
             {
                 bracket.StopModifyAttempts++;
                 return false;
@@ -855,15 +855,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// </summary>
         private void ReconcileStopFromBroker(Account account, ActiveBracket bracket)
         {
-            Order live = null;
-            foreach (Order o in account.Orders)
-            {
-                if (o.OrderId == bracket.StopOrderId && RiskGuardAddOn.OccupiesSlot(o.OrderState))
-                {
-                    live = o;
-                    break;
-                }
-            }
+            string stopName = AtmOrderIdentity.StopName(bracket.BracketId);
+            Order live = AtmOrderIdentity.FindLiveByName(account, stopName);
             if (live == null) return;      // closing, filled, or replaced -- nothing to reconcile
 
             double brokerPrice = live.StopPrice;

@@ -469,6 +469,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P0-67: the third Account.Change() site. MonitorTickCore had ZERO coverage.
             TestAtm_P1130_AStopRestingInAcceptedIsStillMovable();
             TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded();
+            // P1-133: the three sites keyed on an id the broker replaces on accept.
+            TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
+            TestAtm_P1133_TheReconcilerAlsoSurvivesAReId();
+            TestAtm_P1133_ARestingEntryIsNotForgottenAfterAReId();
+            // Written from the battery's four survivors, not from reading the fix.
+            TestAtm_P1133_ABlankOrMiscasedNameMatchesNothing();
+            TestAtm_P1133_AbsentAndTerminalStopsSayDifferentThings();
+            TestAtm_P1133_TheReIdHelperReallyReIds();
             TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened();
             TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker();
             TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced();
@@ -7877,13 +7885,36 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Instrument = inst, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = entry
             });
 
+            // P1-133: the name is the one identity the BROKER does not touch, and it is the one
+            // `DynamicAtmManager` sets at placement -- `"Stop_" + bracketId`. It used to read
+            // "ATM_STOP" here, which matched nothing this class ever creates, so no test could have
+            // noticed the manager looking an order up by anything else.
             stop = acct.CreateOrder(inst, OrderAction.Sell, OrderType.StopMarket, TimeInForce.Day,
-                1, 0, initialStop, "OCO-P067", "ATM_STOP", null);
+                1, 0, initialStop, "OCO-P067", "Stop_BR-P067", null);
             acct.Submit(new[] { stop });
             stop.OrderState = OrderState.Working;
 
             atm = new DynamicAtmManager();
             return acct;
+        }
+
+        /// <summary>
+        /// P1-133. What a REAL broker does the moment it accepts an order, and what the NT8
+        /// Simulator never does: it throws away the submission GUID and puts its own id there.
+        ///
+        /// Measured 2026-08-16 on one box in one minute --
+        ///     Sim101      "orderId": "2f515ed0f89e4ab08f549fa356614236"   still the GUID
+        ///     Provider31  "orderId": "613562531447"                        the broker's id
+        ///
+        /// ⚠️ THIS HELPER IS THE POINT OF THE TICKET. `TradeCopierEngine.cs:4477` warned in
+        /// writing that "no test would catch it, because the test stub hands out a stable GUID per
+        /// order" -- and it was right, for two years, at the cost of a safety feature that has
+        /// never worked anywhere but the Simulator. A suite that only ever models a stable id is
+        /// evidence about one broker, and it is not the one the operator trades.
+        /// </summary>
+        private static void ReIdAsARealBrokerWould(Order order, string brokerId)
+        {
+            order.OrderId = brokerId;
         }
 
         /// <summary>
@@ -7939,6 +7970,274 @@ namespace NinjaTrader.NinjaScript.AddOns
                     "P1-130: and the order really carries the new price for state " + state
                     + " (expected 20000.50, got " + stop.StopPrice + ")");
             }
+        }
+
+        /// <summary>
+        /// P1-133. MEASURED LIVE on the FUNDED 50K (`TAKEPROFITPRO524207503`, Provider31), 1 MNQ,
+        /// `DrawdownShield`, 2-tick breakeven trigger:
+        ///
+        ///     nt_place_atm_order ->  stopOrderId: "f953ea2b50bb43759747e0cb6beab2cc"   a GUID
+        ///     nt_orders          ->  name "Stop_15bc730b", orderId: "613562531447"     the broker's
+        ///
+        ///     ATM_STOP_ORDER_NOT_FOUND x3, then ATM_STOP_MOVE_ABANDONED
+        ///     "no order with id 'f953ea2b...' is on 'TAKEPROFITPRO524207503' at all"
+        ///
+        /// The order was sitting right there, `Working`, at the price the bracket recorded, and
+        /// `30216.5` was exactly entry + the 1-tick offset. Only the IDENTITY was wrong.
+        ///
+        /// ⚠️ THIS IS WHY IT HAS ALWAYS PASSED ON Sim101 -- the one account whose behaviour is not
+        /// the product. And it is the half of `P1-130` that ticket's own live validation could not
+        /// see, because that validation ran on the Simulator too: the fix and its evidence shared
+        /// one blind spot.
+        ///
+        /// ⚠️ THE TEST DRIVES THE RE-ID, NOT THE MOVE. Asserting "the stop moves" passes against a
+        /// stub that never re-ids; the defect exists only once the id has been replaced.
+        /// </summary>
+        private static void TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: a stop the broker re-ided is still found and moved");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // The bracket recorded the submission GUID. The broker now replaces it, exactly as
+            // Provider31 did on the funded account.
+            ReIdAsARealBrokerWould(stop, "613562531447");
+
+            atm.MonitorTickForTest();       // price is 20003.00 = +12 ticks, so breakeven fires
+
+            Assert(bracket.BreakevenTriggered,
+                "P1-133: the breakeven move is REQUESTED even though the broker replaced the "
+                + "order's id. At baseline the manager searched account.Orders for the GUID it "
+                + "captured at placement, so on every real connection it found nothing at all.");
+
+            Assert(Math.Abs(stop.StopPrice - 20000.50) < 1e-9,
+                "P1-133: and the order really carries the new price (expected 20000.50, got "
+                + stop.StopPrice + ")");
+        }
+
+        /// <summary>
+        /// P1-133, the READER. `ReconcileStopFromBroker` runs at the top of every sweep and is what
+        /// makes `CurrentStopPrice` the broker's truth rather than this monitor's last wish
+        /// (`P0-67`). It looked the order up by the same stale id, so on a real connection it found
+        /// nothing and returned early -- silently, since "not found" there is indistinguishable
+        /// from "closing, filled, or replaced".
+        ///
+        /// ⚠️ FIXING ONLY THE WRITER WOULD LEAVE THIS. The manager would then request moves it
+        /// could never confirm, and `P0-67`'s whole point -- that the cache must be the broker's
+        /// truth -- would be quietly back to being the monitor's wish.
+        /// </summary>
+        private static void TestAtm_P1133_TheReconcilerAlsoSurvivesAReId()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: the reconciler adopts the broker's price after a re-id");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            // Somebody -- the operator, or the provider -- moved this stop, and the broker re-ided
+            // the order. The next sweep must adopt 19995.00 as the truth.
+            ReIdAsARealBrokerWould(stop, "613562531447");
+            stop.StopPrice = 19995.00;
+
+            atm.MonitorTickForTest();
+
+            Assert(Math.Abs(bracket.CurrentStopPrice - 20000.50) < 1e-9
+                || Math.Abs(bracket.CurrentStopPrice - 19995.00) < 1e-9,
+                "P1-133: the reconciler READ the live order after the broker re-ided it, so "
+                + "CurrentStopPrice reflects the broker rather than 19990.00, which is only this "
+                + "monitor's stale opinion (got " + bracket.CurrentStopPrice + ")");
+        }
+
+        /// <summary>
+        /// P1-133, the third site: entry liveness. When the position is flat, `MonitorTickCore`
+        /// decides whether to DISCARD the bracket by asking whether the entry order is still
+        /// working -- keyed on `EntryOrderId`.
+        ///
+        /// ⚠️ THIS ONE FAILS TOWARD FORGETTING. On a real connection the re-ided entry never
+        /// matches, so `entryStillWorking` is false and a bracket with a LIVE resting entry is
+        /// dropped from `_activeBrackets`. It then fills into a position nothing is managing --
+        /// no breakeven, no trailing, and no record that the bracket existed.
+        /// </summary>
+        private static void TestAtm_P1133_ARestingEntryIsNotForgottenAfterAReId()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: a re-ided resting ENTRY does not drop the bracket");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+            // Flat: the entry has not filled yet. It is resting at the broker under the name this
+            // class gave it, and under an id the broker has since replaced.
+            acct.Positions.Clear();
+            var entry = acct.CreateOrder(inst, OrderAction.Buy, OrderType.Limit, TimeInForce.Day,
+                1, 20000.00, 0, "OCO-P067", "AtmEntry_BR-P067", null);
+            acct.Submit(new[] { entry });
+            entry.OrderState = OrderState.Working;
+            bracket.EntryOrderId = "the-submission-guid";
+            ReIdAsARealBrokerWould(entry, "613562531448");
+
+            atm.AddBracketForTest(bracket);
+            atm.MonitorTickForTest();
+
+            Assert(atm.GetBracketForTest("BR-P067") != null,
+                "P1-133: the bracket SURVIVES a sweep taken while flat, because its entry is still "
+                + "resting at the broker. At baseline the re-ided entry matched nothing, so the "
+                + "bracket was discarded and the fill that followed would have been unmanaged.");
+        }
+
+        /// <summary>
+        /// P1-133, written because the mutation battery found the suite could not see any of it.
+        ///
+        /// ⚠️ THE BLANK-NAME CASE IS THE DANGEROUS ONE. `NameMatches` returning true for a blank
+        /// name makes `FindLiveByName` resolve to the FIRST order on the account -- and on the
+        /// funded 50K that is somebody else's working order, which this class then MOVES. The two
+        /// directions do not cost the same: matching nothing loses a stop move and says so, and
+        /// matching anything modifies an order that was never ours. Same family as `P1-105`, where
+        /// `WantsEverySymbol` treated blank as a wildcard on a path that CLOSES POSITIONS.
+        ///
+        /// The case test pins intent rather than a reachable scenario -- bracket ids are lowercase
+        /// hex, so nothing on the account differs from one of our names by case alone today. It is
+        /// here because widening a match can only ever ADMIT something that is not ours, and the
+        /// next reader should have to delete an assertion to widen it.
+        /// </summary>
+        private static void TestAtm_P1133_ABlankOrMiscasedNameMatchesNothing()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: a blank or wrongly-cased name matches NO order");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+
+            Assert(acct.Orders.Count > 0,
+                "P1-133: the account really does hold an order, so a null answer below means the "
+                + "match refused rather than that there was nothing to match (positive control)");
+
+            Assert(AtmOrderIdentity.FindByName(acct, "Stop_BR-P067") != null,
+                "P1-133: POSITIVE CONTROL -- the correct name DOES find the stop. Without this the "
+                + "three refusals below would pass against a lookup that never matches anything.");
+
+            foreach (var blank in new[] { null, "", "   ", "\t" })
+            {
+                Assert(AtmOrderIdentity.FindByName(acct, blank) == null,
+                    "P1-133: a blank name matches NOTHING (got a match for " + (blank == null
+                        ? "null" : "'" + blank + "'") + "). Treating blank as a wildcard would "
+                    + "resolve to the first order on the account -- on a funded account, somebody "
+                    + "else's working order, which this class then moves.");
+
+                Assert(AtmOrderIdentity.FindLiveByName(acct, blank) == null,
+                    "P1-133: and the LIVE finder refuses a blank name too -- both finders route "
+                    + "through NameMatches so they cannot disagree");
+            }
+
+            Assert(AtmOrderIdentity.FindByName(acct, "STOP_BR-P067") == null,
+                "P1-133: the match is ORDINAL, so a name differing only in case is not ours. These "
+                + "strings are built by AtmOrderIdentity and are not human text; widening the "
+                + "comparison can only admit something we did not place.");
+        }
+
+        /// <summary>
+        /// P1-133, and it is really a `P1-130` test that could not be written until now.
+        ///
+        /// `P1-130` split `ATM_STOP_ORDER_NOT_FOUND` into two MESSAGES under one event type,
+        /// because "absent entirely" and "present but no longer live" are not the same news and
+        /// only one of them means the position may be unprotected. **That distinction was
+        /// unassertable**: the only observer carried `(account, eventType)`, and both branches emit
+        /// the same type. A mutant that collapsed them survived the whole suite with both messages
+        /// still sitting in the source.
+        ///
+        /// ⚠️ THE ASSERTION IS THAT THE TWO ANSWERS DIFFER. "the message mentions the stop" passes
+        /// under the collapse, because one message is a fine description of both situations --
+        /// the same shape as `P2-109`, where "the filter returns a subset" passed under a filter
+        /// that did nothing.
+        /// </summary>
+        private static void TestAtm_P1133_AbsentAndTerminalStopsSayDifferentThings()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: 'no such order' and 'no longer live' are different messages");
+
+            string whenTerminal = CaptureAtmNotFoundMessage(terminal: true);
+            string whenAbsent = CaptureAtmNotFoundMessage(terminal: false);
+
+            Assert(!string.IsNullOrEmpty(whenTerminal) && !string.IsNullOrEmpty(whenAbsent),
+                "P1-133: both situations produced an ATM_STOP_ORDER_NOT_FOUND message (positive "
+                + "control -- terminal='" + whenTerminal + "', absent='" + whenAbsent + "')");
+
+            Assert(whenTerminal != whenAbsent,
+                "P1-130/P1-133: the two situations say DIFFERENT things. Collapsing them is what "
+                + "P1-130 fixed, and it printed 'the position may be unprotected' 55 times against "
+                + "a stop that was resting perfectly.");
+
+            Assert(whenAbsent.Contains("at all"),
+                "P1-133: the ABSENT message says the order is not on the account at all (got '"
+                + whenAbsent + "')");
+
+            Assert(whenTerminal.Contains("no longer live"),
+                "P1-133: the TERMINAL message says the order is present but no longer live, which "
+                + "is only knowable if the diagnostic lookup found it (got '" + whenTerminal + "')");
+        }
+
+        /// <summary>
+        /// Drives one sweep whose stop move must fail, and returns the ATM_STOP_ORDER_NOT_FOUND
+        /// message. `terminal: true` leaves the stop on the account in a terminal state;
+        /// `terminal: false` removes it entirely.
+        /// </summary>
+        private static string CaptureAtmNotFoundMessage(bool terminal)
+        {
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            if (terminal) stop.OrderState = OrderState.Cancelled;
+            else acct.Orders.Remove(stop);
+
+            // ⚠️ `LogFromComponent` is a no-op when `Instance` is null, and `AtmSetup` clears it --
+            // which is why NO existing ATM test asserts on a log line, and part of why P1-130's two
+            // messages went unobserved. Without this the capture below returns "" for both cases
+            // and the "they differ" assertion would pass on two empty strings; the positive control
+            // above exists because that is exactly what happened on the first run of this test.
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            string captured = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt == "ATM_STOP_ORDER_NOT_FOUND" && captured == null) captured = msg;
+            };
+            try { atm.MonitorTickForTest(); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            return captured ?? "";
+        }
+
+        /// <summary>
+        /// P1-133. A test of the TEST HELPER, and it is not ceremony.
+        ///
+        /// ⚠️ `ReIdAsARealBrokerWould` is the only thing standing between this suite and the state
+        /// that hid this defect for two years. Once the fix is in, the three P1-133 tests pass
+        /// whether or not the helper actually does anything -- that is what SUCCESS looks like, so
+        /// the mutant that neuters it survives all of them. Its protection is indirect: it is what
+        /// makes those tests fail when the FIX is reverted. Nothing else in the suite asserts that
+        /// it works, so a silent no-op here would disarm the regression guard without failing
+        /// anything, and the next person to revert the lookup would see green.
+        /// </summary>
+        private static void TestAtm_P1133_TheReIdHelperReallyReIds()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-133: the broker-re-id helper actually changes the id");
+
+            var order = new Order { OrderId = "the-submission-guid", Name = "Stop_BR-P067" };
+            ReIdAsARealBrokerWould(order, "613562531447");
+
+            Assert(order.OrderId == "613562531447",
+                "P1-133: the helper REPLACED the id, as Provider31 does on accept (got '"
+                + order.OrderId + "'). If this is ever a no-op, every P1-133 test still passes and "
+                + "the suite has quietly gone back to modelling the one broker that never re-ids.");
+
+            Assert(order.Name == "Stop_BR-P067",
+                "P1-133: and it leaves the NAME alone, which is the identity the fix relies on and "
+                + "the one the broker does not touch");
         }
 
         /// <summary>

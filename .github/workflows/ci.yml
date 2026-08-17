@@ -552,6 +552,37 @@ jobs:
           # the only one of the four failures that looks like a success at every other surface.
           - { label: "P3-34+P0-67", batteries: "mutate_p334.py mutate_p0_67.py" }   # 496s = P3-34 262s + P0-67 234s
 
+          # P1-133 is folded into the F-6+P1-99 bin below rather than given its own, because that
+          # bin was the SHORTEST measured (513s on run 31982374191) and the matrix is already at
+          # the 19-bin ceiling. ⚠️ This is a compromise and the comment says so: the bin becomes
+          # ~940s and therefore the critical path, against a previous worst of 636s.
+          #
+          # ⚠️ THE WEIGHTS EXIST -- I first wrote here that they did not, and the header sixty
+          # lines up already said otherwise: the run step prints `BATTERY_SECONDS <file> <n>` for
+          # exactly this reason, described there as "the line that keeps packing from being a
+          # one-way door". Harvested from run 31982374191, all 38 present. Recorded because
+          # asserting a tool cannot be re-run, in a file whose own header explains how, is how a
+          # working mechanism gets abandoned.
+          #
+          # What is actually in the way is smaller: `pack_ci_matrix.py` packs whole matrix
+          # ENTRIES keyed by label, not individual batteries, so a genuine re-pack means first
+          # flattening the matrix back to one battery per entry -- which discards every
+          # hand-written comment attached to a bin, and those comments are the record of what each
+          # battery is FOR. That trade was not worth ~5 minutes of CI tonight. Whoever makes the
+          # packer take battery-level weights directly should re-pack to 19 and delete this.
+          #
+          # P1-133, 14 mutants, ~430s. The ATM manager looked its own bracket legs up by
+          # `Order.OrderId` -- which the BROKER replaces on accept and the Simulator never does --
+          # so breakeven and trailing had never once moved on a live or funded account while 2038
+          # tests stayed green. Two of the fourteen are aimed at the EVIDENCE rather than the fix,
+          # and both survived the first run: the stub ceasing to re-id, and the re-id helper going
+          # no-op while still being called. The second is the one to know -- once the fix is in,
+          # every P1-133 test passes whether or not the helper does anything, because that is what
+          # success looks like, so its protection is purely indirect and nothing else asserted it
+          # worked. Mutant 8 is the other: it reverts the CALLER alone and restores the whole
+          # defect while AtmOrderIdentity stays fully tested -- the exact shape that cost four
+          # agent-loop rounds when the caller sat outside every editable region.
+
           # UI1 (the conformance snapshot), 307s. Two of its twelve mutants SURVIVED on the first
           # run against a suite of 21 tests that were all green -- the short-leader path was
           # untested, and the clamp test asserted the FLAG rather than the VERDICT. A third was
@@ -654,7 +685,7 @@ jobs:
           # that suite ASSERTED the defect as correct behaviour, so the suite was defending it rather
           # than merely silent about it. Mutant 2 is the one to know: it keeps the else branch and
           # makes it do nothing, so the shape of the fix survives and the behaviour does not.
-          - { label: "F-6+P1-99", batteries: "mutate_f6.py mutate_p199.py" }   # 489s = F-6 274s + P1-99 215s
+          - { label: "F-6+P1-99+P1-133", batteries: "mutate_f6.py mutate_p199.py mutate_p1133.py" }   # ~920s = F-6 274s + P1-99 215s + P1-133 ~430s
 
           # P2-116, 265s PROVISIONAL. Evidence for the equity rules counted the AccountState
           # OBJECT, so 88 dormant prop accounts read identically to the one funded account that

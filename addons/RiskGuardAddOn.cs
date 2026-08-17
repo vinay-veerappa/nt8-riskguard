@@ -836,6 +836,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         // right type. See `P1-71`: a message must not NAME another event type, because this log is
         // grepped by type after the fact.
         internal static Action<string, string> LogEventObserver;
+
+        // P1-133. The comment above is right about the COMMON case and wrong about one class of
+        // event, and a surviving mutant is what showed it. `P1-130` deliberately gave
+        // `ATM_STOP_ORDER_NOT_FOUND` two different MESSAGES under one type -- "absent entirely" and
+        // "present but no longer live" are not the same news, and only one of them means the
+        // position may be unprotected. That distinction is the whole product of that fix, and with
+        // only `(account, eventType)` observable it was UNASSERTABLE: a mutant that collapsed the
+        // two branches back into one survived the entire suite while both messages still existed in
+        // the source.
+        //
+        // ⚠️ The rule stands where it was aimed -- do not assert on wording that will be reworded.
+        // Use this only where the MESSAGE is the product, i.e. where two branches share a type and
+        // differ only in what they say, and assert on the distinguishing PHRASE rather than the
+        // sentence.
+        //
+        // Fired from the same statement as the two-argument probe, so the two can never disagree
+        // about whether an event happened.
+        internal static Action<string, string, string> LogEventMessageObserver;
 #endif
 
         public void ResetStateForDev()
@@ -5279,6 +5297,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             // the case a source scan cannot distinguish from a working one.
             var observer = LogEventObserver;
             if (observer != null) observer(account, eventType);
+
+            // P1-133. Same statement, so the two probes cannot disagree about whether an event
+            // happened. `data` is the JObject the log will actually carry, so this observes what
+            // was WRITTEN rather than what a caller intended.
+            var messageObserver = LogEventMessageObserver;
+            if (messageObserver != null)
+            {
+                var m = data == null ? null : data["message"];
+                messageObserver(account, eventType, m == null ? "" : m.ToString());
+            }
 #endif
             try
             {

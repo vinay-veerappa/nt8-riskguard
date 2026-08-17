@@ -1,0 +1,75 @@
+{
+  "plan": "docs/RISKGUARD_COPIER_HARDENING_PLAN.md",
+  "note": "P1-133 only. Seven regions in DynamicAtmManager.cs plus one new file. The acceptance tests are already in the suite and were VERIFIED RED at the 2038/0 baseline before this ticket was written: 2034 passed / 4 failed. ⚠️ The first version of this ticket omitted RequestStopMove, the CALLER that supplies the id, and the run stalled for four rounds at 21 regressions -- the model changed the callee's parameter correctly and could not reach the one line that feeds it. Count the sites that PASS an identity, not only the sites that compare one.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "P1-133: the ATM manager looks its own orders up by an id the BROKER replaces on accept, so breakeven and trailing have never worked on any account except the Simulator",
+      "defect": "MEASURED LIVE on the FUNDED 50K (TAKEPROFITPRO524207503, Provider31), 2026-08-16, 1 MNQ, DrawdownShield, 2-tick breakeven trigger.\n\n    nt_place_atm_order ->  stopOrderId: \"f953ea2b50bb43759747e0cb6beab2cc\"   <- a GUID\n    nt_orders          ->  name \"Stop_15bc730b\", orderId: \"613562531447\"     <- the broker's id\n\n    19:55:48/53/58  ATM_STOP_ORDER_NOT_FOUND\n       \"no order with id 'f953ea2b...' is on 'TAKEPROFITPRO524207503' at all,\n        so the move to 30216.5 was not requested\"\n    19:56:03        ATM_STOP_MOVE_ABANDONED\n\nThe order was sitting right there, Working, at the price the bracket recorded. The arithmetic was right too: 30216.5 is exactly entry 30216.25 + the 1-tick offset. The IDENTITY is wrong. NT8 assigns a GUID at submission and REPLACES Order.OrderId with the broker's own id once the broker accepts. DynamicAtmManager stores the GUID at placement and searches by it forever after.\n\nWHY IT HAS ALWAYS PASSED ON Sim101: the NT8 Simulator never re-ids anything. Measured on the same box in the same minute, Sim101 orders still carry \"orderId\": \"2f515ed0f89e4ab08f549fa356614236\" while every order on the real connection carries a numeric broker id. The one account where the feature works is the one account whose behaviour is not the product.\n\nAND IT IS THE SECOND HALF OF P1-130, which was closed as \"the write fails\". That ticket fixed the STATE test (Working vs Accepted) and was live-validated -- on Sim101, the only place the IDENTITY test could pass. The fix and its validation shared one blind spot. Worse, the state defect P1-130 fixed would never have bitten on a real connection at all: there a resting stop sits in Working, and Accepted was the SIMULATOR's behaviour.\n\nTHE REST OF THIS ADDON ALREADY KNOWS, IN WRITING, IN THREE PLACES. RiskGuardModels.cs:492 tracks recognised stops as List<Order> because \"NT8 Order.OrderId is NOT unique and can change over the order's lifetime\". TradeCopierEngine.cs:4477 defines OrderReferenceComparer because \"Order.OrderId must not be used as a key\" and adds the sentence that predicted this entire defect: \"no test would catch it, because the test stub hands out a stable GUID per order\". CopierReconciler.cs:647 says it a third time. The bridge's own lookup (McpBridgeAddOn.cs:2683) matches all three identities tolerantly. DynamicAtmManager is the sole holdout.",
+      "spec": "ONE EXISTING FILE plus ONE NEW FILE.\n\nNEW: `addons/AtmOrderIdentity.cs`, a static class in namespace NinjaTrader.NinjaScript.AddOns.\n\nIt owns the ONE definition of what an ATM bracket's orders are called, and it is the only place those names are built:\n\n    public static string EntryName(string bracketId)   // \"AtmEntry_\" + bracketId\n    public static string StopName(string bracketId)    // \"Stop_\" + bracketId\n    public static string TargetName(string bracketId)  // \"Target_\" + bracketId\n    public static Order FindByName(Account account, string name)          // first match, or null\n    public static Order FindLiveByName(Account account, string name)      // first match that OccupiesSlot, or null\n\nMatch with StringComparison.Ordinal. A null/blank name must match NOTHING and return null -- never the first order on the account.\n\nWHY THE NAME AND NOT THE ID: the name is a value THIS SYSTEM sets at placement (DynamicAtmManager.cs:353,367,368 already build exactly these three strings) and the broker does not touch it. It was measured surviving on Provider31: nt_orders returned name \"Stop_15bc730b\" for the order whose id had been replaced. A value we own cannot vary by provider; a value the broker owns will.\n\nCHANGE 1 -- `DynamicAtmManager.cs:353,367,368`, the placement site. Build the three names by CALLING AtmOrderIdentity, not by concatenating in place. If the lookup derives the name one way and the placer another, they drift and nothing catches it -- that is the whole reason this is one class.\n\nCHANGE 2 -- `ModifyStopPrice` (around :736). It takes a `string orderId` and scans account.Orders for `order.OrderId == orderId`, twice (:742 the live match, :758 the present-but-not-live diagnostic). Change the parameter to the bracket's ID or to the order NAME and match on the name via AtmOrderIdentity. Keep BOTH lookups and keep them distinguishable -- P1-130 split that diagnostic in two on purpose, because \"absent entirely\" and \"present but terminal\" are not the same news, and the log text must go on saying which. The log lines should now name what a human can find in the orders window (the name), not a GUID that exists nowhere.\n\nCHANGE 3 -- `RequestStopMove` (around :835), THE CALLER. It does `ModifyStopPrice(account, bracket.StopOrderId, newStopPrice)`. Changing ModifyStopPrice's parameter without changing this hands a stale GUID to a lookup that now wants a NAME, so every stop move fails and the whole P0-67 / P1-130 suite goes red. A previous run of this ticket did exactly that -- 21 regressions, four rounds, identical every time -- because this method was not in the region set and the model could not reach it. Pass the stop's name instead. Nothing else in the method changes.\n\nCHANGE 4 -- `ReconcileStopFromBroker` (around :861). Same substitution. This is the READER that makes CurrentStopPrice the broker's truth rather than the monitor's last wish (P0-67), and it fails SILENTLY: not-found there is indistinguishable from \"closing, filled, or replaced\", so it just returns.\n\nCHANGE 5 -- the entry-liveness check (around :621). `o.OrderId == bracket.EntryOrderId` decides whether to DISCARD the bracket when the position is flat. Same substitution. This one fails toward FORGETTING: a re-ided entry matches nothing, the bracket is dropped, and the fill that follows is unmanaged.\n\nDO NOT: (a) leave any of the four sites keyed on OrderId -- fixing only the one the live run exercised leaves the other three broken on exactly the same accounts; (b) add a tolerant `OrderId == key || Name == key` fallback here. The bridge does that because it serves an id a CALLER supplied and cannot know which kind it is; this class placed the order itself and knows the name it chose, so a fallback only reintroduces the stale-id path under a longer condition.\n\nKEEP: the ActiveBracket.StopOrderId / EntryOrderId / TargetOrderId fields and everything that reports them. They are part of the API payload the bridge returns. They are now REPORTING fields only and must never be used for a lookup; say so in a comment at the field.",
+      "regions": [
+        {
+          "id": "ThePlacerEntryName",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "string entryName = \"AtmEntry_\" + bracketId;",
+          "kind": "line",
+          "note": "One line. Must come from AtmOrderIdentity.EntryName so the placer and the lookups cannot drift."
+        },
+        {
+          "id": "ThePlacerStopName",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "\"Stop_\" + bracketId",
+          "kind": "line",
+          "note": "The CreateOrder call for the stop leg. ONLY the name argument changes -- every price, quantity and OCO argument on this line must come back byte-identical."
+        },
+        {
+          "id": "ThePlacerTargetName",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "\"Target_\" + bracketId",
+          "kind": "line",
+          "note": "Same, for the target leg."
+        },
+        {
+          "id": "TheMonitor",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void MonitorTickCore()",
+          "kind": "decl",
+          "note": "Carries the entry-liveness check at :621 that decides whether to DISCARD a bracket while flat. ONLY that lookup changes; every other decision in this sweep -- the reconcile call, the breakeven and trail arithmetic, the removal bookkeeping -- must come back byte-identical."
+        },
+        {
+          "id": "TheStopWriter",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool ModifyStopPrice(Account account, string orderId, double newStopPrice)",
+          "kind": "decl",
+          "note": "Two id-keyed lookups: the live match and P1-130's present-but-not-live diagnostic. Both change; the two DISTINCT messages must survive."
+        },
+        {
+          "id": "TheMoveRequest",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)",
+          "kind": "decl",
+          "note": "THE CALLER. It passes `bracket.StopOrderId` -- the stale GUID -- into ModifyStopPrice. ONLY that argument changes, to the stop's NAME. Everything else in this method must come back byte-identical: the in-flight guard (P0-61: a second Change() while one is in flight REVERTS the order), the abandon check, and P1-130's rule that EVERY failed request spends the retry budget including the not-found one."
+        },
+        {
+          "id": "TheReconciler",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "private void ReconcileStopFromBroker(Account account, ActiveBracket bracket)",
+          "kind": "decl",
+          "note": "The reader that makes CurrentStopPrice the broker's truth (P0-67). Only the lookup changes; the honoured/refused/moved-by-someone-else arithmetic below it must come back byte-identical."
+        },
+        {
+          "id": "TheIdentityClass",
+          "file": "addons/AtmOrderIdentity.cs",
+          "op": "create",
+          "note": "A NEW file. Emit the whole thing: a header comment recording WHY it exists (the broker owns Order.OrderId and replaces it on accept; the name is ours), the three name builders, and the two lookups. Namespace NinjaTrader.NinjaScript.AddOns, `using System;` and whatever else it needs. It takes Account and returns Order, both of which the core's test build already stubs, so it is executable in tests. tools/sync_nt8.py globs addons/*.cs, so it needs no registration to ship."
+        }
+      ],
+      "expect_green": [
+        "P1-133: the breakeven move is REQUESTED even though the broker replaced the order's id",
+        "P1-133: and the order really carries the new price",
+        "P1-133: the reconciler READ the live order after the broker re-ided it",
+        "P1-133: the bracket SURVIVES a sweep taken while flat"
+      ]
+    }
+  ]
+}
