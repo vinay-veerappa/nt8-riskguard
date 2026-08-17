@@ -8277,7 +8277,7 @@ hand where the loop could not reach. Suite 2079 → **2096 / 0**.
 
 | | what landed |
 |---|---|
-| `P2-136` "say it" | `ATM_BRACKET_RELEASED` at both removal branches, naming the bracket and **which** condition — the two branches say different things |
+| `P2-136` "say it" | `ATM_BRACKET_RELEASED` at both removal branches, naming the bracket and **which** condition — the two branches say different things. ✅ **LIVE-VALIDATED on the FUNDED account 2026-08-17 (session 56)**, `TAKEPROFITPRO524207503` / Provider31, bracket `a58ad4da`: its stop filled and 5s later the sweep said *"MNQ position is flat and no entry order is still working, so the trade is finished and the bracket is released. Nothing further is managed for it."* — the **finished-trade** sentence, not the orphan one, which is the distinction two of `mutate_p2135.py`'s mutants attack. Previously `Sim101` only |
 | `P2-136` "survive it" | **NOT done.** Still open; see below |
 | `P3-137` | `IsComplete` deleted — the property, its one construction-time write, both `Where(b => !b.IsComplete)` filters, and the `isComplete` API field |
 | `P3-137a` | `GetBracketStatus` gains `stopModifyAttempts`, `stopMoveAbandonAnnounced`, `lastStopMoveFailureReason` |
