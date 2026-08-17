@@ -475,6 +475,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P2134_AbandoningStillReportsFailureToTheCaller();
             TestAtm_P2134_TheGenuineRefusalKeepsItsName();
             TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling();
+            TestAtm_P2136_ABracketLeavingManagementSaysSo();
+            TestAtm_P3137_TheStatusAnswersWhetherItGaveUp();
+            TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8489,6 +8492,145 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "move that was sent. Recording no reason on this path leaves the one true "
                 + "'refused' reported as whatever ModifyStopPrice last said, or as 'not recorded' "
                 + "(got '" + captured + "')");
+        }
+
+        /// <summary>
+        /// P2-136, the "say it" half. A bracket leaving management is indistinguishable from one
+        /// that was never added: BOTH removal branches in MonitorTickCore drop it silently.
+        ///
+        /// Live consequence, measured 2026-08-17: bracket 1a48f3cf was registered at 23:16 with an
+        /// OPEN 1-lot position and was gone from the registry by 23:17:3x, with the position still
+        /// long 1 and nothing logged. Breakeven and trailing were over, permanently, and every
+        /// surface an operator would check still reported the trade as protected -- the stop and
+        /// target rest at the broker looking healthy. It is protected at its ORIGINAL price.
+        /// </summary>
+        private static void TestAtm_P2136_ABracketLeavingManagementSaysSo()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a bracket dropped from management is announced");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            // The live shape: the position is gone and no entry order is still working, so the
+            // sweep drops the bracket. Nothing about this is wrong -- the trade is over. What is
+            // wrong is that it happens in silence.
+            acct.Positions.Clear();
+            acct.Orders.Clear();
+
+            string captured = null;
+            int announced = 0;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_BRACKET_RELEASED") return;
+                announced++;
+                if (captured == null) captured = msg;
+            };
+            try { atm.MonitorTickForTest(); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(announced > 0,
+                "P2-136: the bracket said it was leaving management. Both removal branches were "
+                + "silent, so a bracket that stopped being managed looked exactly like one that "
+                + "was never added -- and the broker still showing a stop is evidence about the "
+                + "BROKER, not about whether anything is still moving it (seen: " + announced + ")");
+
+            Assert(captured != null
+                   && captured.IndexOf(bracket.BracketId, StringComparison.Ordinal) >= 0,
+                "P2-136: and it names WHICH bracket, because an operator with two positions open "
+                + "cannot act on 'a bracket was released' (got '" + captured + "')");
+
+            Assert(captured != null
+                   && (captured.IndexOf("position", StringComparison.OrdinalIgnoreCase) >= 0
+                       || captured.IndexOf("flat", StringComparison.OrdinalIgnoreCase) >= 0),
+                "P2-136: and WHY it left, because the two branches mean different things -- a flat "
+                + "position is a finished trade, an absent ACCOUNT is a bracket orphaned while its "
+                + "position may still be open (got '" + captured + "')");
+
+            Assert(atm.GetActiveBrackets().Count == 0,
+                "P2-136: precondition -- the bracket really was dropped, so the announcement is "
+                + "about a real removal and not a line logged beside one that stayed");
+        }
+
+        /// <summary>
+        /// P3-137 + P3-137a. `IsComplete` is never assigned true -- two filters and one API field
+        /// are inert -- and the three fields an operator actually needs are not exposed at all.
+        ///
+        /// "Has this bracket given up, and why?" is the single question worth asking about a
+        /// bracket that has stopped trailing, and it could not be asked of the running system:
+        /// `GetBracketStatus` returns thirteen fields, none of them the retry state, and one of
+        /// them -- `isComplete` -- can never change. Found while trying to settle P2-134's
+        /// unexplained b604e308 measurement from outside, which could not be done for this reason.
+        /// </summary>
+        private static void TestAtm_P3137_TheStatusAnswersWhetherItGaveUp()
+        {
+            Console.WriteLine("\n[TEST] ATM P3-137: the bracket status answers 'has this given up, and why?'");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            bracket.StopModifyAttempts = DynamicAtmManager.MaxStopModifyAttempts;
+            bracket.StopMoveAbandonAnnounced = true;
+            bracket.LastStopMoveFailureReason = "provider holds 19990 instead of requested 19995";
+            atm.AddBracketForTest(bracket);
+
+            var status = atm.GetBracketStatus(bracket.BracketId);
+            Assert(status != null, "P3-137: precondition -- the bracket is reported at all");
+
+            var fields = new Dictionary<string, object>();
+            foreach (var prop in status.GetType().GetProperties())
+                fields[prop.Name] = prop.GetValue(status, null);
+
+            Assert(fields.ContainsKey("stopModifyAttempts")
+                   && Convert.ToInt32(fields["stopModifyAttempts"]) == DynamicAtmManager.MaxStopModifyAttempts,
+                "P3-137a: the status reports how many stop moves have failed, so 'has this given "
+                + "up?' can be asked of the RUNNING system instead of inferred from a log line "
+                + "that -- per P2-135 -- might never have been emitted");
+
+            Assert(fields.ContainsKey("stopMoveAbandonAnnounced")
+                   && Convert.ToBoolean(fields["stopMoveAbandonAnnounced"]),
+                "P3-137a: and whether it has already announced giving up");
+
+            Assert(fields.ContainsKey("lastStopMoveFailureReason")
+                   && Convert.ToString(fields["lastStopMoveFailureReason"]) ==
+                      "provider holds 19990 instead of requested 19995",
+                "P3-137a: and the reason it last OBSERVED, which is the 'why' half of the question");
+
+            // P3-137. The field that can never be true, and the two filters that read it.
+            Assert(!fields.ContainsKey("isComplete"),
+                "P3-137: and `isComplete` is gone rather than advertised to every consumer as a "
+                + "constant false. Ask what input makes a status boolean TRUE; if you cannot name "
+                + "one, delete it rather than leaving a mechanism that looks load-bearing");
+        }
+
+        /// <summary>
+        /// P3-137, the source half: the two filters that read the dead flag read as "skip finished
+        /// brackets" and are no-ops. A regex cannot see reachability, so this states its region and
+        /// prints what it counted.
+        /// </summary>
+        private static void TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource(
+            [System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        {
+            Console.WriteLine("\n[TEST] ATM P3-137: the never-assigned completion flag is gone (source gate)");
+
+            string src = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(thisFile), "..", "addons", "DynamicAtmManager.cs"));
+            Assert(File.Exists(src), "the ATM manager source is readable at " + src);
+            if (!File.Exists(src)) return;
+
+            string code = File.ReadAllText(src);
+            int hits = System.Text.RegularExpressions.Regex.Matches(code, @"\bIsComplete\b").Count;
+
+            Assert(hits == 0, string.Format(
+                "P3-137: nothing names IsComplete any more ({0} occurrence(s) in {1} chars). "
+                + "Measured at baseline: 5 -- declared, assigned false once at construction, and "
+                + "read by two Where(b => !b.IsComplete) filters that therefore passed everything.",
+                hits, code.Length));
         }
 
         /// <summary>
