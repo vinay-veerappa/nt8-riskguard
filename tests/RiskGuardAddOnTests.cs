@@ -474,6 +474,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P2134_TheLatchIsScopedToOneBracket();
             TestAtm_P2134_AbandoningStillReportsFailureToTheCaller();
             TestAtm_P2134_TheGenuineRefusalKeepsItsName();
+            TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8488,6 +8489,82 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "move that was sent. Recording no reason on this path leaves the one true "
                 + "'refused' reported as whatever ModifyStopPrice last said, or as 'not recorded' "
                 + "(got '" + captured + "')");
+        }
+
+        /// <summary>
+        /// P2-135. The give-up line must be said BY the thing that gives up, not by the next
+        /// caller of the method that gave up.
+        ///
+        /// ⚠️ THIS IS TestAtm_P2134_TheGenuineRefusalKeepsItsName WITH ONE LINE REMOVED. That
+        /// test drives the refusal path to exhaustion and then does:
+        ///
+        ///     inst.MarketData.Last.Price = 20010.00;   // now ask for a move, and be refused
+        ///
+        /// -- supplying by hand the caller that production does not have. The announcement lives
+        /// at the TOP of RequestStopMove, so it only speaks if something CALLS that method after
+        /// the budget is spent, and on this path nothing does: ReconcileStopFromBroker's re-arm
+        /// is `attempts &lt; Max`, which is false at exactly the attempt that exhausts the budget,
+        /// so BreakevenTriggered stays latched true and the breakeven caller stops calling. The
+        /// only remaining caller is the trailing branch, which needs price to run a further full
+        /// stop-distance -- so the line is reachable only when the trade is WINNING, and silent
+        /// in exactly the case where a frozen stop costs money.
+        ///
+        /// Measured live on Sim101, bracket 75726b75: three ATM_STOP_CHANGE_IGNORED lines ending
+        /// "attempt 3 of 3", and then nothing, ever, for the life of the position.
+        /// [[weigh-the-quiet-failure-above-the-loud]].
+        /// </summary>
+        private static void TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-135: the refusal path announces giving up with nothing calling it");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20000.00);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            atm.AddBracketForTest(bracket);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int announced = 0;
+            string captured = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_STOP_MOVE_ABANDONED") return;
+                announced++;
+                if (captured == null) captured = msg;
+            };
+            try
+            {
+                for (int i = 0; i < DynamicAtmManager.MaxStopModifyAttempts; i++)
+                {
+                    bracket.RequestedStopPrice = 19995.00;
+                    atm.MonitorTickForTest();
+                }
+
+                Assert(bracket.StopModifyAttempts >= DynamicAtmManager.MaxStopModifyAttempts,
+                    "P2-135: precondition -- the refusal path spent the whole budget (got "
+                    + bracket.StopModifyAttempts + ")");
+
+                // ⚠️ THE PRICE IS DELIBERATELY NOT MOVED. This is the production condition: the
+                // budget is gone and nothing asks for another move. Sweeping is all that is left.
+                for (int i = 0; i < 10; i++) atm.MonitorTickForTest();
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(announced > 0,
+                "P2-135: the bracket that gave up SAID so, without anything calling RequestStopMove "
+                + "afterwards. The operator's last word was 'attempt 3 of 3' and then silence, on a "
+                + "position whose stop will never move again (announcements seen: " + announced + ")");
+
+            Assert(announced == 1,
+                "P2-135: and exactly once -- moving the announcement to the site that spends the "
+                + "budget must not re-open P2-134, which was this same line said on every sweep "
+                + "forever (announcements seen: " + announced + ")");
+
+            Assert(captured != null && captured.IndexOf("refus", StringComparison.OrdinalIgnoreCase) >= 0,
+                "P2-135: and it still names the provider refusal, because on THIS path a move "
+                + "really was sent and really was declined (got '" + captured + "')");
         }
 
         /// <summary>
