@@ -7417,7 +7417,7 @@ was repointed rather than retired both times.
 this entry is closed on a suite, a battery and a compile, which is exactly the standard that let
 `P1-130` close with this hiding inside it. **Say which half was measured.**
 
-### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — OPEN, found 2026-08-16 (session 52), same run
+### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — ✅ CLOSED 2026-08-17 (session 53), found 2026-08-16 (session 52), same run
 
 **Measured**, immediately after `P1-133`'s three not-found lines:
 
@@ -7455,3 +7455,79 @@ to the end of the file, which put it *under this heading* — so the first thing
 **A closure record must be filed under the ID it closes, not at EOF**, and the ordering surfaces
 are not the only place a status can be misread — see [[closures-do-not-propagate-backwards]].
 
+
+#### ✅ CLOSED 2026-08-17 (session 53) — and the clear the ticket asked for would have been unreachable
+
+The announcement is latched on `ActiveBracket.StopMoveAbandonAnnounced` and the message states the
+**last observed** reason from `LastStopMoveFailureReason`, recorded at both sites that spend the
+budget. Suite **2058 → 2071 / 0**, battery `mutate_p2134.py` **11/11**, all 11 gates green,
+anchors **434 / 0**, `sync_nt8.py --verify` 17/17, `nt_compile` **0 errors**.
+
+⚠️ **The spec's second clause was wrong and the test caught it, not review.** It said *"the latch
+clears when the CONDITION resolves, never on a timer"* — `P2-107`'s rule, correct in general and
+**false here**. The condition is `StopModifyAttempts >= Max` and it cannot resolve while the latch
+is set: past the cap `RequestStopMove` returns before it asks, a confirm needs an outstanding
+request, and the counter is reset only on a confirm. **Abandonment is permanent for a bracket** —
+which is exactly what *"not asking again for this bracket"* says — so the episode boundary is the
+**bracket**, and the clear would have been a line that can never run, reading as a release valve
+that works. [[dead-safety-machinery-gate]] shipped in the act of preventing a repeat.
+
+⚠️ **Test and fix agreed with each other and both were wrong about the system.** The first draft of
+the recovery test "recovered" by assigning `bracket.StopModifyAttempts = 0` — not a recovery, a
+poke — and the loop's patch answered it with a **setter on that property** that cleared the latch
+on any assignment of zero. Green. `ActiveBracket` is serialised into the bridge payload, so a
+deserialiser writing the default would have re-armed the announcement with nothing recovered.
+**The POSITIVE CONTROL is what broke the agreement**: asserting that `ATM_STOP_MOVE_CONFIRMED`
+had actually fired turned a passing test into a question, and the answer was that the scenario
+does not exist. *Ask the engine what happened; do not assert the state you wanted.*
+
+#### The battery went 6/11, and two survivors were not missing tests
+
+**Three were real, and all three became tests.**
+
+1. ⚠️ **The abandon branch must still RETURN FALSE.** `RequestStopMove`'s value is consumed —
+   `if (RequestStopMove(...)) bracket.BreakevenTriggered = true;` — so a branch that returns true
+   once it has announced makes the manager record a breakeven **that never happened**, and a
+   `ScaledRunner` then trails from a price that was never set. `return false` → `return
+   bracket.StopMoveAbandonAnnounced` passed **2063 green tests**. Quieting the announcement must
+   not quieten the refusal.
+2. The genuine refusal path (`ReconcileStopFromBroker`) must record its own reason, or the one
+   failure where *"refused"* is TRUE is reported as whatever `ModifyStopPrice` last said.
+3. A bracket restored with a count and no reason must say **"not recorded"** rather than print
+   *"last observed reason: ."* — a well-formed sentence that reads as a fact about the failure.
+
+**Two were badly-chosen mutants and were replaced, not chased.** One weakened a test's own positive
+control (`abandoned >= 1` → `>= 0`): a mutant that makes an assertion *looser* cannot fail a suite
+whose code is correct — **unkillable by construction**. The way to prove a positive control is
+load-bearing is to break the CODE it guards, which the replacement `if (false)` mutant does. The
+other gave two brackets the same `BracketId`, described as collapsing the scope test; it does not,
+because `AddBracketForTest` keys by id, so the second bracket *replaces* the first, arrives with a
+fresh latch and announces anyway. Third and fourth instance of **read what a surviving mutant DOES
+before concluding a test is missing.**
+
+⚠️ **Two mutants die as `NO RESULT LINE`, which is an opaque kill**, so it was re-driven by hand:
+the `if (false)` mutant prints `[FAIL] P2-134: the bracket IS abandoned and does say so (positive
+control -- got 0 ...)` first and by name. **A kill you cannot explain is not evidence.**
+
+#### ⚠️ `check_anchors.py` was DEAD, and nothing said so
+
+It crashed with `UnicodeEncodeError: 'charmap' codec can't encode characters in position 44-45`.
+Windows stdout is cp1252; this repo's mutant descriptions are full of `⚠️`; and **a gate only
+prints those strings when it has a finding**. So it could run green for months and die on the
+first run where it mattered, with a traceback that reads as a defect in the script. While it could
+not run it was checking **nothing**. Fixed, its first run reported **434 anchors / 1 BROKEN** —
+`mutate_p1133`'s caller anchor, broken by this ticket's signature change and **repointed for the
+third time at that one site in two days**.
+
+⚠️ **`check_batteries_pin_encoding.py` already enforced this rule** — over `mutation/mutate_*.py`,
+a region that excludes a file **in its own directory** and all of `tools/`. Twelve scripts sat
+unpinned behind a green gate whose header describes exactly their hazard. Now
+`tools/check_tools_pin_stdout.py`, wired into CI, which **caught a thirteenth that a text sweep
+could not**: `check_batteries_pin_encoding.py` itself contains the string `reconfigure` as the
+thing it searches for, so grepping for it reported the file compliant. **Parse; do not grep.**
+Fifth instance of [[state-the-region-a-gate-inspects]].
+
+#### Not live-validated
+
+Needs one filled contract whose stop cannot be located — the same standard `P1-133` closed under,
+and that one had a second defect hiding inside it. Expect more than a confirmation run.
