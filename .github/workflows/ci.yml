@@ -681,17 +681,21 @@ jobs:
           # Mutant 3 is the one to know: widened to "anything that is not NinjaTrader", so Rithmic
           # and InteractiveBrokers classify as simulated. EVERY POSITIVE ASSERTION STILL PASSES --
           # only the negative half catches it, and it fails 5 of them.
-          # ⚠️ APPENDED, NOT GIVEN ITS OWN BIN, AND THIS BIN BECOMES THE CRITICAL PATH.
-          # The ceiling is 19 bins: GitHub allows 20 concurrent jobs ACCOUNT-WIDE and they are
-          # shared with nt8-mcp-bridge, so a 20th bin is not another runner, it is another wait.
-          # Measured on the last green run, the bins already span 524s..842s, so ~500s of new
-          # battery cannot be absorbed anywhere without moving the critical path: this bin goes
-          # 524s -> ~1024s and CI gets roughly 3 minutes slower.
+          # APPENDED, NOT GIVEN ITS OWN BIN. The ceiling is 19 bins: GitHub allows 20 concurrent
+          # jobs ACCOUNT-WIDE and they are shared with nt8-mcp-bridge, so a 20th bin is not
+          # another runner, it is another wait.
           #
-          # A re-pack is the right answer and is NOT done here, for a stated reason:
-          # tools/pack_ci_matrix.py refuses to pack on guessed weights, and mutate_p2135.py has
-          # never run in CI, so its weight does not exist yet. Re-pack once it has:
-          #     gh run view <green-run> --json jobs -q '...' > run_times.tsv
+          # ⚠️ MEASURED 826s on the first green run (31998784914), against the ~1024s predicted
+          # here before it ran -- so P2-135 costs ~336s, not the ~500s guessed, and this bin is
+          # 4s above the previous critical path of 822s rather than 3 minutes above it. The
+          # practical cost of appending was ~0. The estimate is corrected rather than left,
+          # because the next person packing these bins reads these numbers as measurements.
+          #
+          # A re-pack is now possible (this battery has a weight) and is still not urgent, since
+          # the top three bins sit within 21s of each other -- 826 / 822 / 805 -- which is about
+          # as flat as 19 bins get. When it is worth doing:
+          #     gh run view <green-run> --json jobs -q '.jobs[] | select(.name != "checks")
+          #         | [.name, ((.completedAt|fromdate) - (.startedAt|fromdate))] | @tsv' > run_times.tsv
           #     python tools/pack_ci_matrix.py --times run_times.tsv --bins 19 --apply
           #
           # P2-135/P2-136/P3-137, 12 mutants, one declared EXPECTED SURVIVOR. Group 2 is the one
@@ -700,7 +704,7 @@ jobs:
           # query reads -- instead of RiskGuardAddOn.LogFromComponent. The line existed, was
           # correct, named the right bracket, and reached nobody. A fix whose output nobody
           # consumes passes every gate that only checks the fix is present.
-          - { label: "UI6+P2-112+P2-135", batteries: "mutate_ui6.py mutate_p2112.py mutate_p2135.py" }   # ~1024s = UI6 288s + P2-112 202s + P2-135 ~500s (measure and correct on the first green run)
+          - { label: "UI6+P2-112+P2-135", batteries: "mutate_ui6.py mutate_p2112.py mutate_p2135.py" }   # 826s measured = UI6 288s + P2-112 202s + P2-135 ~336s
 
           # F-6, push alerts. The mutants split into LOUD and QUIET, and the QUIET ones are the
           # point: a budget that never refills, a floor that refuses everything, a severity table
