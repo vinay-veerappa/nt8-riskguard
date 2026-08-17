@@ -7527,7 +7527,224 @@ could not**: `check_batteries_pin_encoding.py` itself contains the string `recon
 thing it searches for, so grepping for it reported the file compliant. **Parse; do not grep.**
 Fifth instance of [[state-the-region-a-gate-inspects]].
 
-#### Not live-validated
+#### ✅ LIVE-VALIDATED 2026-08-17 (session 54) — `Sim101`, MNQ SEP26, bracket `4b37828a`
 
-Needs one filled contract whose stop cannot be located — the same standard `P1-133` closed under,
-and that one had a second defect hiding inside it. Expect more than a confirmation run.
+```
+23:40:03  ATM_STOP_MOVE_REQUESTED   4b37828a: breakeven trigger reached -- 30229.25 -> 30241.25
+23:40:08  ATM_STOP_CHANGE_IGNORED   ... provider holds 30229.25 (attempt 1 of 3)
+23:40:13  ATM_STOP_CHANGE_IGNORED   ... (attempt 2 of 3)
+23:40:58  ATM_STOP_CHANGE_IGNORED   ... (attempt 3 of 3)
+23:40:58  ATM_STOP_MOVE_ABANDONED   4b37828a: 3 stop moves failed, last observed reason: provider
+                                    holds 30229.25 instead of requested 30241.25. Not asking again
+                                    for this bracket. The stop is still at 30229.25 and will NOT
+                                    trail. Intervene manually.
+```
+
+**Exactly one** `ATM_STOP_MOVE_ABANDONED` across the episode (counted over the whole buffer, not
+eyeballed), against **four in twenty seconds** at baseline. Both halves hold: the line states what
+was OBSERVED — *"3 stop moves failed"* — instead of asserting *"refused by the provider"*, and it
+names the last observed reason, the price the stop is left at, and what to do.
+
+⚠️ **It was validated by luck, and the luck is `P2-135`.** The announcement is emitted from
+`RequestStopMove`, so it needs a CALLER after the budget is spent. This bracket had
+`TrailMultiplier` 0.5, which keeps the trailing branch live; it was the trailing call in the very
+same sweep as attempt 3 that reached the announcement. A second bracket that night, `75726b75`,
+hit the identical failure on the identical path with the shipped default `TrailMultiplier` of 2 —
+trailing dormant — and **the line was never said at all**. Same code, same provider, same failure:
+see `P2-135` for the controlled pair.
+
+#### Also live-validated in passing
+
+* **`P1-130`'s differentiated message**, on one order in two states within five seconds:
+  `CancelSubmitted` → *"It is on its way out; the stop was not moved."*;
+  `Cancelled` → *"It is terminal, so THE POSITION MAY BE UNPROTECTED."*
+* **`P1-133`'s name-based lookup** — every line above resolves `Stop_<bracketId>`, on a provider
+  whose ids the manager no longer touches.
+* **The bounded retry** stops exactly at the budget on both increment sites.
+
+#### ⚠️ One measurement this does NOT explain
+
+Bracket `b604e308`, the `ModifyStopPrice`-fails path (stop cancelled out from under the manager),
+spent the budget cleanly — `ATM_STOP_ORDER_NOT_FOUND` at 23:35:38, :43, :48 — and then produced
+**no announcement for 3.7 minutes**, with the position open, the price above the breakeven trigger,
+and the sweep demonstrably alive (it was logging for another bracket minutes later). On that path
+`BreakevenTriggered` is never set, so trailing never runs either, and breakeven should have called
+`RequestStopMove` on the very next sweep and reached `:836`. `TestAtm_P2134_TheAbandonAnnouncement‐
+FiresOncePerEpisode` drives exactly this shape and gets `abandoned == 1`. **The suite and the live
+box disagree on this path** and the discrepancy is unexplained — do not close it by reasoning; drive
+it again and instrument `StopModifyAttempts`, which `GetBracketStatus` does not expose (`P3-137a`).
+
+
+### P2-135. `ATM_STOP_MOVE_ABANDONED` cannot be said on the path that spends its budget by refusal — OPEN, found 2026-08-17 (session 54) while live-validating `P2-134`
+
+**Measured on `Sim101`, bracket `75726b75`, MNQ SEP26, one contract:**
+
+```
+23:21:22  ATM_STOP_MOVE_REQUESTED   75726b75: breakeven trigger reached -- requested stop 30212 -> 30232.5
+23:21:27  ATM_STOP_CHANGE_IGNORED   ... the provider holds 30212 (attempt 1 of 3)
+23:21:52  ATM_STOP_MOVE_REQUESTED   (same)
+23:21:57  ATM_STOP_CHANGE_IGNORED   ... (attempt 2 of 3)
+23:22:22  ATM_STOP_MOVE_REQUESTED   (same)
+23:22:27  ATM_STOP_CHANGE_IGNORED   ... (attempt 3 of 3)
+          -- nothing further, ever --
+```
+
+The budget is spent to exactly `MaxStopModifyAttempts` and **`ATM_STOP_MOVE_ABANDONED` is never
+emitted.** The operator is told "attempt 3 of 3" and then the surface goes quiet for the life of
+the position, with the stop resting at its ORIGINAL price and no longer trailing. `P2-134` was
+filed because that line was said too often; this is the same defect inverted, on the neighbouring
+branch, and it is the worse direction.
+
+**Why.** The announcement lives at the TOP of `RequestStopMove`, so it only speaks if something
+CALLS that method after the budget is exhausted. The two sites that spend the budget differ in
+whether anything ever does:
+
+| site | returns | caller sets `BreakevenTriggered`? | re-requests next sweep? |
+|---|---|---|---|
+| `RequestStopMove` — `ModifyStopPrice` failed (`:871`) | `false` | no, the call returned false | **yes** → abandon reached |
+| `ReconcileStopFromBroker` — provider holds another price (`:922`) | n/a, the request had SUCCEEDED | yes, set on the successful request | **no** → abandon unreachable |
+
+The re-arm that would rescue the second row is `:932`:
+
+```csharp
+if (bracket.BreakevenTriggered && bracket.StopModifyAttempts < MaxStopModifyAttempts)
+    bracket.BreakevenTriggered = false;
+```
+
+`attempts < Max` is false at exactly the attempt that exhausts the budget, so `BreakevenTriggered`
+is left latched `true`, `:709`'s `!bracket.BreakevenTriggered` is false forever, and the breakeven
+caller stops calling. The only remaining caller is the trailing branch at `:728`, which needs
+`newStop > CurrentStopPrice` — with the default `TrailMultiplier` of 2 that means price must exceed
+entry by a full stop-distance. **So the give-up line is reachable only on the branch where the trade
+is winning, and silent in exactly the case where a frozen stop matters most.**
+
+#### The controlled pair, measured the same night on the same account
+
+Two brackets, the same code, the same provider, the same failure mode, and one variable:
+
+| bracket | `TrailMultiplier` | trailing branch | `ATM_STOP_MOVE_ABANDONED` |
+|---|---|---|---|
+| `4b37828a` | **0.5** | live — `ATM_STOP_MOVE_IN_FLIGHT ... trailing stop advanced` every sweep | **fired, exactly once**, 23:40:58 |
+| `75726b75` | **2** (the shipped default) | dormant — `newStop` never exceeded `CurrentStopPrice` | **never fired**, 3 attempts then silence |
+
+On `4b37828a` the announcement came out in the *same sweep* as attempt 3: the reconcile incremented
+the counter to the cap and left `BreakevenTriggered` latched `true`, which is precisely what enables
+the trailing branch a few lines later — and that trailing call is what reached `:836`. **The latch
+that disables the breakeven caller is the same latch that enables the trailing one**, so whether
+anybody is left to say the line comes down entirely to a parameter that has nothing to do with
+giving up.
+
+⚠️ **This is why `P2-134` reads as validated.** It is — on the configuration that happened to be
+under test. The default configuration is the silent one.
+
+⚠️ **The suite cannot see this, and its own setup contains the workaround.**
+`ATM_STOP_CHANGE_IGNORED` appears **zero** times in `tests/RiskGuardAddOnTests.cs`.
+`TestAtm_P2134_TheGenuineRefusalKeepsItsName` does drive the refusal path to the cap — and then, at
+`:8476`, does this:
+
+```csharp
+inst.MarketData.Last.Price = 20010.00;   // now ask for a move, and be refused
+```
+
+It moves the price by hand to force another `RequestStopMove`. That is a faithful test of the
+message's CONTENT and it never asks whether anything calls it. **A test that supplies the missing
+caller itself cannot discover that the caller is missing.** Another instance of
+[[an-alarm-wired-to-a-dead-output]], and a second instance of the `P2-134` lesson that the test and
+the fix can agree with each other and both be wrong about the system.
+
+⚠️ **The harness cannot represent this path honestly.** The stub's `ModifyStopPrice` assigns
+`live.StopPrice = newStopPrice` before `account.Change()`, so in the tests a change ALWAYS takes and
+the reconcile always reads CONFIRMED. That is why the existing test must re-prime
+`bracket.RequestedStopPrice` on every iteration — production sets it to `NaN` at `:935` and only a
+successful request restores it. Any fix here needs a stub that can decline a `Change()`.
+
+**Not to do:** do not "fix" this by relaxing `<` to `<=` in the re-arm. That reinstates the
+5-second flood `P2-134` closed. The announcement wants emitting where the budget is SPENT, not
+where the next request is refused.
+
+#### A Simulator refusal, measured — `Sim101` does decline a `Change()`
+
+[[the-simulator-re-ids-nothing]] records the Simulator echoing a requested price back. It does not
+always: the three `ATM_STOP_CHANGE_IGNORED` lines above are `Sim101` declining a move outright.
+The requested stop was **entry + 2 ticks with the trigger also at 2 ticks**, so the breakeven stop
+landed at 30232.5 with the market at 30232.5-30233.5 — a sell-stop at or above the bid. The
+Simulator refuses that and holds the old price; with a trigger of 8 ticks against an offset of 2 the
+same move was accepted. **So "the Simulator honours everything" is false, and the distinguishing
+variable is whether the resulting stop is valid against the current market, not the provider.**
+
+
+### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — OPEN, found 2026-08-17 (session 54)
+
+A **successful** compile hot-swaps `bin/Custom` into a new assembly. `DynamicAtmManager`'s registry
+lives behind `private static readonly Lazy<DynamicAtmManager> _instance` (`:160`) — which reads as
+"survives anything" and does not survive this. The new assembly gets a fresh `Lazy`, so
+`_activeBrackets` starts **empty**, while the position and both broker-side legs are untouched.
+
+**Measured**, on a box with **377 minutes of NT8 uptime and no restart**:
+
+* `mcp_compile_result.json` stamped `2026-08-17T03:17:56Z`, whose own note reads *"NinjaScript
+  hot-swaps right after this; if the connection dropped, GET /api/compile/result"*.
+* **18** `CONNECTION_CHANGE Connecting -> Connected -> INITIALIZE -> ARMED_ON_START` bursts in 2.5
+  hours — every one a recompile, none a restart.
+* Bracket `1a48f3cf`, registered at 23:16 with an OPEN 1-lot MNQ position, was absent from the
+  registry by 23:17:3x. The position was still long 1. Nothing was logged.
+
+**Consequence:** breakeven and trailing stop, permanently, with **no operator-visible symptom** —
+the stop and target still rest at the broker, so every surface an operator would check reports the
+trade as protected. It is protected at its original price and will never move again. This also
+explains the pre-existing orphan `0511fe1c`, left in `CancelPending` since 18:03.
+
+⚠️ **A concurrent session does this to you.** The 23:17:56 compile came from another process
+deploying unrelated `range_probability` NinjaScript in the `tvDownloadOHLC` repo. **Deploying an
+indicator that has nothing to do with the guard discards the guard's ATM state.**
+
+⚠️ **I filed the wrong cause first.** The initial reading was a transient `Account.All` miss during
+a connection cycle hitting the unlogged `toRemove` at `:638` — plausible, wrong, and it would have
+produced a fix for a defect that is not there. The compile timestamp matched to the second.
+[[check-the-exemplar-belongs-to-the-class]].
+
+**Two things are wanted, and they are separable:**
+
+1. **Say it.** Neither removal branch (`:638`, `:652`) logs anything, so a bracket leaving management
+   is indistinguishable from one that was never added. That is cheap and is the whole difference
+   between silent and diagnosable.
+2. **Survive it**, or state plainly that it cannot. `ActiveBracket` is already serialised into the
+   bridge payload, so the shape for rehydration exists.
+
+⚠️ `ARMED_ON_START` re-fires on every one of these. In `shadow` that is noise; in `live` it means a
+deliberate disarm does not survive somebody else's compile. Fold into the same fix or give it an ID.
+
+
+### P3-137. `ActiveBracket.IsComplete` is never set true — two filters and one API field are inert — OPEN, found 2026-08-17 (session 54)
+
+`grep -rn "IsComplete" addons/*.cs` returns five lines and **not one of them assigns `true`**:
+
+```
+:128   public bool IsComplete { get; set; }              declared
+:436               IsComplete = false                    the only write, at construction
+:484   _activeBrackets.Values.Where(b => !b.IsComplete)  GetActiveBrackets() -- passes everything
+:508               isComplete = b.IsComplete             bridge payload -- always false
+:628   _activeBrackets.Values.Where(b => !b.IsComplete)  the sweep's working set -- passes everything
+```
+
+Nothing in `nt8-mcp-bridge/addons` writes it either. Both filters read as "skip finished brackets"
+and are no-ops; the bridge advertises `isComplete` to every consumer as a constant. Removal from
+management is done entirely by `RemoveBracket` / `toRemove`, which is why nobody has noticed.
+
+[[a-green-that-can-never-be-red]] inverted — ask what input makes this TRUE, and if you cannot name
+one, delete the field and both filters rather than leaving a mechanism that looks load-bearing. If
+it is meant to become real, it belongs to `P2-136`'s "say it" half, where a bracket that has left
+management is exactly what wants recording.
+
+#### P3-137a. `GetBracketStatus` exposes the wrong fields — the retry state is invisible
+
+`GetBracketStatus` (`:495`-`:510`) returns thirteen fields and **none of them is
+`StopModifyAttempts`, `StopMoveAbandonAnnounced`, or `LastStopMoveFailureReason`.** It does return
+`isComplete`, which is the one that can never change. So the single question an operator has about
+a bracket that has stopped trailing — *has this given up, and why?* — cannot be asked of the running
+system at all; the only evidence is a log line that, per `P2-135`, may never have been emitted.
+
+Found while trying to settle `P2-134`'s unexplained `b604e308` measurement from outside, which could
+not be done for exactly this reason. Swap `isComplete` for the three retry fields, or add them.
+Note the abandon message's own fallback comment (`:842`-`:845`) already reasons about "a bracket
+restored from the bridge's payload" carrying the count — **the payload does not carry the count.**
