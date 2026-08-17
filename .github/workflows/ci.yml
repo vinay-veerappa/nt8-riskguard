@@ -665,16 +665,16 @@ jobs:
           # going stale, in the same commit that moved them.
           # ⚠️ P1-140 GOES HERE because 19 bins is the ceiling (20 concurrent jobs ACCOUNT-WIDE,
           # shared with nt8-mcp-bridge; a 20th measured 726s and a 21st 853s, both WORSE), and this
-          # was the shortest bin at 492s. The weight is DERIVED FROM A MEASUREMENT rather than
-          # guessed: P1-139 measured 289s for 13 mutants in run 32046508202, i.e. 22.2s per mutant,
-          # so 10 mutants + baseline + restore is ~266s. That puts this bin at ~758s, comfortably
-          # under the 848s critical path, which is why it does not go in the P1-139 bin.
+          # was the shortest bin at 492s. The weight was DERIVED FROM A MEASUREMENT rather than
+          # guessed -- P1-139's 289s for 13 mutants gave 22.2s/mutant, so 10 mutants + baseline +
+          # restore predicted ~266s -- and it MEASURED 235s, within 12%. Deriving a weight from a
+          # neighbouring battery's measured seconds works; guessing 30s/mutant does not.
           #
           # Group 1 is the one to know: it puts the partial-profit SUBMISSION back. A fix that only
           # stops SAYING something is not a fix that stops submitting. Group 4's guard mutant is the
           # one no positive test can see -- removing `partialQty > 0` makes the line fire on every
           # ONE-LOT bracket, which is every bracket this box has ever placed.
-          - { label: "P2-98+P2-101+P1-140", batteries: "mutate_p298.py mutate_p2101.py mutate_p1140.py" }   # ~758s = P2-98 315s + P2-101 177s + P1-140 ~266s (10 mutants; measure and correct on the first green run)
+          - { label: "P2-98+P2-101+P1-140", batteries: "mutate_p298.py mutate_p2101.py mutate_p1140.py" }   # 786s job / 738s batteries = P2-98 332s + P2-101 171s + P1-140 235s (measured 2026-08-17, run 32050873234)
 
           # UI6 (the copier half), 311s. The mutant this battery exists for casts CopierConformance
           # to an int for sorting: that enum's numbering is HISTORICAL, not severity, so casting
@@ -799,10 +799,12 @@ jobs:
           # was deleted rather than declared, because the finding it defended against was measured
           # unreachable -- LogFromComponent cannot throw -- and the duplicate write it added broke
           # two mutate_p0_67.py anchors by making a unique line non-unique.
-          # ⚠️ MEASURED, run 32046508202: this bin is now the CRITICAL PATH at 848s, by ELEVEN
-          # SECONDS over the next one (F-6+P1-99+P1-133 at 837s). Wall clock 15m55s. So do NOT add a
-          # battery here -- the margin is noise, and the next addition should go to whichever bin the
-          # packer picks, on weights from a run, not to whichever looks short in this file.
+          # ⚠️ MEASURED 848s, run 32046508202, where it was the longest bin by ELEVEN SECONDS over
+          # F-6+P1-99+P1-133. ⚠️ AND THAT CLAIM WAS STALE WITHIN ONE RUN: in 32050873234 this bin
+          # dropped out of the top three entirely and F-6+P1-99+P1-133 led at 835s. Run-to-run
+          # variance here is ~60s, which SWAMPS an 11s gap -- so "which bin is the critical path" is
+          # not a stable fact and must not be written down as one. What is stable: the top three bins
+          # sit within ~50s of each other, so there is no cheap win left in re-binning.
           # P1-139 measured 289s against a ~420s estimate: 13 C# mutants came in at ~22s each, so
           # estimating a battery at 30s/mutant overshoots by roughly half.
           - { label: "P2-116+P1-84+P1-139", batteries: "mutate_p2116.py mutate_p184.py mutate_p1139.py" }   # 848s job / 800s batteries = P2-116 310s + P1-84 201s + P1-139 289s (measured 2026-08-17, run 32046508202)
