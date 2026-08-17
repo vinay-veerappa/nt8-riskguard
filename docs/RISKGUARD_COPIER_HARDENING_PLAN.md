@@ -7309,6 +7309,44 @@ sets itself and the broker does not touch. ⚠️ **Whatever is chosen must be v
 non-Simulator account**, because that is precisely the axis on which every existing test agrees
 and reality does not.
 
+#### ⚠️ THE REST OF THIS ADDON ALREADY KNEW, IN WRITING, IN THREE PLACES — swept 2026-08-16
+
+The class sweep was run before writing any code, and it did not find a widespread habit. It found
+the opposite, which is worse: **every other module that keys an order got this right, on purpose,
+with a comment explaining why, and `DynamicAtmManager` is the sole holdout.**
+
+| Site | What it does | Its own words |
+|---|---|---|
+| `RiskGuardModels.cs:492` | FSM tracks `_recognizedStops` as `List<Order>` | *"NT8 Order.OrderId is NOT unique and can change over the order's lifetime … Track recognised stops by the Order object reference, not by id string."* |
+| `TradeCopierEngine.cs:4477` | `OrderReferenceComparer : IEqualityComparer<Order>` keys `_pendingCopies` | *"**`Order.OrderId` must not be used as a key**… Keying on the id here would mis-attribute a fill… **and no test would catch it, because the test stub hands out a stable GUID per order.**"* |
+| `CopierReconciler.cs:647` | reference identity again | *"Reference identity, not `Order.OrderId`."* |
+| `McpBridgeAddOn.cs:2683` | the bridge's order lookup | tolerant three-way: `o.OrderId == key \|\| o.Name == key \|\| o.Id.ToString() == key` |
+
+So the fix is **well-precedented rather than novel**: `OrderReferenceComparer` exists, is tested,
+and states the rule. This is not a new convention to introduce, it is one module to bring into
+line — which also means the ticket should be small and the review should be about the *sites*, not
+the approach.
+
+⚠️ **`DynamicAtmManager` has FOUR id-keyed lookups, not the one the summary above names**:
+`:622` (`o.OrderId == bracket.EntryOrderId`), `:742` and `:758` (both inside `ModifyStopPrice`),
+and `:861` (`o.OrderId == bracket.StopOrderId`, the reconcile path). Fixing only the one the live
+run happened to exercise would leave breakeven working and the entry-detection and reconcile paths
+still broken on exactly the same accounts. **Count the sites before closing the ticket**
+([[a-second-reader-of-the-same-state]]).
+
+⚠️ **And the existing warnings UNDERSTATE the mechanism.** All three say the id "can change over
+the order's lifetime (historical→live transition)" — a rare edge. What was measured is not rare and
+not that: **the broker replaces the id on ACCEPT, on every order, on every real connection.** The
+comments are right about the rule and wrong about how often it bites, and being right about a rule
+for an under-stated reason is how a fourth module comes to think it is exempt. The copier's comment
+is the one that names the real trap — *"no test would catch it, because the test stub hands out a
+stable GUID per order"* — which is [[test-doubles-are-not-evidence]] written down, unread, two
+years before it cost us a safety feature.
+
+**Regression test**: the stub must hand out an id that CHANGES on accept, at least for one order —
+otherwise the suite continues to model the one broker whose behaviour is not the product. A test
+that passes under both a stable and a re-issued id is not evidence about either.
+
 ---
 
 ### P2-134. `ATM_STOP_MOVE_ABANDONED` says "not asking again for this bracket" and then says it every 5 seconds — and blames a provider that refused nothing — OPEN, found 2026-08-16 (session 52), same run

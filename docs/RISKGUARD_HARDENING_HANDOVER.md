@@ -11236,3 +11236,71 @@ the vendored core failed at its baseline: **439 passed / 17 failed in the worktr
 here**. The loop handled it correctly — it counted them as expected failures and reported no
 regression — but two real gates were dark for the whole run and nothing in the output said so.
 Logged against the loop as a consumer finding.
+
+
+---
+
+## 5.84 Session 52 — the funded-account run: brokers do not behave the same, and the Simulator is the one we validate on
+
+The operator cleared a live test on `TAKEPROFITPRO524207503` (Provider31, funded 50K TPT PRO) after
+confirming they were flat. Two 1-lot MNQ brackets, `DrawdownShield`, the second with a 2-tick
+breakeven trigger to force the path rather than wait on the market. Both closed cleanly —
+`positionsMatched: 1`, `cancelledOrdersCount: 4`, `positionsStillOpen: []`, and `nt_positions` /
+`nt_orders` verified empty afterwards.
+
+**What it bought, in one table.** Every row is a difference between the Simulator and a real
+broker, and every row was previously invisible.
+
+| | `Sim101` (Simulator) | `TAKEPROFITPRO…` (Provider31) | Consequence |
+|---|---|---|---|
+| `Order.OrderId` after accept | still the submission GUID | **the broker's numeric id** | `P1-133` — every id-keyed lookup works on one and not the other |
+| a resting protective stop | `Accepted` | **`Working`** | the state defect `P1-130` fixed **could not have bitten here at all** |
+| `Account.Change()` on a stop | echoes the requested price back | (untested — never reached, `P1-133` blocks it) | `P0-63`, closed, is a *Simulator* observation |
+
+✅ **`P1-130`'s bounded-retry half is now genuinely live-validated**: exactly three
+`ATM_STOP_ORDER_NOT_FOUND` attempts, then `ATM_STOP_MOVE_ABANDONED` — **an event that had never
+fired once in the log's history**. That was an open remainder and it is closed on real evidence.
+It then repeated at :13, :18 and :23 from a line reading *"not asking again for this bracket"* —
+filed `P2-134`.
+
+### The question this raises, and the answer that is NOT "handle each broker"
+
+> *Will each broker behave differently? Should we plan for this scenario?*
+
+**Yes — three axes are already measured** (the table above), and they are the three things order
+management is built on: identity, state lifecycle, and whether a modification takes. There will be
+more, and we cannot enumerate them: this box has **eight configured connections** and the funded
+firms can change provider under us without telling anybody.
+
+⚠️ **So the plan is deliberately NOT a per-broker compatibility matrix.** That is a combinatorial
+trap that grows with every firm the operator signs with, and it is unfalsifiable — nobody can
+enumerate a broker's behaviour, only observe the parts they happened to exercise. **Three standing
+rules instead, each of which makes the difference unobservable rather than handled:**
+
+1. **Never key on a value the broker owns.** `Order.OrderId` is the broker's. Use reference
+   identity (`OrderReferenceComparer`, already here) or a name *we* set (`Stop_<bracketId>`). A
+   value we control cannot vary by provider. — this is `P1-133`.
+2. **Never enumerate the live states; ask a question, and close the TERMINAL set.** The predicates
+   (`OccupiesSlot`, `ProvidesCoverage`, `AcceptsModification`, `BridgeOrderLiveness.
+   WouldBeStrandedByDisconnect`) each name a question and each defaults **safe** on a state this
+   build has never heard of. A hand-written list of *live* states is open-ended and silently wrong
+   on the next provider; a list of the three *terminal* ones is closed and a new state falls into
+   the safe branch. `P1-131` is exactly this fix, and the `Working`/`Accepted` row above is exactly
+   what an open list gets wrong.
+3. **Evidence names its provider.** "Live-validated" without a provider name means `Sim101` and is
+   not validation for anything touching identity or state. Say `Provider31` or say which half was
+   measured.
+
+⚠️ **Rule 1 was already written down HERE, three times, and one module never read it.** The sweep
+is in `P1-133`'s entry: `RiskGuardModels.cs:492`, `TradeCopierEngine.cs:4477` and
+`CopierReconciler.cs:647` all forbid keying on `OrderId`, and the bridge's own lookup at
+`McpBridgeAddOn.cs:2683` matches all three identities tolerantly. `DynamicAtmManager` is the sole
+holdout, in **four** places. **A convention documented in three files is not a convention the fourth
+follows, and nothing compared them** — the same shape as `P0-96`, where the whole suite encoded
+that `Position.Quantity` is absolute and the copier read its sign.
+
+⚠️ **And the copier's comment names the trap in advance**: *"no test would catch it, because the
+test stub hands out a stable GUID per order."* It was right, it was unread, and the cost was a
+safety feature that has never worked where it counts. **The regression test for `P1-133` is
+therefore in the STUB, not only in the manager**: at least one order must be re-issued a new id on
+accept. A test that passes under both a stable and a re-issued id is evidence about neither.
