@@ -86,14 +86,17 @@ MUTANTS = [
      "the suppression swallows the RETURN as well as the log, so a bracket past its budget\n"
      "     starts asking again -- the announcement is quiet AND the bound is gone. This is the\n"
      "     mutant that proves the fix suppressed only the logging",
+     # ⚠️ REPOINTED session 56 (P1-139). This used to anchor on the budget block being ADJACENT to
+     # the "// P1-130. EVERY failed request" comment, and P1-139 inserted the kind-recording line
+     # between them, so the anchor stopped matching and this mutant scored a SURVIVOR silently.
+     # Anchored on the announcement above the return instead: that pairing is what the mutant is
+     # about, and it does not depend on what follows the block. [[mutation-anchors-go-stale]].
+     '                AnnounceStopMoveAbandonmentIfNeeded(account, bracket);\n'
      '                return false;\n'
-     '            }\n'
-     '\n'
-     '            // P1-130. EVERY failed request spends the budget',
+     '            }',
+     '                AnnounceStopMoveAbandonmentIfNeeded(account, bracket);\n'
      '                return bracket.StopMoveAbandonAnnounced;\n'
-     '            }\n'
-     '\n'
-     '            // P1-130. EVERY failed request spends the budget'),
+     '            }'),
 
     # ---- group 2: the SCOPE, which is where a suppression turns into deletion -------------------
     (ATM,

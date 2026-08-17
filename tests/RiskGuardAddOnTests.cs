@@ -487,6 +487,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice();
             TestAtm_P1139_AStopAlreadyBetterThanBreakevenIsNotPulledBack();
             TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall();
+            // Both written FROM the mutation battery: the guard is unreachable through the sweep by
+            // design, and the re-arm rule is repaired within the same sweep, so neither was killable.
+            TestAtm_P1139_TheGuardItselfRefusesEveryWrongWayPrice();
+            TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag();
+            TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -8821,6 +8826,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "refuses the wrong-way request leaves BreakevenTriggered false, and the trailing "
                 + "block is gated on it -- so the stop never moves again and the position rides to "
                 + "its original stop. Requested = " + bracket.RequestedStopPrice + ".");
+
+            // ⚠️ The one moment the recorded kind is observable, and the only thing that kills a
+            // mislabelled call site. The request is outstanding here; the NEXT reconcile clears the
+            // kind, and `alreadyAtBreakeven` re-establishes BreakevenTriggered inside the same
+            // sweep -- so a trailing site that claims `Breakeven` produces identical end-state and
+            // identical logs, while the re-arm it licenses is exactly the P1-139 defect.
+            Assert(bracket.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.Trail,
+                "P1-139: the outstanding move is recorded as a TRAIL move, because that is what it "
+                + "is. Label it Breakeven and the reconciler re-arms on refusal, which sends the "
+                + "stop back to the breakeven price computed from entry (got "
+                + bracket.OutstandingStopMoveKind + ").");
         }
 
         /// <summary>
@@ -8946,6 +8962,251 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "the bracket must record that. Refusing the wrong-way move without recording it "
                 + "leaves this flag false, and the trailing block is gated on it -- so the position "
                 + "never trails again and the guard has traded one silent failure for another.");
+        }
+
+        /// <summary>
+        /// P1-139, finding #18 and why it does NOT hold -- pinned rather than argued.
+        ///
+        /// The round-3 arbiter upheld five findings. Four were rejected by hand against the code.
+        /// The fifth said: the reconciler's new `finally` clears `RequestedStopPrice`, but if
+        /// `AnnounceStopMoveAbandonmentIfNeeded` throws, the exception skips
+        /// `bracket.CurrentStopPrice = brokerPrice` at the end of the method, leaving the cache
+        /// holding a price the broker does not have. That was accepted and the assignment was moved
+        /// into the finally.
+        ///
+        /// ⚠️ THEN MEASURED, AND THE PREMISE IS FALSE. Every call inside that `try` is
+        /// `RiskGuardAddOn.LogFromComponent`, whose whole body is
+        /// `try { inst.LogEvent(...); } catch { }` — it swallows everything, including a
+        /// `LogEventMessageObserver` that throws on purpose, which is what this test installs.
+        /// **Nothing in the try block can throw**, so finding #18 is unreachable and all five
+        /// upheld findings fail. Same lesson as [[a-green-that-can-never-be-red]] pointed the other
+        /// way: before accepting a finding, name the input that produces it.
+        ///
+        /// The assignment stays in the finally as defence — it costs one line and makes the
+        /// guarantee unconditional — and `mutate_p1139.py` declares the mutant that moves it back
+        /// out an EXPECTED SURVIVOR, citing this test for the reason. ⚠️ If `LogFromComponent`'s
+        /// internal catch is ever removed, the first assertion here fails and that mutant becomes
+        /// killable, which is exactly the signal wanted.
+        /// </summary>
+        private static void TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: an announcement cannot throw, so #18 is unreachable");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            // One refusal short of the budget, so THIS reconcile is the one that announces.
+            var b = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            b.CurrentStopPrice = 19990.00;
+            b.BreakevenTriggered = true;
+            b.StopModifyAttempts = DynamicAtmManager.MaxStopModifyAttempts - 1;
+            b.RequestedStopPrice = 20013.00;
+            b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.Trail;
+            stop.StopPrice = 20010.00;          // the provider holds this, not the 20013.00 asked for
+
+            bool announced = false;
+            bool escaped = false;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_STOP_MOVE_ABANDONED") return;
+                announced = true;
+                throw new InvalidOperationException("the sink behind this log failed");
+            };
+            try
+            {
+                try { atm.DriveStopReconcileForTest(acct, b); }
+                catch (InvalidOperationException) { escaped = true; }
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            Assert(announced,
+                "P1-139: precondition -- this reconcile really did reach the abandonment "
+                + "announcement, so the throw below was actually attempted. Without this the test "
+                + "asserts nothing.");
+            Assert(!escaped,
+                "P1-139: an observer that throws inside the announcement does NOT escape the "
+                + "reconciler, because LogFromComponent's whole body is try/catch. THIS is why the "
+                + "arbiter's finding #18 does not hold: nothing in the reconciler's try block can "
+                + "throw, so the assignment at the end of the method is never skipped. If this "
+                + "assertion ever fails, #18 has become real -- fix it and make the corresponding "
+                + "EXPECTED SURVIVOR in mutate_p1139.py a live mutant again.");
+            Assert(Math.Abs(b.CurrentStopPrice - 20010.00) < 1e-9,
+                "P1-139: and either way the cache holds what the BROKER holds (20010.00), not the "
+                + "19990.00 it came in with nor the 20013.00 that was refused (got "
+                + b.CurrentStopPrice + ")");
+            Assert(double.IsNaN(b.RequestedStopPrice)
+                   && b.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.None,
+                "P1-139: and no phantom request survives the throw, which would otherwise block "
+                + "every move for the life of the position (requested=" + b.RequestedStopPrice
+                + ", kind=" + b.OutstandingStopMoveKind + ")");
+        }
+
+        /// <summary>
+        /// P1-139. The guard itself, driven directly at the choke point.
+        ///
+        /// ⚠️ WRITTEN BECAUSE THE MUTATION BATTERY FOUND IT UNKILLABLE, not because review asked
+        /// for it. `mutate_p1139.py` replaced the whole guard with `if (false)` and the suite stayed
+        /// green at 2113/0: `alreadyAtBreakeven` means neither breakeven call site ever hands
+        /// RequestStopMove a wrong-way price, and the trailing site has its own `stopMoved` check —
+        /// so the guard is unreachable through the sweep BY DESIGN. That is correct design and it is
+        /// also how a guard becomes decoration. The source gate did not help either: `IsLong` still
+        /// appears inside a dead `if (false)` block, because a regex cannot see reachability.
+        ///
+        /// Six cases, one per mutant the battery produced. The two zero-baseline cases are the ones
+        /// that matter most: an unset `CurrentStopPrice` is "no baseline", and read as a price it
+        /// refuses every SHORT's first move for the life of the position.
+        /// </summary>
+        private static void TestAtm_P1139_TheGuardItselfRefusesEveryWrongWayPrice()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: the wrong-way guard, driven directly at the choke point");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20011.00);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            int refusals = 0;
+            string message = null;
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                if (evt != "ATM_STOP_MOVE_WRONG_WAY") return;
+                refusals++;
+                message = msg;
+            };
+            try
+            {
+                // ---- a LONG: better is HIGHER ----
+                var b = AtmBracketFor(acct, inst, stop, 20000.00, 20010.00);
+                b.CurrentStopPrice = 20010.00;
+                stop.StopPrice = 20010.00;
+
+                Assert(!atm.RequestStopMoveForTest(acct, b, 20000.50, ActiveBracket.StopMoveKind.Breakeven),
+                    "P1-139: a long's stop is not asked DOWN from 20010.00 to 20000.50");
+                Assert(Math.Abs(stop.StopPrice - 20010.00) < 1e-9,
+                    "P1-139: and the broker was never asked -- the order still holds 20010.00 (got "
+                    + stop.StopPrice + ")");
+                Assert(double.IsNaN(b.RequestedStopPrice) && b.StopModifyAttempts == 0,
+                    "P1-139: our own refusal leaves no request outstanding and spends no budget "
+                    + "(requested=" + b.RequestedStopPrice + ", attempts=" + b.StopModifyAttempts + ")");
+                Assert(refusals == 1 && message != null
+                       && message.IndexOf("20010", StringComparison.Ordinal) >= 0
+                       && message.IndexOf("20000.5", StringComparison.Ordinal) >= 0,
+                    "P1-139: it is said once and names BOTH prices -- the one held and the one "
+                    + "refused (count=" + refusals + ", msg='" + message + "')");
+
+                // EQUAL is refused too: a no-op Change() can be reverted by the provider (P0-61)
+                // and there is nothing to gain by sending it.
+                Assert(!atm.RequestStopMoveForTest(acct, b, 20010.00, ActiveBracket.StopMoveKind.Trail),
+                    "P1-139: an EQUAL price is refused -- a redundant Change() is pure risk");
+
+                Assert(atm.RequestStopMoveForTest(acct, b, 20012.00, ActiveBracket.StopMoveKind.Trail),
+                    "P1-139: precondition/negative control -- a genuine IMPROVEMENT is still allowed, "
+                    + "or the guard would simply be refusing everything");
+
+                // ---- a SHORT: better is LOWER, which is the direction no test covered before ----
+                var s = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                s.IsLong = false;
+                s.CurrentStopPrice = 19990.00;
+                s.RequestedStopPrice = double.NaN;
+
+                Assert(!atm.RequestStopMoveForTest(acct, s, 20000.00, ActiveBracket.StopMoveKind.Trail),
+                    "P1-139: a SHORT's stop is not asked UP from 19990.00 to 20000.00. Better is "
+                    + "LOWER for a short, and a guard written long-only accepts this");
+                Assert(atm.RequestStopMoveForTest(acct, s, 19985.00, ActiveBracket.StopMoveKind.Trail),
+                    "P1-139: and a short's genuine improvement -- DOWN to 19985.00 -- is allowed");
+
+                // ---- no baseline at all ----
+                var fresh = AtmBracketFor(acct, inst, stop, 20000.00, 0);
+                fresh.IsLong = false;
+                fresh.CurrentStopPrice = 0;
+                fresh.RequestedStopPrice = double.NaN;
+                Assert(atm.RequestStopMoveForTest(acct, fresh, 19999.50, ActiveBracket.StopMoveKind.Breakeven),
+                    "P1-139: a SHORT with no reconciled baseline is allowed its first move. "
+                    + "CurrentStopPrice is 0 there, and read as a PRICE rather than as 'no baseline' "
+                    + "it is lower than every real stop -- so a short would be refused forever. This "
+                    + "is the reading the round-2 arbiter upheld, reversed by measurement.");
+
+                // ---- a garbage target is refused whatever the baseline says ----
+                var neg = AtmBracketFor(acct, inst, stop, 20000.00, 0);
+                neg.CurrentStopPrice = 0;
+                neg.RequestedStopPrice = double.NaN;
+                Assert(!atm.RequestStopMoveForTest(acct, neg, -5.00, ActiveBracket.StopMoveKind.Trail),
+                    "P1-139: a non-positive stop price is refused even with no baseline to compare "
+                    + "against -- 'no baseline' licenses an unknown direction, not an invalid price");
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
+        /// P1-139. The re-arm rule at the unit, because the sweep hides it.
+        ///
+        /// ⚠️ ALSO WRITTEN FROM THE BATTERY. Two mutants -- dropping the kind clause, and labelling
+        /// the trailing call site `Breakeven` -- both survived the full suite. Not a test gap in the
+        /// sweep tests: `alreadyAtBreakeven` re-establishes `BreakevenTriggered` in the SAME sweep,
+        /// so a flag cleared wrongly is repaired before `MonitorTickForTest` returns and no
+        /// end-of-sweep assertion can see the difference. The rule is only observable one reconcile
+        /// at a time.
+        ///
+        /// This is also the honest record of a REDUNDANCY: part three of the fix (`alreadyAtBreakeven`)
+        /// would repair the defect on its own. The kind clause is kept because it makes the repair
+        /// unnecessary rather than load-bearing — and these two assertions are what stop it from
+        /// being deleted as dead weight.
+        /// </summary>
+        private static void TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-139: the re-arm asks WHICH move was refused (unit)");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm, last: 20015.00);
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            // A refused TRAIL move. The broker holds 20010.00 and a move to 20013.00 was asked for.
+            var t = AtmBracketFor(acct, inst, stop, 20000.00, 20010.00);
+            t.CurrentStopPrice = 20010.00;
+            t.BreakevenTriggered = true;
+            t.RequestedStopPrice = 20013.00;
+            t.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.Trail;
+            stop.StopPrice = 20010.00;
+
+            atm.DriveStopReconcileForTest(acct, t);
+
+            Assert(t.BreakevenTriggered,
+                "P1-139: a refused TRAIL move must NOT clear BreakevenTriggered. The trail recomputes "
+                + "its target from the CURRENT PRICE every sweep and needs no re-arm; the breakeven "
+                + "branch recomputes from ENTRY, so clearing the flag sends the stop back to "
+                + "breakeven. That is the whole defect.");
+            Assert(t.StopModifyAttempts == 1,
+                "P1-139: the provider refusal is still counted (got " + t.StopModifyAttempts + ")");
+
+            // A refused BREAKEVEN move, same shape, opposite requirement -- P0-67's case.
+            var b = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            b.CurrentStopPrice = 19990.00;
+            b.BreakevenTriggered = true;
+            b.RequestedStopPrice = 20000.50;
+            b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.Breakeven;
+            stop.StopPrice = 19990.00;
+
+            atm.DriveStopReconcileForTest(acct, b);
+
+            Assert(!b.BreakevenTriggered,
+                "P1-139: a refused BREAKEVEN move DOES clear it, so the next sweep re-requests the "
+                + "same breakeven price. This is what P0-67 added the re-arm for, and a fix that "
+                + "never clears the flag breaks it.");
+
+            Assert(t.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.None
+                   && b.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.None,
+                "P1-139: and the kind is cleared with RequestedStopPrice in both cases, so a stale "
+                + "one cannot decide the NEXT episode (trail=" + t.OutstandingStopMoveKind
+                + ", breakeven=" + b.OutstandingStopMoveKind + ")");
         }
 
         /// <summary>

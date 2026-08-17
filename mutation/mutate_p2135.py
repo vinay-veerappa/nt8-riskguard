@@ -68,9 +68,9 @@ MUTANTS = [
      "⚠️ THE DEFECT, RESTORED: the reconciler's refusal stops announcing, so the give-up\n"
      "     line is reachable only from RequestStopMove -- which, on this path, nothing calls\n"
      "     again. This is P2-135 exactly: budget spent 3 of 3, announcements 0",
-     '                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";\n'
-     '                    AnnounceStopMoveAbandonmentIfNeeded(account, bracket);',
-     '                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";'),
+     '                        bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";\n'
+     '                        AnnounceStopMoveAbandonmentIfNeeded(account, bracket);',
+     '                        bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";'),
 
     (ATM,
      "EXPECTED SURVIVOR: the ModifyStopPrice site stops announcing. It survived on the first\n"
@@ -117,12 +117,12 @@ MUTANTS = [
      "     fires, still counts once, still says '3 stop moves failed' -- and reports the\n"
      "     PREVIOUS failure or 'not recorded'. The smallest edit that keeps a feature working\n"
      "     and makes it lie",
-     '                    bracket.StopModifyAttempts++;\n'
-     '                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";\n'
-     '                    AnnounceStopMoveAbandonmentIfNeeded(account, bracket);',
-     '                    bracket.StopModifyAttempts++;\n'
-     '                    AnnounceStopMoveAbandonmentIfNeeded(account, bracket);\n'
-     '                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";'),
+     '                        bracket.StopModifyAttempts++;\n'
+     '                        bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";\n'
+     '                        AnnounceStopMoveAbandonmentIfNeeded(account, bracket);',
+     '                        bracket.StopModifyAttempts++;\n'
+     '                        AnnounceStopMoveAbandonmentIfNeeded(account, bracket);\n'
+     '                        bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";'),
 
     (ATM,
      "the budget check inside the announcer is dropped, so it announces on the FIRST failure.\n"

@@ -49,8 +49,8 @@ MUTANTS = [
 
     # ---- the recovery ----
     ("breakeven is never re-armed, so the trail stays latched on an honest cache",
-     '                    if (bracket.BreakevenTriggered && bracket.StopModifyAttempts < MaxStopModifyAttempts)\n                        bracket.BreakevenTriggered = false;',
-     '                    if (false)\n                        bracket.BreakevenTriggered = false;'),
+     '                        if (bracket.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.Breakeven\n                            && bracket.BreakevenTriggered\n                            && bracket.StopModifyAttempts < MaxStopModifyAttempts)\n                        {\n                            bracket.BreakevenTriggered = false;\n                        }',
+     '                        if (false)\n                        {\n                            bracket.BreakevenTriggered = false;\n                        }'),
 
     ("the refusal counter never increments, so the retry is unbounded -- an order flood",
      '                    bracket.StopModifyAttempts++;',

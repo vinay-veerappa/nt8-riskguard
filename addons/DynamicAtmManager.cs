@@ -59,6 +59,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class ActiveBracket
     {
+        public enum StopMoveKind
+        {
+            None,
+            Breakeven,
+            Trail
+        }
+
         public string BracketId { get; set; }
         public string Symbol { get; set; }
         public string AccountName { get; set; }
@@ -100,11 +107,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // what the broker did with it.
         public double RequestedStopPrice { get; set; } = double.NaN;
 
+        // T1. Recorded when RequestStopMove attempts a move, and cleared with RequestedStopPrice.
+        // Used by the reconciler to decide whether a refused move was the breakeven move.
+        public StopMoveKind OutstandingStopMoveKind { get; set; }
+
         // Bounded, because the retry is what makes a refused move recoverable, and an unbounded
         // retry against a provider that always refuses is an order flood.
         public int StopModifyAttempts { get; set; }
 
-        // P2-134. The give-up line is said ONCE per episode; this records that it has been said.
+        // ⚠️ P2-134. The give-up line is said ONCE per episode; this records that it has been said.
         //
         // It is cleared in exactly ONE place: the ATM_STOP_MOVE_CONFIRMED branch of
         // ReconcileStopFromBroker, beside the `StopModifyAttempts = 0` that resolves the condition.
@@ -618,6 +629,37 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (_bracketLock) { _activeBrackets[b.BracketId] = b; }
         }
 
+        /// <summary>
+        /// P1-139. Drives `RequestStopMove` directly, because the wrong-way guard inside it is
+        /// UNREACHABLE through `MonitorTickCore` by design and that is not an accident: both
+        /// breakeven call sites now decline on their own via `alreadyAtBreakeven`, and the trailing
+        /// site has its own `stopMoved` check. The guard is a backstop at the one choke point every
+        /// stop move routes through.
+        ///
+        /// ⚠️ WITHOUT THIS ACCESSOR THE GUARD CANNOT BE KILLED. Measured: `mutate_p1139.py` replaced
+        /// the entire guard with `if (false)` and the whole suite stayed green, because nothing
+        /// reaches it and the source gate's `IsLong` search still matches the text inside the dead
+        /// block. A regex cannot see reachability. [[a-source-gate-must-assert-the-condition]],
+        /// [[dead-safety-machinery-gate]].
+        /// </summary>
+        internal bool RequestStopMoveForTest(Account account, ActiveBracket bracket, double newStopPrice,
+            ActiveBracket.StopMoveKind kind)
+        {
+            return RequestStopMove(account, bracket, newStopPrice, "driven directly by a test", kind);
+        }
+
+        /// <summary>
+        /// P1-139. Drives one reconcile. The re-arm rule -- clear `BreakevenTriggered` only when the
+        /// move that was refused WAS the breakeven move -- is a unit decision, and driving it only
+        /// through the full sweep makes it unobservable: `alreadyAtBreakeven` re-establishes the flag
+        /// in the SAME sweep, so a mutant that clears it wrongly is repaired before the sweep
+        /// returns. Both kind mutants survived the whole suite for exactly that reason.
+        /// </summary>
+        internal void DriveStopReconcileForTest(Account account, ActiveBracket bracket)
+        {
+            ReconcileStopFromBroker(account, bracket);
+        }
+
         internal ActiveBracket GetBracketForTest(string id)
         {
             lock (_bracketLock)
@@ -701,14 +743,29 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     if (bracket.Config.Type == AtmStrategyType.DrawdownShield)
                     {
-                        if (!bracket.BreakevenTriggered && ShouldTriggerBreakeven(bracket.Config, entryPrice, currentPrice, isLong, tickSize))
+                        if (!bracket.BreakevenTriggered)
                         {
                             double beStop = CalculateBreakevenStopPrice(entryPrice, isLong, tickSize, bracket.Config.BreakevenOffsetTicks);
                             // P0-67: BreakevenTriggered is set on the REQUEST so the move is not
                             // spammed every 5 seconds; ReconcileStopFromBroker un-sets it if the
                             // provider refused, which is what makes the retry happen.
-                            if (RequestStopMove(account, bracket, beStop, "breakeven trigger reached"))
-                                bracket.BreakevenTriggered = true;
+                            if (ShouldTriggerBreakeven(bracket.Config, entryPrice, currentPrice, isLong, tickSize))
+                            {
+                                bool alreadyAtBreakeven = bracket.CurrentStopPrice > 0
+                                    && (isLong ? bracket.CurrentStopPrice >= beStop : bracket.CurrentStopPrice <= beStop);
+                                if (alreadyAtBreakeven)
+                                {
+                                    // T1. The broker already holds the stop at or beyond the
+                                    // breakeven price AND the trigger condition is met, so
+                                    // breakeven has been reached without this monitor asking.
+                                    bracket.BreakevenTriggered = true;
+                                    bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
+                                }
+                                else if (RequestStopMove(account, bracket, beStop, "breakeven trigger reached", ActiveBracket.StopMoveKind.Breakeven))
+                                {
+                                    bracket.BreakevenTriggered = true;
+                                }
+                            }
                         }
 
                         if (!bracket.PartialProfitTaken && bracket.BreakevenTriggered)
@@ -733,14 +790,26 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     if (bracket.Config.Type == AtmStrategyType.ScaledRunner)
                     {
-                        if (!bracket.BreakevenTriggered && ShouldTriggerBreakeven(bracket.Config, entryPrice, currentPrice, isLong, tickSize))
+                        if (!bracket.BreakevenTriggered)
                         {
                             double beStop = CalculateBreakevenStopPrice(entryPrice, isLong, tickSize, bracket.Config.BreakevenOffsetTicks);
                             // P0-67: BreakevenTriggered is set on the REQUEST so the move is not
                             // spammed every 5 seconds; ReconcileStopFromBroker un-sets it if the
                             // provider refused, which is what makes the retry happen.
-                            if (RequestStopMove(account, bracket, beStop, "breakeven trigger reached"))
-                                bracket.BreakevenTriggered = true;
+                            if (ShouldTriggerBreakeven(bracket.Config, entryPrice, currentPrice, isLong, tickSize))
+                            {
+                                bool alreadyAtBreakeven = bracket.CurrentStopPrice > 0
+                                    && (isLong ? bracket.CurrentStopPrice >= beStop : bracket.CurrentStopPrice <= beStop);
+                                if (alreadyAtBreakeven)
+                                {
+                                    bracket.BreakevenTriggered = true;
+                                    bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
+                                }
+                                else if (RequestStopMove(account, bracket, beStop, "breakeven trigger reached", ActiveBracket.StopMoveKind.Breakeven))
+                                {
+                                    bracket.BreakevenTriggered = true;
+                                }
+                            }
                         }
 
                         if (bracket.BreakevenTriggered)
@@ -752,7 +821,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             bool stopMoved = isLong ? (newStop > bracket.CurrentStopPrice) : (newStop < bracket.CurrentStopPrice);
                             if (stopMoved)
                             {
-                                RequestStopMove(account, bracket, newStop, "trailing stop advanced");
+                                RequestStopMove(account, bracket, newStop, "trailing stop advanced", ActiveBracket.StopMoveKind.Trail);
                             }
                         }
                     }
@@ -881,7 +950,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// P0-67. Requests a stop move and records it as OUTSTANDING. Deliberately does NOT touch
         /// `CurrentStopPrice`: that is assigned only from the live order, in ReconcileStopFromBroker.
         /// </summary>
-        private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason)
+        private bool RequestStopMove(Account account, ActiveBracket bracket, double newStopPrice, string reason, ActiveBracket.StopMoveKind kind)
         {
             // Found by the P0-67 trail test, not by reading: in the ScaledRunner branch the breakeven
             // move and the trailing move can BOTH fire in one sweep, so two Change() calls landed on
@@ -901,11 +970,44 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return false;
             }
 
+            // T1. Our own invariant: never ask the broker to move a stop the wrong way. A redundant
+            // move is also refused, because a no-op Change() can be reverted by the provider (P0-61).
+            // A non-positive stop price is refused regardless of whether a baseline exists.
+            // This is NOT a provider refusal, so it does NOT spend the StopModifyAttempts budget and
+            // must NOT announce abandonment. Therefore this guard runs BEFORE the budget check.
+            if (newStopPrice <= 0)
+            {
+                RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_WRONG_WAY",
+                    $"{bracket.BracketId}: stop held at {bracket.CurrentStopPrice}; refusing "
+                    + $"non-positive stop price {newStopPrice}.");
+                bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
+                return false;
+            }
+
+            if (bracket.CurrentStopPrice > 0)
+            {
+                bool wrongWay = bracket.IsLong
+                    ? (newStopPrice <= bracket.CurrentStopPrice)
+                    : (newStopPrice >= bracket.CurrentStopPrice);
+                if (wrongWay)
+                {
+                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_WRONG_WAY",
+                        $"{bracket.BracketId}: stop held at {bracket.CurrentStopPrice}; refusing "
+                        + $"wrong-way move to {newStopPrice}.");
+                    bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
+                    return false;
+                }
+            }
+
             if (bracket.StopModifyAttempts >= MaxStopModifyAttempts)
             {
                 AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
                 return false;
             }
+
+            // T1. Record the kind BEFORE the broker call so a later provider refusal still knows
+            // whether the move that was refused was the breakeven move.
+            bracket.OutstandingStopMoveKind = kind;
 
             // P1-130. EVERY failed request spends the budget, including the one where the order is
             // not in `account.Orders` at all.
@@ -926,6 +1028,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bracket.LastStopMoveFailureReason = failureReason;
                 bracket.StopModifyAttempts++;
                 AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
+                bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
                 return false;
             }
 
@@ -955,39 +1058,69 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (!double.IsNaN(requested))
             {
-                if (Math.Abs(brokerPrice - requested) <= 1e-9)
+                try
                 {
-                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_CONFIRMED",
-                        $"{bracket.BracketId}: provider honoured the move; stop is at {brokerPrice}.");
-                    bracket.StopModifyAttempts = 0;
-                    // P2-135. The abandonment episode ends where the CONDITION resolves, which is
-                    // here and only here. A later failure on the same bracket is a NEW episode and
-                    // must announce again -- it is a position the operator believes is trailing.
-                    // See StopMoveAbandonAnnounced's declaration for why P2-134 argued this line
-                    // could never run, and the step that argument missed.
-                    bracket.StopMoveAbandonAnnounced = false;
+                    if (Math.Abs(brokerPrice - requested) <= 1e-9)
+                    {
+                        RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_MOVE_CONFIRMED",
+                            $"{bracket.BracketId}: provider honoured the move; stop is at {brokerPrice}.");
+                        bracket.StopModifyAttempts = 0;
+                        // P2-135. The abandonment episode ends where the CONDITION resolves, which is
+                        // here and only here. A later failure on the same bracket is a NEW episode and
+                        // must announce again -- it is a position the operator believes is trailing.
+                        // See StopMoveAbandonAnnounced's declaration for why P2-134 argued this line
+                        // could never run, and the step that argument missed.
+                        bracket.StopMoveAbandonAnnounced = false;
+                    }
+                    else
+                    {
+                        // The move was requested and the broker is not holding it. This is P0-63's
+                        // behaviour at the third call site, and the reason the trail latched: the old
+                        // code would have recorded `requested` and never looked again.
+                        bracket.StopModifyAttempts++;
+                        bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";
+                        AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
+
+                        RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_CHANGE_IGNORED",
+                            $"{bracket.BracketId}: requested stop {requested} but the provider holds "
+                            + $"{brokerPrice} (attempt {bracket.StopModifyAttempts} of "
+                            + $"{MaxStopModifyAttempts}). Treating the BROKER's price as the truth. "
+                            + "Same root cause as P0-63.");
+
+                        // Re-arm so the next sweep re-evaluates and retries. Without this the trail is
+                        // still latched -- just latched on a correct cache instead of a false one.
+                        // T1: only re-arm when the refused move was the breakeven move. A refused trail
+                        // move must not recompute its target from entry.
+                        if (bracket.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.Breakeven
+                            && bracket.BreakevenTriggered
+                            && bracket.StopModifyAttempts < MaxStopModifyAttempts)
+                        {
+                            bracket.BreakevenTriggered = false;
+                        }
+                    }
                 }
-                else
+                finally
                 {
-                    // The move was requested and the broker is not holding it. This is P0-63's
-                    // behaviour at the third call site, and the reason the trail latched: the old
-                    // code would have recorded `requested` and never looked again.
-                    bracket.StopModifyAttempts++;
-                    bracket.LastStopMoveFailureReason = $"provider holds {brokerPrice} instead of requested {requested}";
-                    AnnounceStopMoveAbandonmentIfNeeded(account, bracket);
+                    // P1-139. Always clear the outstanding request state, even if an announcement
+                    // throws: a request left outstanding blocks EVERY later move for the life of the
+                    // position, because RequestStopMove returns early while one is in flight.
+                    bracket.RequestedStopPrice = double.NaN;
+                    bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
 
-                    RiskGuardAddOn.LogFromComponent(account.Name, "ATM_STOP_CHANGE_IGNORED",
-                        $"{bracket.BracketId}: requested stop {requested} but the provider holds "
-                        + $"{brokerPrice} (attempt {bracket.StopModifyAttempts} of "
-                        + $"{MaxStopModifyAttempts}). Treating the BROKER's price as the truth. "
-                        + "Same root cause as P0-63.");
-
-                    // Re-arm so the next sweep re-evaluates and retries. Without this the trail is
-                    // still latched -- just latched on a correct cache instead of a false one.
-                    if (bracket.BreakevenTriggered && bracket.StopModifyAttempts < MaxStopModifyAttempts)
-                        bracket.BreakevenTriggered = false;
+                    // ⚠️ AND NOT THE CACHE, WHICH WAS TRIED AND REVERTED. The round-3 arbiter upheld
+                    // (finding #18) that `bracket.CurrentStopPrice = brokerPrice` at the end of this
+                    // method is skipped if AnnounceStopMoveAbandonmentIfNeeded throws, so it belonged
+                    // here too. It was added, and then the premise was MEASURED FALSE: every call in
+                    // this try block is RiskGuardAddOn.LogFromComponent, whose whole body is
+                    // `try { inst.LogEvent(...); } catch { }`. Nothing here can throw. Pinned by
+                    // TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped, which installs
+                    // an observer that throws on purpose and asserts it does not escape.
+                    //
+                    // The duplicate write was not free: it made `bracket.CurrentStopPrice =
+                    // brokerPrice` non-unique and broke TWO mutate_p0_67.py anchors, which score a
+                    // SURVIVOR when they stop matching -- so a defensive line against an impossible
+                    // throw was quietly disarming a battery. [[mutation-anchors-go-stale]].
                 }
-                bracket.RequestedStopPrice = double.NaN;
             }
             else if (Math.Abs(brokerPrice - bracket.CurrentStopPrice) > 1e-9 && bracket.CurrentStopPrice > 0)
             {

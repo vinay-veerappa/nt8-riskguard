@@ -771,7 +771,24 @@ jobs:
           # WRONG FIX (floor each slice's delta at 1), which stops the drops and turns the same
           # order into a TWENTY-contract copy. Mutant 4 pins the asymmetry -- exits already mirror
           # the follower's real position and must NOT acquire the accumulator.
-          - { label: "P2-116+P1-84", batteries: "mutate_p2116.py mutate_p184.py" }   # 486s = P2-116 292s + P1-84 194s
+          # ⚠️ P1-139 IS PACKED HERE RATHER THAN GIVEN ITS OWN BIN, and that is deliberate: this
+          # file's own header records that a 20th bin measured 726s and a 21st measured 853s, both
+          # WORSE, because the 20-job concurrency limit is ACCOUNT-WIDE and shared with
+          # nt8-mcp-bridge. 19 is the ceiling. This was the shortest bin at 486s, so it is the one
+          # with room; adding ~450s makes it ~936s against a current critical path of 920s, which
+          # is a ~2% wall-clock cost and the cheapest placement available.
+          #
+          # P1-139's two groups worth knowing: group 1 attacks DIRECTION on both sides, because
+          # "better" is higher for a long and lower for a short and every ATM test in this repo was
+          # long until this ticket added one short. Group 3 attacks the half that is easy to omit --
+          # guarding the direction ALONE latches the trail off, since the trailing block is gated on
+          # BreakevenTriggered, which is P0-67's original defect restored by its own repair.
+          #
+          # Declares NO expected survivor: the one candidate (the cache write leaving the finally)
+          # was deleted rather than declared, because the finding it defended against was measured
+          # unreachable -- LogFromComponent cannot throw -- and the duplicate write it added broke
+          # two mutate_p0_67.py anchors by making a unique line non-unique.
+          - { label: "P2-116+P1-84+P1-139", batteries: "mutate_p2116.py mutate_p184.py mutate_p1139.py" }   # ~906s = P2-116 292s + P1-84 194s + P1-139 ~420s (13 mutants; measure and correct on the first green run)
 
           # P2-92, 285s. Shadow mode must be observation-only. Eleven mutants, and the two worth
           # naming are the ones that look like the fix. Mutant 2 makes CanTrade consult the CURRENT

@@ -7767,7 +7767,7 @@ target.
 partial block), `:440` + `:717`-`:718` (the unreconciled target cache).
 
 
-### P1-139. One refused trailing move asks the broker to put the stop BACK at breakeven — the re-arm `P0-67` added to un-latch the trail is what loosens it, and there is no monotonic guard anywhere — OPEN, found 2026-08-17 (session 56) by reading `P2-136`'s neighbourhood
+### P1-139. One refused trailing move asks the broker to put the stop BACK at breakeven — the re-arm `P0-67` added to un-latch the trail is what loosens it, and there is no monotonic guard anywhere — ✅ FIXED 2026-08-17 (session 56), found by reading `P2-136`'s neighbourhood
 
 **`RequestStopMove` will ask the broker to move a stop the wrong way and call it a success.** There
 is no comparison against the price the broker holds at any of the three call sites nor inside the
@@ -7819,6 +7819,72 @@ The defect needs a stop that has already trailed *past* breakeven, which no test
 
 **Where**: `addons/DynamicAtmManager.cs` — `RequestStopMove`, `ReconcileStopFromBroker`, and one new
 field on `ActiveBracket`.
+
+#### P1-139 closure — 2026-08-17 (session 56)
+
+Driven by the agent loop (`agent/tickets_p1139.json`), which ended **`NOT_CONVERGING`** — blocking
+findings **3 → 7 → 5 with zero overlap between consecutive rounds**, and the loop's own stop message
+said to arbitrate by hand. Its patch passed every gate it ran (`2113 / 0`, all 5 acceptance tests
+green), so the patch was promoted and the findings settled by hand. Suite **2108 → 2132 / 0**.
+
+**Three parts landed, and part three is the one that is easy to omit:**
+
+| | |
+|---|---|
+| the invariant | `RequestStopMove` refuses any target that is not strictly better than the price the broker holds, before it reaches `ModifyStopPrice`. Direction from `bracket.IsLong`; equal refused too (`P0-61`); non-positive refused; a non-positive **baseline** means *no baseline*, not *the best possible stop* |
+| the re-arm | `ActiveBracket.OutstandingStopMoveKind` — the reconciler clears `BreakevenTriggered` only when the move that was refused **was** the breakeven move. Passed explicitly from all three call sites, never inferred from the `reason` string |
+| `alreadyAtBreakeven` | a stop already at or beyond the breakeven price **has** reached breakeven: record it without issuing a request. Without this the guard leaves the flag false and the trailing block is gated on it — ✅ CLOSED `P0-67`'s defect restored by its own repair |
+
+⚠️ **THE FIX CONTAINS A REDUNDANCY AND IT IS RECORDED RATHER THAN REMOVED.** Part three alone
+repairs the original defect, because it re-establishes `BreakevenTriggered` inside the **same** sweep
+that wrongly cleared it. Part two makes that repair unnecessary instead of load-bearing;
+`TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag` is what stops it being deleted later as dead
+weight. Found by the battery, not by reading.
+
+⚠️ **THE ARBITER UPHELD FIVE FINDINGS AND ALL FIVE FAILED.** #13 and #14 are closed by machinery
+already present (the reconciler's new `finally`; the pre-existing in-flight guard, which *is* that
+concern and predates the patch). #15 demanded that a refused **trail** move re-arm
+`BreakevenTriggered` — the exact inverse of this ticket. #16 said the non-positive refusal omits the
+held price; the string contains it. #18 was **accepted, then measured false**: it needs something in
+the reconciler's `try` to throw, and every call in it is `LogFromComponent`, whose whole body is
+`try { inst.LogEvent(...); } catch { }`. Its one-line hardening was kept as defence and the
+corresponding mutant declared an EXPECTED SURVIVOR.
+[[agent-patch-loop-arbiter-gotchas]] — 0 upheld findings held, again.
+
+⚠️ **THE BATTERY FOUND THE GUARD UNKILLABLE, AND THAT IS THE LESSON WORTH CARRYING.** `mutate_p1139.py`
+replaced the entire wrong-way guard with `if (false)` and the suite stayed **green at 2113/0**.
+Correct design is the reason: `alreadyAtBreakeven` means neither breakeven site ever hands
+`RequestStopMove` a wrong-way price, and the trailing site has its own `stopMoved` check — so a
+backstop at a choke point is, by construction, unreachable from the code around it. **The source gate
+did not help either**: `IsLong` still matches inside a dead `if (false)` block, because a regex
+cannot see reachability ([[a-source-gate-must-assert-the-condition]]). Closed by two `#if TESTING`
+accessors (`RequestStopMoveForTest`, `DriveStopReconcileForTest`) that drive the invariant and
+the re-arm rule directly. **5 of 14 mutants survived the first run; 13 of 14 killed after.**
+
+⚠️ **AND THE RE-ARM RULE WAS UNOBSERVABLE THROUGH THE SWEEP** for the same structural reason:
+`alreadyAtBreakeven` repairs a wrongly-cleared flag before `MonitorTickForTest` returns, so no
+end-of-sweep assertion can see the difference. The single moment the recorded kind *is* observable is
+immediately after the sweep that issued the request, which is what kills a mislabelled call site.
+
+⚠️ **TWO OF THE FIVE RED TESTS WERE MY OWN WRONG SPECIFICATIONS AND COST THREE LOOP ROUNDS.** One
+asserted the order was untouched at a price where the trail legitimately advances it — forbidding a
+correct move. The other demanded `ATM_STOP_MOVE_WRONG_WAY` on the normal path, where the guard must
+*not* fire. And the source gate's ordering assertion was vacuous first time out: `IndexOf` returns
+`-1`, and `-1 < 1022` passes on exactly the baseline it exists to reject.
+[[a-wrong-red-test-enforces-itself]], third and fourth instances.
+
+⚠️ **A SETTLED DECISION WAS REVERSED BY MEASUREMENT.** The round-2 arbiter upheld *"a broker-confirmed
+stop at 0.00 is a valid baseline"*, and the patch honoured it by defaulting `CurrentStopPrice` to
+`double.NaN`. That field is serialised by `GetBracketStatus` as `currentStop` and returned verbatim by
+`/api/order/atm/status`; the bridge passes no `JsonSerializerSettings`, so Newtonsoft's default
+`FloatFormatHandling.String` ships it as the quoted string `"NaN"` and the value silently stops being
+a number. The file had already decided the opposite ten lines from the guard —
+`&& bracket.CurrentStopPrice > 0` — and the other reading refuses every short's first move forever.
+
+⚠️ **NOT LIVE-VALIDATED, and `Sim101` alone cannot do it.** The whole defect starts with a provider
+DECLINING a stop move; the Simulator's behaviour on that is `P0-63`'s and is not the same event. The
+confirmation run needs a non-Simulator account and a trade whose stop has trailed past breakeven.
+[[the-simulator-re-ids-nothing]].
 
 
 ### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ⚠️ HALF FIXED 2026-08-17 (session 55): it is now SAID, not survived
