@@ -393,15 +393,52 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # F-9, 288s. The firm-rule REPORTER must resolve the account's plan, as the ENFORCER has
-          # since P1-42. Eleven mutants, and the two that matter most keep the resolved BRANCH and
-          # report the TOP-LEVEL AMOUNT: every state assertion still passes, the row reads Enforcing
-          # correctly, and the number beside it is a limit the operator is not held to. That is
-          # P1-42's own lesson one layer out, and only the limit assertions see it. Two more restore
-          # the defect proper -- and it was a defect in BOTH directions, because the real Take Profit
-          # Trader profile has DailyLoss OFF, so the old reporter claimed a live rule that could not fire.
-          - { label: "F9+P2-119+P2-113", batteries: "mutate_f9.py mutate_p2119.py mutate_p2113.py" }   # 617s = F9 250s + P2-119 222s + P2-113 145s
+          - { label: "P1-133+P2-135+UI5+P0-63", batteries: "mutate_p1133.py mutate_p2135.py mutate_ui5.py mutate_p0_63.py" }   # 876s = P1-133 312s + P2-135 240s + UI5 188s + P0-63 136s
 
+          # P3-34's copier mode, 287s. Every mutant here is a way of writing code that looks like a
+          # shadow mode and places real orders anyway. Mutant 3 is the one to know: it keeps the
+          # gate and deletes the `continue`, so the copy is logged as suppressed and then submitted
+          # -- P1-70's class, and the shape of the fix is entirely present for anyone skimming the
+          # diff. Mutant 2 is P1-87's: an unrecognised mode must not fall through to the permissive
+          # branch, because here the permissive branch trades.
+          # P2-113, ~170s. The inventory reported PropFirm.LocalNewsEventsFilePath as read by
+          # nothing -- 97 rows per poll, measured -- for two days after P2-25 gave it a loader.
+          # F-9's class in the PESSIMISTIC direction, which is not the harmless one: a red row that
+          # is wrong is how an operator learns to discount red rows. Group 1 restores the loader's
+          # silence and group 2 stops the registry reporting what the loader learned. Mutant 3 is
+          # the one to know: a well-formed EMPTY news file reporting as a healthy load, which is
+          # the only one of the four failures that looks like a success at every other surface.
+          # P1-82 / P1-86, 291s. A switch whose rule cannot fire must not default ON. The change is
+          # four literals, which is precisely why it needs a battery: that is the size of diff that
+          # gets half-applied, or reverted later by someone "restoring a sensible default". Each
+          # default is stated TWICE -- property initializer and parser fallback -- and the parser
+          # copy is the one that runs for every config file that predates the field, i.e. all of
+          # them. Mutants 3 and 4 flip only that copy, which the class gate cannot see because it
+          # builds its config with `new`.
+          # P3-30's guard audit, 201s, and specifically its instrument matching. The audit shipped
+          # keying its broker reads on Instrument.ToString() while every FSM in the addon is keyed on
+          # Instrument.FullName, so nothing it looked up ever matched -- and the consequence was not
+          # a missed finding but the opposite: a correctly protected account reporting NAKED_POSITION,
+          # ORPHAN_STOP and FSM_DIVERGENCE every 10 seconds. The three tests it shipped with are all
+          # POSITIVE-only and every one stays green under the defect, because a total matching failure
+          # emits every event. Mutant 1 is the shipped defect and is killed only by the negative
+          # "the audit is SILENT" test. Declares one EXPECTED SURVIVOR (the lock-scope mutant).
+          # UI7 -- a refusal that says why, 265s. Every mutant here still REFUSES the write, so the
+          # P1-76 tests stay green through all of them; what breaks is the operator's ability to find
+          # out what to change. Two of the ten mutate TradeCopierWindow.cs instead of the engine,
+          # putting a surface back on the reason-losing overload -- that file is entirely
+          # `#if !TESTING`, so a source scan is the only gate there is and it has to be proven to
+          # fire. One survived the first run: the accepted-write test covered the relationship half
+          # and not the group half, the same one-sided shape as P1-69 and P1-75.
+          # P2-112, ~215s. The 5-second ATM sweep that moves breakeven stops returned early forever
+          # when Application.Current had no Dispatcher -- P1-13's fail-open at a subsystem P1-13
+          # never inspected, found only when P2-29 widened that gate to the whole addon tree.
+          # Mutants sit on three axes: do the work, do it ONCE, and say so ONCE. Mutant 2 is the one
+          # to know and it changes no production behaviour at all -- it puts the control flow back
+          # behind `#if TESTING`, which is how this survived: the branch holding the defect existed
+          # in NO test build, so the ten ATM tests drove a body the shipped assembly does not
+          # contain. Mutant 7 is the review panel's one correct finding of three. Mutant 9 is a
+          # DECLARED survivor: it rewrites the `#else` body, which no test build compiles.
           # P2-116, 265s PROVISIONAL. Evidence for the equity rules counted the AccountState
           # OBJECT, so 88 dormant prop accounts read identically to the one funded account that
           # was really being watched. Mutant 1 is the one to know: `> 0` instead of `!= 0`, which
@@ -477,10 +514,56 @@ jobs:
           # sit within ~50s of each other, so there is no cheap win left in re-binning.
           # P1-139 measured 289s against a ~420s estimate: 13 C# mutants came in at ~22s each, so
           # estimating a battery at 30s/mutant overshoots by roughly half.
-          - { label: "P2-116+P2-145+P2-101", batteries: "mutate_p2116.py mutate_p2145coverage.py mutate_p2101.py" }   # 616s = P2-116 265s + P2-145 205s + P2-101 146s
+          - { label: "P3-34+P2-116+P2-112+P1-83", batteries: "mutate_p334.py mutate_p2116.py mutate_p2112.py mutate_p183.py" }   # 871s = P3-34 288s + P2-116 268s + P2-112 187s + P1-83 128s
 
-          - { label: "P1-139+P1-99+P3-30", batteries: "mutate_p1139.py mutate_p199.py mutate_p330.py" }   # 614s = P1-139 265s + P1-99 202s + P3-30 147s
+          # UI1 (the conformance snapshot), 307s. Two of its twelve mutants SURVIVED on the first
+          # run against a suite of 21 tests that were all green -- the short-leader path was
+          # untested, and the clamp test asserted the FLAG rather than the VERDICT. A third was
+          # RETIRED as unkillable by construction rather than weakened; the battery records why,
+          # because "make the mutant die" is the wrong instinct when the mutant describes
+          # something the platform cannot produce.
+          # P2-101, new in session 38, 7 mutants -- unmeasured, sits beside P1-100 on that basis.
+          # A shadow lockout retried its flatten forever: the retry's exit condition is "the
+          # position is still open", and in shadow the flatten is never sent. ~12 log lines a
+          # minute per account, on the FUNDED account too, burying interventions.jsonl. Mutant 2
+          # is THE PARTIAL FIX -- one budget for every mode, which stops the unbounded growth and
+          # still repeats an observation five more times than shadow needs. Mutant 7 is the other
+          # half: the LOCKOUT_STUCK warning was keyed on an interval the retry itself reset every
+          # 5s, so it could never fire, and killing that mutant took two attempts because any
+          # sweep where the retry fires hides it. Declares one EXPECTED SURVIVOR.
+          # P2-92, 285s. Shadow mode must be observation-only. Eleven mutants, and the two worth
+          # naming are the ones that look like the fix. Mutant 2 makes CanTrade consult the CURRENT
+          # mode instead of the stored authority, which is only wrong because the mode at READ time
+          # is not the mode at BREACH time -- an operator locked out in live then escapes by
+          # switching to shadow, which is FR-30 / P1-4's bypass through a different setting. Mutants
+          # 6 and 10 fail CLOSED, so they survive on safety rather than correctness and have to be
+          # killed deliberately.
+          # P0-96, 156s. The copier read a position's SIDE off the SIGN of its quantity, and NT8's
+          # Position.Quantity is absolute -- the side is MarketPosition. So a leader COVERING A SHORT
+          # sent the follower a Sell, which does not close a short, it DOUBLES it. 1300 green tests
+          # did not see it, because every long-side test passes under the defect. Mutant 3 is the
+          # other lesson: the exit-alignment block can be deleted outright and only a test with the
+          # follower on the OPPOSITE side to the leader notices -- the one case the block exists for.
+          # Declares one EXPECTED SURVIVOR (the reconciler mutant; unreachable until P2-27).
+          - { label: "P1-139+UI1+UI7+P1-87", batteries: "mutate_p1139.py mutate_ui1.py mutate_ui7.py mutate_p187.py" }   # 870s = P1-139 281s + UI1 270s + UI7 192s + P1-87 127s
 
+          # ⚠️ P2-136 "survive it" IS NEW AND ITS WEIGHT HERE IS AN ESTIMATE, NOT A MEASUREMENT.
+          # Following the add-a-battery loop this header documents: a new battery goes in the
+          # LIGHTEST bin and the file says the arrangement is not yet measured, because the packer
+          # refuses to pack on guessed weights and feeding it a guess dressed as a measurement is how
+          # a plan comes out looking balanced and is not.
+          #
+          # The estimate: 26 mutants + a baseline + a final restore-check = 28 suite runs at the
+          # 22.2s-per-C#-mutant measured on this runner = ~620s. Local wall was 780s. That makes this
+          # bin ~1113s against a current heaviest of 920s, so THIS BIN IS EXPECTED TO BECOME THE
+          # CRITICAL PATH and the predicted wall goes from ~10.5 to ~13 min. RE-PACK on the first
+          # green run with `python tools/pack_ci_matrix.py --bins 19` once the real seconds are in
+          # this comment -- do not leave the estimate here as though it were measured.
+          #
+          # ⚠️ AND THIS BATTERY RUNS A GATE AS WELL AS THE SUITE. `run()` consults
+          # check_no_dead_safety_machinery.py, because the mutant that kills the restore's wiring
+          # cannot be killed by any C# assertion -- NT8's startup path is not driveable from the test
+          # build. That adds a fast Python subprocess per mutant, already inside the estimate.
           # F-6, push alerts. The mutants split into LOUD and QUIET, and the QUIET ones are the
           # point: a budget that never refills, a floor that refuses everything, a severity table
           # that classifies nothing -- each of them passes every "the repeat was suppressed" test,
@@ -494,8 +577,45 @@ jobs:
           # that suite ASSERTED the defect as correct behaviour, so the suite was defending it rather
           # than merely silent about it. Mutant 2 is the one to know: it keeps the else branch and
           # makes it do nothing, so the shape of the fix survives and the behaviour does not.
-          - { label: "F-6+UI7+P0-63", batteries: "mutate_f6.py mutate_ui7.py mutate_p0_63.py" }   # 614s = F-6 259s + UI7 206s + P0-63 149s
+          - { label: "P1-121+F-6+P1-82 / P1-86+P3-30", batteries: "mutate_p1121.py mutate_f6.py mutate_p182.py mutate_p330.py" }   # 868s = P1-121 304s + F-6 247s + P1-82 / P1-86 197s + P3-30 120s
 
+          # F-9, 288s. The firm-rule REPORTER must resolve the account's plan, as the ENFORCER has
+          # since P1-42. Eleven mutants, and the two that matter most keep the resolved BRANCH and
+          # report the TOP-LEVEL AMOUNT: every state assertion still passes, the row reads Enforcing
+          # correctly, and the number beside it is a limit the operator is not held to. That is
+          # P1-42's own lesson one layer out, and only the limit assertions see it. Two more restore
+          # the defect proper -- and it was a defect in BOTH directions, because the real Take Profit
+          # Trader profile has DailyLoss OFF, so the old reporter claimed a live rule that could not fire.
+          - { label: "CM3+F9+P1-140+P0-96", batteries: "mutate_cm3.py mutate_f9.py mutate_p1140.py mutate_p096.py" }   # 850s = CM3 305s + F9 243s + P1-140 201s + P0-96 101s
+
+          # P2-98, 327s. A partial fill delivers several Executions for the SAME Order object, and
+          # the pending-copy entry was consumed on the first of them: the metric described the
+          # SMALLEST slice, and every later slice raised FILL_NOT_MEASURED naming a cause that was
+          # not the cause. Mutant 6 is the one to know -- it keeps the fix and re-evaluates a
+          # REJECTED latency on the next slice, manufacturing a plausible figure out of the same
+          # disagreeing clocks that produced the rejected one. Mutant 4 is the other: an unweighted
+          # mean is this defect in a subtler form, a 1-lot counting for as much as the 9 beside it.
+          # P1-100, new in session 37, and the SHORTEST battery here at 4 mutants -- placed last on
+          # that basis until the first green run gives it a measured time. A SHADOW-only lockout
+          # blocked real orders: the guard's own gate was right (P2-92), but the bridge's three
+          # order paths ask IsAccountLocked, which returned the raw flag and had never been taught
+          # about either shadow authority or lockout deadlines. Wrong in BOTH directions -- it
+          # refused on an observation and admitted orders during a timed manual lockout. The fix is
+          # one predicate with every reader calling it, so the two mutants you would expect here
+          # (delete the authority clause; key it on the current mode) now live in mutate_p292.py,
+          # whose anchors were REPOINTED at that predicate. check_anchors.py is what caught them
+          # going stale, in the same commit that moved them.
+          # ⚠️ P1-140 GOES HERE because 19 bins is the ceiling (20 concurrent jobs ACCOUNT-WIDE,
+          # shared with nt8-mcp-bridge; a 20th measured 726s and a 21st 853s, both WORSE), and this
+          # was the shortest bin at 492s. The weight was DERIVED FROM A MEASUREMENT rather than
+          # guessed -- P1-139's 289s for 13 mutants gave 22.2s/mutant, so 10 mutants + baseline +
+          # restore predicted ~266s -- and it MEASURED 235s, within 12%. Deriving a weight from a
+          # neighbouring battery's measured seconds works; guessing 30s/mutant does not.
+          #
+          # Group 1 is the one to know: it puts the partial-profit SUBMISSION back. A fix that only
+          # stops SAYING something is not a fix that stops submitting. Group 4's guard mutant is the
+          # one no positive test can see -- removing `partialQty > 0` makes the line fire on every
+          # ONE-LOT bracket, which is every bracket this box has ever placed.
           # UI6 (the copier half), 311s. The mutant this battery exists for casts CopierConformance
           # to an int for sorting: that enum's numbering is HISTORICAL, not severity, so casting
           # puts a healthy Idle row first and an ORPHAN -- a live position nothing is managing --
@@ -535,8 +655,109 @@ jobs:
           # query reads -- instead of RiskGuardAddOn.LogFromComponent. The line existed, was
           # correct, named the right bracket, and reached nobody. A fix whose output nobody
           # consumes passes every gate that only checks the fix is present.
-          - { label: "UI6+P2-134+P1-83", batteries: "mutate_ui6.py mutate_p2134.py mutate_p183.py" }   # 600s = UI6 255s + P2-134 218s + P1-83 127s
+          - { label: "P2-98+UI6+CM4+P2-38", batteries: "mutate_p298.py mutate_ui6.py mutate_cm4.py mutate_p238.py" }   # 845s = P2-98 302s + UI6 263s + CM4 186s + P2-38 94s
 
+          # P2-123, 353s PROVISIONAL. The "Symbol & Per-Ticker Matrix" tab was a static poster
+          # reading zero engine state. Mutant 10 is the one to know: it restores ceil(1/ratio) as
+          # the smallest copyable leader fill, which is the obviously-right arithmetic and
+          # disagrees with the copy path by four contracts at x0.1, because .NET rounds midpoints
+          # TO EVEN. That mutant is the fix's own first draft.
+          - { label: "P2-123+P2-92+P1-71+P1-100", batteries: "mutate_p2123.py mutate_p292.py mutate_p1_71.py mutate_p1100.py" }   # 840s = P2-123 342s + P2-92 227s + P1-71 183s + P1-100 88s
+
+          # ⚠️ GENERATED BY tools/pack_ci_matrix.py -- do not hand-balance these bins.
+          #   python tools/pack_ci_matrix.py --times run_times.tsv --bins 19 --apply
+          # where run_times.tsv is
+          #   gh run view <id> --json jobs --jq '.jobs[] | [.name,.startedAt,.completedAt] | @tsv'
+          #
+          # 33 batteries in 20 jobs, packed longest-first on the seconds MEASURED in run
+          # 31914385667 (the first run after the clock-injection speedup; earlier weights are
+          # not usable, because batteries with more mutants shrank more). The tool refuses to
+          # pack without measured times and strips the 31s of per-job setup from each one
+          # first -- a packed bin pays that once, not once per battery.
+          #
+          # ⚠️ THE BIN TOTALS BELOW ARE WORK, NOT JOB DURATION: add 31s of setup. And the
+          # decomposition after each `=` exists because once packed, `gh run view` reports the
+          # BIN's time and not each battery's -- the run step prints a BATTERY_SECONDS line per
+          # battery so the next re-measure still has weights. Without one of those two, this
+          # change is a one-way door.
+          #
+          # ⚠️ 20 BINS IS THE SLOT COUNT, MEASURED, not a round number: in run 31914385667
+          # exactly 20 jobs started in the first wave and 13 waited. Past the slot count another
+          # job is not another runner, it is another wait -- which is why 33 shards were SLOWER
+          # than 20 packed bins despite identical compute.
+          #
+          # ⚠️ UI4 IS THE FLOOR at 508s of work. No packing splits a battery, so ~10.6 min is
+          # the best this shape can do; going below it means splitting UI4, not re-binning.
+          # UI4 (the producer), 553s. UI3's battery proved the REGISTRY honest; this one proves
+          # the BUILDER cannot take that honesty back, which is a different job -- every guarantee
+          # UI3 bought is now mediated by one method. Same asymmetry: every mutant makes the
+          # snapshot more reassuring than the box. Three survived the first run and each said
+          # something different: a field never observed being false (IsArmed), a fix applied to
+          # only one of two identical accessors, and an UNREACHABLE fallback that was deleted
+          # rather than pinned -- see the note beside that mutant before adding a defensive branch.
+          - { label: "UI4+P1-85+P2-113", batteries: "mutate_ui4.py mutate_p185.py mutate_p2113.py" }   # 822s = UI4 474s + P1-85 207s + P2-113 141s
+
+          # UI2 (one config owner; the window dispatches requests), 443s. The FIRST battery to
+          # mutate two files: four of its mutants edit TradeCopierWindow.cs, whose whole body is
+          # `#if !TESTING`, so the suite compiles it away and four acceptance tests read it as
+          # TEXT instead. Those four mutants put each original defect back verbatim, because
+          # "does the source-text check actually fail when the defect returns?" is the one
+          # question a source-text check cannot answer about itself.
+          # P2-119 / P1-117, added 2026-08-16 (session 48). The config-save chokepoint: the
+          # validator that refuses only what a write INTRODUCES, the result type that reports
+          # what the save actually did, and the deep copy that makes the old/new comparison
+          # meaningful. Eleven mutants across THREE files -- the first battery here to do that,
+          # because the behaviour is a JOIN across them and a battery pinned to one file would
+          # have scored full marks on a third of the change. Ten killed; one declared EXPECTED
+          # SURVIVOR (unkillable: the reloaded config is a JSON round trip of the caller's, so
+          # no input separates them).
+          #
+          # ⚠️ HOW THIS BATTERY WAS ADDED, because it is the procedure and not a one-off. A
+          # battery's weight is BATTERY_SECONDS, which does not exist until CI has run it once,
+          # and pack_ci_matrix.py rightly refuses to pack on an estimate. So there is a real
+          # chicken-and-egg, and the resolution is to take ONE deliberately slow run rather than
+          # feed the packer a number somebody made up -- the mistake recorded two entries above.
+          #
+          # Bolted onto the lightest bin, with the prediction written down first so the run could
+          # falsify it. Predicted 290s / bin 692s / wall ~790s. MEASURED on run 31932265493:
+          # battery 255s, bin 701s, wall 814s. The estimate was 12% HIGH on the battery and the
+          # wall came in 24s over -- close enough to have been tempting, and not close enough to
+          # have been worth trusting: 255 and 290 pack into different bins.
+          #
+          # Then re-packed on the real weights. Total compute 8571s -> 8718s, ideal bin at 19
+          # 459s, and UI4 (502s) is STILL the floor -- so the 35th battery costs nothing once the
+          # arrangement is right, which is the same lesson as P2-27's: the floor did not move,
+          # the arrangement was stale.
+          - { label: "UI2+P2-119+P1-99", batteries: "mutate_ui2.py mutate_p2119.py mutate_p199.py" }   # 781s = UI2 378s + P2-119 221s + P1-99 182s
+
+          # P2-107, new in session 40, 18 mutants -- unmeasured, sits beside P2-101 on that basis.
+          # The same repeated-action family as P2-101, found on a DIFFERENT path in that fix's own
+          # validation run: PEAK_GIVEBACK_BREACH re-emitting its flatten 7 times in ~20s,
+          # per-evaluation so with no spacing at all. Two instances in one hour is why the
+          # de-duplication moved to where actions LEAVE the guard (GuardActionDeduplicator behind
+          # DispatchActions) instead of being written into each producer.
+          #
+          # ⚠️ Read the battery's second block before trusting a green here. The first THIRTEEN
+          # mutants all died on the first run; five more, aimed at the parts none of them touched,
+          # ALL SURVIVED -- including a revert of the AccountItemUpdate handler to its old bare
+          # loop, i.e. the one path the defect was measured on walking around the entire
+          # mechanism while eleven tests of that mechanism passed. That is P3-30's shape.
+          - { label: "P2-107+P2-134+P2-108", batteries: "mutate_p2107.py mutate_p2134.py mutate_p2108.py" }   # 770s = P2-107 390s + P2-134 219s + P2-108 161s
+
+          # UI3 (the guard rule inventory), 376s. Every mutant here makes the inventory MORE
+          # REASSURING than the truth, because that is the only direction that can hurt anyone:
+          # this registry exists to stop a config field lying about whether it protects anything,
+          # so "it crashes" is not the failure mode -- "it reports ENFORCING for a rule that has
+          # never been able to fire" is. Three survived the first run, all one gap (the evidence
+          # count was asserted for 1 of 5 rules that use it); the fix opened an escape route, and
+          # the mutant for THAT survived too. Read the file before adding to it.
+          - { label: "UI3+P2-145+P1-84", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py" }   # 763s = UI3 392s + P2-145 208s + P1-84 163s
+
+          - { label: "P2-136+P2-101", batteries: "mutate_p2136survive.py mutate_p2101.py" }   # 759s = P2-136 613s + P2-101 146s
+
+          # P1-76, 354s. Three of its fourteen mutants SURVIVED on the first run, including the
+          # one that reinstates the pre-P1-76 emergent tie-break -- the precedence test was
+          # decorative because direct-wins was over-determined.
           # P2-27, added 2026-08-16 (session 48). The shared guard-config value validator.
           # Eleven mutants, all killed on the first run.
           #
@@ -576,240 +797,7 @@ jobs:
           # ticket is about refusing something, so it satisfies all of them and ships a validator
           # that makes the endpoint unusable -- P2-115's constant and F-17's always-refuse again.
           # The six ACCEPTANCE cases are the only thing that bans it.
-          - { label: "P2-27+P2-135+P1-87", batteries: "mutate_p227.py mutate_p2135.py mutate_p187.py" }   # 597s = P2-27 249s + P2-135 226s + P1-87 122s
-
-          - { label: "P2-136", batteries: "mutate_p2136survive.py" }   # 595s = P2-136 595s
-
-          # P3-34's copier mode, 287s. Every mutant here is a way of writing code that looks like a
-          # shadow mode and places real orders anyway. Mutant 3 is the one to know: it keeps the
-          # gate and deletes the `continue`, so the copy is logged as suppressed and then submitted
-          # -- P1-70's class, and the shape of the fix is entirely present for anyone skimming the
-          # diff. Mutant 2 is P1-87's: an unrecognised mode must not fall through to the permissive
-          # branch, because here the permissive branch trades.
-          # P2-113, ~170s. The inventory reported PropFirm.LocalNewsEventsFilePath as read by
-          # nothing -- 97 rows per poll, measured -- for two days after P2-25 gave it a loader.
-          # F-9's class in the PESSIMISTIC direction, which is not the harmless one: a red row that
-          # is wrong is how an operator learns to discount red rows. Group 1 restores the loader's
-          # silence and group 2 stops the registry reporting what the loader learned. Mutant 3 is
-          # the one to know: a well-formed EMPTY news file reporting as a healthy load, which is
-          # the only one of the four failures that looks like a success at every other surface.
-          # P1-82 / P1-86, 291s. A switch whose rule cannot fire must not default ON. The change is
-          # four literals, which is precisely why it needs a battery: that is the size of diff that
-          # gets half-applied, or reverted later by someone "restoring a sensible default". Each
-          # default is stated TWICE -- property initializer and parser fallback -- and the parser
-          # copy is the one that runs for every config file that predates the field, i.e. all of
-          # them. Mutants 3 and 4 flip only that copy, which the class gate cannot see because it
-          # builds its config with `new`.
-          # P3-30's guard audit, 201s, and specifically its instrument matching. The audit shipped
-          # keying its broker reads on Instrument.ToString() while every FSM in the addon is keyed on
-          # Instrument.FullName, so nothing it looked up ever matched -- and the consequence was not
-          # a missed finding but the opposite: a correctly protected account reporting NAKED_POSITION,
-          # ORPHAN_STOP and FSM_DIVERGENCE every 10 seconds. The three tests it shipped with are all
-          # POSITIVE-only and every one stays green under the defect, because a total matching failure
-          # emits every event. Mutant 1 is the shipped defect and is killed only by the negative
-          # "the audit is SILENT" test. Declares one EXPECTED SURVIVOR (the lock-scope mutant).
-          # UI7 -- a refusal that says why, 265s. Every mutant here still REFUSES the write, so the
-          # P1-76 tests stay green through all of them; what breaks is the operator's ability to find
-          # out what to change. Two of the ten mutate TradeCopierWindow.cs instead of the engine,
-          # putting a surface back on the reason-losing overload -- that file is entirely
-          # `#if !TESTING`, so a source scan is the only gate there is and it has to be proven to
-          # fire. One survived the first run: the accepted-write test covered the relationship half
-          # and not the group half, the same one-sided shape as P1-69 and P1-75.
-          # P2-112, ~215s. The 5-second ATM sweep that moves breakeven stops returned early forever
-          # when Application.Current had no Dispatcher -- P1-13's fail-open at a subsystem P1-13
-          # never inspected, found only when P2-29 widened that gate to the whole addon tree.
-          # Mutants sit on three axes: do the work, do it ONCE, and say so ONCE. Mutant 2 is the one
-          # to know and it changes no production behaviour at all -- it puts the control flow back
-          # behind `#if TESTING`, which is how this survived: the branch holding the defect existed
-          # in NO test build, so the ten ATM tests drove a body the shipped assembly does not
-          # contain. Mutant 7 is the review panel's one correct finding of three. Mutant 9 is a
-          # DECLARED survivor: it rewrites the `#else` body, which no test build compiles.
-          - { label: "P3-34+P1-82 / P1-86+P0-96", batteries: "mutate_p334.py mutate_p182.py mutate_p096.py" }   # 585s = P3-34 249s + P1-82 / P1-86 232s + P0-96 104s
-
-          - { label: "P1-133+CM4+P2-38", batteries: "mutate_p1133.py mutate_cm4.py mutate_p238.py" }   # 584s = P1-133 275s + CM4 202s + P2-38 107s
-
-          # ⚠️ GENERATED BY tools/pack_ci_matrix.py -- do not hand-balance these bins.
-          #   python tools/pack_ci_matrix.py --times run_times.tsv --bins 19 --apply
-          # where run_times.tsv is
-          #   gh run view <id> --json jobs --jq '.jobs[] | [.name,.startedAt,.completedAt] | @tsv'
-          #
-          # 33 batteries in 20 jobs, packed longest-first on the seconds MEASURED in run
-          # 31914385667 (the first run after the clock-injection speedup; earlier weights are
-          # not usable, because batteries with more mutants shrank more). The tool refuses to
-          # pack without measured times and strips the 31s of per-job setup from each one
-          # first -- a packed bin pays that once, not once per battery.
-          #
-          # ⚠️ THE BIN TOTALS BELOW ARE WORK, NOT JOB DURATION: add 31s of setup. And the
-          # decomposition after each `=` exists because once packed, `gh run view` reports the
-          # BIN's time and not each battery's -- the run step prints a BATTERY_SECONDS line per
-          # battery so the next re-measure still has weights. Without one of those two, this
-          # change is a one-way door.
-          #
-          # ⚠️ 20 BINS IS THE SLOT COUNT, MEASURED, not a round number: in run 31914385667
-          # exactly 20 jobs started in the first wave and 13 waited. Past the slot count another
-          # job is not another runner, it is another wait -- which is why 33 shards were SLOWER
-          # than 20 packed bins despite identical compute.
-          #
-          # ⚠️ UI4 IS THE FLOOR at 508s of work. No packing splits a battery, so ~10.6 min is
-          # the best this shape can do; going below it means splitting UI4, not re-binning.
-          # UI4 (the producer), 553s. UI3's battery proved the REGISTRY honest; this one proves
-          # the BUILDER cannot take that honesty back, which is a different job -- every guarantee
-          # UI3 bought is now mediated by one method. Same asymmetry: every mutant makes the
-          # snapshot more reassuring than the box. Three survived the first run and each said
-          # something different: a field never observed being false (IsArmed), a fix applied to
-          # only one of two identical accessors, and an UNREACHABLE fallback that was deleted
-          # rather than pinned -- see the note beside that mutant before adding a defensive branch.
-          - { label: "UI4+P1-100", batteries: "mutate_ui4.py mutate_p1100.py" }   # 565s = UI4 487s + P1-100 78s
-
-          # UI2 (one config owner; the window dispatches requests), 443s. The FIRST battery to
-          # mutate two files: four of its mutants edit TradeCopierWindow.cs, whose whole body is
-          # `#if !TESTING`, so the suite compiles it away and four acceptance tests read it as
-          # TEXT instead. Those four mutants put each original defect back verbatim, because
-          # "does the source-text check actually fail when the defect returns?" is the one
-          # question a source-text check cannot answer about itself.
-          # P2-119 / P1-117, added 2026-08-16 (session 48). The config-save chokepoint: the
-          # validator that refuses only what a write INTRODUCES, the result type that reports
-          # what the save actually did, and the deep copy that makes the old/new comparison
-          # meaningful. Eleven mutants across THREE files -- the first battery here to do that,
-          # because the behaviour is a JOIN across them and a battery pinned to one file would
-          # have scored full marks on a third of the change. Ten killed; one declared EXPECTED
-          # SURVIVOR (unkillable: the reloaded config is a JSON round trip of the caller's, so
-          # no input separates them).
-          #
-          # ⚠️ HOW THIS BATTERY WAS ADDED, because it is the procedure and not a one-off. A
-          # battery's weight is BATTERY_SECONDS, which does not exist until CI has run it once,
-          # and pack_ci_matrix.py rightly refuses to pack on an estimate. So there is a real
-          # chicken-and-egg, and the resolution is to take ONE deliberately slow run rather than
-          # feed the packer a number somebody made up -- the mistake recorded two entries above.
-          #
-          # Bolted onto the lightest bin, with the prediction written down first so the run could
-          # falsify it. Predicted 290s / bin 692s / wall ~790s. MEASURED on run 31932265493:
-          # battery 255s, bin 701s, wall 814s. The estimate was 12% HIGH on the battery and the
-          # wall came in 24s over -- close enough to have been tempting, and not close enough to
-          # have been worth trusting: 255 and 290 pack into different bins.
-          #
-          # Then re-packed on the real weights. Total compute 8571s -> 8718s, ideal bin at 19
-          # 459s, and UI4 (502s) is STILL the floor -- so the 35th battery costs nothing once the
-          # arrangement is right, which is the same lesson as P2-27's: the floor did not move,
-          # the arrangement was stale.
-          - { label: "UI2+P1-84", batteries: "mutate_ui2.py mutate_p184.py" }   # 565s = UI2 401s + P1-84 164s
-
-          # P2-107, new in session 40, 18 mutants -- unmeasured, sits beside P2-101 on that basis.
-          # The same repeated-action family as P2-101, found on a DIFFERENT path in that fix's own
-          # validation run: PEAK_GIVEBACK_BREACH re-emitting its flatten 7 times in ~20s,
-          # per-evaluation so with no spacing at all. Two instances in one hour is why the
-          # de-duplication moved to where actions LEAVE the guard (GuardActionDeduplicator behind
-          # DispatchActions) instead of being written into each producer.
-          #
-          # ⚠️ Read the battery's second block before trusting a green here. The first THIRTEEN
-          # mutants all died on the first run; five more, aimed at the parts none of them touched,
-          # ALL SURVIVED -- including a revert of the AccountItemUpdate handler to its old bare
-          # loop, i.e. the one path the defect was measured on walking around the entire
-          # mechanism while eleven tests of that mechanism passed. That is P3-30's shape.
-          - { label: "P2-107+P2-108", batteries: "mutate_p2107.py mutate_p2108.py" }   # 554s = P2-107 403s + P2-108 151s
-
-          # UI3 (the guard rule inventory), 376s. Every mutant here makes the inventory MORE
-          # REASSURING than the truth, because that is the only direction that can hurt anyone:
-          # this registry exists to stop a config field lying about whether it protects anything,
-          # so "it crashes" is not the failure mode -- "it reports ENFORCING for a rule that has
-          # never been able to fire" is. Three survived the first run, all one gap (the evidence
-          # count was asserted for 1 of 5 rules that use it); the fix opened an escape route, and
-          # the mutant for THAT survived too. Read the file before adding to it.
-          - { label: "UI3+P1-71", batteries: "mutate_ui3.py mutate_p1_71.py" }   # 545s = UI3 377s + P1-71 168s
-
-          # P2-123, 353s PROVISIONAL. The "Symbol & Per-Ticker Matrix" tab was a static poster
-          # reading zero engine state. Mutant 10 is the one to know: it restores ceil(1/ratio) as
-          # the smallest copyable leader fill, which is the obviously-right arithmetic and
-          # disagrees with the copy path by four contracts at x0.1, because .NET rounds midpoints
-          # TO EVEN. That mutant is the fix's own first draft.
-          - { label: "P2-123+P2-112", batteries: "mutate_p2123.py mutate_p2112.py" }   # 528s = P2-123 357s + P2-112 171s
-
-          - { label: "CM3+UI5", batteries: "mutate_cm3.py mutate_ui5.py" }   # 515s = CM3 333s + UI5 182s
-
-          # ⚠️ P2-136 "survive it" IS NEW AND ITS WEIGHT HERE IS AN ESTIMATE, NOT A MEASUREMENT.
-          # Following the add-a-battery loop this header documents: a new battery goes in the
-          # LIGHTEST bin and the file says the arrangement is not yet measured, because the packer
-          # refuses to pack on guessed weights and feeding it a guess dressed as a measurement is how
-          # a plan comes out looking balanced and is not.
-          #
-          # The estimate: 26 mutants + a baseline + a final restore-check = 28 suite runs at the
-          # 22.2s-per-C#-mutant measured on this runner = ~620s. Local wall was 780s. That makes this
-          # bin ~1113s against a current heaviest of 920s, so THIS BIN IS EXPECTED TO BECOME THE
-          # CRITICAL PATH and the predicted wall goes from ~10.5 to ~13 min. RE-PACK on the first
-          # green run with `python tools/pack_ci_matrix.py --bins 19` once the real seconds are in
-          # this comment -- do not leave the estimate here as though it were measured.
-          #
-          # ⚠️ AND THIS BATTERY RUNS A GATE AS WELL AS THE SUITE. `run()` consults
-          # check_no_dead_safety_machinery.py, because the mutant that kills the restore's wiring
-          # cannot be killed by any C# assertion -- NT8's startup path is not driveable from the test
-          # build. That adds a fast Python subprocess per mutant, already inside the estimate.
-          - { label: "P1-121+P0-67", batteries: "mutate_p1121.py mutate_p0_67.py" }   # 505s = P1-121 308s + P0-67 197s
-
-          # P1-76, 354s. Three of its fourteen mutants SURVIVED on the first run, including the
-          # one that reinstates the pre-P1-76 emergent tie-break -- the precedence test was
-          # decorative because direct-wins was over-determined.
-          - { label: "P1-76+P1-85", batteries: "mutate_p1_76.py mutate_p185.py" }   # 501s = P1-76 301s + P1-85 200s
-
-          # P2-98, 327s. A partial fill delivers several Executions for the SAME Order object, and
-          # the pending-copy entry was consumed on the first of them: the metric described the
-          # SMALLEST slice, and every later slice raised FILL_NOT_MEASURED naming a cause that was
-          # not the cause. Mutant 6 is the one to know -- it keeps the fix and re-evaluates a
-          # REJECTED latency on the next slice, manufacturing a plausible figure out of the same
-          # disagreeing clocks that produced the rejected one. Mutant 4 is the other: an unweighted
-          # mean is this defect in a subtler form, a 1-lot counting for as much as the 9 beside it.
-          # P1-100, new in session 37, and the SHORTEST battery here at 4 mutants -- placed last on
-          # that basis until the first green run gives it a measured time. A SHADOW-only lockout
-          # blocked real orders: the guard's own gate was right (P2-92), but the bridge's three
-          # order paths ask IsAccountLocked, which returned the raw flag and had never been taught
-          # about either shadow authority or lockout deadlines. Wrong in BOTH directions -- it
-          # refused on an observation and admitted orders during a timed manual lockout. The fix is
-          # one predicate with every reader calling it, so the two mutants you would expect here
-          # (delete the authority clause; key it on the current mode) now live in mutate_p292.py,
-          # whose anchors were REPOINTED at that predicate. check_anchors.py is what caught them
-          # going stale, in the same commit that moved them.
-          # ⚠️ P1-140 GOES HERE because 19 bins is the ceiling (20 concurrent jobs ACCOUNT-WIDE,
-          # shared with nt8-mcp-bridge; a 20th measured 726s and a 21st 853s, both WORSE), and this
-          # was the shortest bin at 492s. The weight was DERIVED FROM A MEASUREMENT rather than
-          # guessed -- P1-139's 289s for 13 mutants gave 22.2s/mutant, so 10 mutants + baseline +
-          # restore predicted ~266s -- and it MEASURED 235s, within 12%. Deriving a weight from a
-          # neighbouring battery's measured seconds works; guessing 30s/mutant does not.
-          #
-          # Group 1 is the one to know: it puts the partial-profit SUBMISSION back. A fix that only
-          # stops SAYING something is not a fix that stops submitting. Group 4's guard mutant is the
-          # one no positive test can see -- removing `partialQty > 0` makes the line fire on every
-          # ONE-LOT bracket, which is every bracket this box has ever placed.
-          - { label: "P2-98+P1-140", batteries: "mutate_p298.py mutate_p1140.py" }   # 491s = P2-98 290s + P1-140 201s
-
-          # UI1 (the conformance snapshot), 307s. Two of its twelve mutants SURVIVED on the first
-          # run against a suite of 21 tests that were all green -- the short-leader path was
-          # untested, and the clamp test asserted the FLAG rather than the VERDICT. A third was
-          # RETIRED as unkillable by construction rather than weakened; the battery records why,
-          # because "make the mutant die" is the wrong instinct when the mutant describes
-          # something the platform cannot produce.
-          # P2-101, new in session 38, 7 mutants -- unmeasured, sits beside P1-100 on that basis.
-          # A shadow lockout retried its flatten forever: the retry's exit condition is "the
-          # position is still open", and in shadow the flatten is never sent. ~12 log lines a
-          # minute per account, on the FUNDED account too, burying interventions.jsonl. Mutant 2
-          # is THE PARTIAL FIX -- one budget for every mode, which stops the unbounded growth and
-          # still repeats an observation five more times than shadow needs. Mutant 7 is the other
-          # half: the LOCKOUT_STUCK warning was keyed on an interval the retry itself reset every
-          # 5s, so it could never fire, and killing that mutant took two attempts because any
-          # sweep where the retry fires hides it. Declares one EXPECTED SURVIVOR.
-          # P2-92, 285s. Shadow mode must be observation-only. Eleven mutants, and the two worth
-          # naming are the ones that look like the fix. Mutant 2 makes CanTrade consult the CURRENT
-          # mode instead of the stored authority, which is only wrong because the mode at READ time
-          # is not the mode at BREACH time -- an operator locked out in live then escapes by
-          # switching to shadow, which is FR-30 / P1-4's bypass through a different setting. Mutants
-          # 6 and 10 fail CLOSED, so they survive on safety rather than correctness and have to be
-          # killed deliberately.
-          # P0-96, 156s. The copier read a position's SIDE off the SIGN of its quantity, and NT8's
-          # Position.Quantity is absolute -- the side is MarketPosition. So a leader COVERING A SHORT
-          # sent the follower a Sell, which does not close a short, it DOUBLES it. 1300 green tests
-          # did not see it, because every long-side test passes under the defect. Mutant 3 is the
-          # other lesson: the exit-alignment block can be deleted outright and only a test with the
-          # follower on the OPPOSITE side to the leader notices -- the one case the block exists for.
-          # Declares one EXPECTED SURVIVOR (the reconciler mutant; unreachable until P2-27).
-          - { label: "UI1+P2-92", batteries: "mutate_ui1.py mutate_p292.py" }   # 490s = UI1 246s + P2-92 244s
+          - { label: "P1-76+P2-27+P0-67", batteries: "mutate_p1_76.py mutate_p227.py mutate_p0_67.py" }   # 752s = P1-76 304s + P2-27 247s + P0-67 201s
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

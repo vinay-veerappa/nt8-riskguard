@@ -109,6 +109,26 @@ def execution_sites(text: str) -> dict[str, int]:
 # Costs nothing to hold: UI4 is 493s of work and the ideal bin at 19 is 451s, so UI4 -- not
 # the bin count -- is the floor at 17, 18, 19 AND 20 bins. All four predict the same ~10.3
 # min. Raising this number buys zero and re-admits the queue.
+#
+# ⚠️ 19 IS THE CEILING AND IT IS NOT THE RIGHT WORKING VALUE. 13 is. This is a ceiling on what
+# is ALLOWED, not advice on what to pack to, and session 59 read it as the latter: it packed to
+# 19 on measured battery weights, predicted ~12.4 min, and the run came out at 23m0s -- SLOWER
+# than the 21m28s it replaced. The prediction assumed 19 bins run concurrently. They do not.
+#
+# MEASURED on run 32150937854, from the API's per-job created_at -> started_at, which is the
+# only place the wait is visible (the run's own log shows nothing):
+#
+#     6 jobs waited 459-530s     <- a whole second wave, ~8 min behind
+#     12 jobs waited 189-338s    <- the pool is already saturated in the FIRST wave
+#     checks 32s, one bin 2s
+#
+# So the effective allowance is nearer 13 than the 20 above, whatever the documented figure
+# says. At 13 bins there is one wave and wall time becomes `checks + max(bin)` -- a formula
+# that HOLDS, which is worth more than a smaller number that does not. Predicted ~16.7 min.
+#
+# ⚠️ Do not "optimise" this back up by re-reading the 20 above. That figure came from a real
+# measurement too, and it has since rotted; the way to raise it is to re-measure the WAIT,
+# not to re-derive the packing. Bin balance is not the binding constraint -- the slot count is.
 MAX_BINS = 19
 
 
