@@ -36,10 +36,12 @@ THE GROUPS BELOW:
      account that has not appeared yet must DEFER; a flat position is answered and DROPS. Both
      failure directions are live: dropping too eagerly discards a live bracket, keeping too long
      re-announces the same line forever, and an unbounded defer is a record that never leaves.
-  5. ⚠️ CONSUMED ONCE, which is what makes resetting the retry budget safe. Restore clears
-     `StopModifyAttempts` -- right for a new assembly, catastrophic if repeatable, because a file
-     re-read on every 5-second sweep would launder `MaxStopModifyAttempts = 3` into an unbounded
-     order flood against a provider that always refuses.
+  5. ⚠️ CONSUMED ONCE -- and read `P1-143` before trusting this line's older form. It used to say
+     the once-only guard is "what makes resetting the retry budget safe". It never was: the guard is
+     a per-INSTANCE dictionary and ONE nt_compile produces 3-4 fresh instances, measured 15s apart.
+     The reset is GONE (group 8); the budget is carried in the file and cleared only where a move is
+     OBSERVED to have taken. What group 5 still covers is the other half -- not clobbering a bracket
+     the live sweep has already advanced.
   6. ⚠️ THE WIRING, AND IT IS THE GROUP MOST LIKELY TO SHIP DEAD. Nothing in this assembly
      referenced `DynamicAtmManager` at all before this ticket -- it is reached solely through the
      bridge's `/api/order/atm` -- and `EnsureMonitor` is called from `PlaceBracket` ONLY. So the
@@ -51,8 +53,19 @@ THE GROUPS BELOW:
      cannot be parsed means something WAS being managed and is not any more.
      [[an-inapplicable-state-is-not-unreadable]], [[detector-needs-a-negative-test]].
 
-A crash counts as a kill. Exits non-zero on any survivor, and exits 2 rather than running against a
-red baseline.
+  8. ⚠️ P1-143 -- THE BUDGET IS CARRIED ACROSS THE RESTORE, and every mutant in that group is a line
+     that shipped, green and deployed, for a day. Its negative control is the load-bearing one: a
+     CONFIRMED move must still clear the carried budget, or "do not reset it" quietly becomes "a
+     recovered bracket stays abandoned forever".
+
+⚠️ A CRASH IS NOT AUTOMATICALLY A KILL, and it used to be -- see `P2-148`. The harness prints its
+result line LAST, so any unhandled exception leaves 'NO RESULT LINE', which the scoring counted as a
+kill unconditionally. That is right when assertions failed on the way down and WRONG when the mutant
+merely broke the harness. A crash now counts only if the run printed at least one `[FAIL]` first.
+The first thing that rule found was a false kill in this very file: the group 1 mutant had been
+scored KILLED for three sessions while nothing detected it.
+
+Exits non-zero on any survivor, and exits 2 rather than running against a red baseline.
 """
 import os
 import re
@@ -73,22 +86,138 @@ GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 
 MUTANTS = [
     # ---- group 1: the identity check ------------------------------------------------------------
+    # ⚠️ REWRITTEN TWICE ON 2026-08-18 (P2-148), AND BOTH REWRITES ARE THE LESSON.
+    #
+    # v1 mutated only the `if` to `if (false)`. That CANNOT express the defect it describes: control
+    # reaches `liveStop.StopPrice` with liveStop null and throws, so nothing is ever adopted. It
+    # scored KILLED on 'NO RESULT LINE' -- the harness dying, not a test objecting.
+    #
+    # v2 also neutralised the price assignment. Still threw, because there is a THIRD dereference --
+    # `liveStop.StopPrice.ToString()` inside the Restored Reason. A null check is not one line just
+    # because the `if` is; counting the dereferences is the work.
+    #
+    # ⚠️ AND v2 THREW IN A DIFFERENT TEST ENTIRELY --
+    # TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded, registered EARLIER in Main than any
+    # P2-136 test. `ReconcilePersistedBrackets` runs at the top of every `MonitorTickCore`, so every
+    # ATM sweep in the suite drives the restore path: a defect there kills tests that have nothing to
+    # do with it, before the tests that would diagnose it ever run.
+    #
+    # A faithful mutant lets the adoption HAPPEN: no live order found, adopt anyway, keep the FILE's
+    # price. Exactly what this class's header warns against.
+    # [[check-the-exemplar-belongs-to-the-class]].
+    #
+    # ⚠️ All three edits are ONE mutant deliberately. Split, each survives alone and proves
+    # nothing: the `if` alone throws, and each price fallback alone is EQUIVALENT, because the guard
+    # above returns before liveStop can be null at either site.
     (PERSIST,
-     "⚠️ THE IDENTITY CHECK GOES AWAY: any open position in the right symbol is adopted. A file\n"
-     "     two days old plus an unrelated MANUAL trade on that account is now picked up, and this\n"
-     "     monitor starts moving a stop the operator placed, on a funded account",
+     "⚠️ THE IDENTITY CHECK GOES AWAY: any open position in the right symbol is adopted, keeping\n"
+     "     the FILE's price because no named order was found. A file two days old plus an unrelated\n"
+     "     MANUAL trade on that account is picked up, and this monitor starts moving a stop the\n"
+     "     operator placed, on a funded account",
      '            if (liveStop == null)\n'
      '            {\n'
      '                return new AtmRestoreDecision\n'
      '                {\n'
      '                    Bracket = b,\n'
-     '                    Verdict = AtmRestoreVerdict.Unprotected,',
+     '                    Verdict = AtmRestoreVerdict.Unprotected,\n'
+     '                    Reason = b.BracketId + ": the " + b.Symbol + " position on \'" + account.Name\n'
+     '                        + "\' is still OPEN and no live order named \'" + AtmOrderIdentity.StopName(b.BracketId)\n'
+     '                        + "\' remains at the broker, so this position has no protective stop and is not "\n'
+     '                        + "being managed. It is NOT picked back up, because a bracket with no stop to "\n'
+     '                        + "move would report as managed while managing nothing."\n'
+     '                };\n'
+     '            }\n'
+     '\n'
+     '            // The price comes from the ORDER, never from the file. See the header: a price written\n'
+     '            // before a compile is this monitor\'s last wish. P0-67 one layer down.\n'
+     '            b.CurrentStopPrice = liveStop.StopPrice;\n'
+     '\n'
+     '            // Nothing is outstanding across a hot-swap: whatever was in flight either took or did\n'
+     '            // not, and the next sweep\'s ReconcileStopFromBroker is what finds out.\n'
+     '            b.RequestedStopPrice = double.NaN;\n'
+     '            b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;\n'
+     '\n'
+     '            // ⚠️ THE RETRY BUDGET IS CARRIED, NOT RESET, AND THIS IS `P1-143`. It used to be reset\n'
+     '            // here, on the reasoning that "a new assembly against a possibly-new connection is a new\n'
+     '            // episode, so a bracket that had given up deserves to try again", guarded by the claim\n'
+     '            // that a record is consumed ONCE because `RestoreInto` refuses an id already in the\n'
+     '            // registry.\n'
+     '            //\n'
+     '            // That guard is PER-INSTANCE and the condition is not. Measured on the box the day after\n'
+     '            // it shipped: one `nt_compile` produced FOUR `InitializeRiskGuard` runs 15s apart, each\n'
+     '            // on a fresh static context with an empty registry, so one bracket was restored four\n'
+     '            // times and a refused stop was handed four fresh budgets of `MaxStopModifyAttempts`. The\n'
+     '            // order flood the old comment warned about, arriving through the door it did not\n'
+     '            // consider: not a re-read within an instance, but a NEW INSTANCE.\n'
+     '            //\n'
+     '            // "A new assembly is a new episode" is true of a RESTART and false of a COMPILE, which is\n'
+     '            // the same distinction `P2-142` records from the other side. So nothing is cleared here.\n'
+     '            // `StopModifyAttempts`, `StopMoveAbandonAnnounced` and `LastStopMoveFailureReason` are\n'
+     '            // plain serialised properties of `ActiveBracket`, so they survive in the file and simply\n'
+     '            // stand. The event that SHOULD clear them already does: `ReconcileStopFromBroker`\'s\n'
+     '            // CONFIRMED branch clears both when a move is observed to have actually taken, which is\n'
+     '            // a recovery that happened rather than one that is merely possible.\n'
+     '\n'
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,\n'
+     '                Reason = b.BracketId + ": picked back up after a NinjaScript recompile. The "\n'
+     '                    + b.Symbol + " position on \'" + account.Name + "\' is still open and its stop \'"\n'
+     '                    + AtmOrderIdentity.StopName(b.BracketId) + "\' is live at "\n'
+     '                    + liveStop.StopPrice.ToString("0.#####")',
      '            if (false)\n'
      '            {\n'
      '                return new AtmRestoreDecision\n'
      '                {\n'
      '                    Bracket = b,\n'
-     '                    Verdict = AtmRestoreVerdict.Unprotected,'),
+     '                    Verdict = AtmRestoreVerdict.Unprotected,\n'
+     '                    Reason = b.BracketId + ": the " + b.Symbol + " position on \'" + account.Name\n'
+     '                        + "\' is still OPEN and no live order named \'" + AtmOrderIdentity.StopName(b.BracketId)\n'
+     '                        + "\' remains at the broker, so this position has no protective stop and is not "\n'
+     '                        + "being managed. It is NOT picked back up, because a bracket with no stop to "\n'
+     '                        + "move would report as managed while managing nothing."\n'
+     '                };\n'
+     '            }\n'
+     '\n'
+     '            // The price comes from the ORDER, never from the file. See the header: a price written\n'
+     '            // before a compile is this monitor\'s last wish. P0-67 one layer down.\n'
+     '            b.CurrentStopPrice = liveStop == null ? b.CurrentStopPrice : liveStop.StopPrice;\n'
+     '\n'
+     '            // Nothing is outstanding across a hot-swap: whatever was in flight either took or did\n'
+     '            // not, and the next sweep\'s ReconcileStopFromBroker is what finds out.\n'
+     '            b.RequestedStopPrice = double.NaN;\n'
+     '            b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;\n'
+     '\n'
+     '            // ⚠️ THE RETRY BUDGET IS CARRIED, NOT RESET, AND THIS IS `P1-143`. It used to be reset\n'
+     '            // here, on the reasoning that "a new assembly against a possibly-new connection is a new\n'
+     '            // episode, so a bracket that had given up deserves to try again", guarded by the claim\n'
+     '            // that a record is consumed ONCE because `RestoreInto` refuses an id already in the\n'
+     '            // registry.\n'
+     '            //\n'
+     '            // That guard is PER-INSTANCE and the condition is not. Measured on the box the day after\n'
+     '            // it shipped: one `nt_compile` produced FOUR `InitializeRiskGuard` runs 15s apart, each\n'
+     '            // on a fresh static context with an empty registry, so one bracket was restored four\n'
+     '            // times and a refused stop was handed four fresh budgets of `MaxStopModifyAttempts`. The\n'
+     '            // order flood the old comment warned about, arriving through the door it did not\n'
+     '            // consider: not a re-read within an instance, but a NEW INSTANCE.\n'
+     '            //\n'
+     '            // "A new assembly is a new episode" is true of a RESTART and false of a COMPILE, which is\n'
+     '            // the same distinction `P2-142` records from the other side. So nothing is cleared here.\n'
+     '            // `StopModifyAttempts`, `StopMoveAbandonAnnounced` and `LastStopMoveFailureReason` are\n'
+     '            // plain serialised properties of `ActiveBracket`, so they survive in the file and simply\n'
+     '            // stand. The event that SHOULD clear them already does: `ReconcileStopFromBroker`\'s\n'
+     '            // CONFIRMED branch clears both when a move is observed to have actually taken, which is\n'
+     '            // a recovery that happened rather than one that is merely possible.\n'
+     '\n'
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,\n'
+     '                Reason = b.BracketId + ": picked back up after a NinjaScript recompile. The "\n'
+     '                    + b.Symbol + " position on \'" + account.Name + "\' is still open and its stop \'"\n'
+     '                    + AtmOrderIdentity.StopName(b.BracketId) + "\' is live at "\n'
+     '                    + b.CurrentStopPrice.ToString("0.#####")'),
 
     (PERSIST,
      "the identity lookup stops caring whether our leg is LIVE, so a FILLED or CANCELLED stop\n"
@@ -126,14 +255,6 @@ MUTANTS = [
      '            b.RequestedStopPrice = double.NaN;\n'
      '            b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;',
      '            b.OutstandingStopMoveKind = b.OutstandingStopMoveKind;'),
-
-    (PERSIST,
-     "the refusal budget survives, so a bracket that had spent its three attempts before the\n"
-     "     compile can never ask again -- on a new assembly against a possibly-new connection,\n"
-     "     which is a new episode by any reading",
-     '            b.StopModifyAttempts = 0;\n'
-     '            b.StopMoveAbandonAnnounced = false;',
-     '            b.StopMoveAbandonAnnounced = false;'),
 
     # ---- group 3: direction --------------------------------------------------------------------
     (PERSIST,
@@ -336,6 +457,70 @@ MUTANTS = [
      "     that is reset on restore anyway",
      '                FloatFormatHandling = FloatFormatHandling.String',
      '                FloatFormatHandling = FloatFormatHandling.DefaultValue'),
+    # ---- group 6: P1-143, the budget must be CARRIED across the restore -------------------------
+    # These mutants re-introduce the defect this battery's own subject SHIPPED WITH. P2-136's fix
+    # reset the retry budget on restore, justified by "a record is consumed ONCE" -- true per
+    # instance, and one nt_compile makes 3-4 instances. Every mutant below is a line that was in the
+    # tree, green, deployed and live for a day.
+    (PERSIST,
+     "\u26a0\ufe0f P1-143 ITSELF, PUT BACK: the spent refusal budget is reset on restore. A provider that\n"
+     "     always refuses gets a fresh MaxStopModifyAttempts on every assembly, and a compile makes\n"
+     "     3-4 of those -- the bounded retry the budget exists to be becomes an order flood",
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,',
+     '            b.StopModifyAttempts = 0;\n'
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,'),
+
+    (PERSIST,
+     "P1-143's quiet half: the ABANDON LATCH is cleared on restore, so the giving-up message is\n"
+     "     re-said once per assembly. This is what kept the four resets from being obvious -- each\n"
+     "     new instance believed it had never announced anything",
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,',
+     '            b.StopMoveAbandonAnnounced = false;\n'
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,'),
+
+    (PERSIST,
+     "the recorded failure REASON is nulled on restore, so the abandon message that does survive\n"
+     "     prints 'not recorded' instead of what the provider actually said. An alarm that keeps\n"
+     "     firing and stops saying why",
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,',
+     '            b.LastStopMoveFailureReason = null;\n'
+     '            return new AtmRestoreDecision\n'
+     '            {\n'
+     '                Bracket = b,\n'
+     '                Verdict = AtmRestoreVerdict.Restored,'),
+
+    # The NEGATIVE CONTROL, and it is the load-bearing one. "Carry the budget" must not become
+    # "nothing can ever clear it", which would leave a recovered bracket permanently abandoned and
+    # would pass every other mutant in this group.
+    (ATM,
+     "\u26a0\ufe0f the OPPOSITE failure to P1-143: an OBSERVED, CONFIRMED move no longer clears the carried\n"
+     "     budget, so a bracket that genuinely recovered stays abandoned forever. Carrying a budget\n"
+     "     across a compile is only safe while the event that SHOULD clear it still does",
+     "                        bracket.StopModifyAttempts = 0;\n"
+     "                        // P2-135. The abandonment episode ends where the CONDITION resolves, which is",
+     "                        // P2-135. The abandonment episode ends where the CONDITION resolves, which is"),
+
+    (ATM,
+     "the per-instance guard stops guarding, so a later sweep's file re-read OVERWRITES a bracket\n"
+     "     the monitor has already advanced -- discarding a stop price it moved. P1-143 removed the\n"
+     "     budget reset from behind this guard; the clobbering half is still real",
+     "                        alreadyLive = _activeBrackets.ContainsKey(decision.Bracket.BracketId);",
+     "                        alreadyLive = false;"),
 ]
 
 ORIGINALS = {p: open(p, encoding='utf-8').read() for p in {m[0] for m in MUTANTS}}
@@ -385,6 +570,16 @@ def run():
     m = re.search(r'Passed = (\d+), Failed = (\d+)', out)
     result = m.group(0) if m else 'NO RESULT LINE'
 
+    # ⚠️ A CRASH IS NOT A DETECTION, and without this the two are indistinguishable. The harness
+    # prints its result line last, so an unhandled exception anywhere leaves 'NO RESULT LINE' --
+    # which the scoring below counts as KILLED. That is right when assertions failed first and the
+    # crash was a consequence; it is a FALSE KILL when the mutant merely broke the harness and
+    # nothing detected it. Measured here: the `alreadyLive = false` mutant crashes the run with a
+    # NullReferenceException, and it IS caught -- two P2-134 assertions fail on the way down. The
+    # scoring could not tell, so it is told: the run must have printed at least one [FAIL].
+    if not m and '[FAIL]' not in out:
+        return 'NO RESULT LINE + NO ASSERTION FAILED (harness died undetected)'
+
     # Only consulted when the suite is green: a red suite has already scored the mutant, and running
     # the gate anyway would make a build failure and a wiring failure print the same line.
     if result.endswith('Failed = 0'):
@@ -414,9 +609,13 @@ for target, name, old, new in MUTANTS:
     try:
         res = run()
         mm = re.search(r'Failed = (\d+)', res)
-        killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
-            or ('GATE FAILED' in res) or ('GATE TIMEOUT' in res) \
-            or (mm is not None and int(mm.group(1)) > 0)
+        # Order matters: the undetected-crash verdict CONTAINS 'NO RESULT LINE', so it has to be
+        # excluded before that substring is read as a kill.
+        undetected_crash = 'NO ASSERTION FAILED' in res
+        killed = (not undetected_crash) and (
+            ('BUILD FAILED' in res) or ('NO RESULT LINE' in res)
+            or ('GATE FAILED' in res) or ('GATE TIMEOUT' in res)
+            or (mm is not None and int(mm.group(1)) > 0))
         print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
         if not killed:
             survivors.append(name)

@@ -257,16 +257,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.RequestedStopPrice = double.NaN;
             b.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.None;
 
-            // ⚠️ THE BUDGET IS RESET, AND THE INVARIANT THAT MAKES THAT SAFE IS THE CALLER'S.
-            // A new assembly against a possibly-new connection is a new episode, so a bracket that
-            // had given up deserves to try again -- and `StopMoveAbandonAnnounced` is cleared with it
-            // so the second failure is not swallowed as already-said. This is only safe because a
-            // record is consumed ONCE: `RestoreInto` refuses a bracket id already in the registry.
-            // Without that, a file re-read on every sweep would launder the retry budget every five
-            // seconds and turn a bounded retry into an order flood.
-            b.StopModifyAttempts = 0;
-            b.StopMoveAbandonAnnounced = false;
-            b.LastStopMoveFailureReason = null;
+            // ⚠️ THE RETRY BUDGET IS CARRIED, NOT RESET, AND THIS IS `P1-143`. It used to be reset
+            // here, on the reasoning that "a new assembly against a possibly-new connection is a new
+            // episode, so a bracket that had given up deserves to try again", guarded by the claim
+            // that a record is consumed ONCE because `RestoreInto` refuses an id already in the
+            // registry.
+            //
+            // That guard is PER-INSTANCE and the condition is not. Measured on the box the day after
+            // it shipped: one `nt_compile` produced FOUR `InitializeRiskGuard` runs 15s apart, each
+            // on a fresh static context with an empty registry, so one bracket was restored four
+            // times and a refused stop was handed four fresh budgets of `MaxStopModifyAttempts`. The
+            // order flood the old comment warned about, arriving through the door it did not
+            // consider: not a re-read within an instance, but a NEW INSTANCE.
+            //
+            // "A new assembly is a new episode" is true of a RESTART and false of a COMPILE, which is
+            // the same distinction `P2-142` records from the other side. So nothing is cleared here.
+            // `StopModifyAttempts`, `StopMoveAbandonAnnounced` and `LastStopMoveFailureReason` are
+            // plain serialised properties of `ActiveBracket`, so they survive in the file and simply
+            // stand. The event that SHOULD clear them already does: `ReconcileStopFromBroker`'s
+            // CONFIRMED branch clears both when a move is observed to have actually taken, which is
+            // a recovery that happened rather than one that is merely possible.
 
             return new AtmRestoreDecision
             {

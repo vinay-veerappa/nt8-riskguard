@@ -7860,7 +7860,7 @@ operator's. Whatever the fix, it wants `ARMED_ON_START` to distinguish the two, 
 unreadable on this axis regardless.
 
 
-### P1-143. `P2-136`'s restore hands a refused stop a FRESH retry budget on every recompile, because the "consumed once" latch is per-INSTANCE and a compile makes several instances — OPEN, found 2026-08-18 (session 58) in the first live run of the fix that introduced it
+### P1-143. `P2-136`'s restore hands a refused stop a FRESH retry budget on every recompile, because the "consumed once" latch is per-INSTANCE and a compile makes several instances — ✅ FIXED 2026-08-18 (session 58), found the same session in the first live run of the fix that introduced it
 
 `AtmBracketPersistence.Decide` clears `StopModifyAttempts = 0` and
 `StopMoveAbandonAnnounced = false` when it restores a bracket
@@ -7902,8 +7902,30 @@ restore — persist and carry them. The CONFIRMED branch in `DynamicAtmManager.c
 clears both on a genuine recovery, which is the event that should clear them. Then suppress the
 repeat announcement so `ATM_BRACKET_RESTORED` says itself once per bracket.
 
-⚠️ **The funded-account leg of `P2-136`'s live validation is ON HOLD until this lands.** The Sim101
-leg passed and is recorded under `P2-136`.
+✅ **FIXED 2026-08-18 (session 58).** The reset is gone. `StopModifyAttempts`,
+`StopMoveAbandonAnnounced` and `LastStopMoveFailureReason` are plain serialised properties of
+`ActiveBracket`, so carrying them across a compile was a DELETION, not new machinery. The event that
+should clear them already did: `ReconcileStopFromBroker`'s CONFIRMED branch, where a move is OBSERVED
+to have taken.
+
+Suite **2182 → 2188 / 0**; battery `mutate_p2136survive.py` **26 → 30 mutants, 30/30 killed**.
+
+⚠️ **TWO ARTEFACTS FROM THE SESSION THAT SHIPPED THE DEFECT WERE ENFORCING IT**, and this is the part
+worth carrying:
+
+* the test asserted `restored.StopModifyAttempts == 0` — written in the same session as the reset,
+  from the same wrong premise, so it licensed the defect rather than catching it; and
+* the battery carried a mutant scoring the CORRECT behaviour as the bug (*"the refusal budget
+  survives … which is a new episode by any reading"*).
+
+A test written from the same premise as the code tests the premise, not the code. Both are inverted,
+and the new negative control — a CONFIRMED move must still clear the carried budget — is what stops
+the fix becoming "nothing ever clears it".
+
+⚠️ **NOT FIXED, and deliberately left with `P2-142`:** `if (restored > 0) EnsureMonitor()` is still
+per-instance, so several managers may each hold a copy of one bracket. Whether old assemblies survive
+a hot-swap has not been MEASURED by anybody here, and it belongs with the question of why one compile
+yields 3-4 `INITIALIZE` events. Bundling a guess with a definite fix would have made both unverifiable.
 
 
 ### P2-144. `check_bridge_parses.py` was on disk and wired to NOTHING — and neither repo's meta-gate could ever have noticed, because both globbed `mutation/` only — ✅ FIXED 2026-08-18 (session 58)
@@ -8022,6 +8044,89 @@ through, and any evidence gathered for this ID has to name it. The candidate dir
 the side from `Execution.MarketPosition` or the position delta rather than from `Order`, but that is
 a guess until somebody measures which fields are actually populated on this provider when `Order` is
 null.
+
+
+### P2-148. A mutant that CRASHES the test harness scores as KILLED with nothing having detected it — 41 of the 44 batteries — ⚠️ OPEN: fixed in one battery 2026-08-18 (session 58), the other 40 are a mechanical sweep
+
+Found while diagnosing a kill that read oddly, not by a gate.
+
+Every battery's `run()` ends by regex-matching the harness's `Passed = N, Failed = M` line, which the
+harness prints **last**. So an unhandled exception anywhere leaves no result line, `run()` returns
+`'NO RESULT LINE'`, and the scoring reads:
+
+```python
+killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) or ... 
+```
+
+**A crash counts as a kill unconditionally.** That is correct when assertions failed first and the
+crash was a consequence; it is a FALSE KILL when the mutant merely broke the harness and no test
+detected anything. The two are indistinguishable to the scorer, and a false kill is invisible — it
+prints `[KILLED]` and leaves the survivor list empty, which is the exact shape of
+[[a-green-that-can-never-be-red]] that this repo keeps paying for.
+
+**Measured on the instance that exposed it.** The `alreadyLive = false` mutant in
+`mutate_p2136survive.py` dies with a `NullReferenceException`. Re-driven by hand, it **is** genuinely
+caught — two `P2-134` assertions fail on the way down — so the verdict was right, **by accident**.
+The scoring could not have told the difference.
+
+⚠️ **AND THEN THE FIXED SCORING IMMEDIATELY FOUND A REAL FALSE KILL, IN THIS BATTERY.** An earlier
+draft of this entry said "no battery result is known to be wrong"; that was written before the
+battery was re-run and **it is false**. Re-run with the stricter rule, `mutate_p2136survive.py` went
+**30/30 → 29/30**, and the newly-exposed survivor is the first mutant in the file:
+
+> ⚠️ THE IDENTITY CHECK GOES AWAY: any open position in the right symbol is adopted.
+
+That is **`P2-136`'s entire safety argument** — a record is only picked up when the live order named
+`Stop_<bracketId>` is still working — and it has been scored KILLED since the battery was written
+while nothing detected it. The mechanism: with `if (liveStop == null)` mutated to `if (false)`,
+control reaches `b.CurrentStopPrice = liveStop.StopPrice` and throws a `NullReferenceException`.
+
+⚠️ **The test that should catch it EXISTS and is correct** — `TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted`
+— but it never runs its assertion, because `Main` is a **flat list of unguarded calls** and one throw
+kills the process. So the crash is not merely mis-scored; **every test registered after the throwing
+one goes unrun**, and the number that reach an assertion at all is unknown. This is the same
+structural fact as the `P2-134` precondition crash noted below, and it is the real defect underneath
+`P2-148`.
+
+⚠️ **A second, separate problem with that mutant, and it cuts the other way.** Its stated consequence
+— *"this monitor starts moving a stop the operator placed, on a funded account"* — is **not** what the
+mutated code does. It throws before adopting anything, and `ExecuteSafetySweep` wraps the call, so in
+production this shape would be logged as a restore failure rather than adopting a stranger's
+position. **The mutant does not model the defect it describes.** A faithful one returns a fabricated
+non-null stop and lets the adoption actually happen. Until that mutant is written, the identity check
+has no evidence behind it in either direction — [[check-the-exemplar-belongs-to-the-class]].
+
+**So the correct summary is not "41 batteries have been mis-scoring".** It is: one false kill is
+confirmed, in the battery that happened to be re-run; the other 40 batteries have the same blind spot
+and **have not been re-run under the stricter rule**, so nothing is known about them yet. Re-running
+them is how to find out, and it is the first thing to do here.
+
+**The fix, applied to `mutate_p2136survive.py` only:** a crash counts as detection only if the run
+printed at least one `[FAIL]` first.
+
+```python
+if not m and '[FAIL]' not in out:
+    return 'NO RESULT LINE + NO ASSERTION FAILED (harness died undetected)'
+```
+
+⚠️ Ordering matters and is easy to get wrong: the new verdict string CONTAINS `'NO RESULT LINE'`, so
+it must be excluded before that substring is read as a kill. A first draft that appended the note
+without the exclusion scored identically to the defect — [[a-substring-assertion-catches-the-identifier]].
+
+**Why the other 40 are not done in the same commit.** It is a mechanical edit to the verification
+layer of the whole repo, made at the end of a session, on files a running battery mutates in place.
+`mutation/_battery.py` already exists and exports `_description` and `finish` but **not** `run` —
+each battery owns its own copy — so the class fix is either 40 near-identical edits or lifting `run`
+into the shared module and migrating callers. ⚠️ **Do not add the helper without migrating**: a
+correct `run` in `_battery.py` that 40 batteries do not call is dead safety machinery, and this repo
+has a CI gate that exists because of exactly that.
+
+⚠️ **And there is a second, smaller defect underneath this one, which is what made the kill
+ambiguous.** `TestAtm_P2134_TheGenuineRefusalKeepsItsName` dereferences a null **after its own
+precondition assertion has already failed**, so it crashes rather than failing cleanly — taking
+every test registered after it down with it, unrun. A test that cannot survive its own failed
+precondition converts one red assertion into an unknown number of unmeasured ones. That is worth its
+own sweep of the suite's preconditions and gets its own ID when taken.
 
 
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID

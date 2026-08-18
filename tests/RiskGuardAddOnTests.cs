@@ -503,6 +503,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             // through one manager and restores through a SECOND one -- that is the hot-swap.
             TestAtm_P2136_ABracketWithALiveStopIsPickedBackUp();
             TestAtm_P2136_TheRestoredStopPriceComesFromTheOrderNotTheFile();
+            // P1-143. The restore above happens 3-4 times per compile, not once, so the refusal
+            // budget must be CARRIED. Every test either side of these instantiates one manager,
+            // which is exactly why none of them could see it.
+            TestAtm_P1143_FourRecompilesDoNotHandOutFourBudgets();
+            TestAtm_P1143_AConfirmedMoveStillClearsTheCarriedBudget();
+            TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile();
             TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted();
             TestAtm_P2136_AFinishedTradeIsNotResurrected();
             TestAtm_P2136_AReversedPositionIsNotManaged();
@@ -9299,6 +9305,157 @@ namespace NinjaTrader.NinjaScript.AddOns
             return after;
         }
 
+        /// <summary>
+        /// P1-143. The measured condition, and the reason a single-restore test could never see it:
+        /// one `nt_compile` produced FOUR `InitializeRiskGuard` runs 15s apart, each on a fresh
+        /// static context. So the file is consumed once per ASSEMBLY, not once per bracket, and the
+        /// per-instance `alreadyLive` guard cannot span them.
+        ///
+        /// Drives `n` successive hot-swaps against one state file, exactly as a compile burst does:
+        /// each restore rewrites the file from the live registry, and the next fresh manager reads
+        /// what the previous one wrote. Returns the bracket as the LAST assembly holds it.
+        /// </summary>
+        private static ActiveBracket AtmAfterNRecompiles(DynamicAtmManager first, ActiveBracket bracket,
+            string stateFile, int n)
+        {
+            first.SetBracketStateFileForTest(stateFile);
+            first.RegisterBracket(bracket);
+
+            ActiveBracket last = null;
+            for (int i = 0; i < n; i++)
+            {
+                var fresh = new DynamicAtmManager();
+                fresh.SetBracketStateFileForTest(stateFile);
+                fresh.ReconcilePersistedBrackets();
+                last = fresh.GetBracketForTest(bracket.BracketId);
+            }
+            return last;
+        }
+
+        /// <summary>
+        /// P1-143. One compile is 3-4 assemblies, so the budget must survive being restored
+        /// repeatedly. This is the test the 26-mutant P2-136 battery and 2182 green assertions could
+        /// not have produced between them: every one of them instantiates ONE manager.
+        /// </summary>
+        private static void TestAtm_P1143_FourRecompilesDoNotHandOutFourBudgets()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-143: four recompiles do not hand a refused stop four fresh budgets");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                bracket.StopModifyAttempts = 3;
+                bracket.StopMoveAbandonAnnounced = true;
+                bracket.LastStopMoveFailureReason = "provider refused the modification";
+
+                // Four, because four is what was measured -- 02:10:29, :44, :59 and 02:11:14.
+                var restored = AtmAfterNRecompiles(atm, bracket, file, 4);
+
+                Assert(restored != null && restored.StopModifyAttempts == 3,
+                    "P1-143: after FOUR restores the spent budget is still 3, not reset to 0 four "
+                    + "times (got " + (restored == null ? "no bracket" : restored.StopModifyAttempts.ToString())
+                    + "). The literal 3 is asserted rather than MaxStopModifyAttempts, because reading "
+                    + "the constant makes the expectation move with a mutant that changes it.");
+
+                Assert(restored != null && restored.StopMoveAbandonAnnounced,
+                    "P1-143: the abandon latch is still set, so the giving-up message is not re-said "
+                    + "once per assembly. Clearing it was how the four resets stayed quiet: each new "
+                    + "instance believed it had never announced anything.");
+
+                Assert(restored != null && restored.LastStopMoveFailureReason == "provider refused the modification",
+                    "P1-143: the recorded reason survives too. It is what the abandon message prints, "
+                    + "and nulling it turned a stated cause into 'not recorded' on every restore.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P1-143's negative control, and it is the load-bearing half: carrying the budget must not
+        /// mean nothing can ever clear it, or a bracket that recovers stays permanently abandoned.
+        ///
+        /// The event that clears it is a move OBSERVED TO HAVE TAKEN -- ReconcileStopFromBroker's
+        /// CONFIRMED branch -- which is a recovery that happened rather than one that is merely
+        /// possible. Without this assertion the fix could be "never clear the budget", which passes
+        /// every other test here and permanently disarms the retry.
+        /// </summary>
+        private static void TestAtm_P1143_AConfirmedMoveStillClearsTheCarriedBudget()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-143: a CONFIRMED move still clears a budget carried across a recompile");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                bracket.StopModifyAttempts = 3;
+                bracket.StopMoveAbandonAnnounced = true;
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+                after.ReconcilePersistedBrackets();
+                var restored = after.GetBracketForTest(bracket.BracketId);
+
+                Assert(restored != null && restored.StopModifyAttempts == 3,
+                    "P1-143 precondition: the budget arrives spent. If it did not, the clearing below "
+                    + "would prove nothing -- it would be observing a value that was already 0.");
+
+                // The broker is now seen holding the price the monitor asked for: the move took.
+                // Driven through the sweep, the way every other test of this branch drives it,
+                // rather than through a seam written for this test alone.
+                restored.RequestedStopPrice = 20005.50;
+                restored.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.Trail;
+                stop.StopPrice = 20005.50;
+                after.MonitorTickForTest();
+
+                Assert(restored.StopModifyAttempts == 0 && !restored.StopMoveAbandonAnnounced,
+                    "P1-143: an OBSERVED move clears the carried budget and the latch (got attempts="
+                    + restored.StopModifyAttempts + ", announced=" + restored.StopMoveAbandonAnnounced
+                    + "). Carrying the budget across a compile must not make it uncarryable forever.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P1-143. The budget has to reach the DISK to be carried, and it is only carried because
+        /// `ActiveBracket`'s properties serialise by default -- which is a property of the type,
+        /// not a decision anybody made here. A `[JsonIgnore]` added to either field for an unrelated
+        /// reason would silently restore the laundering, with every in-memory test still green.
+        /// </summary>
+        private static void TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile()
+        {
+            Console.WriteLine("\n[TEST] ATM P1-143: the spent budget reaches the state file, not just the next object");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                bracket.StopModifyAttempts = 3;
+                bracket.StopMoveAbandonAnnounced = true;
+
+                atm.SetBracketStateFileForTest(file);
+                atm.RegisterBracket(bracket);
+
+                string json = System.IO.File.ReadAllText(file);
+                var parsed = AtmBracketPersistence.Deserialise(json);
+
+                Assert(parsed != null && parsed.Brackets != null && parsed.Brackets.Count == 1
+                       && parsed.Brackets[0].Bracket.StopModifyAttempts == 3
+                       && parsed.Brackets[0].Bracket.StopMoveAbandonAnnounced,
+                    "P1-143: the file itself carries attempts=3 and the abandon latch. Asserted "
+                    + "against the parsed file rather than a substring of the JSON, so a renamed "
+                    + "property fails here instead of passing on a number that happens to appear.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
         private static RiskGuardAddOn AtmGuardForRestore()
         {
             var guard = new RiskGuardAddOn();
@@ -9389,11 +9546,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "finds out -- carrying a stale outstanding request over would make the "
                     + "reconciler judge this sweep's broker price against the last assembly's wish.");
 
-                Assert(restored != null && restored.StopModifyAttempts == 0 && !restored.StopMoveAbandonAnnounced,
-                    "P2-136: the refusal budget is fresh. A new assembly against a possibly-new "
-                    + "connection is a new episode, and a bracket that had given up deserves to try "
-                    + "again -- with the announcement latch cleared too, so the next failure is not "
-                    + "swallowed as already-said.");
+                Assert(restored != null && restored.StopModifyAttempts == 3 && restored.StopMoveAbandonAnnounced,
+                    "P1-143: the spent refusal budget is CARRIED, not reset (got attempts="
+                    + (restored == null ? "no bracket" : restored.StopModifyAttempts.ToString())
+                    + "). ⚠️ This assertion used to read `== 0`, and it PINNED THE DEFECT: it was "
+                    + "written in the same session as the reset it was checking, from the same wrong "
+                    + "premise -- that a new assembly is a new episode. A compile is not a restart, "
+                    + "and one compile makes 3-4 assemblies, so `== 0` licensed handing a refused "
+                    + "stop four fresh budgets. See P1-143.");
             }
             finally { try { System.IO.File.Delete(file); } catch { } }
         }

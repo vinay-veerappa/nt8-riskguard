@@ -11409,10 +11409,12 @@ Derived from the plan's statuses this session — **do not copy this list forwar
 previous block listed the §4 layout work as *"slice 1 landed; the page does not consume it yet"* six
 sessions after that stopped being true.
 
-1. **`P1-143`** — it is a regression in code shipped last session, it launders a safety budget on
-   the stop-move path, and ⚠️ **the funded-account leg of last session's registry-restore
-   validation is blocked on it** (that entry is closed, so its ID is not repeated here).
-   Do not reach for the log de-duplication: that fixes the symptom and leaves the reset.
+1. ~~The registry-restore budget regression~~ — ✅ CLOSED later in this same session, suite
+   **2188/0** and battery **30/30**. Struck rather than deleted because the two artefacts it left
+   behind are the lesson: a test and a mutant, both written from the same wrong premise as the code,
+   were **enforcing** the defect. Its ID is not repeated here — the gate reads any ID in this block
+   as work to do, correctly.
+   ⚠️ **Its remainder is real and lives under `P2-142`**: `EnsureMonitor` is still per-instance.
 2. **`P1-146`** — real money, no stop, twice. The open question is what opened those positions: no
    `ATM_BRACKET_*` event names either instrument at those times, so they did not come through
    `DynamicAtmManager`. Answer that before deciding whether it is a guard defect at all.

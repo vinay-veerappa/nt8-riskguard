@@ -667,11 +667,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (decision.Verdict == AtmRestoreVerdict.Restored)
                 {
-                    // ⚠️ THE INVARIANT THAT MAKES RESETTING THE RETRY BUDGET SAFE. A record is
-                    // consumed ONCE. Without this a file re-read on a later sweep would overwrite a
-                    // bracket the sweep has since advanced, and would launder
-                    // `StopModifyAttempts` back to zero every five seconds -- turning a bounded
-                    // retry into an order flood against a provider that always refuses.
+                    // A record is consumed ONCE per instance: without this a file re-read on a later
+                    // sweep would overwrite a bracket the sweep has since advanced, discarding a
+                    // stop price the monitor has already moved.
+                    //
+                    // ⚠️ It used to be described as the invariant that made resetting the retry
+                    // budget safe. It never was -- this dictionary is per-INSTANCE and a compile
+                    // makes several instances, which is `P1-143`. The reset is gone; nothing here
+                    // launders anything now, and this guard is only about not clobbering live state.
                     bool alreadyLive;
                     lock (_bracketLock)
                     {
