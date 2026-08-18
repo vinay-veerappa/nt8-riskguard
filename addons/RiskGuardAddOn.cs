@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.40.0";
+        public const string Version = "1.41.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -542,6 +542,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // `AuditIntervalSeconds: 10` sat in the live config describing an audit that
                 // never ran: a configured protection that did not exist.
                 StartAuditTimer();
+
+                // P2-136 "survive it". A successful compile hot-swaps `bin/Custom` into a NEW
+                // assembly, so `DynamicAtmManager`'s `Lazy<>` singleton is fresh and its registry of
+                // managed brackets starts EMPTY -- while the position and both broker-side legs are
+                // untouched. Every surface then reports the trade as protected, and it is: protected
+                // at its opening price, with a stop that will never move again.
+                //
+                // ⚠️ THIS IS THE ONLY STARTUP PATH THAT CLASS HAS. Nothing else in this assembly
+                // referenced `DynamicAtmManager` at all -- it is reached solely through the bridge's
+                // `/api/order/atm` -- so without this line the restore would be
+                // [[dead-safety-machinery-gate]] verbatim: written, tested, mutation-covered, and
+                // never once run. `check_no_dead_safety_machinery.py` matches the `Reconcile*` name
+                // and fails the build if this call is removed.
+                try { DynamicAtmManager.Instance.ReconcilePersistedBrackets(); }
+                catch (Exception ex)
+                {
+                    LogEvent("SYSTEM", "ERROR", "ATM bracket restore failed: " + ex.Message);
+                }
 
                 LogEvent("SYSTEM", "INITIALIZE", $"RiskGuard Add-On v{Version} initialized in {_mode} mode. Event monitoring started.");
                 // P1-47: the mode is resolved by now, so the arm default can follow it.
@@ -2102,6 +2120,34 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         internal void ExecuteSafetySweep()
         {
+            // P2-136 "survive it", THE GUARANTEED DRIVER. The init-time call in InitializeRiskGuard
+            // gives immediacy; this one gives the guarantee, and the difference was measured rather
+            // than reasoned about.
+            //
+            // ⚠️ THE ATM MANAGER'S OWN SWEEP CANNOT BE THE DRIVER. `EnsureMonitor` is called from
+            // `PlaceBracket` only, so after a recompile with no new order there is NO ATM timer -- and
+            // the restore, the deferral retry and its bounded give-up all sit behind a timer that
+            // never starts. `mutate_p2136survive.py` put `if (false)` in front of the init call and the
+            // whole restore path went dead behind a 2176/0 suite, a green `check_anchors`, and a
+            // `check_no_dead_safety_machinery` that still read WIRED because the ATM sweep also calls
+            // it. THIS timer is started unconditionally in InitializeRiskGuard beside the others and
+            // runs whether or not any bracket exists.
+            //
+            // ⚠️ AND IT IS REACHABLE FROM A TEST, WHICH THE INIT PATH IS NOT. `ExecuteSafetySweep` is
+            // internal and already driven by the suite, so a mutant that kills this call FAILS a test
+            // rather than passing every gate. That is the whole reason the call lives here and not
+            // only in a private startup method a C# assertion can see only as text.
+            // [[a-backstop-at-a-choke-point-is-unkillable]], [[dead-safety-machinery-gate]].
+            //
+            // Wrapped, because a file read must never cost the sweep its heartbeat, session reset,
+            // lockout enforcement or FSM watchdog. It returns immediately once there is nothing left
+            // to restore, so the steady-state cost is one bool read.
+            try { DynamicAtmManager.Instance.ReconcilePersistedBrackets(); }
+            catch (Exception ex)
+            {
+                LogEvent("SYSTEM", "ERROR", "ATM bracket restore failed during the safety sweep: " + ex.Message);
+            }
+
             // Decisions taken under the lock, executed after it is released (P1-10).
             var cancelBatches = new List<KeyValuePair<Account, List<Order>>>();
             var deferredCancelBatches = new List<KeyValuePair<Account, List<Order>>>();

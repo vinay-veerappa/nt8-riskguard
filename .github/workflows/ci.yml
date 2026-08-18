@@ -611,7 +611,24 @@ jobs:
           # sweep where the retry fires hides it. Declares one EXPECTED SURVIVOR.
           - { label: "UI1+P2-108", batteries: "mutate_ui1.py mutate_p2108.py" }   # 494s = UI1 303s + P2-108 191s
 
-          - { label: "P1-121+P0-63", batteries: "mutate_p1121.py mutate_p0_63.py" }   # 493s = P1-121 331s + P0-63 162s
+          # ⚠️ P2-136 "survive it" IS NEW AND ITS WEIGHT HERE IS AN ESTIMATE, NOT A MEASUREMENT.
+          # Following the add-a-battery loop this header documents: a new battery goes in the
+          # LIGHTEST bin and the file says the arrangement is not yet measured, because the packer
+          # refuses to pack on guessed weights and feeding it a guess dressed as a measurement is how
+          # a plan comes out looking balanced and is not.
+          #
+          # The estimate: 26 mutants + a baseline + a final restore-check = 28 suite runs at the
+          # 22.2s-per-C#-mutant measured on this runner = ~620s. Local wall was 780s. That makes this
+          # bin ~1113s against a current heaviest of 920s, so THIS BIN IS EXPECTED TO BECOME THE
+          # CRITICAL PATH and the predicted wall goes from ~10.5 to ~13 min. RE-PACK on the first
+          # green run with `python tools/pack_ci_matrix.py --bins 19` once the real seconds are in
+          # this comment -- do not leave the estimate here as though it were measured.
+          #
+          # ⚠️ AND THIS BATTERY RUNS A GATE AS WELL AS THE SUITE. `run()` consults
+          # check_no_dead_safety_machinery.py, because the mutant that kills the restore's wiring
+          # cannot be killed by any C# assertion -- NT8's startup path is not driveable from the test
+          # build. That adds a fast Python subprocess per mutant, already inside the estimate.
+          - { label: "P1-121+P0-63+P2-136", batteries: "mutate_p1121.py mutate_p0_63.py mutate_p2136survive.py" }   # ~1113s = P1-121 331s + P0-63 162s + P2-136 ~620s (ESTIMATE, re-pack after the first green run)
 
           # P1-82 / P1-86, 291s. A switch whose rule cannot fire must not default ON. The change is
           # four literals, which is precisely why it needs a battery: that is the size of diff that

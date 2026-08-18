@@ -7793,6 +7793,38 @@ now"* — which is the same detection surface that found `P2-138`. Both `P1-139`
 halves were confirmed by the same bracket; see `P1-139`'s closure.
 
 
+### P2-142. `ARMED_ON_START` re-arms the guard on every recompile, so a deliberate DISARM does not survive somebody else's deploy — OPEN, split out of `P2-136` 2026-08-17 (session 57)
+
+Measured while diagnosing `P2-136`: **84 `ARMED_ON_START` events in one 3 MB tail** of
+`interventions.jsonl`, alongside 84 `INITIALIZE` and 171 `CONNECTION_CHANGE` — every one a recompile
+rather than a restart, several of them from another repo deploying unrelated NinjaScript.
+
+In `shadow` this is noise. In `live` it means **the guard re-arms itself minutes after an operator
+disarmed it**, with no interaction from that operator and no symptom other than a log line that
+already appears 84 times.
+
+⚠️ **AND IT SITS DIRECTLY AGAINST A RULE THAT IS DELIBERATE, WHICH IS WHY IT IS ITS OWN ID RATHER
+THAN FOLDED INTO `P2-136`.** `LoadPersistedState` refuses to rehydrate `_isArmed`, in writing:
+
+```
+// FR-30/31: never rehydrate the armed flag from persisted state.
+// Lockouts persist, but armed state must be set fresh each session via Preflight().
+// Previously: _isArmed = data.IsArmed;  (could silently re-arm across restarts)
+```
+
+So the existing rule prevents a persisted `true` from re-arming, and `ApplyInitialArmState` then arms
+from the CONFIG anyway. The two mechanisms answer the same question differently. **This is not a
+one-line fix and must not be treated as one**: making a disarm persist means persisting a `false`
+through exactly the path `FR-30/31` exists to keep closed, and the distinction it needs is
+*"disarmed because nobody armed it yet"* versus *"disarmed because an operator said so"* — which the
+state file does not currently carry. [[configured-evaluated-enforcing]].
+
+Note also that a compile is not a restart, so "set fresh each session" is doing work the phrase does
+not obviously cover: 84 arm events is 84 sessions by this code's reckoning and one session by the
+operator's. Whatever the fix, it wants `ARMED_ON_START` to distinguish the two, or the log stays
+unreadable on this axis regardless.
+
+
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID
 
 `PlaceBracket` submits the stop and the target with **`calculatedQty`** — the whole position — and
@@ -8044,7 +8076,7 @@ until that specific order of events is in a log.** [[the-simulator-re-ids-nothin
 evidence above names its provider, which is the point.
 
 
-### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ⚠️ HALF FIXED 2026-08-17 (session 55): it is now SAID, not survived
+### P2-136. A NinjaScript recompile silently drops every tracked ATM bracket — ✅ FIXED 2026-08-17: SAID (session 55) and SURVIVED (session 57)
 
 A **successful** compile hot-swaps `bin/Custom` into a new assembly. `DynamicAtmManager`'s registry
 lives behind `private static readonly Lazy<DynamicAtmManager> _instance` (`:160`) — which reads as
@@ -8083,7 +8115,61 @@ produced a fix for a defect that is not there. The compile timestamp matched to 
    bridge payload, so the shape for rehydration exists.
 
 ⚠️ `ARMED_ON_START` re-fires on every one of these. In `shadow` that is noise; in `live` it means a
-deliberate disarm does not survive somebody else's compile. Fold into the same fix or give it an ID.
+deliberate disarm does not survive somebody else's compile. **Given its own ID as `P2-142`** rather
+than folded: it is a different mechanism (the guard's arming gate, not the ATM registry) and it
+contradicts `FR-30/31`, which deliberately refuses to rehydrate `_isArmed` so a restart cannot
+silently re-arm. Whether a deliberate DISARM should persist is a policy question against that rule,
+not a bug in this one.
+
+#### P2-136 "survive it" closure — 2026-08-17 (session 57)
+
+`addons/AtmBracketPersistence.cs` (new) + wiring in `DynamicAtmManager` and `RiskGuardAddOn`. Core
+suite **2139 → 2182 / 0** across 18 new tests, `mutate_p2136survive.py` **26 mutants / 0 survivors**,
+495 anchors / 0 broken, 9 local gates green. `v1.41.0`.
+
+| | |
+|---|---|
+| **persist** | the registry is written to `UserDataDir/RiskGuard/atm_brackets.json` on register, on remove, and **on every sweep that saw a bracket** — the fields worth surviving are the ones the sweep MOVES (`CurrentStopPrice`, `BreakevenTriggered`), and a file written only at placement restores a bracket as if breakeven had never been reached, which then asks the broker to move the stop back DOWN. That is `P1-139` arriving by a new route. |
+| **identity** | ⚠️ **NOT "is there a position".** A record says "account X, symbol MNQ", and a two-day-old file plus an unrelated MANUAL MNQ trade on that account satisfies that description exactly — restoring on it would attach this monitor to a position it did not create and start **moving the operator's own stop** on a funded account. A record is picked up only when the live order named `Stop_<bracketId>` is still working: bracket-unique, chosen by this addon, and per `P1-133` the one identity a broker does not replace. |
+| **the price** | read off the live order that was just found, never from the file. `P0-67` one layer up: a price written before a compile is this monitor's last WISH, and trusting it reinstates exactly the cache-vs-broker fiction that made the trail LATCH. `RequestedStopPrice`/`OutstandingStopMoveKind` reset; the refusal budget resets too, because a new assembly is a new episode. |
+| **direction** | a LONG record over a SHORT position is refused as `Mismatched`. The named stop may well be there — this is a hand-reversed position, not an identity failure — but every breakeven and trail price downstream is signed by `IsLong`. |
+| **defer vs drop** | ⚠️ **"not restorable now" ≠ "never restorable", and this entry's own first diagnosis is why that distinction is here.** That reading blamed a transient `Account.All` miss during a connection cycle: wrong cause for THAT measurement, but the transient is real — an `ARMED_ON_START` burst IS a connection cycle and this code runs during one. An absent or not-yet-synced account DEFERS and stays on disk; a flat position is answered and DROPPED. The deferral is bounded at **3** and its give-up is announced, naming the consequence. |
+| **consumed once** | `RestoreInto` refuses a bracket id already live. Without it a file re-read on every 5-second sweep would launder `MaxStopModifyAttempts = 3` into an unbounded order flood, and would replace the object the sweep is advancing. |
+| **loud vs silent, both ways** | a MISSING file says nothing (the ordinary state of a box that has never placed a managed bracket); a file that exists and cannot be PARSED is announced, because something was being managed and is not any more. Both directions are pinned, so neither can drift into the other. |
+
+⚠️ **THE WIRING WAS THE PART THAT NEARLY SHIPPED DEAD, AND ONLY THE BATTERY SAW IT.** Nothing in this
+assembly referenced `DynamicAtmManager` at all before this ticket — it is reached solely through the
+bridge's `/api/order/atm` — and `EnsureMonitor` is called from `PlaceBracket` **only**, so after a
+recompile with no new order there is no ATM timer at all. The first version called the restore from
+`InitializeRiskGuard`, and `mutate_p2136survive.py` put `if (false)` in front of that one call:
+
+* the suite stayed **2176 / 0**,
+* `check_anchors` stayed green,
+* and `check_no_dead_safety_machinery.py` still read **WIRED** — because the ATM sweep also calls the
+  method, and that gate asks "is this called by ANYTHING", not "by a driver that RUNS".
+
+Nothing could kill it: NT8's startup path is not driveable from the test build, and a C# source
+assertion finds the call text sitting inside the dead branch. **So the code moved rather than the test
+being weakened**: the guaranteed driver is now `ExecuteSafetySweep`, which is `internal`, already
+driven by the suite, and on a timer started unconditionally at init. The init call remains for
+immediacy only, which is why the battery has no mutant against it alone — with the sweep in place,
+killing it does not kill the restore. [[a-backstop-at-a-choke-point-is-unkillable]],
+[[fix-the-class-not-the-instance]].
+
+⚠️ **AND `check_no_dead_safety_machinery.py` WAS WRONG FOR EVERY ENTRY POINT, NOT JUST THIS ONE.** It
+now deletes statically-dead branches (`if (false)`, `while (0)`, `#if false`) before searching, and
+**self-tests in both directions on every invocation**. The first version of that stripper immediately
+mis-fired: it matched an `if (false)` inside a **doc comment** in `DynamicAtmManager.cs` and its
+single-statement walk then deleted forward to the next `;`, taking two REAL `ReconcileStopFromBroker`
+call sites with it — so the gate reported a live, wired, load-bearing method as **DEAD**. Comments and
+string literals are masked first, and the self-test pins that regression by name. A comment ABOUT a
+mutant is not a mutant. `mutate_p2136survive.py` runs the gate as part of its own scoring, with a
+control mutant that injects an unwired `Reconcile*` entry point — if that control ever SURVIVES, the
+gate is not in the loop and every gate-dependent result in the battery is worthless.
+
+⚠️ **STILL NOT LIVE-VALIDATED, AND THIS ONE IS CHEAP TO GET.** The reproduction is a managed
+`DrawdownShield` bracket open across a recompile — `nt_compile` with an ATM position on. Grep for
+`ATM_BRACKET_RESTORED` and expect the stop price in the line to be the BROKER's, not the file's.
 
 
 ### P3-137. `ActiveBracket.IsComplete` is never set true — two filters and one API field are inert — ✅ FIXED 2026-08-17 (session 55)
@@ -8278,7 +8364,7 @@ hand where the loop could not reach. Suite 2079 → **2096 / 0**.
 | | what landed |
 |---|---|
 | `P2-136` "say it" | `ATM_BRACKET_RELEASED` at both removal branches, naming the bracket and **which** condition — the two branches say different things. ✅ **LIVE-VALIDATED on the FUNDED account 2026-08-17 (session 56)**, `TAKEPROFITPRO524207503` / Provider31, bracket `a58ad4da`: its stop filled and 5s later the sweep said *"MNQ position is flat and no entry order is still working, so the trade is finished and the bracket is released. Nothing further is managed for it."* — the **finished-trade** sentence, not the orphan one, which is the distinction two of `mutate_p2135.py`'s mutants attack. Previously `Sim101` only |
-| `P2-136` "survive it" | **NOT done.** Still open; see below |
+| `P2-136` "survive it" | ✅ **DONE in session 57** — `AtmBracketPersistence.cs`, 18 tests, 26 mutants / 0 survivors, `v1.41.0`. See the closure block under the entry itself. Not yet live-validated |
 | `P3-137` | `IsComplete` deleted — the property, its one construction-time write, both `Where(b => !b.IsComplete)` filters, and the `isComplete` API field |
 | `P3-137a` | `GetBracketStatus` gains `stopModifyAttempts`, `stopMoveAbandonAnnounced`, `lastStopMoveFailureReason` |
 

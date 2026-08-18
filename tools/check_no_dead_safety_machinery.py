@@ -61,12 +61,149 @@ KNOWN_DEAD = {
 }
 
 
+# ⚠️ A CALL INSIDE A STATICALLY-DEAD BRANCH IS NOT A CALL, and this gate could not see the
+# difference until 2026-08-17. Measured: `mutate_p2136survive.py` wrapped the only production
+# call site of `ReconcilePersistedBrackets` in `if (false)` and BOTH this gate and a C# source
+# assertion still reported it WIRED, because the call text is right there. The whole restore path
+# was dead and every gate this repo has was green.
+#
+# That is the third time an `if (false)` has beaten a text search here -- `P0-67`'s guard survived
+# `if (false)` over the entire body at 2113/0, and a `-1 < 1022` ordering assertion passed on the
+# baseline it existed to reject. A regex cannot see reachability, so the dead regions are DELETED
+# before anything is searched. [[a-backstop-at-a-choke-point-is-unkillable]],
+# [[a-source-gate-must-assert-the-condition]].
+DEAD_HEAD = re.compile(r'\b(?:if|while)\s*\(\s*(?:false|0)\s*\)')
+
+
+def mask_comments_and_strings(text):
+    """
+    Comments and string literals replaced by spaces, newlines kept so offsets and line numbers are
+    unchanged.
+
+    ⚠️ THIS IS NOT TIDINESS, IT IS THE FIRST VERSION'S BUG. Without it, `DynamicAtmManager.cs:854`
+    -- a DOC COMMENT that says "replaced the entire guard with `if (false)` and the whole suite
+    stayed green" -- was read as a dead branch, and the single-statement walk then deleted forward
+    to the next `;`, taking the two REAL `ReconcileStopFromBroker` call sites with it. The gate
+    reported a live, wired, load-bearing method as DEAD. A comment ABOUT a mutant is not a mutant.
+    """
+    out = list(text)
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '/' and i + 1 < n and text[i + 1] == '/':
+            while i < n and text[i] != '\n':
+                out[i] = ' '
+                i += 1
+        elif c == '/' and i + 1 < n and text[i + 1] == '*':
+            while i < n and not (text[i] == '*' and i + 1 < n and text[i + 1] == '/'):
+                if text[i] != '\n':
+                    out[i] = ' '
+                i += 1
+            for _ in range(2):
+                if i < n:
+                    out[i] = ' '
+                    i += 1
+        elif c == '@' and i + 1 < n and text[i + 1] == '"':
+            out[i] = ' '
+            i += 2
+            out[i - 1] = ' '
+            while i < n:
+                if text[i] == '"':
+                    if i + 1 < n and text[i + 1] == '"':      # "" is an escaped quote
+                        out[i] = out[i + 1] = ' '
+                        i += 2
+                        continue
+                    out[i] = ' '
+                    i += 1
+                    break
+                if text[i] != '\n':
+                    out[i] = ' '
+                i += 1
+        elif c == '"' or c == "'":
+            quote = c
+            out[i] = ' '
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == '\\' and i + 1 < n:
+                    out[i] = out[i + 1] = ' '
+                    i += 2
+                    continue
+                if text[i] != '\n':
+                    out[i] = ' '
+                i += 1
+            if i < n:
+                out[i] = ' '
+                i += 1
+        else:
+            i += 1
+    return ''.join(out)
+
+
+def strip_dead_branches(text):
+    """Blank out `if (false)` / `while (0)` bodies, single-statement or braced, and `#if false`."""
+    # Searched and walked on the MASKED copy so a `;` in a string or a mutant named in a comment
+    # cannot move the boundaries; the ranges found are then blanked out of that same copy.
+    text = mask_comments_and_strings(text)
+    out = []
+    i = 0
+    while True:
+        m = DEAD_HEAD.search(text, i)
+        if m is None:
+            out.append(text[i:])
+            break
+
+        out.append(text[i:m.start()])
+
+        # Walk past the head to the body.
+        j = m.end()
+        while j < len(text) and text[j] in ' \t\r\n':
+            j += 1
+
+        if j < len(text) and text[j] == '{':
+            depth = 0
+            while j < len(text):
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+        else:
+            # A single statement: to the next `;` at nesting depth 0.
+            depth = 0
+            while j < len(text):
+                if text[j] in '({[':
+                    depth += 1
+                elif text[j] in ')}]':
+                    depth -= 1
+                elif text[j] == ';' and depth <= 0:
+                    j += 1
+                    break
+                j += 1
+
+        # Keep the NEWLINES so reported line numbers stay honest -- a gate that names the wrong
+        # line is a gate an operator stops trusting.
+        out.append('\n' * text.count('\n', m.start(), j))
+        i = j
+
+    stripped = ''.join(out)
+
+    # `#if false` / `#if 0` regions, same reasoning.
+    stripped = re.sub(r'#if\s+(?:false|0)\b.*?#endif',
+                      lambda m: '\n' * m.group(0).count('\n'),
+                      stripped, flags=re.DOTALL)
+    return stripped
+
+
 def call_sites(name, sources):
-    """Call sites for `name`, excluding its own declaration and commented-out lines."""
+    """Call sites for `name`, excluding its own declaration, comments and dead branches."""
     hits = []
     call = re.compile(r'\b' + re.escape(name) + r'\s*\(')
     for path, text in sources.items():
-        for lineno, line in enumerate(text.splitlines(), 1):
+        for lineno, line in enumerate(strip_dead_branches(text).splitlines(), 1):
             stripped = line.lstrip()
             if stripped.startswith('//') or stripped.startswith('*'):
                 continue
@@ -76,6 +213,50 @@ def call_sites(name, sources):
                 continue
             hits.append('%s:%d' % (os.path.basename(path), lineno))
     return hits
+
+
+def self_test():
+    """
+    ⚠️ THE NEGATIVE CONTROL, and it runs on every invocation.
+
+    A dead-branch stripper that strips too much makes every call site vanish and this gate then
+    fails on the whole repo -- loud, and someone fixes it. A stripper that strips NOTHING makes the
+    gate pass on the exact mutant it was written for -- silent, and it stays broken for sessions.
+    So the second direction is asserted here rather than trusted. A gate whose own detector has no
+    negative test is a detector that fires on everything.
+    """
+    live = 'void Caller() { ReconcileThing(); }'
+    dead_inline = 'void Caller() { try { if (false) ReconcileThing(); } catch {} }'
+    dead_block = 'void Caller() { if (false)\n{\n    ReconcileThing();\n}\n}'
+    dead_pp = 'void Caller() {\n#if false\n    ReconcileThing();\n#endif\n}'
+    # The regression the masker exists for: a doc comment DESCRIBING an `if (false)` mutant, with a
+    # real call after it. This is the shape that made the gate call a wired method dead.
+    commented = ('/// replaced the guard with `if (false)` and the suite stayed green\n'
+                 'void Caller() { ReconcileThing(); }')
+    # And the same hazard from a string literal, which the walk would also have run through.
+    in_string = 'void Caller() { Log("if (false) is how it broke; really"); ReconcileThing(); }'
+
+    problems = []
+    for label, src in (('a plain call', live),
+                       ('a call after a comment mentioning if (false)', commented),
+                       ('a call after a string containing if (false) and a semicolon', in_string)):
+        if 'ReconcileThing' not in strip_dead_branches(src):
+            problems.append('%s was stripped -- the stripper is too greedy, and a greedy '
+                            'stripper reports WIRED methods as dead' % label)
+    for label, src in (('inline if (false)', dead_inline),
+                       ('braced if (false)', dead_block),
+                       ('#if false', dead_pp)):
+        if 'ReconcileThing' in strip_dead_branches(src):
+            problems.append('a call inside %s was NOT stripped -- the mutant that beat this gate '
+                            'on 2026-08-17 would beat it again' % label)
+    if problems:
+        print('SELF-TEST FAILED -- this gate cannot be trusted:\n')
+        for p in problems:
+            print('  * ' + p)
+        sys.exit(1)
+
+
+self_test()
 
 
 sources = {}

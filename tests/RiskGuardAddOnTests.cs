@@ -498,6 +498,30 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket();
             TestAtm_P1140_AOneLotBracketSaysNothing();
             TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken();
+            // P2-136 "survive it": a compile hot-swaps a new assembly in and the registry starts
+            // empty while the position and both broker legs are untouched. Every test below saves
+            // through one manager and restores through a SECOND one -- that is the hot-swap.
+            TestAtm_P2136_ABracketWithALiveStopIsPickedBackUp();
+            TestAtm_P2136_TheRestoredStopPriceComesFromTheOrderNotTheFile();
+            TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted();
+            TestAtm_P2136_AFinishedTradeIsNotResurrected();
+            TestAtm_P2136_AReversedPositionIsNotManaged();
+            TestAtm_P2136_AnAbsentAccountDefersRatherThanDropping();
+            TestAtm_P2136_TheDeferralIsBoundedAndSaysSoWhenItGivesUp();
+            TestAtm_P2136_ALiveBracketIsNeverOverwrittenByTheFile();
+            TestAtm_P2136_ARestoredBracketActuallyMovesItsStop();
+            TestAtm_P2136_TheSweepPersistsWhatItAdvanced();
+            TestAtm_P2136_ARestoredBracketSurvivesASecondRecompile();
+            TestAtm_P2136_NoFileAndAnEmptyFileAreBothSilent();
+            TestAtm_P2136_AnUnparseableFileIsAnnounced();
+            TestAtm_P2136_TheFileStaysValidJsonWithAnOutstandingRequest();
+            // Both written FROM the battery: `if (false)` over EnsureMonitor and over the sweep's own
+            // retry each survived a green suite, because every test above drove the restore by name
+            // and asked only whether the registry held the bracket.
+            TestAtm_P2136_ARestoreStartsTheSweep();
+            TestAtm_P2136_TheSweepItselfDrivesTheRetry();
+            TestAtm_P2136_TheGuardsOwnSweepDrivesTheRestore();
+            TestAtm_P2136_TheRestoreIsCalledFromGuardStartup();
             TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
@@ -9227,6 +9251,893 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + said + ")");
             }
             finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        // ==================================================================================
+        // P2-136, the "survive it" half. A successful NinjaScript compile hot-swaps bin/Custom
+        // into a NEW assembly, so DynamicAtmManager's Lazy<> singleton is fresh and its registry
+        // starts EMPTY -- while the position and both broker legs are untouched.
+        //
+        // ⚠️ HOW A HOT-SWAP IS MODELLED HERE, and it is the whole reason these tests are
+        // meaningful: `new DynamicAtmManager()` IS the new assembly's singleton. The old
+        // instance's dictionary is unreachable, exactly as it is in production. Every test below
+        // saves through one manager and restores through a second one.
+        // [[a-successful-compile-wipes-static-state]].
+        // ==================================================================================
+
+        /// <summary>
+        /// One addon source file, for the source gates. `McpBridgeAddOn.cs` is not the only file a
+        /// gate cannot compile against: a call site inside a method the test build DOES compile is
+        /// still only observable as text when the method is private and the caller is production.
+        /// </summary>
+        private static string ReadAddonSource(string fileName)
+        {
+            var path = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(P184ThisFile()), "..", "addons", fileName));
+            return File.Exists(path) ? File.ReadAllText(path) : "";
+        }
+
+        /// <summary>A private temp file per test; the production path is under Globals.UserDataDir.</summary>
+        private static string AtmTempStateFile()
+        {
+            return System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "riskguard_atm_" + Guid.NewGuid().ToString("N") + ".json");
+        }
+
+        /// <summary>
+        /// Saves one bracket through manager A, then returns a FRESH manager pointed at the same
+        /// file -- i.e. what the process holds one instant after a compile.
+        /// </summary>
+        private static DynamicAtmManager AtmAfterHotSwap(DynamicAtmManager before, ActiveBracket bracket,
+            string stateFile)
+        {
+            before.SetBracketStateFileForTest(stateFile);
+            before.RegisterBracket(bracket);
+
+            var after = new DynamicAtmManager();
+            after.SetBracketStateFileForTest(stateFile);
+            return after;
+        }
+
+        private static RiskGuardAddOn AtmGuardForRestore()
+        {
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            RiskGuardAddOn.SetInstanceForTest(guard);
+            return guard;
+        }
+
+        /// <summary>
+        /// P2-136. The case the defect was measured on: bracket `1a48f3cf`, registered against an
+        /// open 1-lot MNQ position, gone from the registry a minute later with the position still
+        /// long 1 and the stop still resting at the broker.
+        /// </summary>
+        private static void TestAtm_P2136_ABracketWithALiveStopIsPickedBackUp()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a bracket with a live stop is picked back up after a recompile");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                Assert(after.GetBracketForTest(bracket.BracketId) == null,
+                    "P2-136 precondition: the fresh manager's registry starts EMPTY -- if it did not, "
+                    + "these tests would prove nothing, because the defect IS the empty registry.");
+
+                after.ReconcilePersistedBrackets();
+
+                var restored = after.GetBracketForTest(bracket.BracketId);
+                Assert(restored != null,
+                    "P2-136: the bracket is back in the new assembly's registry. Before this, the "
+                    + "position and both broker legs survived the compile and the MANAGEMENT did not, "
+                    + "so breakeven and trailing were lost with no operator-visible symptom -- the "
+                    + "stop still rested at its original price and every surface reported the trade "
+                    + "as protected.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136 + P0-67, one layer up. The restored price must come from the ORDER, never the file.
+        ///
+        /// A price written before a compile is this monitor's last wish, and `Account.Change()` is a
+        /// REQUEST -- P0-67 measured the Simulator accepting one and silently discarding it. If the
+        /// file's number were trusted, a restore would reinstate the fiction that made the trail
+        /// LATCH: the cache says the stop is already better, so no move is ever attempted again.
+        /// </summary>
+        private static void TestAtm_P2136_TheRestoredStopPriceComesFromTheOrderNotTheFile()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the restored stop price is read from the order, not the file");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+                // What the file will claim, and what P0-67 proves the file may be wrong about.
+                bracket.CurrentStopPrice = 19990.00;
+                bracket.RequestedStopPrice = 20001.25;   // a move that was in flight at compile time
+                bracket.OutstandingStopMoveKind = ActiveBracket.StopMoveKind.Trail;
+                bracket.StopModifyAttempts = 3;          // the budget was spent
+                bracket.StopMoveAbandonAnnounced = true;
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+                // The broker's truth, which disagrees with the file.
+                stop.StopPrice = 20005.50;
+
+                after.ReconcilePersistedBrackets();
+                var restored = after.GetBracketForTest(bracket.BracketId);
+
+                Assert(restored != null && Math.Abs(restored.CurrentStopPrice - 20005.50) < 0.0001,
+                    "P2-136: CurrentStopPrice is 20005.50, the LIVE order's price, not the 19990.00 the "
+                    + "file recorded (got " + (restored == null ? "no bracket" : restored.CurrentStopPrice.ToString())
+                    + "). Trusting the file would reinstate exactly the cache-vs-broker fiction P0-67 "
+                    + "removed, and the trail would latch on a price the broker never had.");
+
+                Assert(restored != null && double.IsNaN(restored.RequestedStopPrice)
+                       && restored.OutstandingStopMoveKind == ActiveBracket.StopMoveKind.None,
+                    "P2-136: no stop move is outstanding across a hot-swap. Whatever was in flight "
+                    + "either took or did not, and the next sweep's ReconcileStopFromBroker is what "
+                    + "finds out -- carrying a stale outstanding request over would make the "
+                    + "reconciler judge this sweep's broker price against the last assembly's wish.");
+
+                Assert(restored != null && restored.StopModifyAttempts == 0 && !restored.StopMoveAbandonAnnounced,
+                    "P2-136: the refusal budget is fresh. A new assembly against a possibly-new "
+                    + "connection is a new episode, and a bracket that had given up deserves to try "
+                    + "again -- with the announcement latch cleared too, so the next failure is not "
+                    + "swallowed as already-said.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. THE SAFETY ARGUMENT, and the reason the check is not "is there a position".
+        ///
+        /// A record says "account SimAtm, symbol MNQ". A two-day-old file plus an unrelated manual
+        /// MNQ trade on that account satisfies that description exactly. Restoring on it would attach
+        /// this monitor to a position it did not create and start MOVING THE OPERATOR'S OWN STOP --
+        /// on a funded account. The leg named `Stop_&lt;bracketId&gt;` is what makes the record ours:
+        /// bracket-unique, chosen by this addon, and per P1-133 the one identity a broker does not
+        /// replace.
+        /// </summary>
+        private static void TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: an open position with no leg of ours is NOT adopted");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                // The position stays open -- it is somebody else's, or ours after the stop filled and
+                // was replaced by hand. Either way OUR leg is gone.
+                stop.OrderState = OrderState.Filled;
+
+                string evt = null; string message = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) { evt = e; message = m; }
+                };
+                try { after.ReconcilePersistedBrackets(); }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                Assert(after.GetBracketForTest(bracket.BracketId) == null,
+                    "P2-136: NOT adopted. There is an open MNQ position on this account and no live "
+                    + "order named 'Stop_" + bracket.BracketId + "', so nothing proves the position is "
+                    + "ours -- and a bracket with no stop to move would report as managed while "
+                    + "managing nothing, which is the shape P2-136 exists to remove.");
+
+                Assert(evt == "ATM_BRACKET_UNPROTECTED",
+                    "P2-136: and it is said under its OWN event type, not a shared 'not restored' one. "
+                    + "An operator filtering their log for a live position with no protective stop must "
+                    + "not have to read message text to tell it from a finished trade (got '" + evt + "')");
+
+                Assert(message != null && message.IndexOf("OPEN", StringComparison.Ordinal) >= 0
+                       && message.IndexOf("Stop_" + bracket.BracketId, StringComparison.Ordinal) >= 0,
+                    "P2-136: the line names the condition (the position is OPEN) and the leg it looked "
+                    + "for by name. 'Could not restore' names neither and diagnoses nothing (msg='"
+                    + message + "')");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136, the ordinary case and the one that must NOT be loud. The overwhelming majority of
+        /// records on disk at any restart belong to trades that finished. A file left holding them
+        /// would announce a scary line per bracket on every startup, and an alarm that is always on
+        /// is off.
+        /// </summary>
+        private static void TestAtm_P2136_AFinishedTradeIsNotResurrected()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a finished trade is released, not resurrected");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                acct.Positions[0].Quantity = 0;
+                acct.Positions[0].MarketPosition = MarketPosition.Flat;
+
+                string evt = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) evt = e;
+                };
+                try { after.ReconcilePersistedBrackets(); }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                Assert(after.GetBracketForTest(bracket.BracketId) == null,
+                    "P2-136: a flat position is a finished trade and is not picked back up.");
+
+                Assert(evt == "ATM_BRACKET_RELEASED",
+                    "P2-136: reported as RELEASED -- the same event the sweep's normal exit uses -- and "
+                    + "NOT as unprotected or abandoned. This is good news and must not read like bad "
+                    + "news (got '" + evt + "')");
+
+                // And it must leave: a record that is answered but kept says the same thing forever.
+                Assert(!System.IO.File.Exists(file)
+                       || System.IO.File.ReadAllText(file).IndexOf(bracket.BracketId, StringComparison.Ordinal) < 0,
+                    "P2-136: the answered record is off the disk. Keeping it would re-announce the same "
+                    + "finished trade on every sweep for the life of the process.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. A position reversed by hand while our leg rested. The named stop may well still be
+        /// there, so this is not an identity failure -- but every breakeven and trail price downstream
+        /// is signed by `IsLong`, so restoring would compute the wrong direction against a real
+        /// position. P1-139's guard would refuse the resulting wrong-way move; that is a backstop
+        /// catching a decision that should never have been made.
+        /// </summary>
+        private static void TestAtm_P2136_AReversedPositionIsNotManaged()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a position that reversed under the record is not managed");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);   // IsLong = true
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                // Reversed by hand. Quantity is ABSOLUTE on NT8 -- the side is MarketPosition, and
+                // reading the sign of Quantity is what doubled a short behind 1311 green tests.
+                // [[nt8-position-quantity-is-absolute]].
+                acct.Positions[0].MarketPosition = MarketPosition.Short;
+                acct.Positions[0].Quantity = 1;
+
+                string evt = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) evt = e;
+                };
+                try { after.ReconcilePersistedBrackets(); }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                Assert(after.GetBracketForTest(bracket.BracketId) == null && evt == "ATM_BRACKET_MISMATCHED",
+                    "P2-136: a LONG record over a SHORT position is not managed, and says which way "
+                    + "each runs (got '" + evt + "'). Restoring it would compute breakeven and every "
+                    + "trail price with the wrong sign on a live position.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. "NOT RESTORABLE NOW" IS NOT "NEVER RESTORABLE", and conflating them is how this
+        /// entry's own first diagnosis went wrong. That reading blamed a transient `Account.All` miss
+        /// during a connection cycle -- the wrong cause for that measurement, but the transient is
+        /// real: an `ARMED_ON_START` burst IS a connection cycle, 18 of them were measured in 2.5
+        /// hours, and this code runs during one. Dropping the record then would discard a live
+        /// bracket for a reason that resolves a second later.
+        /// [[check-the-exemplar-belongs-to-the-class]].
+        /// </summary>
+        private static void TestAtm_P2136_AnAbsentAccountDefersRatherThanDropping()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: an account not yet in Account.All defers, and the record stays");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                // Mid-connection-cycle: the account has not appeared yet.
+                Account.All.Clear();
+
+                string evt = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) evt = e;
+                };
+                try { after.ReconcilePersistedBrackets(); }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                Assert(evt == "ATM_BRACKET_RESTORE_DEFERRED",
+                    "P2-136: DEFERRED, which is not an answer -- not 'released' and not 'unprotected'. "
+                    + "Nothing about the live world was readable, so nothing about it is claimed (got '"
+                    + evt + "')");
+
+                Assert(System.IO.File.Exists(file)
+                       && System.IO.File.ReadAllText(file).IndexOf(bracket.BracketId, StringComparison.Ordinal) >= 0,
+                    "P2-136: and the record is STILL ON DISK. This is the whole distinction: a flat "
+                    + "position is answered and dropped, an unreadable account is asked again.");
+
+                Assert(after.PersistedRestorePendingForTest,
+                    "P2-136: the restore stays pending, so the sweep asks again. A bounded retry whose "
+                    + "exit condition nothing re-evaluates never exits. [[a-retry-that-cannot-exit]]");
+
+                // And it really does come back when the account does -- the retry has to WORK, not
+                // merely be scheduled. [[report-the-outcome-not-the-call]].
+                Account.All.Add(acct);
+                after.ReconcilePersistedBrackets();
+                Assert(after.GetBracketForTest(bracket.BracketId) != null,
+                    "P2-136: once the account appears, the deferred record is picked up. A deferral "
+                    + "that is never honoured is a slower way of dropping the bracket.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. The deferral is BOUNDED and its give-up is ANNOUNCED. An unbounded defer is a
+        /// record that never leaves the disk, and a silent give-up is a bounded retry with no policy:
+        /// `RestartCount 3` let an alert relay stay dead for seven hours because nothing said so.
+        /// [[a-recovery-budget-is-not-a-policy]].
+        /// </summary>
+        private static void TestAtm_P2136_TheDeferralIsBoundedAndSaysSoWhenItGivesUp()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the deferral is bounded, and the give-up is announced");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+                Account.All.Clear();
+
+                var events = new List<string>();
+                string abandonMessage = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e == null || !e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) return;
+                    events.Add(e);
+                    if (e == "ATM_BRACKET_RESTORE_ABANDONED") abandonMessage = m;
+                };
+                try
+                {
+                    // Each attempt is a fresh manager, because in production each retry is either a
+                    // later sweep on this one or a later compile on a new one; the budget must live in
+                    // the FILE, not in the instance.
+                    for (int i = 0; i < 6; i++)
+                    {
+                        var mgr = new DynamicAtmManager();
+                        mgr.SetBracketStateFileForTest(file);
+                        mgr.ReconcilePersistedBrackets();
+                    }
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                int deferred = events.Count(e => e == "ATM_BRACKET_RESTORE_DEFERRED");
+                int abandoned = events.Count(e => e == "ATM_BRACKET_RESTORE_ABANDONED");
+
+                // ⚠️ THE LITERAL 3, NOT `AtmBracketPersistence.MaxRestoreDeferrals`. The first draft
+                // read the constant, so a mutant lowering it to 1 moved the expectation with it and
+                // SURVIVED: what read as "three retries" was one, and every assertion still passed.
+                // The number is a design decision with a reason -- a connection cycle spans more than
+                // one sweep -- so the test states the decision rather than asking the code what it did.
+                Assert(deferred == 3 && AtmBracketPersistence.MaxRestoreDeferrals == 3,
+                    "P2-136: deferred exactly 3 times (got " + deferred + ", budget "
+                    + AtmBracketPersistence.MaxRestoreDeferrals + "). Three because the condition "
+                    + "being ridden out is a CONNECTION CYCLE, which spans more than one sweep -- one "
+                    + "attempt would drop a live bracket because Account.All had not filled in yet. "
+                    + "And the budget lives in the FILE, so it survives the retries; an "
+                    + "instance-scoped counter would reset on every compile, which is the same class "
+                    + "of defect as the registry this ticket is about.");
+
+                Assert(abandoned == 1,
+                    "P2-136: and the give-up is announced exactly ONCE (got " + abandoned + "). Silent "
+                    + "abandonment is what let a dead alert relay go unnoticed for seven hours.");
+
+                Assert(abandonMessage != null
+                       && abandonMessage.IndexOf("stop will not move again", StringComparison.Ordinal) >= 0,
+                    "P2-136: and the line states the CONSEQUENCE, not just the failure. 'Could not "
+                    + "restore' does not tell an operator that a position they believe is trailing is "
+                    + "not (msg='" + abandonMessage + "')");
+
+                Assert(!System.IO.File.Exists(file)
+                       || System.IO.File.ReadAllText(file).IndexOf(bracket.BracketId, StringComparison.Ordinal) < 0,
+                    "P2-136: an abandoned record leaves the disk. Otherwise the give-up line, whose "
+                    + "whole value is being said once, is said on every sweep forever.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. THE INVARIANT THAT MAKES RESETTING THE RETRY BUDGET SAFE. Restore clears
+        /// `StopModifyAttempts`, which is right for a new assembly and catastrophic if it can happen
+        /// repeatedly: a file re-read on every 5-second sweep would launder the budget continuously
+        /// and turn `MaxStopModifyAttempts = 3` into an unbounded order flood against a provider that
+        /// always refuses. A record is consumed ONCE.
+        /// </summary>
+        private static void TestAtm_P2136_ALiveBracketIsNeverOverwrittenByTheFile()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a live bracket is never overwritten by the persisted copy");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                atm.SetBracketStateFileForTest(file);
+                atm.RegisterBracket(bracket);
+
+                // The sweep has since spent the budget on this live bracket.
+                bracket.StopModifyAttempts = DynamicAtmManager.MaxStopModifyAttempts;
+                bracket.StopMoveAbandonAnnounced = true;
+
+                // Now the file is re-read -- the shape a retry loop would produce.
+                atm.ReconcilePersistedBrackets();
+                atm.ReconcilePersistedBrackets();
+
+                var live = atm.GetBracketForTest(bracket.BracketId);
+                Assert(live != null && live.StopModifyAttempts == DynamicAtmManager.MaxStopModifyAttempts,
+                    "P2-136: the live bracket keeps its spent budget (got "
+                    + (live == null ? "no bracket" : live.StopModifyAttempts.ToString())
+                    + "). If a re-read could reset it, the 5-second sweep would launder a bounded "
+                    + "retry into an order flood -- and every assertion about MaxStopModifyAttempts "
+                    + "elsewhere in this suite would be describing a limit that does not bind.");
+
+                Assert(ReferenceEquals(live, bracket),
+                    "P2-136: and it is the SAME object the sweep is advancing, not a copy read off "
+                    + "disk. Two objects for one bracket means the sweep's stop moves and the "
+                    + "registry's record diverge silently.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. Restoration must be MANAGEMENT, not registry membership.
+        /// [[report-the-outcome-not-the-call]]: a bracket back in the dictionary with no timer moving
+        /// its stop is restored and still unmanaged, which is the defect wearing a green badge.
+        /// `EnsureMonitor` is called from `PlaceBracket` ONLY, so nothing else starts the sweep after
+        /// a compile.
+        /// </summary>
+        private static void TestAtm_P2136_ARestoredBracketActuallyMovesItsStop()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a restored bracket goes on to move its stop");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                // 20003 is 12 ticks past 20000 with a 0.25 tick -- the breakeven trigger.
+                var acct = AtmSetup(out inst, out stop, out atm, last: 20003.00);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+                after.ReconcilePersistedBrackets();
+                after.MonitorTickForTest();
+
+                Assert(Math.Abs(stop.StopPrice - 20000.50) < 0.0001,
+                    "P2-136: the BROKER'S stop order moved to breakeven+2 ticks (20000.50, got "
+                    + stop.StopPrice + ") after the restore. This is the assertion that matters: a "
+                    + "bracket back in a dictionary that never moves a stop is the same defect with a "
+                    + "green badge on it.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. The fields worth surviving are the ones the SWEEP moves. A file written only at
+        /// placement restores a bracket to its opening state -- so it re-announces everything it had
+        /// already said and, worse, forgets that breakeven has been reached.
+        /// </summary>
+        private static void TestAtm_P2136_TheSweepPersistsWhatItAdvanced()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the sweep persists the state it advanced, not the opening state");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm, last: 20003.00);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                atm.SetBracketStateFileForTest(file);
+                atm.RegisterBracket(bracket);
+                atm.MonitorTickForTest();          // moves to breakeven and latches the flag
+
+                Assert(bracket.BreakevenTriggered,
+                    "P2-136 precondition: the sweep latched BreakevenTriggered.");
+
+                var reread = AtmBracketPersistence.Deserialise(System.IO.File.ReadAllText(file));
+                var record = reread == null ? null : reread.Brackets.FirstOrDefault();
+
+                Assert(record != null && record.Bracket.BreakevenTriggered,
+                    "P2-136: the file carries BreakevenTriggered = true, so the sweep's own product "
+                    + "survives. A save only at placement would restore the bracket as if breakeven "
+                    + "had never been reached -- and it would then try to move the stop back down to "
+                    + "breakeven, which is P1-139's wrong-way move arriving from a new direction.");
+
+                Assert(record != null && record.RestoreDeferrals == 0,
+                    "P2-136: a freshly saved record has spent no deferrals. Writing a non-zero budget "
+                    + "would hand every new bracket a partly-exhausted retry.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. A restored bracket must be written back, or the restore undoes itself on the very
+        /// next compile -- and this box measured 18 compiles in 2.5 hours.
+        /// </summary>
+        private static void TestAtm_P2136_ARestoredBracketSurvivesASecondRecompile()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a restored bracket survives a SECOND recompile");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var second = AtmAfterHotSwap(atm, bracket, file);
+                second.ReconcilePersistedBrackets();
+
+                var third = new DynamicAtmManager();
+                third.SetBracketStateFileForTest(file);
+                third.ReconcilePersistedBrackets();
+
+                Assert(third.GetBracketForTest(bracket.BracketId) != null,
+                    "P2-136: still managed after two compiles. Emptying the file once a pass finds "
+                    + "nothing left to defer would drop the brackets that pass had just restored -- a "
+                    + "restore that undoes itself, and with 18 compiles measured in 2.5 hours it would "
+                    + "undo itself within minutes.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136, the negative control. NO FILE IS NOT A FAILURE -- it is a box that has never placed
+        /// a managed bracket, which is the ordinary state. A detector that fires on everything passes
+        /// every positive test written for it ([[detector-needs-a-negative-test]]), and here "fires on
+        /// everything" means a scary line on every single startup.
+        /// [[an-inapplicable-state-is-not-unreadable]].
+        /// </summary>
+        private static void TestAtm_P2136_NoFileAndAnEmptyFileAreBothSilent()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: no file, and an empty file, are both silent");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+
+                var events = new List<string>();
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) events.Add(e);
+                };
+                try
+                {
+                    var noFile = new DynamicAtmManager();
+                    noFile.SetBracketStateFileForTest(file);
+                    noFile.ReconcilePersistedBrackets();
+
+                    Assert(events.Count == 0,
+                        "P2-136: a missing file says NOTHING (got " + string.Join(",", events) + "). "
+                        + "Every box that has never placed a managed bracket is in this state, and an "
+                        + "alarm that is always on is off.");
+
+                    System.IO.File.WriteAllText(file, AtmBracketPersistence.Serialise(new List<ActiveBracket>()));
+                    var empty = new DynamicAtmManager();
+                    empty.SetBracketStateFileForTest(file);
+                    empty.ReconcilePersistedBrackets();
+
+                    Assert(events.Count == 0,
+                        "P2-136: and a file listing ZERO brackets is silent too (got "
+                        + string.Join(",", events) + "). That is a registry that WAS read and was "
+                        + "empty, not one that could not be read -- treating it as corruption is the "
+                        + "same conflation that painted 95 of 97 accounts as the worst thing on a page.");
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. A file that cannot be parsed is the one case where silence is wrong: something WAS
+        /// being managed and no longer is. Note the direction -- unreadable fails LOUD, absent fails
+        /// silent, and the test above pins the other half so neither can drift into the other.
+        /// </summary>
+        private static void TestAtm_P2136_AnUnparseableFileIsAnnounced()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: an unparseable registry is announced, not swallowed");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                System.IO.File.WriteAllText(file, "{ this is not json");
+
+                string evt = null; string message = null;
+                RiskGuardAddOn.LogEventMessageObserver = (a, e, m) =>
+                {
+                    if (e != null && e.StartsWith("ATM_BRACKET_", StringComparison.Ordinal)) { evt = e; message = m; }
+                };
+                try
+                {
+                    var mgr = new DynamicAtmManager();
+                    mgr.SetBracketStateFileForTest(file);
+                    mgr.ReconcilePersistedBrackets();
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                Assert(evt == "ATM_BRACKET_RESTORE_FAILED",
+                    "P2-136: an unparseable registry is ANNOUNCED (got '" + evt + "'). A file that "
+                    + "exists and cannot be read means something was being managed and is not any "
+                    + "more -- the opposite of a missing file.");
+
+                Assert(message != null && message.IndexOf("not move again", StringComparison.Ordinal) >= 0,
+                    "P2-136: and it states the consequence for the position, not just that a read "
+                    + "failed (msg='" + message + "')");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. `RequestedStopPrice` defaults to `double.NaN` and Json.NET's DEFAULT float handling
+        /// writes a bare `NaN`, which is not valid JSON. Every other reader of this file -- the bridge,
+        /// a diagnostic, an operator with `jq` -- would reject the whole registry over a field that is
+        /// reset on restore anyway.
+        /// </summary>
+        private static void TestAtm_P2136_TheFileStaysValidJsonWithAnOutstandingRequest()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the registry stays valid JSON with a NaN field in it");
+
+            Instrument inst; Order stop; DynamicAtmManager atm;
+            var acct = AtmSetup(out inst, out stop, out atm);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            Assert(double.IsNaN(bracket.RequestedStopPrice),
+                "P2-136 precondition: RequestedStopPrice starts as NaN, meaning 'no move outstanding'.");
+
+            string json = AtmBracketPersistence.Serialise(new List<ActiveBracket> { bracket });
+
+            Assert(json.IndexOf(": NaN", StringComparison.Ordinal) < 0
+                   && json.IndexOf(":NaN", StringComparison.Ordinal) < 0,
+                "P2-136: no bare NaN token. Json.NET writes one by default and it is not valid JSON, "
+                + "so any other reader of this file rejects the entire registry.");
+
+            var round = AtmBracketPersistence.Deserialise(json);
+            Assert(round != null && round.Brackets.Count == 1
+                   && double.IsNaN(round.Brackets[0].Bracket.RequestedStopPrice),
+                "P2-136: and it still round-trips to NaN, so 'no move outstanding' does not come back "
+                + "as a real price of zero -- which the wrong-way guard would then compare against.");
+        }
+
+        /// <summary>
+        /// P2-136, WRITTEN FROM THE BATTERY. `if (false)` over the restore's `EnsureMonitor()` call
+        /// survived the entire suite, because every test above asks whether the bracket is back in the
+        /// registry and none could ask whether anything will ever move its stop.
+        ///
+        /// `EnsureMonitor` is called from `PlaceBracket` ONLY. After a recompile there is no
+        /// `PlaceBracket`, so without this the restored bracket sits in the dictionary, the bridge
+        /// payload reports it as managed, and the 5-second sweep never runs.
+        /// [[report-the-outcome-not-the-call]], [[dead-safety-machinery-gate]].
+        /// </summary>
+        private static void TestAtm_P2136_ARestoreStartsTheSweep()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: a restore starts the sweep, not just the registry entry");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                Assert(!after.MonitoringForTest,
+                    "P2-136 precondition: a fresh manager is not monitoring. EnsureMonitor is called "
+                    + "from PlaceBracket only, and after a recompile there is no PlaceBracket.");
+
+                after.ReconcilePersistedBrackets();
+
+                Assert(after.MonitoringForTest,
+                    "P2-136: the sweep is RUNNING after the restore. Membership in the registry is not "
+                    + "management: with no timer the bracket is reported as managed by every surface "
+                    + "and its stop never moves -- which is the defect this ticket is about, wearing "
+                    + "the badge of its own fix.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136, WRITTEN FROM THE BATTERY. `if (false)` over the sweep's own
+        /// `ReconcilePersistedBrackets()` survived, because every test above calls the method
+        /// DIRECTLY -- so the deferral machinery was fully covered and the thing that drives the
+        /// retry was not.
+        ///
+        /// This matters because the init-time attempt is the one that runs during a connection cycle,
+        /// which is exactly when `Account.All` is not populated. With no retry, the deferral, its
+        /// bounded budget and its give-up line are all correct and none of them ever run twice.
+        /// [[a-retry-that-cannot-exit]].
+        /// </summary>
+        private static void TestAtm_P2136_TheSweepItselfDrivesTheRetry()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the sweep itself drives the retry, not just an explicit call");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                AtmGuardForRestore();
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                var after = AtmAfterHotSwap(atm, bracket, file);
+
+                // The init-time attempt, mid-connection-cycle: nothing to read.
+                Account.All.Clear();
+                after.ReconcilePersistedBrackets();
+                Assert(after.GetBracketForTest(bracket.BracketId) == null,
+                    "P2-136 precondition: the init attempt could not read the account, so nothing was "
+                    + "restored and the record was deferred.");
+
+                // The connection completes. NOTHING calls ReconcilePersistedBrackets again by name --
+                // only the sweep does, which is the whole point of this test.
+                Account.All.Add(acct);
+                after.MonitorTickForTest();
+
+                Assert(after.GetBracketForTest(bracket.BracketId) != null,
+                    "P2-136: the SWEEP picked the deferred record up. Every other test here calls the "
+                    + "restore by name, so the deferral logic was fully covered while the thing that "
+                    + "re-runs it was not -- and a bounded retry with nothing asking again later is a "
+                    + "slower way of dropping the bracket.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136, THE ONE THE BATTERY COULD NOT KILL UNTIL THE CODE MOVED.
+        ///
+        /// `if (false)` in front of the restore's only startup call left the whole path dead behind a
+        /// 2176/0 suite, a green `check_anchors`, and a `check_no_dead_safety_machinery` that still
+        /// read WIRED -- because the ATM manager's own sweep also calls it, and the gate asks "called
+        /// by anything", not "called by a driver that runs". No C# assertion could close it: NT8's
+        /// startup path is not driveable from this test build.
+        ///
+        /// So the guaranteed driver moved to `ExecuteSafetySweep`, whose timer is started
+        /// unconditionally beside the others and which the suite already drives. THAT is what this
+        /// test asserts -- not the presence of a call, but that driving the guard's ordinary
+        /// five-second sweep, with no ATM timer running and nothing else touching the ATM manager,
+        /// picks a bracket back up.
+        /// [[a-backstop-at-a-choke-point-is-unkillable]], [[fix-the-class-not-the-instance]].
+        /// </summary>
+        private static void TestAtm_P2136_TheGuardsOwnSweepDrivesTheRestore()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the GUARD's safety sweep drives the restore");
+
+            string file = AtmTempStateFile();
+            try
+            {
+                Instrument inst; Order stop; DynamicAtmManager atm;
+                var acct = AtmSetup(out inst, out stop, out atm);
+                var guard = AtmGuardForRestore();
+                guard.SetStateFileForTest(System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(), "riskguard_state_" + Guid.NewGuid().ToString("N") + ".json"));
+
+                var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+
+                // Saved through the pre-compile manager, then the singleton the guard will reach is
+                // pointed at that file -- which is what the new assembly's Lazy<> hands it.
+                atm.SetBracketStateFileForTest(file);
+                atm.RegisterBracket(bracket);
+
+                var after = DynamicAtmManager.Instance;
+                after.SetBracketStateFileForTest(file);
+                Assert(after.GetBracketForTest(bracket.BracketId) == null,
+                    "P2-136 precondition: the singleton the guard reaches holds nothing.");
+                // ⚠️ NOT an assertion about `MonitoringForTest`. The Lazy<> singleton is shared across
+                // the whole test run and an earlier test may legitimately have started its timer, so
+                // that claim is not this test's to make -- `ARestoreStartsTheSweep` makes it on a fresh
+                // instance instead. What matters here is established by construction: NOTHING below
+                // drives MonitorTickForTest, so a pass cannot come from the ATM sweep.
+
+                guard.ExecuteSafetySweep();
+
+                Assert(after.GetBracketForTest(bracket.BracketId) != null,
+                    "P2-136: the GUARD's five-second sweep restored the bracket. This is the driver "
+                    + "that is guaranteed to run: its timer is started unconditionally at init, unlike "
+                    + "the ATM monitor's, which only starts when a bracket is PLACED -- and after a "
+                    + "recompile nothing is placed.");
+            }
+            finally { try { System.IO.File.Delete(file); } catch { } }
+        }
+
+        /// <summary>
+        /// P2-136. The startup call, gated at the SOURCE.
+        ///
+        /// Nothing in this assembly referenced `DynamicAtmManager` at all before this ticket -- it is
+        /// reached solely through the bridge's `/api/order/atm` -- so the whole restore path could
+        /// have shipped tested, mutation-covered and never once run. `EnsureMonitor` is likewise
+        /// called from `PlaceBracket` only. The method is named `Reconcile*` so
+        /// `check_no_dead_safety_machinery.py` also fails the build if the call is deleted; this
+        /// asserts the call exists in the startup path specifically.
+        /// [[dead-safety-machinery-gate]], [[a-code-move-disarms-a-source-gate]].
+        ///
+        /// ⚠️ AND HERE IS WHAT THIS TEST CANNOT DO, STATED RATHER THAN IMPLIED. `if (false)` in front
+        /// of the call leaves the text exactly where this assertion looks for it, so the mutant that
+        /// kills the whole restore path SURVIVES this test -- measured, not feared. A regex cannot see
+        /// reachability, and NT8's startup path is not driveable from this test build, so no C#
+        /// assertion here can close it. The gate that does is
+        /// `tools/check_no_dead_safety_machinery.py`, which now deletes statically-dead branches
+        /// before searching and self-tests that it still does; `mutate_p2136survive.py` runs that gate
+        /// as part of scoring for exactly this mutant. **Do not read a pass here as proof the restore
+        /// runs.** [[a-backstop-at-a-choke-point-is-unkillable]].
+        /// </summary>
+        private static void TestAtm_P2136_TheRestoreIsCalledFromGuardStartup()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-136: the restore is wired into RiskGuard's startup path");
+
+            string source = ReadAddonSource("RiskGuardAddOn.cs");
+            int initAt = source.IndexOf("private void InitializeRiskGuard()", StringComparison.Ordinal);
+            Assert(initAt >= 0, "P2-136: InitializeRiskGuard is still the startup method (anchor found).");
+
+            int callAt = source.IndexOf("DynamicAtmManager.Instance.ReconcilePersistedBrackets()", initAt < 0 ? 0 : initAt,
+                StringComparison.Ordinal);
+            int nextMethod = source.IndexOf("private void CleanupRiskGuard()", initAt < 0 ? 0 : initAt,
+                StringComparison.Ordinal);
+
+            // ⚠️ `>= 0 &&` FIRST. IndexOf returns -1 on absence and `-1 < nextMethod` is TRUE, so an
+            // ordering assertion without this passes on the very baseline it exists to reject. That
+            // exact mistake shipped in P1-139's source gate and the battery caught it.
+            Assert(callAt >= 0 && nextMethod > 0 && callAt < nextMethod,
+                "P2-136: the restore is called from INSIDE InitializeRiskGuard (call at " + callAt
+                + ", next method at " + nextMethod + "). This is the only startup path the ATM manager "
+                + "has; without it the restore is written, tested, deployed and wired to nothing.");
         }
 
         /// <summary>

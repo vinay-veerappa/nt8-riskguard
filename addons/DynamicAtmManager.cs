@@ -6,6 +6,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NinjaTrader.Cbi;
 using NinjaTrader.Code;
+using NinjaTrader.Core;
 using NinjaTrader.Data;
 using NinjaTrader.NinjaScript;
 
@@ -228,11 +229,53 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
         }
 
+        // P2-136 "survive it". Where the registry lives when this assembly does not.
+        private string _bracketStateFile;
+
+        // Starts TRUE because a fresh instance is exactly the situation this covers: either the
+        // process just started or a compile just hot-swapped a new assembly in, and from in here
+        // those are indistinguishable. Cleared only when a restore pass leaves nothing on disk.
+        private bool _persistedRestorePending = true;
+
         public DynamicAtmManager()
         {
             _activeBrackets = new Dictionary<string, ActiveBracket>();
             _bracketLock = new object();
+            _bracketStateFile = System.IO.Path.Combine(Globals.UserDataDir, "RiskGuard", "atm_brackets.json");
         }
+
+#if TESTING
+        /// <summary>
+        /// Production roots the file in `Globals.UserDataDir`, which a test must not write to.
+        ///
+        /// ⚠️ RE-ARMS `_persistedRestorePending`, and that is the point rather than a convenience.
+        /// Pointing the manager at a DIFFERENT file means there is a different registry to consider,
+        /// so leaving the flag false would make the seam lie. It was found the hard way: the
+        /// `Lazy&lt;&gt;` singleton is shared across the whole test run, an earlier test's
+        /// `ExecuteSafetySweep` had already consumed the flag, and a later test pointing the singleton
+        /// at a fresh file got a silent no-op that read as "the sweep does not drive the restore".
+        /// </summary>
+        internal void SetBracketStateFileForTest(string path)
+        {
+            _bracketStateFile = path;
+            _persistedRestorePending = true;
+        }
+
+        internal string BracketStateFileForTest { get { return _bracketStateFile; } }
+
+        internal bool PersistedRestorePendingForTest { get { return _persistedRestorePending; } }
+
+        /// <summary>
+        /// P2-136. Whether the 5-second sweep has been started.
+        ///
+        /// ⚠️ EXISTS BECAUSE THE BATTERY PROVED IT WAS NEEDED. `if (false)` over the `EnsureMonitor()`
+        /// on the restore path SURVIVED the whole suite: every test asserted the bracket was back in
+        /// the registry, and none could ask whether anything would ever move its stop. A bracket in a
+        /// dictionary with no timer is restored and unmanaged -- the defect with a green badge on it.
+        /// [[report-the-outcome-not-the-call]].
+        /// </summary>
+        internal bool MonitoringForTest { get { return _monitoring; } }
+#endif
 
         public static AtmInstrumentProfile GetProfile(string rootSymbol)
         {
@@ -507,6 +550,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 _activeBrackets[bracket.BracketId] = bracket;
             }
+            SaveBracketsToDisk();
         }
 
         public void RemoveBracket(string bracketId)
@@ -514,6 +558,179 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (_bracketLock)
             {
                 _activeBrackets.Remove(bracketId);
+            }
+            SaveBracketsToDisk();
+        }
+
+        /// <summary>
+        /// P2-136 "survive it". Writes the registry where a hot-swap cannot reach it.
+        ///
+        /// ⚠️ CALLED AFTER EVERY MUTATION, NOT ONLY ON REGISTER. The fields that matter across a
+        /// compile are the ones the SWEEP moves -- `CurrentStopPrice`, `BreakevenTriggered`,
+        /// `PartialProfitUnavailableAnnounced` -- so a file written only at placement would restore a
+        /// bracket to its opening state and re-announce everything it had already said.
+        ///
+        /// ⚠️ SERIALISED UNDER THE LOCK, WRITTEN OUTSIDE IT. `_activeBrackets` must not be enumerated
+        /// while another thread mutates it, and file IO must not be done holding a lock the 5-second
+        /// sweep needs -- `RiskGuardAddOn.WriteFileOutsideLock` exists for the same reason.
+        ///
+        /// Silent on failure BY DESIGN and this is the one place that is right: persistence is a
+        /// best-effort improvement on today's behaviour, and a throw here would propagate into
+        /// whatever broker decision was mid-flight. A failure to write is not a failure to protect.
+        /// </summary>
+        private void SaveBracketsToDisk()
+        {
+            string json;
+            try
+            {
+                List<ActiveBracket> snapshot;
+                lock (_bracketLock)
+                {
+                    snapshot = _activeBrackets.Values.ToList();
+                }
+                json = AtmBracketPersistence.Serialise(snapshot);
+            }
+            catch { return; }
+
+            try
+            {
+                string dir = System.IO.Path.GetDirectoryName(_bracketStateFile);
+                if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+                    System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllText(_bracketStateFile, json);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// P2-136 "survive it". Picks managed brackets back up after a NinjaScript recompile.
+        ///
+        /// ⚠️ THE NAME IS `Reconcile*` ON PURPOSE. `tools/check_no_dead_safety_machinery.py` matches
+        /// `Reconcile\w+` and FAILS THE BUILD if it has no caller, and this method is precisely the
+        /// shape that gate exists for: nothing outside `DynamicAtmManager.cs` referenced this class at
+        /// all before P2-136, so restore logic wired to nothing would have passed the whole suite,
+        /// every battery and CI while never once running in production.
+        /// [[dead-safety-machinery-gate]], [[a-gate-is-per-repo]].
+        ///
+        /// ⚠️ AND IT IS CALLED TWICE, WHICH IS THE POINT. Once from `RiskGuardAddOn`'s init, which is
+        /// the only startup path this class has, and again from each sweep while anything is still
+        /// pending -- because the condition an init-time attempt hits is a CONNECTION CYCLE with
+        /// `Account.All` not yet filled, and a bounded retry with nothing asking again later never
+        /// exits. [[a-recovery-budget-is-not-a-policy]], [[a-retry-that-cannot-exit]].
+        /// </summary>
+        public void ReconcilePersistedBrackets()
+        {
+            if (!_persistedRestorePending) return;
+
+            PersistedAtmBracketFile file;
+            try
+            {
+                if (!System.IO.File.Exists(_bracketStateFile))
+                {
+                    // No file is not a failure. It is a box that has never placed a managed bracket,
+                    // which is the ordinary state. [[an-inapplicable-state-is-not-unreadable]].
+                    _persistedRestorePending = false;
+                    return;
+                }
+                file = AtmBracketPersistence.Deserialise(System.IO.File.ReadAllText(_bracketStateFile));
+            }
+            catch (Exception ex)
+            {
+                RiskGuardAddOn.LogFromComponent("", "ATM_BRACKET_RESTORE_FAILED",
+                    "the persisted ATM bracket registry at '" + _bracketStateFile + "' could not be read ("
+                    + ex.Message + "), so any bracket that was being managed before the last recompile is "
+                    + "no longer managed. Positions and broker-side stops are unaffected, but their stops "
+                    + "will not move again.");
+                _persistedRestorePending = false;
+                return;
+            }
+
+            if (file == null)
+            {
+                RiskGuardAddOn.LogFromComponent("", "ATM_BRACKET_RESTORE_FAILED",
+                    "the persisted ATM bracket registry at '" + _bracketStateFile + "' is present but could "
+                    + "not be parsed, so any bracket that was being managed before the last recompile is no "
+                    + "longer managed. Its position and broker-side stop are unaffected, but the stop will "
+                    + "not move again.");
+                _persistedRestorePending = false;
+                return;
+            }
+
+            List<Account> accounts;
+            try { accounts = Account.All.ToList(); }
+            catch { accounts = new List<Account>(); }
+
+            List<AtmRestoreDecision> decisions = AtmBracketPersistence.DecideAll(file, accounts);
+            int restored = 0;
+
+            foreach (AtmRestoreDecision decision in decisions)
+            {
+                if (decision.Verdict == AtmRestoreVerdict.Restored)
+                {
+                    // ⚠️ THE INVARIANT THAT MAKES RESETTING THE RETRY BUDGET SAFE. A record is
+                    // consumed ONCE. Without this a file re-read on a later sweep would overwrite a
+                    // bracket the sweep has since advanced, and would launder
+                    // `StopModifyAttempts` back to zero every five seconds -- turning a bounded
+                    // retry into an order flood against a provider that always refuses.
+                    bool alreadyLive;
+                    lock (_bracketLock)
+                    {
+                        alreadyLive = _activeBrackets.ContainsKey(decision.Bracket.BracketId);
+                        if (!alreadyLive)
+                            _activeBrackets[decision.Bracket.BracketId] = decision.Bracket;
+                    }
+                    if (alreadyLive) continue;
+
+                    restored++;
+                    RiskGuardAddOn.LogFromComponent(decision.Bracket.AccountName, "ATM_BRACKET_RESTORED", decision.Reason);
+                    continue;
+                }
+
+                // Every other verdict is a bracket that is NOT managed, and they are different news.
+                // `Unprotected` and `DeferralExhausted` name a live position whose stop will not move
+                // again; `Finished` is good news; `Deferred` is not an answer yet.
+                string account = decision.Bracket != null ? decision.Bracket.AccountName : "";
+                RiskGuardAddOn.LogFromComponent(account, EventTypeFor(decision.Verdict), decision.Reason);
+            }
+
+            PersistedAtmBracketFile remaining = AtmBracketPersistence.Remaining(decisions, file.Brackets);
+
+            if (remaining.Brackets.Count == 0)
+            {
+                _persistedRestorePending = false;
+                // Rewrite from the LIVE registry rather than emptying the file: brackets restored a
+                // moment ago belong on disk, and truncating here would drop them again on the next
+                // compile -- a restore that undoes itself.
+                SaveBracketsToDisk();
+            }
+            else
+            {
+                try { System.IO.File.WriteAllText(_bracketStateFile, AtmBracketPersistence.Serialise(remaining)); }
+                catch { }
+            }
+
+            // Nothing else starts the sweep after a recompile: `EnsureMonitor` is called from
+            // `PlaceBracket` only, so without this a restored bracket would sit in the registry with
+            // no timer moving its stop -- restored and still unmanaged.
+            if (restored > 0)
+                EnsureMonitor();
+        }
+
+        /// <summary>
+        /// One event type per verdict, and NOT one shared `ATM_BRACKET_NOT_RESTORED`: an operator
+        /// filtering their log for a live unprotected position must not have to read the message text
+        /// to tell it from a finished trade.
+        /// </summary>
+        private static string EventTypeFor(AtmRestoreVerdict verdict)
+        {
+            switch (verdict)
+            {
+                case AtmRestoreVerdict.Finished:           return "ATM_BRACKET_RELEASED";
+                case AtmRestoreVerdict.Unprotected:        return "ATM_BRACKET_UNPROTECTED";
+                case AtmRestoreVerdict.Mismatched:         return "ATM_BRACKET_MISMATCHED";
+                case AtmRestoreVerdict.Deferred:           return "ATM_BRACKET_RESTORE_DEFERRED";
+                case AtmRestoreVerdict.DeferralExhausted:  return "ATM_BRACKET_RESTORE_ABANDONED";
+                default:                                   return "ATM_BRACKET_RESTORE_FAILED";
             }
         }
 
@@ -693,6 +910,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void MonitorTickCore()
         {
+            // P2-136. The retry half. An init-time attempt runs during a connection cycle, so the
+            // account it needs may not be in `Account.All` yet; this is what asks again.
+            ReconcilePersistedBrackets();
+
             List<ActiveBracket> toRemove = new List<ActiveBracket>();
             List<ActiveBracket> active;
 
@@ -875,6 +1096,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                         _activeBrackets.Remove(b.BracketId);
                 }
             }
+
+            // P2-136. Gated on `active`, NOT on `toRemove`: the sweep's ordinary product is a MUTATED
+            // bracket -- a stop advanced, a breakeven latched -- and a save gated on removal would
+            // persist only the moments a bracket leaves, which is the one state that does not need
+            // saving. The removal case is covered too, because a bracket in `toRemove` was in
+            // `active`, so this rewrite is what drops it from disk. Nothing at all in `active` means
+            // the file is already empty and there is nothing to write.
+            if (active.Count > 0)
+                SaveBracketsToDisk();
         }
 
         /// <summary>
