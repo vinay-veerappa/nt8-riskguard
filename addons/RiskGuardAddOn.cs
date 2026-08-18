@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.43.0";
+        public const string Version = "1.44.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -2764,6 +2764,121 @@ namespace NinjaTrader.NinjaScript.AddOns
             return c == OrderLiveness.Working || c == OrderLiveness.Changing;
         }
 
+        // ==================================================================================
+        // P2-145. WHAT A COVERAGE GAP IS, asked once.
+        //
+        // The audit's NAKED_POSITION predicate used to be, inline:
+        //
+        //     if (!isProtected || covered < positionQty)
+        //
+        // An OR with two arms that mean different things, and the finding it raised named only
+        // one of them. Measured across 245 logged findings on this box:
+        //
+        //   * `gap == positionQty - covered` in **245 of 245**. Nothing ever disagreed with its
+        //     own gap field, which is what P2-145 was originally filed as. That half was wrong.
+        //   * **17 rows fired with `gap=0`** -- every contract covered -- because the left arm is
+        //     true whenever the state is not exactly `Protected`. All 17 read `ProtectedPending`,
+        //     which by its own definition (`GuardFsmState`) means the stop is
+        //     Submitted/Initialized/Accepted and therefore ALREADY COUNTED as coverage by
+        //     `ProvidesCoverage`. A fully protected position reported as naked, seventeen times.
+        //   * **4 rows read `fsmState=Protected` with a gap of 1-2.** Those are correct and
+        //     deliberate: `Protected` means "something is covering", not "everything is". P1-36
+        //     established that losing one stop of several is not being naked, and the terminal-stop
+        //     path drops to `Unprotected` only when `CoveredQuantity <= 0`. The state is doing its
+        //     job; a reader mistaking it for full coverage is why the message now says so out loud.
+        //
+        // ⚠️ NARROWING THIS PREDICATE HAD TO NOT LOSE A TRUE POSITIVE. Requiring a gap silences
+        // the 17, but the left arm was also the only thing that would have reported a position
+        // whose coverage is complete while the state machine does not agree -- an FSM stuck in
+        // `Unprotected` or `FlattenPending` with a full stop behind it. That is a real disagreement
+        // and it now gets its OWN finding rather than being folded into nakedness.
+        // [[a-filter-that-matches-too-much]]: on a path that decides whether to flatten, the two
+        // failure directions are not symmetric, so the arm being removed gets somewhere to go.
+        //
+        // Extracted from the audit loop for the same reason `ResolveMaxContracts` was: while it
+        // lived inline inside `RunGuardAudit` it needed `Account.All` to reach, so every test in
+        // this repo tested the THROTTLE around it and none tested the predicate. That is how a
+        // condition wrong in 21 of 245 cases stayed green.
+        // ==================================================================================
+
+        internal enum CoverageFinding
+        {
+            /// <summary>Coverage and state agree. Nothing to report.</summary>
+            None,
+
+            /// <summary>Some or all of the position has no stop behind it.</summary>
+            NakedPosition,
+
+            /// <summary>
+            /// Fully covered, but the state machine does not say so. Not nakedness -- the
+            /// opposite -- and worth a line because the flatten decision reads the state.
+            /// </summary>
+            CoverageDisagrees
+        }
+
+        internal struct CoverageAssessment
+        {
+            public CoverageFinding Finding;
+
+            /// <summary>Contracts with no stop behind them. Never negative.</summary>
+            public long Gap;
+
+            /// <summary>
+            /// True when SOME cover exists but not enough. Distinguishes "half this position is
+            /// naked" from "all of it is", which the old single message could not.
+            /// </summary>
+            public bool Partial;
+        }
+
+        /// <summary>
+        /// Whether an open position's protective coverage warrants a finding, given the FSM's
+        /// state and its covered quantity.
+        /// </summary>
+        /// <param name="hasFsm">
+        /// False when no FSM exists for this (account, instrument). ⚠️ This is NOT rare and it is
+        /// not always a defect: `RunGuardAudit` iterates every account, while FSM creation honours
+        /// `ExcludedAccounts` and `_isArmed`. An account the guard was told not to guard therefore
+        /// has a position and no FSM, and reports a full gap -- correctly, since nothing is
+        /// watching it.
+        /// </param>
+        /// <param name="covered">Contracts with live protective stops behind them.</param>
+        /// <param name="positionQty">ABSOLUTE position size. `Position.Quantity` on NT8 is never
+        /// negative and the side lives in `MarketPosition` -- reading a sign here is `P0-96`.</param>
+        internal static CoverageAssessment AssessCoverage(
+            bool hasFsm, GuardFsmState state, long covered, long positionQty)
+        {
+            // No position, nothing to protect. The caller already skips these; answering it here
+            // too means the function is total, so a future caller cannot get it wrong.
+            if (positionQty <= 0)
+                return new CoverageAssessment { Finding = CoverageFinding.None };
+
+            if (covered < positionQty)
+            {
+                return new CoverageAssessment
+                {
+                    Finding = CoverageFinding.NakedPosition,
+                    Gap = positionQty - covered,
+                    // Negative coverage is not a thing, but if it ever were, treating it as
+                    // "partially covered" would understate the exposure. Anchor on > 0.
+                    Partial = covered > 0
+                };
+            }
+
+            // Fully covered from here on. The only question left is whether the state agrees.
+            //
+            // `ProtectedPending` counts as agreement: it means the stop is Submitted/Initialized/
+            // Accepted, which `ProvidesCoverage` already treats as cover, so a full count in that
+            // state is the system working, not a disagreement. This single line is what the 17
+            // false findings turn on.
+            bool stateAgrees = hasFsm
+                && (state == GuardFsmState.Protected || state == GuardFsmState.ProtectedPending);
+
+            if (stateAgrees)
+                return new CoverageAssessment { Finding = CoverageFinding.None };
+
+            return new CoverageAssessment { Finding = CoverageFinding.CoverageDisagrees, Gap = 0 };
+        }
+
         /// <summary>
         /// "Can I issue an Account.Change() against this order right now?"
         ///
@@ -3451,21 +3566,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Position pos = posKv.Value;
                         string fsmKey = accountName + "|" + instrument;
                         bool hasFsm = fsmSnapshot.TryGetValue(fsmKey, out FsmAuditSnapshot fsm);
-                        bool isProtected = hasFsm && fsm.State == GuardFsmState.Protected;
                         long covered = hasFsm ? fsm.CoveredQuantity : 0;
                         long positionQty = pos.Quantity;
-                        if (!isProtected || covered < positionQty)
+                        GuardFsmState fsmState = hasFsm ? fsm.State : GuardFsmState.Unprotected;
+                        string stateName = hasFsm ? fsm.State.ToString() : "MISSING";
+
+                        // P2-145: one question, asked in one place. See AssessCoverage for why the
+                        // predicate this replaced fired on 17 fully covered positions.
+                        CoverageAssessment cov = AssessCoverage(hasFsm, fsmState, covered, positionQty);
+
+                        if (cov.Finding == CoverageFinding.NakedPosition)
                         {
-                            long gap = Math.Max(0, positionQty - covered);
-                            string stateName = hasFsm ? fsm.State.ToString() : "MISSING";
                             // P2-108: the finding is RECORDED here and logged (or withheld) at
                             // the end of the pass. Logging inline is what made this one line every
                             // 10 seconds, forever, on a path DispatchActions never sees.
                             string nakedKey = AuditFindingThrottle.KeyFor("NAKED_POSITION", accountName, instrument);
                             firedKeys.Add(nakedKey);
-                            findingText[nakedKey] = $"{instrument}: position={positionQty}, fsmState={stateName}, covered={covered}, gap={gap}";
+                            // "partially" vs "entirely" is stated because `fsmState=Protected` with
+                            // a gap is legitimate (P1-36) and used to read as a contradiction.
+                            string extent = cov.Partial ? "partially uncovered" : "entirely uncovered";
+                            findingText[nakedKey] = $"{instrument}: position={positionQty}, fsmState={stateName}, covered={covered}, gap={cov.Gap} ({extent})";
                             findingAccount[nakedKey] = accountName;
                             findingType[nakedKey] = "NAKED_POSITION";
+                        }
+                        else if (cov.Finding == CoverageFinding.CoverageDisagrees)
+                        {
+                            // Fully covered while the state machine says otherwise. The opposite of
+                            // nakedness, and it matters because the flatten decision reads state.
+                            string disagreeKey = AuditFindingThrottle.KeyFor("FSM_COVERAGE_DISAGREES", accountName, instrument);
+                            firedKeys.Add(disagreeKey);
+                            findingText[disagreeKey] = $"{instrument}: position={positionQty} is FULLY covered ({covered}), but fsmState={stateName} does not agree. Not a naked position -- the state machine is behind the coverage.";
+                            findingAccount[disagreeKey] = accountName;
+                            findingType[disagreeKey] = "FSM_COVERAGE_DISAGREES";
                         }
                     }
 

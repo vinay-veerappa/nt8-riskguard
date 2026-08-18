@@ -245,7 +245,7 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | ⚠️ **Every number in this table rots. Re-derive before quoting it — that is what the third column is for.** Measured 2026-08-18 (session 58): core **2182 / 0**; bridge harness **597 / 0**; MCP wrapper **66 / 0**; `agent-loop` **749 pass / 36 skipped** with **selftest 13/13**. ⚠️ **`dotnet test` on these csproj files exits 0 HAVING RUN NOTHING** — they are console harnesses, so `dotnet run` is the only invocation that tests anything, and it is what CI does. ⚠️ The wrapper must run as `cd mcp && node --test`; `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails `MODULE_NOT_FOUND`, which reads like a test failure | `dotnet build tests/RiskGuardTests.csproj && dotnet run --project tests/RiskGuardTests.csproj --no-build`; in `nt8-mcp-bridge` the same for `tests/BridgeTests.csproj`, then `cd mcp && node --test`; in `agent-loop` `pytest -q` **and** `python -m agent_loop.selftest` (two harnesses, CI ran only one for an unknown number of sessions) |
+| **Suite** | ⚠️ **Every number in this table rots. Re-derive before quoting it — that is what the third column is for.** Measured 2026-08-18 (session 58): core **3158 / 0**; bridge harness **597 / 0**; MCP wrapper **66 / 0**; `agent-loop` **749 pass / 36 skipped** with **selftest 13/13**. ⚠️ **`dotnet test` on these csproj files exits 0 HAVING RUN NOTHING** — they are console harnesses, so `dotnet run` is the only invocation that tests anything, and it is what CI does. ⚠️ The wrapper must run as `cd mcp && node --test`; `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails `MODULE_NOT_FOUND`, which reads like a test failure | `dotnet build tests/RiskGuardTests.csproj && dotnet run --project tests/RiskGuardTests.csproj --no-build`; in `nt8-mcp-bridge` the same for `tests/BridgeTests.csproj`, then `cd mcp && node --test`; in `agent-loop` `pytest -q` **and** `python -m agent_loop.selftest` (two harnesses, CI ran only one for an unknown number of sessions) |
 | **Defects** | ⚠️ **NO COUNT IS RECORDED HERE, DELIBERATELY.** The last three figures written into this row were each wrong when written: one read `122 / 109 / 13` while listing six closed defects as open, and one read `117 / 104 / 13` while its own breakdown summed to something else. A half-updated summary is worse than an obviously stale one, because the timestamp vouches for every row — [[closures-do-not-propagate-backwards]]. ⚠️ **A naive `grep CLOSED` gets it wrong**: headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`. The gate computes it mechanically and refuses to do so vacuously. **Run it; do not quote a number.** | `python tools/check_next_list_ids.py` — it also fails if any ID named as work-to-do is closed, or any plan entry has no status |
 | **Do next** | ⚠️ **This row is a POINTER, not a list, because a list here goes stale silently.** Read the newest `### Order from here` — currently **§5.85 (session 58)** — which carries the reasons and was derived from the plan's statuses rather than copied forward. ⚠️ **The previous version of this row named the §4 fleet/inspector layout work as next for six sessions after it stopped being open** (its ID is deliberately not repeated here — naming a closed ID in this row is the very thing the gate rejects), which is the failure this pointer exists to stop. `check_next_list_ids.py` now fails on exactly that, in both this row and §5.6's | `python tools/check_next_list_ids.py`, then read the LAST `### Order from here` in this file |
 | **Branch** | **`main` only, level with `origin/main`, all three repos** — measured 2026-08-18 (session 58). `nt8-riskguard` **49 tags**, `v1.0.0`…**`v1.41.0`**. ⚠️ **`nt8-mcp-bridge` has NO tags** and is pinned into nothing; it is the consumer, not the consumed | `git status -sb` and `git describe --tags` in each repo |
@@ -11328,7 +11328,7 @@ thing, on 2026-08-18:
 | | nt8-riskguard | nt8-mcp-bridge | agent-loop |
 |---|---|---|---|
 | head | `v1.41.0` = `b740666` | `6ab39d3` (pin `v1.41.0`, current) | `beb108d` |
-| suite | **2182 / 0** | harness **597 / 0**, wrapper **66 / 0** | **749 pass / 36 skipped** |
+| suite | **3158 / 0** | harness **597 / 0**, wrapper **66 / 0** | **749 pass / 36 skipped** |
 | batteries | **44** | **13** | — |
 | anchors | **495 / 0 broken** | **174 / 0 broken** | — |
 | gates | **11** green | **5** green | selftest **13 / 13** |
@@ -11385,12 +11385,12 @@ it; restore and each exits **0**. [[a-gate-is-per-repo]].
 All three had been sitting in a **44 MB** `interventions.jsonl`. None is caused by this session's
 work; all three were unreadable before `P2-127` slice 4.
 
-* **`P2-145`** — ⚠️ **its premise is measured WRONG and the entry needs re-describing before it is
-  worked.** `gap == position - covered` in **245 of 245** rows, so nothing disagrees with its own
-  `gap`. The real shape is the OR in the firing predicate (`RiskGuardAddOn.cs:3457`,
-  `if (!isProtected || covered < positionQty)`): 17 rows fire with `gap=0` because coverage is
-  complete while the state is `ProtectedPending`, and 4 fire reading `Protected` with a gap of 1-2
-  through the other arm. Two independent defects, neither arithmetic.
+* **`P2-145`** — ✅ closed this session. Its premise was measured wrong: `gap == position -
+  covered` in **245 of 245** rows, and the 4 `Protected`-with-a-gap rows were correct behaviour, not
+  the serious half. One real defect: 17 findings on FULLY COVERED positions, because the predicate's
+  `!isProtected` arm fired on `ProtectedPending` — a state whose stops `ProvidesCoverage` already
+  counts. Now `AssessCoverage`, with the removed arm rehomed as `FSM_COVERAGE_DISAGREES` rather than
+  deleted.
 * **`P1-151`** — `OnMissing: Flatten` at `StopAttachSeconds: 15` versus a **measured** 43-second
   hand speed on the funded account. Costs nothing in `shadow`, which is why it survived; it is a
   blocker the moment the posture changes. Its predecessor asked what opened those unprotected
@@ -11425,8 +11425,12 @@ sessions after that stopped being true.
    stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
    ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
    unvalidated one.
-3. **`P2-145`**, and drive the `Protected`-with-a-gap rows FIRST — the noisy `gap=0` half is the
-   one that will attract the fix and the quiet half is the one that matters.
+3. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
+   rather than deleted because its instruction was wrong in an instructive way: it said to drive the
+   `Protected`-with-a-gap rows FIRST as "the quiet half that matters", and those four rows were the
+   system working correctly: `Protected` means *something* is covering, not everything, which a
+   long-closed entry established deliberately. The loud half was the whole defect. No ID is
+   repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
 4. **`P2-141`**, **`P2-142`**, then `P1-140`'s native-partials remainder.
 5. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
    ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.

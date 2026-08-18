@@ -509,6 +509,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             TestAtm_P1143_FourRecompilesDoNotHandOutFourBudgets();
             TestAtm_P1143_AConfirmedMoveStillClearsTheCarriedBudget();
             TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile();
+            // P2-145. The coverage predicate itself, which no test reached while it was
+            // inline in RunGuardAudit -- 21 of 245 logged findings were wrong, suite green.
+            TestAudit_P2145_FullyCoveredWhilePendingIsNotNaked();
+            TestAudit_P2145_ProtectedWithAGapStillFires();
+            TestAudit_P2145_ZeroCoverageIsEntirelyUncovered();
+            TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding();
+            TestAudit_P2145_GapIsAlwaysPositionMinusCovered();
+            TestAudit_P2145_NoPositionIsNeverAFinding();
             TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted();
             TestAtm_P2136_AFinishedTradeIsNotResurrected();
             TestAtm_P2136_AReversedPositionIsNotManaged();
@@ -9426,6 +9434,165 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// not a decision anybody made here. A `[JsonIgnore]` added to either field for an unrelated
         /// reason would silently restore the laundering, with every in-memory test still green.
         /// </summary>
+
+        // ------------------------------------------------------------------
+        // P2-145. THE COVERAGE PREDICATE, which had no test of its own.
+        //
+        // Every pre-existing NAKED_POSITION test in this file exercises the THROTTLE around the
+        // finding (`AuditFindingThrottle`), not the condition that raises it. The condition lived
+        // inline in `RunGuardAudit`, needed `Account.All` to reach, and was wrong in 21 of 245
+        // logged findings on this box while the suite was green.
+        //
+        // The measurements these encode, from `interventions.jsonl`:
+        //   17 findings with `gap=0`, all `ProtectedPending`   -> must NOT fire  (the false alarms)
+        //    4 findings with `fsmState=Protected` and a gap    -> must     fire  (legitimate, P1-36)
+        //  245 of 245 with `gap == position - covered`         -> arithmetic was never the defect
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The 17 measured false alarms. `ProtectedPending` means the stop is Submitted/Initialized/
+        /// Accepted, which `ProvidesCoverage` already counts, so a full count in that state is the
+        /// system working. This is the case the old `!isProtected ||` arm got wrong.
+        /// </summary>
+        private static void TestAudit_P2145_FullyCoveredWhilePendingIsNotNaked()
+        {
+            Console.WriteLine("\n[TEST] P2-145: ProtectedPending + full coverage raises NOTHING");
+
+            var a = RiskGuardAddOn.AssessCoverage(true, GuardFsmState.ProtectedPending, 2, 2);
+            Assert(a.Finding == RiskGuardAddOn.CoverageFinding.None,
+                "ProtectedPending covering 2 of 2 is not a finding, got " + a.Finding);
+            Assert(a.Gap == 0, "and there is no gap, got " + a.Gap);
+
+            // The exact measured row: MES SEP26 position=2, ProtectedPending, covered=2, gap=0.
+            var measured = RiskGuardAddOn.AssessCoverage(true, GuardFsmState.ProtectedPending, 2, 2);
+            Assert(measured.Finding == RiskGuardAddOn.CoverageFinding.None,
+                "the measured 2026-08-18T12:55:06Z row must now be silent");
+        }
+
+        /// <summary>
+        /// The 4 measured legitimate ones. `Protected` does NOT mean fully covered -- P1-36 made
+        /// losing one stop of several a partial, not a nakedness -- so a gap under `Protected` is
+        /// real and must still be reported. This is the negative control for the fix above: a
+        /// change that silenced the 17 by requiring `Protected` would break this.
+        /// </summary>
+        private static void TestAudit_P2145_ProtectedWithAGapStillFires()
+        {
+            Console.WriteLine("\n[TEST] P2-145: Protected with a partial gap still fires, as PARTIAL");
+
+            // The measured row: TAKEPROFITPRO524207503 MNQ position=2, Protected, covered=1, gap=1.
+            var a = RiskGuardAddOn.AssessCoverage(true, GuardFsmState.Protected, 1, 2);
+            Assert(a.Finding == RiskGuardAddOn.CoverageFinding.NakedPosition,
+                "1 of 2 covered under Protected is still a naked finding, got " + a.Finding);
+            Assert(a.Gap == 1, "gap is 1, got " + a.Gap);
+            Assert(a.Partial, "and it is PARTIAL -- half the position has a stop");
+
+            // The other measured shape: position=5, Protected, covered=3, gap=2.
+            var b = RiskGuardAddOn.AssessCoverage(true, GuardFsmState.Protected, 3, 5);
+            Assert(b.Finding == RiskGuardAddOn.CoverageFinding.NakedPosition && b.Gap == 2 && b.Partial,
+                "3 of 5 under Protected: partial finding with gap 2");
+        }
+
+        /// <summary>
+        /// The true positives that must survive the narrowing -- all five funded `covered=0` rows.
+        /// These are reported as ENTIRELY uncovered, which the old single message could not say.
+        /// </summary>
+        private static void TestAudit_P2145_ZeroCoverageIsEntirelyUncovered()
+        {
+            Console.WriteLine("\n[TEST] P2-145: covered=0 fires as ENTIRELY uncovered, in every state");
+
+            foreach (GuardFsmState st in new[] { GuardFsmState.Unprotected, GuardFsmState.FlattenPending,
+                                                 GuardFsmState.Protected, GuardFsmState.ProtectedPending })
+            {
+                var a = RiskGuardAddOn.AssessCoverage(true, st, 0, 3);
+                Assert(a.Finding == RiskGuardAddOn.CoverageFinding.NakedPosition,
+                    "covered=0 pos=3 must fire under " + st + ", got " + a.Finding);
+                Assert(a.Gap == 3, "full gap of 3 under " + st + ", got " + a.Gap);
+                Assert(!a.Partial, "nothing is covered, so it is not partial, under " + st);
+            }
+
+            // No FSM at all -- an excluded or unarmed account. Still a full gap, correctly.
+            var none = RiskGuardAddOn.AssessCoverage(false, GuardFsmState.Unprotected, 0, 1);
+            Assert(none.Finding == RiskGuardAddOn.CoverageFinding.NakedPosition && none.Gap == 1,
+                "a position with no FSM reports a full gap");
+        }
+
+        /// <summary>
+        /// What the removed `!isProtected` arm was the only reporter of: coverage complete while
+        /// the state machine has not caught up. Without this the narrowing would have DELETED a
+        /// signal rather than moved it -- [[a-filter-that-matches-too-much]].
+        /// </summary>
+        private static void TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding()
+        {
+            Console.WriteLine("\n[TEST] P2-145: fully covered + state disagrees -> FSM_COVERAGE_DISAGREES");
+
+            foreach (GuardFsmState st in new[] { GuardFsmState.Unprotected, GuardFsmState.FlattenPending,
+                                                 GuardFsmState.Flat })
+            {
+                var a = RiskGuardAddOn.AssessCoverage(true, st, 2, 2);
+                Assert(a.Finding == RiskGuardAddOn.CoverageFinding.CoverageDisagrees,
+                    "full coverage under " + st + " is a disagreement, got " + a.Finding);
+                Assert(a.Gap == 0, "and it is NOT reported as a gap, got " + a.Gap);
+            }
+
+            // Over-coverage is not a gap either, and must not read as one.
+            var over = RiskGuardAddOn.AssessCoverage(true, GuardFsmState.Protected, 5, 2);
+            Assert(over.Finding == RiskGuardAddOn.CoverageFinding.None,
+                "more cover than position is not a finding, got " + over.Finding);
+            Assert(over.Gap == 0, "and certainly not a negative gap, got " + over.Gap);
+        }
+
+        /// <summary>
+        /// The half of P2-145 that was filed and turned out not to exist: `gap` disagreeing with
+        /// `position - covered`. It held in 245 of 245 measured rows and it holds here by
+        /// construction, so nobody re-derives the claim from a source read.
+        /// </summary>
+        private static void TestAudit_P2145_GapIsAlwaysPositionMinusCovered()
+        {
+            Console.WriteLine("\n[TEST] P2-145: gap == position - covered, exhaustively");
+
+            for (long pos = 1; pos <= 12; pos++)
+            {
+                for (long cov = 0; cov <= 12; cov++)
+                {
+                    foreach (GuardFsmState st in new[] { GuardFsmState.Unprotected, GuardFsmState.Protected,
+                                                         GuardFsmState.ProtectedPending, GuardFsmState.FlattenPending })
+                    {
+                        var a = RiskGuardAddOn.AssessCoverage(true, st, cov, pos);
+                        if (a.Finding == RiskGuardAddOn.CoverageFinding.NakedPosition)
+                        {
+                            Assert(a.Gap == pos - cov,
+                                "gap must be " + (pos - cov) + " for pos=" + pos + " cov=" + cov + " " + st + ", got " + a.Gap);
+                            Assert(a.Gap > 0, "a naked finding always carries a positive gap");
+                        }
+                        else
+                        {
+                            Assert(a.Gap == 0,
+                                "a non-naked finding carries no gap (pos=" + pos + " cov=" + cov + " " + st + "), got " + a.Gap);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A flat or absent position is never a finding, whatever the state says. Keeps the
+        /// function total so a future caller that forgets to pre-filter cannot raise a phantom.
+        /// </summary>
+        private static void TestAudit_P2145_NoPositionIsNeverAFinding()
+        {
+            Console.WriteLine("\n[TEST] P2-145: position <= 0 raises nothing");
+
+            foreach (long q in new long[] { 0, -1, -7 })
+            {
+                foreach (GuardFsmState st in new[] { GuardFsmState.Unprotected, GuardFsmState.FlattenPending })
+                {
+                    var a = RiskGuardAddOn.AssessCoverage(true, st, 0, q);
+                    Assert(a.Finding == RiskGuardAddOn.CoverageFinding.None,
+                        "position " + q + " under " + st + " is not a finding, got " + a.Finding);
+                }
+            }
+        }
+
         private static void TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile()
         {
             Console.WriteLine("\n[TEST] ATM P1-143: the spent budget reaches the state file, not just the next object");

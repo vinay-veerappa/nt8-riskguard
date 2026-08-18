@@ -546,7 +546,15 @@ jobs:
           # P1-76, 354s. Three of its fourteen mutants SURVIVED on the first run, including the
           # one that reinstates the pre-P1-76 emergent tie-break -- the precedence test was
           # decorative because direct-wins was over-determined.
-          - { label: "P1-76+P3-30", batteries: "mutate_p1_76.py mutate_p330.py" }   # 499s = P1-76 324s + P3-30 175s
+          # P2-145 joins this bin because it is the same family as P3-30: both are the guard
+          # audit reporting a correctly protected account as naked, and P3-30's own comment
+          # already records that its three shipped tests were POSITIVE-only. P2-145 is the
+          # negative half -- 17 of 245 measured findings fired on FULLY COVERED positions.
+          # 10 mutants + baseline + restore-check = 12 suite runs at ~22s = ~264s, which keeps
+          # this bin under the ~1113s critical path, so the wall does not move. RE-PACK with
+          # `python tools/pack_ci_matrix.py --bins 19` once a green run reports the real
+          # seconds -- the 264s here is arithmetic, not a measurement.
+          - { label: "P1-76+P3-30+P2-145", batteries: "mutate_p1_76.py mutate_p330.py mutate_p2145coverage.py" }   # 499s + P2-145 ~264s (ESTIMATE)
 
           # P3-34's copier mode, 287s. Every mutant here is a way of writing code that looks like a
           # shadow mode and places real orders anyway. Mutant 3 is the one to know: it keeps the

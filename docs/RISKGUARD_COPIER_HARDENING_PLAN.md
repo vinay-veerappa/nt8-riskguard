@@ -7962,7 +7962,7 @@ ceiling, so its gates are plain steps. Nothing yet requires a *new* gate to carr
 control.
 
 
-### P2-145. `NAKED_POSITION` disagrees with its own `gap` field in BOTH directions — it fires on fully-covered positions and stays quiet on uncovered ones — OPEN, measured 2026-08-18 (session 58)
+### P2-145. `NAKED_POSITION` fires on fully-covered positions — 21 of 245 measured findings were wrong, and the `gap` half of this entry never existed — ✅ FIXED 2026-08-18 (session 59), `v1.44.0`
 
 Surfaced within minutes of `P2-127`'s events pane going live, from 235 `NAKED_POSITION` events that
 were previously buried in a 44 MB `interventions.jsonl`. Grouped by `fsmState` and `gap`:
@@ -7995,6 +7995,74 @@ Also unestablished: whether `ProtectedPending`/`gap=0` is a *transient* read tak
 settles, in which case the fix is a settle window rather than a predicate change. Nothing measured
 yet distinguishes those.
 
+
+
+---
+
+## RESOLVED 2026-08-18 (session 59). One half was real, the other half did not exist.
+
+**Re-derived from all 245 `NAKED_POSITION` findings rather than from the 235 the pane showed:**
+
+| fsmState | gap | count | verdict |
+|---|---|---|---|
+| `ProtectedPending` | **0** | **17** | ‼️ FALSE ALARM — every contract covered |
+| `Protected` | 1–2 | **4** | ✅ CORRECT, and deliberate — see below |
+| `FlattenPending` | >0 | 163 | correct |
+| `Unprotected` | >0 | 61 | correct |
+
+**`gap == positionQty - covered` in 245 of 245 rows.** Nothing ever disagreed with its own `gap`
+field, so the headline of this entry was wrong and the "BOTH directions" framing sent the next
+reader looking for an arithmetic bug that was never there. What actually existed was **one** OR with
+two arms:
+
+```csharp
+if (!isProtected || covered < positionQty)      // RiskGuardAddOn.cs, was ~3457
+```
+
+The left arm is true whenever the state is not *exactly* `Protected`. `ProtectedPending` means the
+stop is Submitted/Initialized/Accepted — states `ProvidesCoverage` **already counts as cover** —
+so a fully protected position took the branch and announced itself naked. All 17.
+
+⚠️ **AND THE FOUR `Protected`-WITH-A-GAP ROWS ARE NOT A DEFECT.** This entry called them "the
+*serious* direction" and they are the system working. `Protected` does not mean fully covered:
+`P1-36` deliberately made losing one stop of several a *partial* rather than a nakedness, and the
+terminal-stop path drops to `Unprotected` only when `CoveredQuantity <= 0`
+(`RiskGuardAddOn.cs`, the `FSM_UNDERCOVERED` branch). A gap under `Protected` is a correctly
+reported partial. The fix therefore does **not** touch them — it makes the message say
+`partially uncovered` so no future reader repeats this entry's misreading.
+
+So the standing instruction in this entry — *"drive the `Protected` rows first"* — pointed at the
+half that was already right. [[weigh-the-quiet-failure-above-the-loud]] is sound advice that assumed
+a quiet failure existed.
+
+**THE FIX.** The predicate is extracted to `RiskGuardAddOn.AssessCoverage(hasFsm, state, covered,
+positionQty)`, returning `CoverageFinding.{None, NakedPosition, CoverageDisagrees}` plus `Gap` and
+`Partial`. `NAKED_POSITION` now requires `covered < positionQty`.
+
+⚠️ **Narrowing it had to not eat a true positive.** `!isProtected` was the only reporter of *fully
+covered while the state machine does not agree* — an FSM stuck `Unprotected` or `FlattenPending`
+behind a complete stop. Deleting that arm would have removed a signal silently, which is the one
+failure a green suite cannot show you, so it is **rehomed** as a distinct
+`FSM_COVERAGE_DISAGREES` finding rather than dropped. `ProtectedPending` counts as agreement, which
+is the single line the 17 turn on. [[a-filter-that-matches-too-much]].
+
+**WHY IT SURVIVED, which is the part worth carrying.** Every `NAKED_POSITION` test in this repo
+exercises the **throttle** (`AuditFindingThrottle`), not the condition. The predicate sat inline in
+`RunGuardAudit`, which needs `Account.All`, so nothing could reach it from the test build — and a
+predicate that fires on everything passes every positive test ever written for it.
+[[a-detector-needs-a-negative-test]]. `P3-30`'s battery comment already recorded that its three
+guard-audit tests were positive-only; this is the same gap, one predicate over.
+
+**Evidence:** suite **3158 / 0** (the exhaustive gap check contributes 624 assertions). Battery
+`mutation/mutate_p2145coverage.py`, **10 / 10 killed**, wired into the `P1-76+P3-30+P2-145` CI bin
+next to the other guard-audit battery. The group-1 mutant that restores the old predicate verbatim
+produces **239 failures**, which is the test-first evidence — these tests would have been red
+before the fix. The battery also carries a mutant for the gap arithmetic that was measured correct
+in 245/245 rows, because "measured correct" is a statement about the past.
+
+⚠️ **NOT LIVE-VALIDATED.** `AssessCoverage` is proven by the suite and the battery against the
+measured inputs; nothing has yet watched a real `ProtectedPending` position go un-alarmed on the
+box. The next 17-shaped occurrence is the confirmation, and its absence is what to look for.
 
 ### P1-146. Two genuinely UNPROTECTED positions on the FUNDED account, and the guard reported both without acting because it is in `shadow` — ✅ CLOSED NOT-A-DEFECT 2026-08-18 (session 59): the operator's own bare manual entries, and the guard read them correctly
 
