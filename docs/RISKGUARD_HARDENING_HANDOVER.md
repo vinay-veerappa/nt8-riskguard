@@ -11417,7 +11417,9 @@ sessions after that stopped being true.
    behind are the lesson: a test and a mutant, both written from the same wrong premise as the code,
    were **enforcing** the defect. Its ID is not repeated here — the gate reads any ID in this block
    as work to do, correctly.
-   ⚠️ **Its remainder is real and lives under `P2-142`**: `EnsureMonitor` is still per-instance.
+   ⚠️ **Its remainder is real and now has its own ID, `P2-155`**: `EnsureMonitor`'s latch is still
+   per-instance, so a recompile may start a second sweep. ⚠️ MEASURE FIRST — whether the old timer
+   survives a compile is unknown, and the two answers are a duplicated sweep or nothing at all.
 2. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
    the previous entry's "what opened those positions" turned it inside out: the detector was right
    every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
@@ -11431,11 +11433,11 @@ sessions after that stopped being true.
    system working correctly: `Protected` means *something* is covering, not everything, which a
    long-closed entry established deliberately. The loud half was the whole defect. No ID is
    repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
-4. **`P2-142`** — the operator has ruled: ALL configuration is persistent, so a deliberate
-   DISARM must survive a recompile. ⚠️ A persisted disarm means the guard can come up DISARMED
-   with a funded account attached, so the state has to be loud on load, not merely stored.
-   Then **`P2-154`** (the bridge half of the closed breakeven entry) and `P1-140`'s
-   native-partials remainder.
+4. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
+   native-partials remainder. ⚠️ The persistent-disarm work is CLOSED, and it left a standing
+   operational fact rather than a task: the guard can now come up DISARMED with a funded account
+   attached, by design, because all configuration persists. `DISARM_PERSISTED` is the line that
+   says so — if it is in the log, nothing is evaluating.
 5. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
    ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
 6. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.

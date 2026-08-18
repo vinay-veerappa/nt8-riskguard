@@ -587,6 +587,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding);
             Run(TestAudit_P2145_GapIsAlwaysPositionMinusCovered);
             Run(TestAudit_P2145_NoPositionIsNeverAFinding);
+            Run(TestArm_P2142_ADeliberateDisarmSurvivesTheNextStart);
+            Run(TestArm_P2142_TheToggleRecordsAndClearsTheIntent);
+            Run(TestArm_P2142_TheDisarmActuallyReachesTheStateFile);
+            Run(TestArm_P2142_APersistedArmIsStillIgnored);
+            Run(TestArm_P2142_NoDisarmRecordedStillArmsPerMode);
+            Run(TestArm_P2142_ARecompileIsNotARestart);
             Run(TestAtm_P2141_AnOffsetPastTheTriggerIsRefused);
             Run(TestAtm_P2141_AnOffsetEqualToTheTriggerIsRefused);
             Run(TestAtm_P2141_TheRefusalNamesBothValues);
@@ -9689,6 +9695,143 @@ namespace NinjaTrader.NinjaScript.AddOns
                 18000, 0.25, 2.0);
         }
 
+        // ── P2-142: a deliberate disarm survives a recompile ───────────────────────────────
+        // The operator ruled that ALL configuration is persistent. 84 ARMED_ON_START events in one
+        // 3 MB tail were recompiles, several from an unrelated repo deploying NinjaScript; in `live`
+        // that means the guard re-arms itself minutes after somebody disarmed it, with no symptom
+        // beyond a log line that already appears 84 times.
+
+        private static void TestArm_P2142_TheDisarmActuallyReachesTheStateFile()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: the disarm round-trips through state.json");
+            // ⚠️ THE SEAM TESTS ABOVE PROVE THE FIELD IS READ, NOT THAT IT IS WRITTEN. A value held
+            // only in memory would satisfy every one of them and still be lost by the recompile this
+            // entry exists for -- configured, but not persisted, which is the same family as a
+            // config that reads as protection it does not provide.
+            string dir = Path.Combine(Path.GetTempPath(), "rg_p2142_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string stateFile = Path.Combine(dir, "state.json");
+            try
+            {
+                var disarmedAt = new DateTime(2026, 8, 18, 13, 45, 0, DateTimeKind.Utc);
+
+                var writer = new RiskGuardAddOn();
+                writer.SetConfigForTest(new RiskConfig());
+                writer.SetModeForTest("shadow");
+                writer.SetStateFileForTest(stateFile);
+                writer.SetOperatorDisarmedUtcForTest(disarmedAt);
+                writer.SavePersistedStateForTest();
+
+                Assert(File.Exists(stateFile), "P2-142: the state file was written");
+                string json = File.ReadAllText(stateFile);
+                Assert(json.Contains("OperatorDisarmedUtc"),
+                    "P2-142: the disarm is named in the state file, not only held in memory");
+
+                var reader = new RiskGuardAddOn();
+                reader.SetConfigForTest(new RiskConfig());
+                reader.SetModeForTest("shadow");
+                reader.SetStateFileForTest(stateFile);
+                reader.LoadPersistedStateForTest();
+                var got = reader.GetOperatorDisarmedUtcForTest();
+                Assert(got.HasValue && Math.Abs((got.Value.ToUniversalTime() - disarmedAt).TotalSeconds) < 1.0,
+                    "P2-142: a fresh instance reads the disarm back from the state file");
+
+                reader.ApplyInitialArmStateForTest();
+                Assert(!reader.GetIsArmed(),
+                    "P2-142: and a guard loading that file comes up DISARMED in a mode that arms");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+        private static void TestArm_P2142_TheToggleRecordsAndClearsTheIntent()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: disarming RECORDS the intent and arming CLEARS it");
+            // ⚠️ WITHOUT THIS THE WHOLE MECHANISM IS UNREACHABLE. Two mutants survived the first
+            // battery here: one that never recorded the intent and one that never cleared it. Every
+            // other P2-142 test seeds the field directly, so all of them passed under both -- the
+            // honouring half was covered and the WRITING half was not.
+            Account.All.Clear();
+            var account = new Account { Name = "TestAcc", Provider = Provider.Simulator };
+            Account.All.Add(account);
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(new RiskConfig());
+            addon.SetModeForTest("shadow");
+            addon.SetSubscribedAccountForTest("TestAcc");
+            addon.SetArmedForTest(true);
+            addon.SetOperatorDisarmedUtcForTest(null);
+
+            addon.ToggleArmed();      // armed -> disarmed
+            Assert(!addon.GetIsArmed(), "Precondition: the toggle disarmed the guard");
+            Assert(addon.GetOperatorDisarmedUtcForTest().HasValue,
+                "P2-142: disarming RECORDS the operator intent, or there is nothing to honour later");
+
+            addon.ToggleArmed();      // disarmed -> armed (preflight passes in shadow)
+            Assert(addon.GetIsArmed(), "Precondition: the toggle re-armed the guard");
+            Assert(!addon.GetOperatorDisarmedUtcForTest().HasValue,
+                "P2-142: arming CLEARS the intent, so a disarm does not outlive undoing it");
+
+            Account.All.Clear();
+        }
+        private static void TestArm_P2142_ADeliberateDisarmSurvivesTheNextStart()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: a deliberate disarm survives the next start");
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            guard.SetModeForTest("shadow");   // the mode that DOES arm by default
+            guard.SetOperatorDisarmedUtcForTest(new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc));
+            guard.ApplyInitialArmStateForTest();
+            Assert(!guard.GetIsArmed(),
+                "P2-142: a deliberate disarm survives a start that would otherwise arm");
+        }
+
+        private static void TestArm_P2142_APersistedArmIsStillIgnored()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: a persisted ARM is still ignored");
+            // ⚠️ THE NEGATIVE CONTROL, AND THE POINT OF THE WHOLE DESIGN. Honouring persisted state
+            // in BOTH directions would re-open FR-30/31: a stale `true` re-arming an acting mode.
+            // The two directions carry opposite risk and must not share one symmetrical rule.
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            guard.SetModeForTest("live");
+            guard.SetArmedForTest(true);
+            guard.SetOperatorDisarmedUtcForTest(null);
+            guard.ApplyInitialArmStateForTest();
+            Assert(!guard.GetIsArmed(),
+                "P2-142: an acting mode still comes up disarmed with no persisted disarm (FR-30/31)");
+        }
+
+        private static void TestArm_P2142_NoDisarmRecordedStillArmsPerMode()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: no recorded disarm still arms per mode");
+            // The other negative control: an OLD state file, written before this field existed,
+            // deserialises the nullable as null and must behave exactly as before.
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            guard.SetModeForTest("shadow");
+            guard.SetOperatorDisarmedUtcForTest(null);
+            guard.ApplyInitialArmStateForTest();
+            Assert(guard.GetIsArmed(),
+                "P2-142: with no recorded disarm, shadow still arms on start");
+        }
+
+        private static void TestArm_P2142_ARecompileIsNotARestart()
+        {
+            Console.WriteLine("\n[TEST] ARM P2-142: a recompile is told from a restart");
+            var t = new DateTime(2026, 8, 18, 9, 0, 0, DateTimeKind.Utc);
+            Assert(RiskGuardAddOn.StartKindFor(4242, t, 4242, t) == "a RECOMPILE",
+                "P2-142: same process and same start time is a RECOMPILE");
+            Assert(RiskGuardAddOn.StartKindFor(4242, t, 9999, t) == "a RESTART",
+                "P2-142: a different pid is a RESTART");
+            // ⚠️ pids are RECYCLED, so the pid alone is not identity. Same number, different
+            // process: this must not read as a recompile.
+            Assert(RiskGuardAddOn.StartKindFor(4242, t, 4242, t.AddHours(3)) == "a RESTART",
+                "P2-142: the same pid with a different start time is a RESTART, because pids recycle");
+            Assert(RiskGuardAddOn.StartKindFor(0, null, 4242, t) == "a RESTART",
+                "P2-142: an unrecorded host reads as a RESTART, the answer that claims less");
+        }
         private static void TestAtm_P2141_AnOffsetPastTheTriggerIsRefused()
         {
             Console.WriteLine("\n[TEST] ATM P2-141: an offset past the trigger is refused at placement");

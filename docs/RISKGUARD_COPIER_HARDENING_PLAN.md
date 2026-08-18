@@ -7874,7 +7874,53 @@ now"* — which is the same detection surface that found `P2-138`. Both `P1-139`
 halves were confirmed by the same bracket; see `P1-139`'s closure.
 
 
-### P2-142. `ARMED_ON_START` re-arms the guard on every recompile, so a deliberate DISARM does not survive somebody else's deploy — OPEN, split out of `P2-136` 2026-08-17 (session 57)
+### P2-142. `ARMED_ON_START` re-arms the guard on every recompile, so a deliberate DISARM does not survive somebody else's deploy — ✅ FIXED 2026-08-18 (session 59), split out of `P2-136` 2026-08-17 (session 57)
+
+**FIXED, on an explicit operator ruling: ALL configuration is persistent.** Asked whether a disarm
+should persist (the guard may come up off when you expect it on) or keep re-arming (a disarm
+silently evaporates), the answer was the general rule rather than the instance.
+
+`PersistedStateData.OperatorDisarmedUtc` is a **nullable** `DateTime` recording *when* an operator
+deliberately disarmed. `ToggleArmed` sets it on disarming and clears it on arming;
+`LoadPersistedState` rehydrates it; `ApplyInitialArmState` honours it and returns before the
+mode default is applied.
+
+⚠️ **NULLABLE BECAUSE THREE STATES HAVE TO BE DISTINGUISHABLE AND A BOOL CARRIES TWO**: "an
+operator disarmed at T", "nobody has disarmed", and — for a state file written before the field
+existed — "unknown", which reads as null and behaves as the safe answer. A bool would have made a
+fresh install and a deliberate disarm identical, which is the trap where a default and an erasure
+look the same.
+
+⚠️ **THE ASYMMETRY IS THE DESIGN, NOT AN OVERSIGHT, AND IT IS WHAT A FUTURE READER WILL TIDY AWAY.**
+Only a DISARM is honoured from persisted state. A persisted ARM is still ignored — `_isArmed` is
+still forced false on load and arming an acting mode still requires preflight plus a deliberate
+toggle — because `FR-30/31` exists to stop a stale `true` re-arming a guard. The two directions
+carry **opposite** risk: a wrongly-restored ARM makes a guard act on stale intent, a
+wrongly-restored DISARM only declines to act. They must not share one symmetrical rule, and two
+mutants (one per direction) exist solely to catch someone collapsing them into one line.
+
+**A persisted disarm gets its own event**, `DISARM_PERSISTED`, naming the timestamp and the start
+kind it survived — not `UNPROTECTED_ON_START`, which already means "this mode comes up disarmed by
+default". The fact an operator needs on returning to the box is *a person turned it off and it is
+still off*, and persistence without visibility is how a config comes to read as protection that
+does not exist. [[configured-evaluated-enforcing]].
+
+**A recompile is now told from a restart.** `StartKindFor(recordedPid, recordedStartUtc, currentPid,
+currentStartUtc)` is pure and names no NinjaTrader type. Identity is the pid **plus the process
+start time**, because pids are recycled; an unrecorded host reads as `a RESTART`, the answer that
+claims less. This is what the entry asked for: 84 arm events was 84 sessions by this code's
+reckoning and one by the operator's.
+
+⚠️ **The first battery left two survivors and they were a real coverage gap, not battery noise.**
+Every other test seeded `OperatorDisarmedUtc` directly, so the HONOURING half was covered and the
+WRITING half was not: a mutant that never recorded the intent and one that never cleared it both
+passed the whole suite. `TestArm_P2142_TheToggleRecordsAndClearsTheIntent` closes it. The
+round-trip test is there for the same reason in the other dimension — the seam tests prove the
+field is READ, not that it is WRITTEN, and a value held only in memory would be lost by exactly
+the recompile this entry is about.
+
+**Evidence**: suite 3170 → 3185, `mutation/mutate_p2142.py` 12 mutants, wired into CI.
+
 
 Measured while diagnosing `P2-136`: **84 `ARMED_ON_START` events in one 3 MB tail** of
 `interventions.jsonl`, alongside 84 `INITIALIZE` and 171 `CONNECTION_CHANGE` — every one a recompile
@@ -8414,6 +8460,43 @@ name both values; do not substitute one.
 
 **Where**: `nt8-mcp-bridge`, `McpBridgeAddOn.cs` around the `breakevenTriggerTicks` read. Its own
 repo, its own suite, its own contract tests.
+
+### P2-155. `_monitoring` and `_monitorTimer` are per-INSTANCE, so a recompile can leave the ATM sweep running on an orphaned manager — OPEN, split out of `P2-142` 2026-08-18 (session 59)
+
+Carried as an unnamed remainder under a now-closed entry, which is why it gets an ID: a remainder
+hiding under a closed entry is invisible to every count.
+
+`DynamicAtmManager.Instance` is a `Lazy<T>` static, but the sweep's latch is not:
+
+```csharp
+private void EnsureMonitor()
+{
+    if (_monitoring) return;
+    _monitoring = true;
+    _monitorTimer = new Timer(MonitorTick, null, 5000, 5000);
+}
+```
+
+Both fields are instance state. A NinjaScript recompile builds a new assembly in the SAME process
+and replaces the statics, so the new `Instance` sees `_monitoring == false` and starts a second
+timer — while the previous manager's `Timer` is still referenced by the runtime and still firing
+`MonitorTick`. Neither is disposed by the swap.
+
+⚠️ **This is the same shape the recompile family keeps producing** — a latch whose scope is narrower
+than the thing it is latching. `P1-143` was per-instance retry budget (a compile handed a refused
+stop a fresh budget), and the closed arming entry was per-instance arm state. Ask what a compile
+resets before trusting any latch.
+
+**Not yet measured, and that ordering matters.** What is known is the scope of the fields, which is
+read from the source. What is NOT known is whether NT8 actually keeps the old timer alive across a
+compile, or collects it with the old assembly — and the two possibilities are a duplicated sweep
+versus nothing at all. **Measure before fixing**: count `MonitorTick` executions across a
+deliberate recompile with a bracket registered. A fix built on the untested half would be a guess
+with a mutation battery wrapped around it.
+
+**Where**: `addons/DynamicAtmManager.cs` `EnsureMonitor` / `_monitoring` / `_monitorTimer`. Note the
+comment already at `:823` reasoning about instance-versus-process scope for the dispatcher — the
+same question was asked there and answered the other way, so read it first.
 
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 

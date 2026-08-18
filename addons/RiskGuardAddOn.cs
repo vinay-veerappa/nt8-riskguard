@@ -359,6 +359,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 #else
         private bool _isArmed = false;
 #endif
+
+        // P2-142: set when an operator deliberately disarms; cleared when they arm. Persisted,
+        // and honoured on load in ONE direction only -- see ApplyInitialArmState.
+        private DateTime? _operatorDisarmedUtc = null;
+
+        // P2-142: the host process identity recorded in the state file we loaded, so
+        // StartKind() can tell a recompile from a restart. Not the CURRENT process.
+        private int _recordedHostProcessId = 0;
+        private DateTime? _recordedHostProcessStartUtc = null;
+#if TESTING
+        // (the #if pair above keeps this field outside the TESTING-only default block)
+#endif
         // FR-29: count of completed shadow sessions, persisted across restarts. Incremented on session reset.
         private int _shadowSessionsCompleted = 0;
         // Tracks the session date already counted, so we only increment once per ET session day.
@@ -678,6 +690,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void SetInstanceForTest(RiskGuardAddOn guard) { Instance = guard; }
 
         internal void SetArmedForTest(bool armed) { _isArmed = armed; }
+        internal DateTime? GetOperatorDisarmedUtcForTest() { return _operatorDisarmedUtc; }
+        internal void SetOperatorDisarmedUtcForTest(DateTime? at) { _operatorDisarmedUtc = at; }
         internal void ApplyInitialArmStateForTest() { ApplyInitialArmState(); }
 
 // The two methods below are PRODUCTION code and must exist in the NT8 (net48) build too, so the
@@ -708,14 +722,84 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Applied once at initialise, after LoadConfig has resolved the mode. NOT applied on a
         // config reload: that would override an operator who deliberately disarmed.
+        /// <summary>
+        /// P2-142. Whether this start was a RECOMPILE (new assembly, same host process, every
+        /// static singleton wiped) or a RESTART (new process). Pure, and takes no NinjaTrader
+        /// type, so it is reachable from a test without a platform stub.
+        ///
+        /// ⚠️ A recompile is not a restart, and this code treated them as one. "Armed state must be
+        /// set fresh each session" was doing work the phrase does not cover: 84 ARMED_ON_START
+        /// events in one 3 MB tail of interventions.jsonl were 84 sessions by that reckoning and
+        /// ONE session by the operator's -- several of them from an unrelated repo deploying
+        /// NinjaScript. Without this distinction the log is unreadable on exactly the axis that
+        /// matters when asking why the guard armed itself.
+        ///
+        /// Returns "a RESTART" when the recorded process cannot be matched, because that is the
+        /// answer that claims less: an unknown host is more likely a new process than the same one.
+        /// </summary>
+        internal static string StartKindFor(int recordedPid, DateTime? recordedStartUtc,
+                                            int currentPid, DateTime currentStartUtc)
+        {
+            if (recordedPid == 0 || !recordedStartUtc.HasValue) return "a RESTART";
+            if (recordedPid != currentPid) return "a RESTART";
+            // The pid alone is not identity -- pids are recycled. The start time is what makes it
+            // the SAME process. One second of tolerance for serialisation rounding.
+            if (Math.Abs((recordedStartUtc.Value - currentStartUtc).TotalSeconds) > 1.0)
+                return "a RESTART";
+            return "a RECOMPILE";
+        }
+
+        private static int CurrentProcessId()
+        {
+            try { return System.Diagnostics.Process.GetCurrentProcess().Id; }
+            catch { return 0; }
+        }
+
+        private static DateTime CurrentProcessStartUtc()
+        {
+            try { return System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(); }
+            catch { return DateTime.MinValue; }
+        }
+
+        private string StartKind()
+        {
+            return StartKindFor(_recordedHostProcessId, _recordedHostProcessStartUtc,
+                                CurrentProcessId(), CurrentProcessStartUtc());
+        }
+
         private void ApplyInitialArmState()
         {
             _isArmed = DefaultArmedForMode(_mode);
 
+            // P2-142. An operator who disarmed stays disarmed, through a recompile and
+            // through a restart, because ALL configuration is persistent.
+            //
+            // ⚠️ THE ASYMMETRY IS THE WHOLE DESIGN AND IT IS NOT AN OVERSIGHT. Only a
+            // DISARM is honoured from persisted state. A persisted ARM is still ignored,
+            // which is FR-30/31 and stays true: `_isArmed` is set to false on load and
+            // arming an acting mode still requires preflight plus a deliberate toggle. The
+            // two directions carry opposite risk -- a wrongly-restored ARM makes a guard
+            // act on stale intent, a wrongly-restored DISARM only declines to act -- so
+            // they must not be handled by one symmetrical rule.
+            if (_operatorDisarmedUtc.HasValue)
+            {
+                _isArmed = false;
+                // Deliberately its own event, not UNPROTECTED_ON_START. That line already
+                // means "this mode comes up disarmed by default"; this one means "a person
+                // turned it off and it is STILL off", which is the fact an operator
+                // returning to the box after somebody else deployed needs to see.
+                LogEvent("SYSTEM", "DISARM_PERSISTED",
+                    $"GUARD IS NOT ARMED, BY A DELIBERATE DISARM at {_operatorDisarmedUtc.Value:yyyy-MM-dd HH:mm:ss}Z "
+                    + $"(mode '{_mode}'). It has survived {StartKind()} and will survive every further one until "
+                    + "somebody arms it. No rule evaluates and CanTrade allows everything.");
+                return;
+            }
+
             if (_isArmed)
             {
                 LogEvent("SYSTEM", "ARMED_ON_START",
-                    $"Guard armed on start in '{_mode}' mode. It observes and logs; it cannot act outside 'live'.");
+                    $"Guard armed on start in '{_mode}' mode after {StartKind()}. It observes and logs; "
+                    + "it cannot act outside 'live'.");
             }
             else
             {
@@ -1092,6 +1176,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // Lockouts persist, but armed state must be set fresh each session via Preflight().
                             // Previously: _isArmed = data.IsArmed;  (could silently re-arm across restarts)
                             _isArmed = false;
+                            // P2-142: the deliberate DISARM is rehydrated even though the
+                            // armed flag above deliberately is not. See ApplyInitialArmState
+                            // for why the two directions are not symmetrical.
+                            _operatorDisarmedUtc = data.OperatorDisarmedUtc;
+                            _recordedHostProcessId = data.HostProcessId;
+                            _recordedHostProcessStartUtc = data.HostProcessStartUtc;
                             // FR-29: shadow-session counter IS rehydrated (it accumulates across sessions).
                             // P1-37: rehydrate the date marker in the same breath. These two are one
                             // fact -- "N sessions counted, the most recent being D" -- and restoring
@@ -1208,6 +1298,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return new PersistedStateData
                     {
                         IsArmed = _isArmed,
+                        OperatorDisarmedUtc = _operatorDisarmedUtc,
+                        HostProcessId = CurrentProcessId(),
+                        HostProcessStartUtc = CurrentProcessStartUtc(),
                         ShadowSessionsCompleted = _shadowSessionsCompleted,
                         LastShadowSessionDate = _lastShadowSessionDate,
                         LockedOutAccounts = lockedOut,
@@ -4360,6 +4453,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
                 _isArmed = !_isArmed;
+                // P2-142: the operator's INTENT, recorded separately from the flag, because the
+                // flag is reset on every load and the intent must not be. Cleared on arming so
+                // that a disarm does not outlive the decision to undo it.
+                _operatorDisarmedUtc = _isArmed ? (DateTime?)null : DateTime.UtcNow;
                 LogEvent("SYSTEM", "TOGGLE_ARMED", $"System Armed State changed to: {_isArmed}");
 
                 // P1-15: UpdateFsmOnPosition/UpdateFsmOnOrder both return early while disarmed,

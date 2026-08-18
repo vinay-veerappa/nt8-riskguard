@@ -753,7 +753,7 @@ jobs:
           # the mutant for THAT survived too. Read the file before adding to it.
           - { label: "UI3+P2-145+P1-84", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py" }   # 763s = UI3 392s + P2-145 208s + P1-84 163s
 
-          - { label: "P2-136+P2-101", batteries: "mutate_p2136survive.py mutate_p2101.py" }   # 759s = P2-136 613s + P2-101 146s
+          - { label: "P2-136+P2-101+P2-142", batteries: "mutate_p2136survive.py mutate_p2101.py mutate_p2142.py" }   # 1119s = P2-136 613s + P2-101 146s + P2-142 360s (local measure; re-pack once CI prints its BATTERY_SECONDS)
 
           # P1-76, 354s. Three of its fourteen mutants SURVIVED on the first run, including the
           # one that reinstates the pre-P1-76 emergent tie-break -- the precedence test was

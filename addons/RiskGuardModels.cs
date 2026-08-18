@@ -682,9 +682,30 @@ namespace NinjaTrader.NinjaScript.AddOns
         // and MinShadowSessions could be satisfied by recompiling three times.
         public DateTime LastShadowSessionDate { get; set; } = DateTime.MinValue;
         
+        // P2-142: WHEN an operator deliberately disarmed, or null if none has.
+        //
+        // ⚠️ THIS IS NOT `IsArmed` AND MUST NEVER BECOME IT. `IsArmed` is deliberately NOT
+        // rehydrated (FR-30/31: a persisted `true` must never silently re-arm a guard across a
+        // restart). This field is the opposite direction only: it carries a deliberate DISARM so
+        // that arming remains an act and disarming is not undone by somebody else's recompile.
+        //
+        // Nullable because three states have to be distinguishable and a bool only carries two:
+        // "an operator disarmed at T", "no operator has disarmed", and -- for an old state file
+        // written before this field existed -- "unknown", which reads as null and so behaves as
+        // the safe answer, arming per mode. A bool would have made a fresh install and a
+        // deliberate disarm identical.
+        public DateTime? OperatorDisarmedUtc { get; set; }
+
+        // P2-142: identity of the process that wrote this state, so a RECOMPILE can be told from a
+        // RESTART. A NinjaScript recompile builds a new assembly inside the SAME process and wipes
+        // every static singleton, which this code counted as a new session -- 84 ARMED_ON_START
+        // events in one 3 MB tail were 84 "sessions" by that reckoning and one by the operator's.
+        public int HostProcessId { get; set; }
+        public DateTime? HostProcessStartUtc { get; set; }
+
         // Dictionary for per-account persisted data
         public Dictionary<string, AccountPersistedData> AccountsData { get; set; } = new Dictionary<string, AccountPersistedData>();
-        
+
         public DateTime Timestamp { get; set; }
     }
 
