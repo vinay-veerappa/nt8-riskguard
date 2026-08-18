@@ -4928,7 +4928,42 @@ answer, including `refused`, which is the engine declining on purpose and is not
 
 ---
 
-### P2-127. The page never got section 4 of the agreed design -- the fleet/inspector split -- so everything landed as one scroll; and the obvious fix is the ONE thing that design explicitly killed -- OPEN, found 2026-08-16 (session 50), reported by the operator as "cluttered"
+### P2-127. The page never got section 4 of the agreed design -- the fleet/inspector split -- so everything landed as one scroll; and the obvious fix is the ONE thing that design explicitly killed -- ✅ FIXED 2026-08-18 (session 58), found 2026-08-16 (session 50), reported by the operator as "cluttered"
+
+✅ **CLOSED 2026-08-18 (session 58) — all four slices of §4 shipped, deployed and live-validated.**
+Recorded here rather than at EOF, under the ID it closes. ⚠️ **The status line above said `OPEN`
+for six sessions after slice 1 landed and carried no record of slices 2–4 at all**, while the
+newest "Order from here" in the handover still listed `P2-127` as *"slice 1 landed session 52; the
+page does not consume it yet"* — [[closures-do-not-propagate-backwards]], again, on this entry.
+
+| slice | what | commit |
+|---|---|---|
+| 1 | the fleet tree's decision class, `BridgeFleetView.cs` | `10e274c` (session 52) |
+| 2 | **wiring it to the page** — split out as its own ID because it was built and served to nobody | `P2-138`, `8050ec4` |
+| 3 | the inspector's three tabs, `BridgeInspectorTabs.cs`, built AND wired in one commit | `a983455` |
+| 4 | the events pane and §4 decision 4's system row, `BridgeEventsView.cs` + `BridgeSystemRow.cs` | `6ab39d3` |
+
+Measured at close: bridge harness **597 / 0** (`declared` 104), wrapper **66 / 0**, **13** mutation
+batteries all wired, **174 anchors / 0 broken**, `nt_compile` **0 errors**, CI green.
+
+**Live-validated**, which is the half slice 1's entry could not claim: the system row rendered the
+guard as *"Shadow"* at rank 3 **beside** the copier at *"live, acting"* rank 1 — two different
+answers to "is it on?", side by side, which is the whole point of `P3-34` and of never merging those
+two cells.
+
+⚠️ **The events pane earned its keep inside minutes and that is the finding, not the feature.**
+Three defects surfaced immediately that had been sitting in a **44 MB** `interventions.jsonl`
+nobody could read: `NAKED_POSITION` firing with `gap=0` (**`P2-145`**), two genuinely unprotected
+positions on the FUNDED account (**`P1-146`**), and twelve dropped copier executions
+(**`P2-147`**). None was caused by this work; all three were invisible before it. *A log nobody can
+read is a log nobody reads.*
+
+⚠️ **What is NOT closed, stated rather than left implied**: `ui/index.html` is still in **no test
+build and no mutation battery**. Every decision in §4 lives in a compiled class for exactly that
+reason — that is `P2-138`'s lesson applied — but the renderer itself is covered only by source
+assertions over the file's text, and a source assertion cannot see whether the page runs. Three
+separate times this session a text gate matched **a comment about its own subject** rather than the
+subject. If the renderer grows logic, it needs a real harness and that gets its own ID.
 
 🔶 **SLICE 1 LANDED (session 52): the FLEET tree's decision class**, `nt8-mcp-bridge/addons/BridgeFleetView.cs`, suite **444/15 → 467/0** across 77 tests, battery **16/16**, `nt_compile` **0 errors**, `deploy --verify` **31 files / 0 orphans**. The entry stays **OPEN** because nothing renders it yet -- the HTML, the inspector's three tabs and the events pane are still to come. Three things in it are worth carrying, and all three came from arbitrating the agent loop by hand after it returned `NOT_CONVERGING`: **one node per FOLLOWER, not per row** (a leader and a follower may hold several relationships, one per instrument, and both live rows are instrument-less -- so a per-row tree passes every test written against the box as it stands); **the order must be TOTAL** -- `List<T>.Sort` is documented UNSTABLE and `groups` is a `Dictionary` whose enumeration order is unspecified, and equal ranks are the NORMAL case here since all 95 unlinked accounts tie, so without a name tie-break the page re-orders itself between refreshes of identical data (⚠️ **the arbiter REJECTED this finding as "stable and correct"**); and ⚠️ **an INAPPLICABLE state is not an UNREADABLE one** -- the ticket was silent, so the model defaulted to fail-closed and ranked all 95 unlinked accounts WORST, which paints 95 permanent red rows. `NotApplicableRank` sits above every real rank, is explicitly temporary, and is pinned by a test so the next slice has to change it deliberately. ⚠️ **The battery went 15/15 on its first run and the sixteenth mutant is the lesson**: dropping the `Unlinked` node when it is EMPTY survived the whole suite, because every other test supplies a spare account -- *an absent node and an empty one read identically to whatever renders them.*
 
@@ -7823,6 +7858,170 @@ Note also that a compile is not a restart, so "set fresh each session" is doing 
 not obviously cover: 84 arm events is 84 sessions by this code's reckoning and one session by the
 operator's. Whatever the fix, it wants `ARMED_ON_START` to distinguish the two, or the log stays
 unreadable on this axis regardless.
+
+
+### P1-143. `P2-136`'s restore hands a refused stop a FRESH retry budget on every recompile, because the "consumed once" latch is per-INSTANCE and a compile makes several instances — OPEN, found 2026-08-18 (session 58) in the first live run of the fix that introduced it
+
+`AtmBracketPersistence.Decide` clears `StopModifyAttempts = 0` and
+`StopMoveAbandonAnnounced = false` when it restores a bracket
+(`addons/AtmBracketPersistence.cs:267-268`). The comment justifying that sits two files over in
+`DynamicAtmManager.cs:122` and says the reset is safe **because a record is consumed once**.
+
+It is not. Measured on this box after a single `nt_compile`:
+
+```
+02:10:29  ATM_BRACKET_RESTORED 41162959  + INITIALIZE + ARMED_ON_START
+02:10:44  ATM_BRACKET_RESTORED 41162959  + INITIALIZE + ARMED_ON_START
+02:10:59  ATM_BRACKET_RESTORED 41162959  + INITIALIZE + ARMED_ON_START
+02:11:14  ATM_BRACKET_RESTORED 41162959  + INITIALIZE + ARMED_ON_START
+```
+
+One compile produced **four `InitializeRiskGuard` runs**, each on a fresh static context — so
+`_persistedRestorePending`, which is an instance field, was `true` four times and the file was
+consumed four times. The latch makes the restore once-per-INSTANCE; nothing makes it
+once-per-BRACKET.
+
+Two consequences, and the first is the one that costs money:
+
+* **The refusal budget is laundered.** `P2-135` bounds stop-move attempts precisely so a provider
+  refusing a move cannot be asked forever. A compile burst hands a refused bracket 3–4 fresh
+  budgets. The bound still exists; it is no longer the bound the code claims.
+* **`if (restored > 0) EnsureMonitor();`** (`DynamicAtmManager.cs:715-716`) — `EnsureMonitor`'s
+  `if (_monitoring) return` is also per-instance, so N managers each hold their own copy of one
+  bracket, with their own `CurrentStopPrice` cache, all moving the same stop.
+  [[a-second-reader-of-the-same-state]].
+
+⚠️ **This is self-inflicted and it is a REGRESSION**: before `P2-136`, a post-compile manager had an
+empty registry and did nothing at all. The reasoning that failed was *"a new assembly is a new
+episode"*, which is true of a restart and false of a compile — the same distinction `P2-142` records
+from the other side. A fix that only de-duplicates the log line fixes the symptom and leaves the
+budget reset.
+
+**Proposed direction** (not yet implemented): stop resetting the budget and the abandon latch on
+restore — persist and carry them. The CONFIRMED branch in `DynamicAtmManager.cs:1332,1338` already
+clears both on a genuine recovery, which is the event that should clear them. Then suppress the
+repeat announcement so `ATM_BRACKET_RESTORED` says itself once per bracket.
+
+⚠️ **The funded-account leg of `P2-136`'s live validation is ON HOLD until this lands.** The Sim101
+leg passed and is recorded under `P2-136`.
+
+
+### P2-144. `check_bridge_parses.py` was on disk and wired to NOTHING — and neither repo's meta-gate could ever have noticed, because both globbed `mutation/` only — ✅ FIXED 2026-08-18 (session 58)
+
+Found while deriving a gate count for `CLAUDE.md` rather than by any gate.
+`nt8-mcp-bridge/tools/check_bridge_parses.py` is referenced in the handover (§ parse gate) and in
+this plan in six places as the gate covering **`McpBridgeAddOn.cs`** — the one bridge source
+`BridgeTests.csproj` cannot compile, so a stray brace there is findable only by deploying. CI had
+**never run it**. It had only ever run by hand, on the machine that wrote it.
+
+The stakes are the ones the riskguard sibling states in its own workflow comment: a syntax error in
+**any** addon `.cs` stops **every** addon loading, RiskGuard included — and
+[[broken-nt8-assembly-is-invisible]] means the symptom is a deploy that appears to do nothing.
+
+⚠️ **THE CLASS, WHICH IS WHY THIS IS NOT A ONE-LINE CI EDIT.** `check_ci_runs_every_battery.py`
+exists in both repos precisely because a battery on disk and unwired proves nothing. Its own
+docstring records fixing that for batteries and warns that fixing an instance is not fixing a class.
+Both copies glob `mutation/mutate_*.py` — so **no gate script in either repo was ever required to be
+wired anywhere**. The meta-gate had the identical defect it was written to prevent, one directory
+over.
+
+Fixed in both repos: each `check_ci_runs_every_battery.py` now also globs `check_*.py` under
+`tools/` and `mutation/` and requires each to be executed exactly once, **matched on the
+repo-relative path** so `python tools/x.py` and `python mutation/x.py` are not interchangeable
+evidence for the same basename. `check_bridge_parses.py` wired into the bridge workflow in the same
+commit.
+
+Controls run both ways in both repos, since [[a-source-gate-must-assert-the-condition]]: with the
+gate unwired each meta-gate exits **1** naming it; restored, each exits **0**. riskguard reads
+`44 batteries / 11 gates`, bridge `13 batteries / 5 gates`.
+
+Not covered, and stated rather than left implied: the bridge has no `pack_ci_matrix.py` and no bin
+ceiling, so its gates are plain steps. Nothing yet requires a *new* gate to carry a negative
+control.
+
+
+### P2-145. `NAKED_POSITION` disagrees with its own `gap` field in BOTH directions — it fires on fully-covered positions and stays quiet on uncovered ones — OPEN, measured 2026-08-18 (session 58)
+
+Surfaced within minutes of `P2-127`'s events pane going live, from 235 `NAKED_POSITION` events that
+were previously buried in a 44 MB `interventions.jsonl`. Grouped by `fsmState` and `gap`:
+
+| fsmState | gap | count |
+|---|---|---|
+| `ProtectedPending` | **0** | **10** |
+| `Protected` | **1** | **2** |
+| `Protected` | **2** | **2** |
+| `FlattenPending` | 1, 2, 3, 10, 11, 100 | 163 |
+| `Unprotected` | 1, 2, 3, 10, 11, 100 | 58 |
+
+Two opposite failures, and they need separating before either is fixed:
+
+* **Fires on a non-condition — 10 events with `gap=0`.** e.g.
+  `MNQ SEP26: position=5, fsmState=ProtectedPending, covered=5, gap=0`. Every contract is covered
+  and the event announces a naked position. A detector that fires when its own arithmetic says
+  there is nothing to report is [[a-filter-that-matches-too-much]], and on this surface the cost is
+  that the 58 real `Unprotected` events read like more of the same noise.
+* **The state says `Protected` while the gap is 1 or 2 — 4 events.** That is the *serious*
+  direction and it is not the same bug: coverage is genuinely short while the FSM believes it is
+  not. [[configured-evaluated-enforcing]].
+
+⚠️ **Do not "fix" this by suppressing `gap=0`.** That silences the loud half and leaves the quiet
+half — the four `Protected`-with-a-gap events — exactly as invisible as they are now, and
+[[weigh-the-quiet-failure-above-the-loud]] says which of the two is worth the session. The
+`Protected` rows are the ones to drive first.
+
+Also unestablished: whether `ProtectedPending`/`gap=0` is a *transient* read taken before coverage
+settles, in which case the fix is a settle window rather than a predicate change. Nothing measured
+yet distinguishes those.
+
+
+### P1-146. Two genuinely UNPROTECTED positions on the FUNDED account, and the guard reported both without acting because it is in `shadow` — OPEN, measured 2026-08-18 (session 58)
+
+Not a detector defect — these are the true positives inside `P2-145`'s noise, on
+`TAKEPROFITPRO524207503`, a funded 50K TPT PRO account:
+
+```
+2026-08-18T01:53:03Z  MNQ SEP26: position=3, fsmState=Unprotected, covered=0, gap=3
+2026-08-18T02:26:14Z  MES SEP26: position=1, fsmState=Unprotected, covered=0, gap=1
+```
+
+`covered=0` on both: real money in the market with **no stop at all**, for as long as it took the
+position to close. Neither position was placed by this session's work (that was MNQ on `Sim101`).
+
+Both records carry `mode: shadow`, so `EvaluatedNotEnforcing` applied and the guard did nothing but
+write a line. **That is the guard behaving exactly as configured** — which is the point worth
+recording rather than the defect: the protection that would have covered these exists, is armed, is
+guarding, and is switched to report-only. [[configured-evaluated-enforcing]].
+
+Open questions, none answered yet: what opened them (no `ATM_BRACKET_*` event names either
+instrument at those times, so they did not come through `DynamicAtmManager`); whether a bracket was
+attempted and refused; and whether `P1-143`'s laundered budget could produce this shape. Do not
+close this against `P2-145` — the detector being noisy and these being real are independent facts.
+
+
+### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — OPEN, measured 2026-08-18 (session 58)
+
+```
+2026-08-18T02:00:54Z  TAKEPROFITPRO524207503
+  execution 613562532259_1 has no Order, so its direction cannot be determined.
+  execution 613562532273_1 has no Order, so its direction cannot be determined.
+  execution 613562532319_1 has no Order, so its direction cannot be determined.
+  ... 12 in total, all on the funded account
+```
+
+Three of them share one timestamp to the tick, which suggests one fill event fanned into several
+executions rather than twelve separate trades — [[an-order-is-not-one-fill]].
+
+The copier reads direction from `execution.Order`. When that is null it ignores the execution, which
+is the safe branch and is why this is a P2 rather than a P0: dropping is better than guessing a
+side. But an ignored execution on a LEADER account is a copy that silently did not happen, and
+nothing downstream reports the leader and the follower having diverged.
+
+⚠️ **`Order` being null is a BROKER-DEPENDENT fact and must not be reasoned about from `Sim101`.**
+[[the-simulator-re-ids-nothing]] — the provider here is whatever `TAKEPROFITPRO524207503` connects
+through, and any evidence gathered for this ID has to name it. The candidate direction is to read
+the side from `Execution.MarketPosition` or the position delta rather than from `Order`, but that is
+a guess until somebody measures which fields are actually populated on this provider when `Order` is
+null.
 
 
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID

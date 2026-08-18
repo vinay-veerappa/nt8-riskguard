@@ -46,6 +46,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 BATTERIES = REPO / "mutation"
+# The gate scripts live in both directories: tools/check_*.py, plus mutation/check_anchors.py.
+GATE_DIRS = (REPO / "tools", REPO / "mutation")
 
 
 def strip_comments(text: str) -> str:
@@ -202,8 +204,46 @@ def main() -> int:
         print("a wasted slot pushes a real battery into the next wave.")
         return 1
 
+    # ---- the gate scripts ----------------------------------------------------------------
+    # Added 2026-08-18, and it is the CLASS of the defect this file was already written for.
+    # Both repos' copies globbed mutation/ only, so no gate script in either repo was ever
+    # required to be wired anywhere. The bridge was found with tools/check_bridge_parses.py on
+    # disk and unrun since the day it was written -- the only automated reader of
+    # McpBridgeAddOn.cs, which no test build compiles. This side happened to be fully wired,
+    # which is luck, not a mechanism; the gap could open here on the next gate written.
+    #
+    # Matched on the REPO-RELATIVE PATH rather than the bare name, so `python tools/x.py` and
+    # `python mutation/x.py` are not interchangeable evidence for the same basename.
+    gates = sorted(
+        set(g.relative_to(REPO).as_posix()
+            for d in GATE_DIRS if d.is_dir()
+            for g in d.glob("check_*.py")))
+    if not gates:
+        print("FAIL: no check_*.py under tools/ or mutation/. This half would pass vacuously.")
+        return 1
+
+    print()
+    gate_problems = []
+    for rel in gates:
+        n = len(re.findall(r"run:[^\n]*" + re.escape(rel), text))
+        state = "MISSING" if n == 0 else ("x%d    " % n if n > 1 else "ok     ")
+        print(f"  {state}  {rel}")
+        if n != 1:
+            gate_problems.append((rel, n))
+
+    if gate_problems:
+        print()
+        print(f"FAIL: {len(gate_problems)} gate(s) are not wired exactly once:")
+        for rel, n in gate_problems:
+            print(f"    {rel}  ({n} execution sites)")
+        print()
+        print("A gate nobody executes cannot fail, and from outside it is indistinguishable")
+        print("from one that passes. Wire it in the same commit that writes it.")
+        return 1
+
     print(f"\nOK: all {len(batteries)} mutation batteries are executed by CI, exactly once")
-    print(f"    each, in {bins} bins (ceiling {MAX_BINS}, to leave a slot for the sibling repo).")
+    print(f"    each, in {bins} bins (ceiling {MAX_BINS}, to leave a slot for the sibling repo),")
+    print(f"    and all {len(gates)} gate scripts are executed exactly once each.")
     return 0
 
 

@@ -245,18 +245,19 @@ not. The command that checks it is in the last column.
 
 | | | How to re-check |
 |---|---|---|
-| **Suite** | **core 1469 passed, 0 failed**; **bridge harness 233 passed, 0 failed across 46 tests** (was 133/26 at the start of session 41 — `P1-105` added 12 and `P2-109` added 8); **MCP wrapper 51 passed, 0 failed** (was 43 — `P2-103` added 8) — re-measured 2026-08-14 (session 41). ⚠️ The wrapper's tests **now run in `nt8-mcp-bridge` CI**, which they never did anywhere before; run them the way CI does (`cd mcp && node --test`), because `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails with `MODULE_NOT_FOUND` that reads like a test failure | `dotnet run --project tests/RiskGuardTests.csproj`; in `nt8-mcp-bridge`: `dotnet run --project tests/BridgeTests.csproj` and `cd mcp && node --test` |
-| **Defects** | **127 IDs — 120 closed, 7 open**, re-derived 2026-08-15 (session 44) with `check_next_list_ids.py`'s OWN status logic rather than a substring scan: **115** banded entries (**108** closed, **7** open — `P2-116`, `P3-110` narrowed, `P3-33`, plus `P0-9`, `P1-13`, `P2-27`, `P2-29` PARTIALLY CLOSED with recorded remainders) + **3** untriaged `P?-` (all closed) + **9** `F-` findings (`F-9`…`F-17`, all closed). ⚠️ **The previous figure said 122 / 109 / 13 and listed SIX defects as open that are closed** — `P1-77`, `P1-81`, `P2-78`, `P1-102`, `P2-108` and `P2-112`. It had been hand-patched rather than re-derived, which is the failure [[closures-do-not-propagate-backwards]] describes: **a half-updated summary is worse than an obviously stale one**, because the timestamp vouches for every row. ⚠️ And a naive `grep CLOSED` gets this WRONG — headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`, so `P0-96` reads as open. Derive it with the gate's `entry_status`. | `python tools/check_next_list_ids.py`; the derivation is in §5.69 |
-| **Do next** | ⚠️ **This row and §5.6's are kept in step with the newest `Order from here`, which is §5.78's — read that one; it carries the reasons.** 🆕 **SESSION 51: `P1-125` and `P3-122` are ✅ CLOSED and live-validated on the `live`-mode half** — the browser page now carries the copier's own mode beside the guard's, and each row says why it is not enforcing, ranked by what BINDS. **Next is `P2-127`**, §4's fleet/inspector layout, which is SETTLED and not to be re-opened. ✅ **`P3-128` CLOSED v1.34.0** the same evening it was filed, by the agent loop (APPROVE round 1), and live-validated: the page now reads `[ COPIER LIVE - NOTHING ENABLED ]` in amber. 🔶 **§5.77 REORDERED EVERYTHING BELOW.** The operator sent a screenshot of the surface they actually use: the **browser UI** at `http://localhost:7890/ui`, served from `nt8-mcp-bridge/ui/index.html` — **not** the WPF `TradeCopierWindow` that sessions 49 and 50 spent themselves on. Measured: the page renders **0** of the `copierMode` / `notEnforcingReason` / `configConflicts` the API has returned all along (**21** references on the serving side), dispatches **2** of the **14** copier actions its own API accepts, and has **0** nav elements across **4** stacked sections. Filed `P1-125` (✅ CLOSED session 51), `P2-126`, `P2-127`. ⚠️ **The unfalsifiable-status-header defect closed in the WPF window last session is the same defect this page still has** — fixed there, not here. **Establish which surface the operator has open before improving a display.** ✅ **`P2-116` and `P2-123` BOTH CLOSED in session 50 (`v1.33.0`), and `P2-116` is LIVE-VALIDATED**: the funded account and a dormant eval no longer read identically — trailing drawdown, firm trailing drawdown and peak equity giveback all report **`Inert`** with a stated reason on an account reporting no equity, while the daily loss limit correctly does NOT. ⚠️ **Both fixes were first written committing the defect they were fixing** (`ceil(1/ratio)` against a copy path that rounds midpoints TO EVEN; `> 0` against an account whose equity has gone negative) and **both were caught by writing the mutant, not by reading the code**. ✅ **`P1-121` CLOSED in session 49** — entered on the operator's *"the copier UI does not look like it is done"*, and it was not a feature gap: the window was finished and **wrong**. `_statusText` was a green `[ ENGINE: ACTIVE ]` literal assigned once at construction and **never again**, over rows reading `Armed: LIVE` that never consulted the global copier mode — so a `disabled` copier, submitting nothing, rendered as a healthy screen. Three producers (`GetCopierMode`, `DetectConfigConflicts`, `CopierMetric.Samples`) already computed all of it for the API; the UI consumed **none**, while a comment claimed it did. Decisions moved to `addons/CopierStatusView.cs` (no WPF type, so it can be mutated at all — `TradeCopierWindow.cs` is outside the test build). Suite **1846 → 1924**, battery **14/14**. ✅ **`P2-116` CLOSED (session 50)** — measured the hour the broker was reconnected: **89** prop accounts subscribed, **1** reporting any equity, **0** with any guard event ever, and all 89 reporting `Trailing drawdown: EvaluatedNotEnforcing`. `F-9`'s class in the OPTIMISTIC direction, on the surface built to answer *is the guard protecting me* (§5.65). ✅ **`P1-117`, `P2-119` and `P2-120` ALL CLOSED in session 48, and the last one is LIVE-VALIDATED both ways**: the config save now reports what it did and refuses what a write INTRODUCES, the window no longer edits the live config in place, and the bridge route stopped answering `success = true` regardless. Core **v1.31.0** deployed, `nt_compile` **0 errors**, guard loaded / shadow / armed / guarding. ✅ `P2-115` closed (§5.67) — but ⚠️ **only the positive live half is measured**: `true` with a broker attached is what the defect produced too, and showing `false` needs a broker disconnect that is the operator's call.
-| **Branch** | **`main` only**, level with `origin/main`, all three repos. **30 tags**, `v1.0.0`…**`v1.23.0`** — measured 2026-08-14 (session 40) | `git status -sb; git describe --tags` |
-| **Deployed** | **`v1.23.0` core + bridge are live in NT8** — core measured session 40 (`sync_nt8.py --verify` **ALL IN SYNC, 9 files**); bridge redeployed twice in session 41, adding `BridgeClosePlan.cs`, `BridgeAccountScope.cs` and `BridgeOrderQuery.cs` (`deploy.py --verify` **18 files, 0 orphans**), `nt_compile` `errorCount: 0` both times. ⚠️ **The core tag is unchanged and that is correct** — `P1-105` is entirely bridge-side, so the pin stays `v1.23.0`; a bridge fix does not move the core's tag | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge` |
-| **Guard** | `v1.23.0`, `mode: shadow`, armed — **measured 2026-08-14 (session 40)** off the box: `RiskGuard Add-On v1.23.0 initialized in shadow mode` followed by `ARMED_ON_START` in `interventions.jsonl`, and `/api/riskguard/config` reads `Mode: shadow`, `DailyLossLimit: 1000.0` (restored byte-for-byte after `P2-107`'s live test) | `curl -H "Authorization: Bearer $(cat 'Documents/NinjaTrader 8/mcp_token.txt')" http://localhost:7890/api/riskguard/config` |
-| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **96 accounts**, **feed connected** — measured 2026-08-14 | `nt_health` |
-| **Mutation** | **33 batteries** — **28 here** + **5 in `nt8-mcp-bridge`** (`mutate_p1105.py` and `mutate_p2109.py` added session 41, both wired into that repo's CI and verified by its own `check_ci_runs_every_battery.py`). ⚠️ **All FOUR bridge batteries could not RUN** until session 41 — three were fixed and the fourth was reported as a `SKIP` by the bulk patch and **not acted on**, which turned CI red on the next push (§5.50); now enforced by `tools/check_batteries_pin_encoding.py`, which runs BEFORE them. The cause: `capture_output=True, text=True` decodes cp1252 on Windows, so one non-ASCII character in a test message killed the reader thread and `res.stdout` came back `None`. `encoding='utf-8'` is pinned in all four now. **301 anchors / 0 broken** (was 283: `mutate_p2107.py`'s **18 anchors were being SILENTLY SKIPPED** because its 4-tuples put the file constant second and `check_anchors.py` `continue`d on any shape it did not recognise — see §5.48) | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py`; `python tools/check_expected_survivors.py` |
-| **NT8 compile** | **0 errors, net48 — measured 2026-08-14 (session 40) on `v1.23.0`**, four times across the deploy and the live test. ⚠️ **ALWAYS read `errorCount`, never the call's own `success`** — a broken Custom assembly is invisible, because NT8 keeps serving the last good one | `nt_compile` |
-| **CI** | **`nt8-riskguard` green on the two `P2-107` pushes, measured 2026-08-14 (session 40)**: 16m56s (code, 28-battery matrix) and 16m3s (docs). ⚠️ **Three later pushes and every `nt8-mcp-bridge` run were still QUEUED or IN PROGRESS when this row was written — they are NOT measured here.** Re-run before quoting. Run it BEFORE the first claim about state, not after a deploy | `gh run list --limit 5` in each repo |
-| **Bridge pin** | ✅ **`v1.23.0`, and the RANGE is empty** — `git diff --name-only v1.23.0..main -- addons/` returns nothing, measured 2026-08-14 (session 40). ⚠️ **Compare the RANGE, never the tag's own commit**: a tag whose own commit is docs-only can still carry core code in its range | `git -C vendor/nt8-riskguard describe --tags; git diff --name-only <pin>..main -- addons/` |
-| **Parse gate** | ✅ New: **`nt8-mcp-bridge/tools/check_bridge_parses.py`**. `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying — and a syntax error in ANY addon `.cs` stops **every** addon loading | `python tools/check_bridge_parses.py` (verified by breaking a file on purpose) |
+| **Suite** | ⚠️ **Every number in this table rots. Re-derive before quoting it — that is what the third column is for.** Measured 2026-08-18 (session 58): core **2182 / 0**; bridge harness **597 / 0**; MCP wrapper **66 / 0**; `agent-loop` **749 pass / 36 skipped** with **selftest 13/13**. ⚠️ **`dotnet test` on these csproj files exits 0 HAVING RUN NOTHING** — they are console harnesses, so `dotnet run` is the only invocation that tests anything, and it is what CI does. ⚠️ The wrapper must run as `cd mcp && node --test`; `node --test mcp/tests/` from the repo root is a MODULE path on Node 24 and fails `MODULE_NOT_FOUND`, which reads like a test failure | `dotnet build tests/RiskGuardTests.csproj && dotnet run --project tests/RiskGuardTests.csproj --no-build`; in `nt8-mcp-bridge` the same for `tests/BridgeTests.csproj`, then `cd mcp && node --test`; in `agent-loop` `pytest -q` **and** `python -m agent_loop.selftest` (two harnesses, CI ran only one for an unknown number of sessions) |
+| **Defects** | ⚠️ **NO COUNT IS RECORDED HERE, DELIBERATELY.** The last three figures written into this row were each wrong when written: one read `122 / 109 / 13` while listing six closed defects as open, and one read `117 / 104 / 13` while its own breakdown summed to something else. A half-updated summary is worse than an obviously stale one, because the timestamp vouches for every row — [[closures-do-not-propagate-backwards]]. ⚠️ **A naive `grep CLOSED` gets it wrong**: headings use `FIXED`, `RESOLVED`, `SUPERSEDED` and `PARTIALLY CLOSED`. The gate computes it mechanically and refuses to do so vacuously. **Run it; do not quote a number.** | `python tools/check_next_list_ids.py` — it also fails if any ID named as work-to-do is closed, or any plan entry has no status |
+| **Do next** | ⚠️ **This row is a POINTER, not a list, because a list here goes stale silently.** Read the newest `### Order from here` — currently **§5.85 (session 58)** — which carries the reasons and was derived from the plan's statuses rather than copied forward. ⚠️ **The previous version of this row named the §4 fleet/inspector layout work as next for six sessions after it stopped being open** (its ID is deliberately not repeated here — naming a closed ID in this row is the very thing the gate rejects), which is the failure this pointer exists to stop. `check_next_list_ids.py` now fails on exactly that, in both this row and §5.6's | `python tools/check_next_list_ids.py`, then read the LAST `### Order from here` in this file |
+| **Branch** | **`main` only, level with `origin/main`, all three repos** — measured 2026-08-18 (session 58). `nt8-riskguard` **49 tags**, `v1.0.0`…**`v1.41.0`**. ⚠️ **`nt8-mcp-bridge` has NO tags** and is pinned into nothing; it is the consumer, not the consumed | `git status -sb` and `git describe --tags` in each repo |
+| **Deployed** | **`v1.41.0` core + bridge are live in NT8** — measured 2026-08-18 (session 58): `sync_nt8.py --verify` **18 files identical**. ⚠️ **`--verify` proves the FILES match, not that they COMPILE** — a broken NT8 Custom assembly is invisible because NT8 keeps running the last good one, so the only symptom is a deploy having no effect. ⚠️ **A drift report does not say which side is stale**: `NtDrawingCore.cs` once reported `content-differs` for days with the NT8 copy the NEWER one, and the obvious sync would have reverted a live fix. Read the diff and its DIRECTION | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge`; then `nt_compile` |
+| **Guard** | **`v1.41.0`, `mode: shadow`, `isArmed: true`, `guarding: true`** — measured 2026-08-18 (session 58) off the box via `nt_health` and `/api/riskguard/config`. ⚠️ **`shadow` means every rule reads `EvaluatedNotEnforcing` and the guard STOPS NOTHING.** Measured the same session: two genuinely unprotected positions on the funded account were reported and not acted on (`P1-146`). That is correct behaviour for the posture, and it is the thing to understand before reading any rule as protection — [[configured-evaluated-enforcing]] | `curl` `/api/riskguard/config` with the bearer token from `Documents/NinjaTrader 8/mcp_token.txt` |
+| **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **97 accounts**, **feed connected** — measured 2026-08-18 (session 58). ⚠️ One of them, `TAKEPROFITPRO524207503`, is a **funded 50K TPT PRO account trading real money under real prop-firm rules** | `nt_health` |
+| **Mutation** | **57 batteries — 44 here + 13 in `nt8-mcp-bridge`**, every one wired into its own repo's CI and checked by a gate; **495 + 174 anchors, 0 broken** — measured 2026-08-18 (session 58). ⚠️ **An anchor that stops matching prints `[SKIP]` and scores a SURVIVOR**, so the anchor check is not optional. ⚠️ **A battery restores its mutant only on COMPLETION** — a stopped batch leaves a live mutant in the tree | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py` |
+| **Gates** | **11 here + 5 in `nt8-mcp-bridge`**, all green — measured 2026-08-18 (session 58). ⚠️ **NEW 2026-08-18**: until this session `check_ci_runs_every_battery.py` globbed `mutation/` only in BOTH repos, so **no gate script in either repo was required to be wired anywhere** — and `nt8-mcp-bridge/tools/check_bridge_parses.py`, the only automated reader of `McpBridgeAddOn.cs`, had never run in CI at all (`P2-144`). Both meta-gates now cover `check_*.py` too, matched on repo-relative path | run every `tools/check_*.py` and `mutation/check_anchors.py`; `check_ci_runs_every_battery.py` proves CI runs them |
+| **NT8 compile** | **0 errors** — last measured 2026-08-18 (session 58). ⚠️ **`nt_health` reading healthy is NOT evidence of a good assembly**: 651 compile errors have been observed while it read healthy, because NT8 keeps serving the last good build. ⚠️ **A successful compile HOT-SWAPS the assembly and wipes every static singleton** — and it fires `InitializeRiskGuard` **3–4 times**, not once, which is the whole of `P1-143`. Check what in-memory state a compile will discard before running one | `nt_compile` |
+| **CI** | **Both repos green, measured 2026-08-18 (session 58)**: `nt8-riskguard` 18m38s, `nt8-mcp-bridge` 12m51s. ⚠️ **RUN THIS AT THE START OF A SESSION, BEFORE THE FIRST CLAIM ABOUT STATE.** CI has run red for 7 and then 10 consecutive pushes while the docs claimed green. It costs five seconds. ⚠️ The riskguard matrix ceiling is **19 bins** — 20 concurrent jobs are shared ACCOUNT-WIDE with the sibling repo, so past the ceiling another bin is another WAIT; re-pack rather than adding one | `gh run list --limit 5` in each repo; `python tools/pack_ci_matrix.py --times run_times.tsv --bins 19 --apply` |
+| **Bridge pin** | ✅ **`v1.41.0`, and the RANGE is empty** — the submodule is at `b740666`, which IS `nt8-riskguard` HEAD; measured 2026-08-18 (session 58). ⚠️ **What matters is the tag's RANGE, not its own commit**: the bridge deploys the vendored core alongside itself, so a stale pin makes `deploy.py` silently REVERT a live core | `git submodule status`; `git diff --name-only <pin>..main -- addons/` in `nt8-riskguard` |
+| **Parse gate** | ✅ **`nt8-mcp-bridge/tools/check_bridge_parses.py`** — `McpBridgeAddOn.cs` is in no test build, so a stray brace there used to be findable only by deploying, and a syntax error in ANY addon `.cs` stops **every** addon loading. ⚠️ **It existed for many sessions and CI NEVER RAN IT** (`P2-144`, fixed 2026-08-18). It reads **19 files** and is a PARSER check (CS1xxx) only — it is not a compile and does not replace `nt_compile` | `python tools/check_bridge_parses.py` in `nt8-mcp-bridge` |
 
 > ⚠️ **A GATE NOBODY READS IS A COMMENT. Keep this after the fix, because the fix is not the lesson.**
 > `tools/check_version_matches_tag.py` reported constant `1.10.0` vs tag `v1.12.1` and **failed 7
@@ -11315,3 +11316,113 @@ test stub hands out a stable GUID per order."* It was right, it was unread, and 
 safety feature that has never worked where it counts. **The regression test for `P1-133` is
 therefore in the STUB, not only in the manager**: at least one order must be re-issued a new id on
 accept. A test that passes under both a stable and a re-issued id is evidence about neither.
+
+
+---
+
+## 5.85 Session 58 — the fix shipped last session regressed on its first live run, and a gate covering the highest-stakes file in the sibling repo had never run at all
+
+**State MEASURED this session, not carried forward.** Every number below was derived by running the
+thing, on 2026-08-18:
+
+| | nt8-riskguard | nt8-mcp-bridge | agent-loop |
+|---|---|---|---|
+| head | `v1.41.0` = `b740666` | `6ab39d3` (pin `v1.41.0`, current) | `beb108d` |
+| suite | **2182 / 0** | harness **597 / 0**, wrapper **66 / 0** | **749 pass / 36 skipped** |
+| batteries | **44** | **13** | — |
+| anchors | **495 / 0 broken** | **174 / 0 broken** | — |
+| gates | **11** green | **5** green | selftest **13 / 13** |
+| sync / deploy | `--verify` **18 files identical** | pin = riskguard HEAD | — |
+| CI | ✅ green, 18m38s | ✅ green, 12m51s | — |
+
+Deployed and live: `v1.41.0`, **`shadow`**, armed, guarding, 97 accounts, feed connected.
+
+⚠️ **`dotnet test` on `tests/RiskGuardTests.csproj` exits 0 HAVING RUN NOTHING.** It was the first
+thing tried this session and it reported success in a few seconds. The suites here are console
+harnesses: `dotnet build … ` then **`dotnet run --project … --no-build`**, which is what CI does and
+the only invocation that prints a count. A test command that passes without testing is the same
+class as this repo's dead gates — [[a-green-that-can-never-be-red]] — and it is *the default
+command* for a `.csproj`.
+
+### `P1-143` — last session's fix regressed on its first live run
+
+`P2-136` (the ATM registry surviving a recompile) was verified by a **26/26** battery and a 2182-test
+suite, deployed, and validated on `Sim101`: the bracket survived `nt_compile`, was re-adopted by
+name, and took its stop price from the broker's order rather than from the file. That half is real
+and is closed.
+
+Then the log showed `ATM_BRACKET_RESTORED` **four times for one bracket**, 15 s apart, each paired
+with an `INITIALIZE`. One compile produces **3–4 `InitializeRiskGuard` runs on fresh static
+contexts**, so `_persistedRestorePending` — an *instance* field — was true four times. The latch
+makes the restore once-per-instance; nothing makes it once-per-bracket. The reset of
+`StopModifyAttempts` that `Decide` performs is justified in a comment saying it is safe *"because a
+record is consumed ONCE"*, so `P2-135`'s refusal budget is now laundered once per compile.
+
+**The reasoning that failed is worth more than the defect.** *"A new assembly is a new episode"* is
+true of a restart and false of a compile — which is the same distinction `P2-142` records from the
+other side, filed by me, last session, and not applied here. ⚠️ **Neither the battery nor the suite
+could have caught it**: both instantiate one manager. The plural-instance condition only exists on a
+box where NT8 hot-swaps, and the only instrument that showed it was `P2-127`'s new events pane.
+
+### `P2-144` — the meta-gate had the defect it was written to prevent, one directory over
+
+`nt8-mcp-bridge/tools/check_bridge_parses.py` — the only automated reader of `McpBridgeAddOn.cs`,
+which no test build compiles — **had never been run by CI**. It is named in this handover and six
+times in the plan as the gate covering that file.
+
+It was not found by a gate. It was found while deriving a gate count to replace a stale number in
+`CLAUDE.md`, which is an argument for re-deriving stale numbers rather than tidying them.
+
+The class: **both** repos' `check_ci_runs_every_battery.py` glob `mutation/mutate_*.py` only, so no
+*gate script* in either repo was ever required to be wired anywhere. Its own docstring records
+fixing exactly this for batteries and warns that the instance is not the class. Both copies now also
+require every `check_*.py` under `tools/` and `mutation/` to be executed exactly once, matched on
+**repo-relative path**. Controls run both ways in both repos: unwire one and each exits **1** naming
+it; restore and each exits **0**. [[a-gate-is-per-repo]].
+
+### Three defects the new events pane surfaced in minutes
+
+All three had been sitting in a **44 MB** `interventions.jsonl`. None is caused by this session's
+work; all three were unreadable before `P2-127` slice 4.
+
+* **`P2-145`** — `NAKED_POSITION` disagrees with its own `gap` field **in both directions**: 10
+  events fire at `gap=0` with every contract covered, and 4 events read `fsmState=Protected` while
+  the gap is 1 or 2. Fixing the loud half alone would silence the noise and leave the four quiet
+  ones exactly as invisible.
+* **`P1-146`** — two genuinely unprotected positions on the **funded** account (`covered=0`,
+  `gap=3` and `gap=1`). The guard reported both and acted on neither, because `shadow` means every
+  rule is `EvaluatedNotEnforcing`. That is correct behaviour and it is the thing to understand
+  about the current posture.
+* **`P2-147`** — twelve executions dropped by the copier for having no `Order`, three sharing one
+  timestamp to the tick. Dropping is the safe branch; an unreported divergence between leader and
+  follower is not.
+
+✅ **Closed this session and therefore ABSENT from the list below**: the `P2-127` layout work (all
+four slices), the unwired-gate class fix, and the `Sim101` half of last session's ATM registry
+restore. Named here rather than in the list, because an ID inside an `Order from here` block **is**
+a claim that it is work to do — `check_next_list_ids.py` reads it that way and fails on it, which is
+how this paragraph came to be outside the block.
+
+### Order from here
+
+Derived from the plan's statuses this session — **do not copy this list forward, re-derive it.** The
+previous block listed the §4 layout work as *"slice 1 landed; the page does not consume it yet"* six
+sessions after that stopped being true.
+
+1. **`P1-143`** — it is a regression in code shipped last session, it launders a safety budget on
+   the stop-move path, and ⚠️ **the funded-account leg of last session's registry-restore
+   validation is blocked on it** (that entry is closed, so its ID is not repeated here).
+   Do not reach for the log de-duplication: that fixes the symptom and leaves the reset.
+2. **`P1-146`** — real money, no stop, twice. The open question is what opened those positions: no
+   `ATM_BRACKET_*` event names either instrument at those times, so they did not come through
+   `DynamicAtmManager`. Answer that before deciding whether it is a guard defect at all.
+3. **`P2-145`**, and drive the `Protected`-with-a-gap rows FIRST — the noisy `gap=0` half is the
+   one that will attract the fix and the quiet half is the one that matters.
+4. **`P2-141`**, **`P2-142`**, then `P1-140`'s native-partials remainder.
+5. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
+   ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
+6. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
+
+⚠️ **Standing, and it is not a technical constraint**: the operator asked to be told before any
+trade, and will either give the direction or ask for one. `TAKEPROFITPRO524207503` is a funded 50K
+account. Nothing goes to it without saying so first.
