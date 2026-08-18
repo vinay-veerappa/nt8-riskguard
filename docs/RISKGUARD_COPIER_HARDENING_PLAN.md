@@ -8129,6 +8129,79 @@ precondition converts one red assertion into an unknown number of unmeasured one
 own sweep of the suite's preconditions and gets its own ID when taken.
 
 
+### P1-149. `Sizing.MaxContractsPerAccount` is configured, evaluated, displayed — and enforced by NOTHING before an order is placed. The only thing that refuses an oversized order is the PROP FIRM, at 60 — OPEN, measured 2026-08-18 (session 58)
+
+Found because the operator proposed the experiment — *"if you try to go for 1000 contracts it might refuse"* — after this session's author had asserted, wrongly, that the ATM order path has no pre-trade gate at all.
+
+**Measured, on `Sim101`, with `Sizing.MaxContractsPerAccount: 10` live in the config:**
+
+```
+nt_place_atm_order  MES SEP26  sell 1000
+  -> status "submitted", calculatedQuantity 1000, bracket daefb3c5
+  -> FILLED: quantity 1000, avgPrice 7740.50725 against a 7743 last
+  -> unrealizedPnL -1213.75 the instant it filled, from entry slippage alone
+```
+
+**100× the configured cap, accepted without comment.** No guard event, no warning, no refusal.
+
+⚠️ **THE CAP IS REAL — IT IS JUST REACTIVE.** `RiskGuardAddOn.cs:3822` does enforce it:
+
+```csharp
+if (pos.Quantity > limit)
+{
+    MarkRuleLockout(stateModel, "MAX_SIZE_BREACH");
+    actions.Add(new GuardAction { ActionType = GuardActionType.FlattenPosition, ... });
+}
+```
+
+That is a predicate over a position **that already exists**. With `AuditIntervalSeconds: 10`, the live sequence is: order accepted → filled → up to ~10s → force-flatten, which slips again on the way out. At 1000 contracts on a 50K funded account the entry slippage alone (**-$1,213 measured, on a quiet overnight book**) is 2.4% of the account before the sweep has run once. The control exists and cannot arrive in time. [[configured-evaluated-enforcing]].
+
+⚠️ **AND THE BRIDGE — THE PATH AN AGENT USES — CHECKS SIZING NOWHERE.** `grep MaxContracts addons/McpBridgeAddOn.cs` returns **nothing**. The readers of `MaxContractsPerAccount` are `GuardRules.cs` (evaluates it for the inventory display), `RiskGuardAddOn.cs` (builds it into a profile, then the reactive rule above), `RiskGuardWindow.cs` (lets you edit it), and `TradeCopierEngine.cs` (sizes copies with it). **Four readers, and the one that places the order is not among them.**
+
+`PlaceAtmOrder` does have two pre-trade gates, which is what makes the gap easy to miss: a live-account `confirmLive` guard, and `BridgeLockoutGate.Evaluate`. A path with *some* refusals reads as a path with refusals.
+
+⚠️ **BANDED `P0` FOR TWENTY MINUTES, ON AN ASSUMPTION THE OPERATOR THEN DISPROVED.** The `P0` rested
+on *"a mistyped quantity is account-ending before anything can react"*, inferred from 1000 filling on
+`Sim101`. The operator tried **501 on the LIVE funded account** and it was **REJECTED** — and the
+refusal is not ours:
+
+```
+Order='613562532433/TAKEPROFITPRO524207503'  New state='Rejected'  Quantity=501  Error='Panic'
+  "Your maximum order quantity has been met... Limit: 60  Current: 501.  Scope: M..."
+```
+
+**The prop firm caps this account at 60 contracts per order.** `Sim101` filled 1000 because a
+Simulator has no such desk. So the exposure is **not unbounded — it is the band 11 to 60**, where the
+broker allows and the configured cap of 10 says no and nothing enforces it. Six times the intended
+size, not a hundred, and the reactive `MAX_SIZE_BREACH` flatten still arrives within
+`AuditIntervalSeconds`. That is a `P1`.
+
+⚠️ **The band letter was re-derived, not defended.** It is recorded here rather than quietly
+corrected because the original reasoning was sound and the *input* was wrong: a Simulator fill was
+read as evidence about a live desk. [[test-doubles-are-not-evidence]] — a Simulator does not enforce
+the broker's risk desk any more than a stub enforces `OrderState`. ⚠️ **And `Scope: M...` is
+TRUNCATED in the log**: whether 60 is a micros-scoped limit with a lower ceiling on full-size `ES` is
+**unmeasured**. Do not assume it scales — 60 `ES` is $3,000/point and would restore the `P0`. Measure
+it before relying on this band.
+
+⚠️ **A THIRD SYSTEM SAW IT, AND IT IS NEITHER OF THE TWO ABOVE.** The `Sim101` probe tripped
+`RiskGatekeeper`, the strategy-side pre-trade half: `*** ACCOUNT BLOWN *** Sim101 | Drawdown
+$3,685.00 >= Limit $2,000.00`. It detected the damage the guard only observed and the bridge never
+checked — on the one path it covers. [[riskguard-third-risk-system]]: *"what is my maximum size?"* now
+has **four** answers — the bridge's (none), the guard config's (10), the prop firm's (60), and
+`RiskGatekeeper`'s drawdown proxy.
+
+**The fix is a pre-trade quantity check on every bridge order path**, refusing rather than reporting, keyed to the same config value the display already shows — and `nt_place_oco_order` / `nt_place_order` need auditing for the same hole in the same commit. ⚠️ Do not fix it only in `PlaceAtmOrder`: [[a-second-reader-of-the-same-state]] is this repo's most repeated shape, and there are at least three order entry points.
+
+⚠️ **A CORRECTION THIS ENTRY EXISTS TO RECORD.** Session 58 first reported that a funded-account order placed during an active lockout proved *"the bridge's ATM path accepted the order with no pre-trade refusal"*. **That was wrong.** The gate is there, and it allowed the order for a correct reason: `LockoutBinds` (`RiskGuardAddOn.cs:224`) contains
+
+```csharp
+if (state.LockoutWasShadowOnly) return false;
+```
+
+and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shadow lockout must not bind, or `shadow` would be enforcing.** In `live` that lockout binds and the order is refused pre-trade. So the lockout half was the system behaving correctly and the author reading a `shadow` observation as a defect — [[configured-evaluated-enforcing]] in the OPTIMISTIC direction, and the reason the sizing hole underneath went unnoticed for the length of a session.
+
+
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID
 
 `PlaceBracket` submits the stop and the target with **`calculatedQty`** — the whole position — and
