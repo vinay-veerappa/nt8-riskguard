@@ -4954,7 +4954,7 @@ two cells.
 ⚠️ **The events pane earned its keep inside minutes and that is the finding, not the feature.**
 Three defects surfaced immediately that had been sitting in a **44 MB** `interventions.jsonl`
 nobody could read: `NAKED_POSITION` firing with `gap=0` (**`P2-145`**), two genuinely unprotected
-positions on the FUNDED account (**`P1-146`**), and twelve dropped copier executions
+positions on the FUNDED account (**`P1-146`** — since closed not-a-defect; the live-mode corollary is **`P1-151`**), and twelve dropped copier executions
 (**`P2-147`**). None was caused by this work; all three were invisible before it. *A log nobody can
 read is a log nobody reads.*
 
@@ -7996,7 +7996,7 @@ settles, in which case the fix is a settle window rather than a predicate change
 yet distinguishes those.
 
 
-### P1-146. Two genuinely UNPROTECTED positions on the FUNDED account, and the guard reported both without acting because it is in `shadow` — OPEN, measured 2026-08-18 (session 58)
+### P1-146. Two genuinely UNPROTECTED positions on the FUNDED account, and the guard reported both without acting because it is in `shadow` — ✅ CLOSED NOT-A-DEFECT 2026-08-18 (session 59): the operator's own bare manual entries, and the guard read them correctly
 
 Not a detector defect — these are the true positives inside `P2-145`'s noise, on
 `TAKEPROFITPRO524207503`, a funded 50K TPT PRO account:
@@ -8018,6 +8018,76 @@ Open questions, none answered yet: what opened them (no `ATM_BRACKET_*` event na
 instrument at those times, so they did not come through `DynamicAtmManager`); whether a bracket was
 attempted and refused; and whether `P1-143`'s laundered budget could produce this shape. Do not
 close this against `P2-145` — the detector being noisy and these being real are independent facts.
+
+---
+
+**ANSWERED 2026-08-18 (session 59), from `interventions.jsonl`. The guard was right; there is no
+code defect here.** The operator places orders on this account two different ways, and the log
+distinguishes them by `orderName`:
+
+* **`Entry` / `Stop1` / `Target1` / `Exit` / `Close`** — Chart Trader with an NT8 **ATM strategy**
+  attached. 90 MNQ entries between 08-07 and 08-17, and every one is covered **in the same second**:
+  `19:24:41 Entry Buy 3 Filled` and `19:24:41 Stop1 Working @30185.0` + `Target1 Working`, with
+  `Stop1` then trailing 30185 -> 30193.75 -> 30196.5 -> ... -> 30208.5. Includes a **10-lot** at
+  19:40:52 which arrived with `Stop1 qty=10 @30196.5` attached — bracketed, not a runaway.
+* **`orderName` EMPTY** — a bare order with no ATM strategy. **All four naked episodes are these.**
+
+So the answer to "what opened them" is: a bare manual entry, and nothing brackets those. Full set on
+the funded account (ET), wider than the two originally filed:
+
+```
+Sun 08-16 19:28:46  MNQ short 3, cov=0   <- see the flip note below
+Mon 08-17 21:52:54  MNQ Sell 3 @30005.50 -> covered 21:53:23 @29979.50.  NO STOP EVER. naked 29s
+Mon 08-17 23:30:30  MNQ Sell 1 @29860.00 -> covered 23:31:18 @29853.00.  naked ~48s
+Tue 08-18 00:01:59  MNQ Sell 1 @29880.25 -> stop appeared 00:02:42.      naked 43s
+```
+
+`AUDIT_FINDING_SUPPRESSED` matters for reading these: *"is STILL TRUE and will stop being logged
+after 1 line(s)"*. **A single `NAKED_POSITION` row does not mean a brief window** — four of the five
+funded `covered=0` conditions carry a suppression, i.e. they persisted past the 10-second re-check.
+
+**08-16 19:28 is a different shape and worth its own attention.** It was not an entry. The operator
+was long 3 and clicked `Exit Sell 2` three times (19:27:08, 19:28:45, 19:28:48 x2), which sold
+through flat and **flipped the account to short 3 with no bracket**, because `Stop1`/`Target1`
+belonged to the long. An over-click on the exit button is a naked reversal.
+
+**Ruled out as causes, each measured rather than reasoned:**
+
+* **The copier.** `copier_config.json` holds two relationships, `Sim101->Sim-ORB` and
+  `Sim101->SimCopy2`, both `IsEnabled: false`, and the funded account appears as neither leader nor
+  follower. Confirmed by the operator: the copier is not enabled yet. The operator's MNQ strategy
+  runs on **sim** accounts and never reached real money.
+* **`DynamicAtmManager`.** Its brackets are named `AtmEntry_*`/`Stop_*`/`Target_*` and all five on
+  this account attached their stop in the same second.
+* **`P1-143`'s laundered budget.** `StopModifyAttempts` is not in this path at all; these positions
+  never had a stop to modify.
+* **A `Suspended` stop dropping out of `CoveredQuantity`.** Raised as a hypothesis because
+  `Suspended` -> `OrderLiveness.Inert` -> not cover (`RiskGuardAddOn.cs:2724`) and the four live
+  TakeProfit accounts produce it (25-118 stop updates each) while `Sim101` produces **zero** — the
+  shape of [[the-simulator-re-ids-nothing]]. **Measured and refuted:** 179 of 179 `Suspended` stops
+  return to `Working` (123) or `Accepted` (56), median **0.0s**, max **0.2s**. It is a sub-200ms
+  transient inside a modification, not a dormant order, and the 10-second audit cadence almost never
+  samples it. The fail-closed classification is correct and this is not a coverage defect.
+
+⚠️ **WHAT THIS TURNS INTO, AND IT POINTS AT `live`.** `StopGuard.OnMissing: Flatten` with
+`StopAttachSeconds: 15`. Against the measured behaviour above, arming `live` would have **flattened
+the operator's own trades**: the 00:01:59 position 28 seconds *before* their stop arrived at
+00:02:42, and the 21:52:54 three-lot out from under an active scalp. `RiskGuardModels.cs:912` already
+names this hazard — `P1-84` raised the value from 3 to 15 because *"entering manually and reaching
+for the mouse to place the stop gets you flattened on a day when nothing was wrong"* — and **15 is
+still about 3x short of measured hand speed.** That comment also states the number is only right
+*for* `Flatten`; `OnMissing: AutoStop` exists with offsets already configured (MNQ 40, MES 16) and is
+the better pairing here, because an invented stop is recoverable and being taken out of a trade is
+not. `P1-84` mitigated this with a guess; there is now a measurement. **This is a blocker on arming
+`live` and it needs its own ID before anyone does.**
+
+Note also `ACTION_SUPPRESSED`: *"already reported once and the condition has not resolved; the guard
+is not acting."* In `live` the **second** naked position of the same kind receives no flatten at all.
+
+**The lesson, since the premise was wrong rather than the code:** the entry asked "what opened
+these", assuming a component did. The detector was accurate the whole time and the defect was in the
+workflow it was watching. [[check-the-exemplar-belongs-to-the-class]] — and the two positions
+originally filed were 5 of 9 funded rows, so the exemplar was also incomplete.
 
 
 ### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — OPEN, measured 2026-08-18 (session 58)
@@ -8207,6 +8277,133 @@ if (state.LockoutWasShadowOnly) return false;
 ```
 
 and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shadow lockout must not bind, or `shadow` would be enforcing.** In `live` that lockout binds and the order is refused pre-trade. So the lockout half was the system behaving correctly and the author reading a `shadow` observation as a defect — [[configured-evaluated-enforcing]] in the OPTIMISTIC direction, and the reason the sizing hole underneath went unnoticed for the length of a session.
+
+
+
+### P1-151. `StopGuard.OnMissing: Flatten` at `StopAttachSeconds: 15` would flatten the operator's own manual trades — `P1-84` set that number by guess, and there is now a measurement — OPEN, measured 2026-08-18 (session 59)
+
+Split out of `P1-146` on closure: the detector there was correct and the workflow was the defect, but
+what the workflow implies for `live` is real work and needs an ID of its own.
+
+**Measured on `TAKEPROFITPRO524207503`** (funded 50K TPT PRO), from `interventions.jsonl`. The
+operator enters manually with a bare order — no ATM strategy attached, `orderName` empty — and
+attaches the stop afterwards by hand, or not at all on a fast scalp:
+
+```
+00:01:59  MNQ Sell 1 @29880.25   position short 1, FSM -> Unprotected
+00:02:08  NAKED_POSITION covered=0 gap=1
+00:02:14  grace expires -> MISSING_STOP_FLATTEN   <-- in `live`, this flattens
+00:02:42  the operator's own stop arrives: Working StopMarket @29885.25 -> Protected (covered 1/1)
+```
+
+**28 seconds too early.** And the 21:52:54 case is worse: `Sell 3 @30005.50`, no stop ever attached,
+covered by hand at 21:53:23 for roughly **+$156 in 29 seconds** — `live` would have flattened a
+three-lot out from under an active scalp at 21:53:09.
+
+`RiskGuardModels.cs:912` already names this exact hazard. `P1-84` raised the value from 3 to 15
+because *"three seconds from fill to a working stop ... entering manually and reaching for the mouse
+to place the stop gets you flattened on a day when nothing was wrong. A default that fires on a
+normal day is a default that disarms the guard."* The reasoning was right; the number was a guess.
+**Measured hand speed on this operator is 43 seconds**, so 15 is about 3x short and the P1-84 comment
+describes a defect that is still live at the new value.
+
+⚠️ **This is a blocker on arming `live`.** In `shadow` it costs nothing, which is exactly why it has
+survived: the failure is invisible until the posture changes. [[configured-evaluated-enforcing]].
+
+**Direction, and the same comment argues for it.** `RiskGuardModels.cs:920` states the 15 is only
+right *for* `Flatten`, and that `AutoStop` would want a much SHORTER deadline "because an invented
+stop is recoverable and being taken out of the trade is not". `OnMissing: AutoStop` is implemented
+(`RiskGuardAddOn.cs:3258`), has offsets configured (`MNQ 40`, `MES 16`, `NQ 40`, `ES 16`,
+`default 30`) and `MaxAutoStopAttempts: 2`. For an operator who brackets via NT8 ATM most of the time
+and free-hands the rest, `AutoStop` protects the free-handed entries without ever removing them from
+a trade. Prefer it over lengthening the `Flatten` deadline.
+
+Two constraints on any fix:
+
+* **Do not compute the deadline from `OnMissing`.** `RiskGuardModels.cs:921-927` refuses this
+  deliberately: a getter that recomputes would let a config reload move a deadline while a grace
+  timer was already running, and would read `OnMissing` off one thread while another wrote it. Change
+  the defaults together, in one edit, as plain values.
+* **`ACTION_SUPPRESSED` makes the protection one-shot.** Measured at 00:02:14: *"already reported
+  once and the condition has not resolved; the guard is not acting."* So in `live` the **second**
+  naked position of the same kind receives no action at all. Whichever action is chosen, decide
+  deliberately whether it is once-per-condition or once-per-position — the current behaviour is the
+  former and it is not obviously intended. [[a-recovery-budget-is-not-a-policy]].
+
+⚠️ **`AutoStop` has never run in `live` on this box.** Everything above is `shadow` evidence about
+what *would* have happened. The auto-stop placement path (`PlaceStopOrder` / `MISSING_STOP_ATTACH`)
+is exercised only by the suite, so re-banding this to a fix means live-validating a path that has
+placed a real order zero times — on an account where a wrong stop price is real money.
+
+
+### P2-150. `PlaceBracket` reads its exit legs' `OrderState` in the same breath as `Submit()`, so `partial_submit` is a status that can never be set — OPEN, measured 2026-08-18 (session 59)
+
+`DynamicAtmManager.cs:526-536`, immediately after `account.Submit(validOrders)`:
+
+```csharp
+foreach (var o in new[] { stopOrder, targetOrder })
+{
+    if (o != null && (o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled))
+        rejectedOrders.Add(o.Name + " state=" + o.OrderState);
+}
+if (rejectedOrders.Count > 0) { result.Status = "partial_submit"; ... }
+```
+
+`Submit` is asynchronous. **Measured from `interventions.jsonl`, eight bridge-placed brackets on
+2026-08-10**, the state sequence for a stop leg is:
+
+```
+00:11:31.2870  Initialized
+00:11:31.3085  Submitted     (+21ms)
+00:11:31.4203  Accepted     (+132ms)
+```
+
+The verdict arrives 20-200ms later, on `OnOrderUpdate`. At the instant this loop runs the leg is
+`Initialized`, so the predicate is false for every order that will *later* be rejected. The only
+order it can catch is one already terminal *before* submission, which nothing produces.
+`partial_submit` is therefore unreachable, and a caller that trusts `status: "submitted"` learns
+nothing about whether its protective legs were accepted — [[a-green-that-can-never-be-red]]:
+for any status value, ask what input makes it fire, and if you cannot name one, it is not a status.
+
+The caller here is frequently **an agent** via `nt_place_atm_order`, which makes a truthful status
+load-bearing rather than cosmetic.
+
+**Why P2 and not higher:** the downstream net is real. `NAKED_POSITION` + the grace timer +
+`MISSING_STOP_ATTACH` do notice an uncovered position within `StopGuard.StopAttachSeconds`, so a
+rejected stop is caught by the guard even though the bracket call misreported. This is a truthful-
+reporting defect, not an unprotected-position defect.
+
+**Direction:** the outcome cannot be known synchronously, so do not try. Either report
+`status: "pending_legs"` with the leg ids and let the caller poll `nt_atm_bracket_status`, or have
+`RegisterBracket` arm a short deferred check that emits an `ATM_LEG_REJECTED` event on the real
+transition. Do **not** simply widen the state list — the bug is the *timing*, and a wider list read
+at the same instant is still read too early. [[report-the-outcome-not-the-call]].
+
+⚠️ **TWO THEORIES THIS ENTRY RECORDS AS DISPROVEN**, both by the same eight-bracket measurement,
+so that neither is re-derived from a source read:
+
+1. *"The ATR strategies never round to tick size, unlike the three other price-writing paths
+   (`RiskGuardAddOn.cs:5099`, `TradeCopierEngine.cs:3942`, `CopierReconciler.cs:447`), so
+   `MNQ`/`NQ`/`RTY`/`M2K`/`CL` — whose `DefaultStrategy` is `AtrAdaptive`, reached whenever
+   `strategyName` is omitted (`McpBridgeAddOn.cs:5706`) — submit off-tick stops that the broker
+   rejects."* The prices genuinely are off-tick and it genuinely reaches the broker:
+   `29876.04464285714`, `29872.866071428572`, `29897.41964285714`. **NT8 rounds them itself on
+   submit** — `29876.04464… -> 29876.0`, `29872.866… -> 29872.75`, `29897.4196… -> 29897.5`, nearest
+   tick, and **all eight reached `Accepted` with zero rejections**; one filled as an ordinary
+   stop-out. Not a safety defect.
+2. *"A null `stopOrder` from `CreateOrder` still submits the entry (`469-486`) and reports
+   `Status = "submitted"` with `StopOrderId = null`, no event, no retry."* The code does read that
+   way and the fail-open direction is wrong. But an off-tick price was the only plausible way to
+   make `CreateOrder` return null, and (1) shows it does not. **No evidence this branch is
+   reachable**, so it is hardening, not a measured defect — and per
+   [[check-the-exemplar-belongs-to-the-class]] it should not be filed as one until something
+   demonstrates a null.
+
+What survives from (1) worth its own small ID later: the unrounded `stopPrice` is stored in
+`ActiveBracket.CurrentStopPrice` while the broker holds the rounded value, so the two disagree by
+up to half a tick permanently. `Stop_5c903ad3` shows the symptom — a `ChangeSubmitted` at
+01:45:38.746 that resolved to the **same** `29897.5` it already had. A no-op modification, and
+[[nt8-order-change-semantics]] says a modification in flight is not free.
 
 
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID

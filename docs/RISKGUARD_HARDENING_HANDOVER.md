@@ -250,7 +250,7 @@ not. The command that checks it is in the last column.
 | **Do next** | ⚠️ **This row is a POINTER, not a list, because a list here goes stale silently.** Read the newest `### Order from here` — currently **§5.85 (session 58)** — which carries the reasons and was derived from the plan's statuses rather than copied forward. ⚠️ **The previous version of this row named the §4 fleet/inspector layout work as next for six sessions after it stopped being open** (its ID is deliberately not repeated here — naming a closed ID in this row is the very thing the gate rejects), which is the failure this pointer exists to stop. `check_next_list_ids.py` now fails on exactly that, in both this row and §5.6's | `python tools/check_next_list_ids.py`, then read the LAST `### Order from here` in this file |
 | **Branch** | **`main` only, level with `origin/main`, all three repos** — measured 2026-08-18 (session 58). `nt8-riskguard` **49 tags**, `v1.0.0`…**`v1.41.0`**. ⚠️ **`nt8-mcp-bridge` has NO tags** and is pinned into nothing; it is the consumer, not the consumed | `git status -sb` and `git describe --tags` in each repo |
 | **Deployed** | **`v1.41.0` core + bridge are live in NT8** — measured 2026-08-18 (session 58): `sync_nt8.py --verify` **18 files identical**. ⚠️ **`--verify` proves the FILES match, not that they COMPILE** — a broken NT8 Custom assembly is invisible because NT8 keeps running the last good one, so the only symptom is a deploy having no effect. ⚠️ **A drift report does not say which side is stale**: `NtDrawingCore.cs` once reported `content-differs` for days with the NT8 copy the NEWER one, and the obvious sync would have reverted a live fix. Read the diff and its DIRECTION | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge`; then `nt_compile` |
-| **Guard** | **`v1.41.0`, `mode: shadow`, `isArmed: true`, `guarding: true`** — measured 2026-08-18 (session 58) off the box via `nt_health` and `/api/riskguard/config`. ⚠️ **`shadow` means every rule reads `EvaluatedNotEnforcing` and the guard STOPS NOTHING.** Measured the same session: two genuinely unprotected positions on the funded account were reported and not acted on (`P1-146`). That is correct behaviour for the posture, and it is the thing to understand before reading any rule as protection — [[configured-evaluated-enforcing]] | `curl` `/api/riskguard/config` with the bearer token from `Documents/NinjaTrader 8/mcp_token.txt` |
+| **Guard** | **`v1.41.0`, `mode: shadow`, `isArmed: true`, `guarding: true`** — measured 2026-08-18 (session 58) off the box via `nt_health` and `/api/riskguard/config`. ⚠️ **`shadow` means every rule reads `EvaluatedNotEnforcing` and the guard STOPS NOTHING.** Measured 2026-08-18 (session 59): **five** naked-position conditions on the funded account were reported and none acted on, four of them persisting past the 10-second re-check. The guard read every one correctly — they were the operator's own bare manual entries (`P1-146`, closed not-a-defect). ⚠️ **The corollary is `P1-151`: in `live` the same condition FLATTENS, and at `StopAttachSeconds: 15` against a measured 43-second hand speed it would have flattened the operator's own trades.** `shadow` is why that is still theory, and it is the thing to understand before reading any rule as protection — [[configured-evaluated-enforcing]] | `curl` `/api/riskguard/config` with the bearer token from `Documents/NinjaTrader 8/mcp_token.txt` |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **97 accounts**, **feed connected** — measured 2026-08-18 (session 58). ⚠️ One of them, `TAKEPROFITPRO524207503`, is a **funded 50K TPT PRO account trading real money under real prop-firm rules** | `nt_health` |
 | **Mutation** | **57 batteries — 44 here + 13 in `nt8-mcp-bridge`**, every one wired into its own repo's CI and checked by a gate; **495 + 174 anchors, 0 broken** — measured 2026-08-18 (session 58). ⚠️ **An anchor that stops matching prints `[SKIP]` and scores a SURVIVOR**, so the anchor check is not optional. ⚠️ **A battery restores its mutant only on COMPLETION** — a stopped batch leaves a live mutant in the tree | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py` |
 | **Gates** | **11 here + 5 in `nt8-mcp-bridge`**, all green — measured 2026-08-18 (session 58). ⚠️ **NEW 2026-08-18**: until this session `check_ci_runs_every_battery.py` globbed `mutation/` only in BOTH repos, so **no gate script in either repo was required to be wired anywhere** — and `nt8-mcp-bridge/tools/check_bridge_parses.py`, the only automated reader of `McpBridgeAddOn.cs`, had never run in CI at all (`P2-144`). Both meta-gates now cover `check_*.py` too, matched on repo-relative path | run every `tools/check_*.py` and `mutation/check_anchors.py`; `check_ci_runs_every_battery.py` proves CI runs them |
@@ -11385,14 +11385,17 @@ it; restore and each exits **0**. [[a-gate-is-per-repo]].
 All three had been sitting in a **44 MB** `interventions.jsonl`. None is caused by this session's
 work; all three were unreadable before `P2-127` slice 4.
 
-* **`P2-145`** — `NAKED_POSITION` disagrees with its own `gap` field **in both directions**: 10
-  events fire at `gap=0` with every contract covered, and 4 events read `fsmState=Protected` while
-  the gap is 1 or 2. Fixing the loud half alone would silence the noise and leave the four quiet
-  ones exactly as invisible.
-* **`P1-146`** — two genuinely unprotected positions on the **funded** account (`covered=0`,
-  `gap=3` and `gap=1`). The guard reported both and acted on neither, because `shadow` means every
-  rule is `EvaluatedNotEnforcing`. That is correct behaviour and it is the thing to understand
-  about the current posture.
+* **`P2-145`** — ⚠️ **its premise is measured WRONG and the entry needs re-describing before it is
+  worked.** `gap == position - covered` in **245 of 245** rows, so nothing disagrees with its own
+  `gap`. The real shape is the OR in the firing predicate (`RiskGuardAddOn.cs:3457`,
+  `if (!isProtected || covered < positionQty)`): 17 rows fire with `gap=0` because coverage is
+  complete while the state is `ProtectedPending`, and 4 fire reading `Protected` with a gap of 1-2
+  through the other arm. Two independent defects, neither arithmetic.
+* **`P1-151`** — `OnMissing: Flatten` at `StopAttachSeconds: 15` versus a **measured** 43-second
+  hand speed on the funded account. Costs nothing in `shadow`, which is why it survived; it is a
+  blocker the moment the posture changes. Its predecessor asked what opened those unprotected
+  positions and the answer was the operator, placing bare orders — so the guard was accurate and the
+  work moved from the detector to the response.
 * **`P2-147`** — twelve executions dropped by the copier for having no `Order`, three sharing one
   timestamp to the tick. Dropping is the safe branch; an unreported divergence between leader and
   follower is not.
@@ -11415,9 +11418,13 @@ sessions after that stopped being true.
    were **enforcing** the defect. Its ID is not repeated here — the gate reads any ID in this block
    as work to do, correctly.
    ⚠️ **Its remainder is real and lives under `P2-142`**: `EnsureMonitor` is still per-instance.
-2. **`P1-146`** — real money, no stop, twice. The open question is what opened those positions: no
-   `ATM_BRACKET_*` event names either instrument at those times, so they did not come through
-   `DynamicAtmManager`. Answer that before deciding whether it is a guard defect at all.
+2. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
+   the previous entry's "what opened those positions" turned it inside out: the detector was right
+   every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
+   15s would therefore have flattened their own trades — one of them 28 seconds before their own
+   stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
+   ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
+   unvalidated one.
 3. **`P2-145`**, and drive the `Protected`-with-a-gap rows FIRST — the noisy `gap=0` half is the
    one that will attract the fix and the quiet half is the one that matters.
 4. **`P2-141`**, **`P2-142`**, then `P1-140`'s native-partials remainder.
