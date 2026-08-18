@@ -8498,6 +8498,51 @@ with a mutation battery wrapped around it.
 comment already at `:823` reasoning about instance-versus-process scope for the dispatcher — the
 same question was asked there and answered the other way, so read it first.
 
+### P1-156. Arming ON START never seeds FSMs, so after every recompile the guard is armed and covering nothing — ✅ FIXED 2026-08-18 (session 59), MEASURED LIVE on the funded account minutes after deploying v1.45.0
+
+Found by checking coverage after a deploy, not by any test or gate. `nt_riskguard_state` returned
+**zero FSMs** for `TAKEPROFITPRO524207503` while it held **MNQ SEP26 Short 6**, with `nt_health`
+reporting the guard `loaded`, `shadow`, `isArmed: true`, `guarding: true`.
+
+The event order after a recompile is the defect:
+
+```
+SUBSCRIBE          isArmed:false    SeedFsmsForExistingPositions runs HERE -- but the broker has
+                                    not delivered positions yet, so it seeds nothing
+CONNECTION_CHANGE  Connected        positions arrive; AuditPosition ->
+                                    ExecutePositionUpdateDetails -> UpdateFsmOnPosition ...
+INITIALIZE
+ARMED_ON_START     isArmed:true     ... which returned early on `if (!_isArmed) return;`
+```
+
+Two guards conspire. `SubscribeToAccount` early-returns on `_subscribedAccounts.Contains`, so the
+connection-change re-subscribe is a no-op and the seeding inside it never re-runs. And a **static**
+position generates no further position update, so nothing seeds it afterwards — the gap lasts the
+life of the trade.
+
+⚠️ **THIS IS `P1-15` THROUGH A DIFFERENT DOOR, AND THAT IS WORTH MORE THAN THE FIX.** `P1-15` added
+seeding to the RE-ARM path (`ToggleArmed`) for exactly this reason, with a test and a comment
+saying that otherwise "the guard is armed and reports healthy while covering nothing".
+`ApplyInitialArmState` — the OTHER path that sets `_isArmed = true` — never learned the same
+clause. [[a-second-reader-of-the-same-state]]: count the sites before closing the ticket.
+
+**Fixed** by seeding every subscribed account inside the armed branch of `ApplyInitialArmState`,
+after `_isArmed` is set. Seeding is idempotent and makes no broker calls.
+
+⚠️ **The tempting wrong fix gets its own mutant**: seeding on the DISARMED branch, or before
+`_isArmed = true`, reads correctly and does nothing — the FSM paths return early while disarmed,
+which is the very reason the gap exists.
+
+⚠️ **A survivor exposed a hole in the FIRST test, not in the code.** With one account in the
+fixture, a `break` after the first successful seed is undetectable. On the live box there are 97
+accounts and the funded one is **not first**, so the account that matters is precisely the one a
+first-only loop would miss. A two-account test closes it.
+
+**Consequence today was observation, not protection**: the guard is in `shadow`, so nothing was
+going to intervene. In `live` it would have reported healthy over an unguarded position.
+
+**Evidence**: suite 3185 → 3191, `mutation/mutate_p1156.py` 4/4.
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by

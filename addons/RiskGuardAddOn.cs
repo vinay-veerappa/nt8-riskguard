@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.45.0";
+        public const string Version = "1.46.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -797,6 +797,26 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (_isArmed)
             {
+                // P1-156. Everything that runs BEFORE this point runs disarmed, so a position
+                // that was already open is invisible to the guard: SubscribeToAccount seeds at
+                // a moment when the broker has not delivered positions yet, its
+                // _subscribedAccounts guard makes the connection-change re-subscribe a no-op,
+                // and the CONNECTION_CHANGE audit reaches UpdateFsmOnPosition, which returns
+                // early while !_isArmed. A static position then generates no further update, so
+                // nothing ever seeds it and the guard reports armed while covering nothing.
+                //
+                // MEASURED on the funded account 2026-08-18 right after deploying v1.45.0:
+                // zero FSMs against a live MNQ Short 6, guard loaded/armed/guarding.
+                //
+                // ⚠️ P1-15 ADDED EXACTLY THIS TO ToggleArmed AND THIS PATH NEVER LEARNED IT.
+                // Two readers of one fact; only one was taught. Seeding is idempotent (it
+                // skips keys already tracked) and makes no broker calls, so it is safe here.
+                foreach (var accName in _subscribedAccounts)
+                {
+                    var seedAccount = Account.All.FirstOrDefault(a => a.Name == accName);
+                    if (seedAccount != null) SeedFsmsForExistingPositions(seedAccount);
+                }
+
                 LogEvent("SYSTEM", "ARMED_ON_START",
                     $"Guard armed on start in '{_mode}' mode after {StartKind()}. It observes and logs; "
                     + "it cannot act outside 'live'.");

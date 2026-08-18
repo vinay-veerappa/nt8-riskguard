@@ -751,7 +751,7 @@ jobs:
           # never been able to fire" is. Three survived the first run, all one gap (the evidence
           # count was asserted for 1 of 5 rules that use it); the fix opened an escape route, and
           # the mutant for THAT survived too. Read the file before adding to it.
-          - { label: "UI3+P2-145+P1-84", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py" }   # 763s = UI3 392s + P2-145 208s + P1-84 163s
+          - { label: "UI3+P2-145+P1-84+P1-156", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py mutate_p1156.py" }   # 883s = UI3 392s + P2-145 208s + P1-84 163s + P1-156 120s (local measure)
 
           - { label: "P2-136+P2-101+P2-142", batteries: "mutate_p2136survive.py mutate_p2101.py mutate_p2142.py" }   # 1119s = P2-136 613s + P2-101 146s + P2-142 360s (local measure; re-pack once CI prints its BATTERY_SECONDS)
 

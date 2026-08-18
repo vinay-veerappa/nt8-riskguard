@@ -587,6 +587,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding);
             Run(TestAudit_P2145_GapIsAlwaysPositionMinusCovered);
             Run(TestAudit_P2145_NoPositionIsNeverAFinding);
+            Run(TestArm_P1156_ArmingOnStartSeedsFsmsForOpenPositions);
+            Run(TestArm_P1156_EverySubscribedAccountIsSeededNotJustTheFirst);
             Run(TestArm_P2142_ADeliberateDisarmSurvivesTheNextStart);
             Run(TestArm_P2142_TheToggleRecordsAndClearsTheIntent);
             Run(TestArm_P2142_TheDisarmActuallyReachesTheStateFile);
@@ -9772,6 +9774,95 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(addon.GetIsArmed(), "Precondition: the toggle re-armed the guard");
             Assert(!addon.GetOperatorDisarmedUtcForTest().HasValue,
                 "P2-142: arming CLEARS the intent, so a disarm does not outlive undoing it");
+
+            Account.All.Clear();
+        }
+        private static void TestArm_P1156_EverySubscribedAccountIsSeededNotJustTheFirst()
+        {
+            Console.WriteLine("\n[TEST] ARM P1-156: EVERY subscribed account is seeded, not just the first");
+            // ⚠️ THE SINGLE-ACCOUNT TEST CANNOT SEE THIS. A `break` after the first successful seed
+            // passes it, and survived the first battery run for exactly that reason. On the live box
+            // there are 97 accounts and the funded one is NOT first -- so the account that matters is
+            // precisely the one a first-only loop would miss.
+            var mnq = new Instrument("MNQ");
+            var es = new Instrument("ES");
+            Account.All.Clear();
+            var first = new Account { Name = "AaaFirst", Provider = Provider.Simulator };
+            var second = new Account { Name = "ZzzFunded", Provider = Provider.Simulator };
+            first.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 20000
+            });
+            second.Positions.Add(new Position
+            {
+                Instrument = es, MarketPosition = MarketPosition.Short, Quantity = 6, AveragePrice = 5500
+            });
+            Account.All.Add(first);
+            Account.All.Add(second);
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(FsmTestConfig(graceSeconds: 60, onMissing: "AutoStop"));
+            addon.SetModeForTest("shadow");
+            addon.SetSubscribedAccountForTest("AaaFirst");
+            addon.SetSubscribedAccountForTest("ZzzFunded");
+            addon.TestClearFsms();
+            addon.SetArmedForTest(false);
+
+            addon.ApplyInitialArmStateForTest();
+
+            Assert(addon.TestGetFsm("AaaFirst", mnq.FullName) != null,
+                "P1-156: the first subscribed account is seeded");
+            Assert(addon.TestGetFsm("ZzzFunded", es.FullName) != null,
+                "P1-156: the SECOND subscribed account is seeded too, not just the first");
+
+            Account.All.Clear();
+        }
+        private static void TestArm_P1156_ArmingOnStartSeedsFsmsForOpenPositions()
+        {
+            Console.WriteLine("\n[TEST] ARM P1-156: arming ON START seeds FSMs for already-open positions");
+            // MEASURED LIVE on the funded account 2026-08-18, immediately after deploying v1.45.0:
+            // nt_riskguard_state returned ZERO FSMs while the account held MNQ Short 6, with the
+            // guard reporting loaded, armed and guarding. Armed, and covering nothing.
+            //
+            // The event order after a recompile is what does it:
+            //   SUBSCRIBE          isArmed:false   <- seeds, but the connection is not up yet
+            //   CONNECTION_CHANGE  Connected       <- positions arrive, AuditPosition runs...
+            //   ARMED_ON_START     isArmed:true    <- ...but UpdateFsmOnPosition returned early
+            //
+            // SubscribeToAccount early-returns on _subscribedAccounts.Contains, so the
+            // connection-change re-subscribe is a no-op and the seeding inside it never re-runs.
+            // A static position then generates no further update, so nothing ever seeds it.
+            //
+            // ⚠️ THIS IS P1-15 THROUGH A DIFFERENT DOOR. P1-15 added seeding to the RE-ARM path
+            // (ToggleArmed) for exactly this reason; ApplyInitialArmState never learned the same
+            // clause. Two readers of one fact, and only one of them was taught.
+            var mnq = new Instrument("MNQ");
+            Account.All.Clear();
+            var account = new Account { Name = "TestAcc", Provider = Provider.Simulator };
+            Account.All.Add(account);
+            account.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 6, AveragePrice = 29525
+            });
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(FsmTestConfig(graceSeconds: 60, onMissing: "AutoStop"));
+            addon.SetModeForTest("shadow");
+            addon.SetSubscribedAccountForTest("TestAcc");
+            addon.TestClearFsms();
+            addon.SetArmedForTest(false);
+
+            Assert(addon.TestGetFsm("TestAcc", mnq.FullName) == null,
+                "Precondition: nothing is tracked before arming");
+
+            addon.ApplyInitialArmStateForTest();
+            Assert(addon.GetIsArmed(), "Precondition: shadow arms on start");
+
+            var fsm = addon.TestGetFsm("TestAcc", mnq.FullName);
+            Assert(fsm != null,
+                "P1-156: arming on start seeds an FSM for a position that was already open");
+            Assert(fsm != null && fsm.PositionQuantity == 6,
+                "P1-156: the seeded FSM carries the live position quantity");
 
             Account.All.Clear();
         }
