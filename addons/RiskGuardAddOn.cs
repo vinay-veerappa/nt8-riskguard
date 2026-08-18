@@ -1362,6 +1362,62 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// the same predicate rather than two that agree by inspection. F-9's lesson, applied to a
         /// reader instead of a rule display: derive the report FROM the enforcer.
         /// </summary>
+        /// <summary>
+        /// The contract cap that applies to one account and instrument: the per-instrument profile
+        /// if there is one, otherwise the account default.
+        ///
+        /// ⚠️ EXTRACTED FOR `P1-149` SO THERE IS EXACTLY ONE READER OF THIS RULE. The reactive
+        /// `MAX_SIZE_BREACH` sweep had this lookup inline, and the bridge's new PRE-trade gate needs
+        /// the same answer. Two copies of a three-branch precedence rule is
+        /// [[a-second-reader-of-the-same-state]] -- this repo's most repeated shape -- and the
+        /// failure would be silent and asymmetric: a pre-trade gate that permits what the reactive
+        /// rule then flattens, which reads to an operator as the guard flattening a legal order.
+        /// </summary>
+        internal static int ResolveMaxContracts(AccountRiskProfile profile, string baseSymbol, string fullInstrument)
+        {
+            if (profile == null) return 0;
+
+            int limit = profile.DefaultMaxContracts;
+            if (profile.InstrumentProfiles == null) return limit;
+
+            InstrumentProfile instrProfile;
+            if (!string.IsNullOrEmpty(baseSymbol)
+                && profile.InstrumentProfiles.TryGetValue(baseSymbol, out instrProfile))
+                return instrProfile.MaxContracts;
+
+            InstrumentProfile exactProfile;
+            if (!string.IsNullOrEmpty(fullInstrument)
+                && profile.InstrumentProfiles.TryGetValue(fullInstrument, out exactProfile))
+                return exactProfile.MaxContracts;
+
+            return limit;
+        }
+
+        /// <summary>
+        /// `P1-149`. The cap a PRE-trade caller should apply, resolved from the same profile the
+        /// reactive sweep uses. Returns 0 when nothing is configured, which every caller must read
+        /// as "no cap" -- matching `GuardRules`' own `Off("no per-account contract cap")`.
+        ///
+        /// ⚠️ Deliberately NOT mode-aware. It answers "what is the configured cap", not "should you
+        /// act on it"; whether `shadow` suppresses an action is the caller's question and folding it
+        /// in here would make one method answer two, which is how `configured / evaluated /
+        /// enforcing` gets confused in the first place.
+        /// </summary>
+        public int EffectiveMaxContracts(Account account, string instrumentName)
+        {
+            if (account == null) return 0;
+            lock (_stateLock)
+            {
+                if (_config == null) return 0;
+                AccountRiskProfile profile = GetResolvedProfile(account);
+                if (profile == null) return 0;
+                string baseSymbol = string.IsNullOrEmpty(instrumentName)
+                    ? null
+                    : instrumentName.Split(' ')[0];
+                return ResolveMaxContracts(profile, baseSymbol, instrumentName);
+            }
+        }
+
         public bool IsAccountLocked(string accountName)
         {
             lock (_stateLock)
@@ -3807,17 +3863,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var pos = posPair.Value;
                 if (pos.MarketPosition != MarketPosition.Flat)
                 {
-                    int limit = profile.DefaultMaxContracts;
                     string baseSymbol = pos.InstrumentObj?.MasterInstrument?.Name ?? pos.Instrument.Split(' ')[0];
-                    
-                    if (profile.InstrumentProfiles.TryGetValue(baseSymbol, out var instrProfile))
-                    {
-                        limit = instrProfile.MaxContracts;
-                    }
-                    else if (profile.InstrumentProfiles.TryGetValue(pos.Instrument, out var exactProfile))
-                    {
-                        limit = exactProfile.MaxContracts;
-                    }
+                    int limit = ResolveMaxContracts(profile, baseSymbol, pos.Instrument);
 
                     if (pos.Quantity > limit)
                     {
