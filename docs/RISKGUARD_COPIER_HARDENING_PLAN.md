@@ -8046,7 +8046,7 @@ a guess until somebody measures which fields are actually populated on this prov
 null.
 
 
-### P2-148. A mutant that CRASHES the test harness scores as KILLED with nothing having detected it — 41 of the 44 batteries — ⚠️ OPEN: fixed in one battery 2026-08-18 (session 58), the other 40 are a mechanical sweep
+### P2-148. A mutant that CRASHES the test harness scores as KILLED with nothing having detected it — ALL 44 batteries, in two spellings — ⚠️ OPEN: fixed in one battery 2026-08-18 (session 58), the other 43 are a mechanical sweep
 
 Found while diagnosing a kill that read oddly, not by a gate.
 
@@ -8063,6 +8063,13 @@ crash was a consequence; it is a FALSE KILL when the mutant merely broke the har
 detected anything. The two are indistinguishable to the scorer, and a false kill is invisible — it
 prints `[KILLED]` and leaves the survivor list empty, which is the exact shape of
 [[a-green-that-can-never-be-red]] that this repo keeps paying for.
+
+⚠️ **THE COUNT WAS FIRST WRITTEN AS "41 of 44" AND THAT IS WRONG.** 41 batteries spell the defect
+as `('NO RESULT LINE' in res)`. The other three — `mutate_cm3.py`, `mutate_cm4.py`,
+`mutate_p0_63.py` — spell it `killed = 'Failed = 0' not in res`, which is **strictly more
+permissive**: every non-green result string counts as a kill, including `TIMEOUT` and
+`BUILD FAILED`, with no enumeration at all. Grepping for one spelling and reporting the count as
+the population is the same mistake as a naive `grep CLOSED` on this file. **All 44 are affected.**
 
 **Measured on the instance that exposed it.** The `alreadyLive = false` mutant in
 `mutate_p2136survive.py` dies with a `NullReferenceException`. Re-driven by hand, it **is** genuinely
