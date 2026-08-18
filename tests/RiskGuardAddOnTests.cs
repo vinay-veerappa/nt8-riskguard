@@ -587,6 +587,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding);
             Run(TestAudit_P2145_GapIsAlwaysPositionMinusCovered);
             Run(TestAudit_P2145_NoPositionIsNeverAFinding);
+            Run(TestAtm_P2141_AnOffsetPastTheTriggerIsRefused);
+            Run(TestAtm_P2141_AnOffsetEqualToTheTriggerIsRefused);
+            Run(TestAtm_P2141_TheRefusalNamesBothValues);
+            Run(TestAtm_P2141_TheMeasuredLivePairIsRefused);
+            Run(TestAtm_P2141_NoBracketIsRegisteredWhenTheRefusalFires);
+            Run(TestAtm_P2141_TheDefaultPairIsAccepted);
+            Run(TestAtm_P2141_AnOffsetOneTickInsideTheTriggerIsAccepted);
             Run(TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted);
             Run(TestAtm_P2136_AFinishedTradeIsNotResurrected);
             Run(TestAtm_P2136_AReversedPositionIsNotManaged);
@@ -9649,6 +9656,115 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// A flat or absent position is never a finding, whatever the state says. Keeps the
         /// function total so a future caller that forgets to pre-filter cannot raise a phantom.
         /// </summary>
+        // ── P2-141: a breakeven offset at or past the trigger cannot be honoured ────────────
+        // ⚠️ WRITTEN RED, BEFORE THE VALIDATOR EXISTS, ON PURPOSE. The agent-loop gate matches
+        // `expect_green` against this runner's [FAIL] lines and refuses a ticket whose tests
+        // already pass -- see agent/tickets_p2141.json. Every assertion below is written to REACH
+        // its Assert while PlaceBracket still accepts the bad config, so the failure line matches.
+        //
+        // The invariant: breakeven fires once price has travelled `BreakevenTriggerTicks`
+        // (ShouldTriggerBreakeven) and places the stop at `entry + BreakevenOffsetTicks * tick`
+        // (CalculateBreakevenStopPrice). For a long, that stop is at or ABOVE the market whenever
+        // offset >= trigger, so the provider holds the old price for the life of the position.
+        // Measured live on the FUNDED account with trigger 1 / offset 2 (bracket 302e7759).
+
+        private static AtmStrategyConfig P2141Config(int triggerTicks, int offsetTicks)
+        {
+            return new AtmStrategyConfig
+            {
+                Type = AtmStrategyType.FixedTicks,
+                StopTicks = 40,
+                TargetTicks = 80,
+                BreakevenTriggerTicks = triggerTicks,
+                BreakevenOffsetTicks = offsetTicks
+            };
+        }
+
+        private static BracketResult P2141Place(int triggerTicks, int offsetTicks, Account account = null)
+        {
+            var acct = account ?? CreateAtmAccount("Sim101");
+            var instrument = CreateAtmInstrument("MNQ", "MNQ 09-26");
+            return DynamicAtmManager.Instance.PlaceBracket(
+                acct, instrument, "buy", 1, P2141Config(triggerTicks, offsetTicks),
+                18000, 0.25, 2.0);
+        }
+
+        private static void TestAtm_P2141_AnOffsetPastTheTriggerIsRefused()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: an offset past the trigger is refused at placement");
+            var result = P2141Place(4, 8);
+            Assert(result != null && result.Status == "error",
+                "P2-141: an offset PAST the trigger is refused at placement");
+        }
+
+        private static void TestAtm_P2141_AnOffsetEqualToTheTriggerIsRefused()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: an offset EQUAL to the trigger is refused at placement");
+            // ⚠️ The off-by-one this most expects to be got wrong: a stop exactly at the market is
+            // not a valid resting stop, so `>` instead of `>=` leaves the boundary case live.
+            var result = P2141Place(6, 6);
+            Assert(result != null && result.Status == "error",
+                "P2-141: an offset EQUAL to the trigger is refused at placement");
+        }
+
+        private static void TestAtm_P2141_TheRefusalNamesBothValues()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: the refusal names both values");
+            var result = P2141Place(1, 2);
+            string err = result == null ? "" : (result.Error ?? "");
+            // "invalid breakeven configuration" sends the operator to read source to find out
+            // WHICH of two knobs to turn. Both numbers, and both words, or it is not an answer.
+            bool namesBoth = err.Contains("1") && err.Contains("2")
+                && err.IndexOf("offset", StringComparison.OrdinalIgnoreCase) >= 0
+                && err.IndexOf("trigger", StringComparison.OrdinalIgnoreCase) >= 0;
+            Assert(namesBoth,
+                "P2-141: the refusal names both the offset and the trigger values");
+        }
+
+        private static void TestAtm_P2141_TheMeasuredLivePairIsRefused()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: the measured live pair is refused");
+            // The exact values nt_place_atm_order accepted without comment on the funded account.
+            var result = P2141Place(1, 2);
+            Assert(result != null && result.Status == "error",
+                "P2-141: the measured live pair (trigger 1, offset 2) is refused");
+        }
+
+        private static void TestAtm_P2141_NoBracketIsRegisteredWhenTheRefusalFires()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: nothing is created when the refusal fires");
+            var account = CreateAtmAccount("Sim101");
+            var result = P2141Place(1, 2, account);
+            // A refusal that still submits is worse than no refusal: it reports failure while the
+            // orders are live. The refusal must precede the ocoId and every CreateOrder.
+            bool nothingSubmitted = account.Orders.Count == 0
+                && (result == null || string.IsNullOrEmpty(result.BracketId));
+            Assert(nothingSubmitted,
+                "P2-141: no bracket is registered when the refusal fires");
+        }
+
+        // ── the negative controls ──────────────────────────────────────────────────────────
+        // These are GREEN NOW and must stay green: a validator that refuses everything passes
+        // every refusal test ever written for it. They are deliberately NOT in expect_green.
+
+        private static void TestAtm_P2141_TheDefaultPairIsAccepted()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: the default 12/2 pair is accepted");
+            var result = P2141Place(12, 2);
+            Assert(result != null && result.Status == "submitted",
+                "P2-141: the default 12/2 pair is accepted");
+        }
+
+        private static void TestAtm_P2141_AnOffsetOneTickInsideTheTriggerIsAccepted()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-141: an offset one tick inside the trigger is accepted");
+            // The tightest PLACEABLE configuration. If this goes red the guard is off by one in
+            // the other direction and has started refusing a stop that is genuinely below market.
+            var result = P2141Place(6, 5);
+            Assert(result != null && result.Status == "submitted",
+                "P2-141: an offset one tick inside the trigger is accepted");
+        }
+
         private static void TestAudit_P2145_NoPositionIsNeverAFinding()
         {
             Console.WriteLine("\n[TEST] P2-145: position <= 0 raises nothing");

@@ -1,0 +1,41 @@
+{
+  "_comment": "P2-141. A breakeven config that CANNOT be honoured on any provider is accepted in silence. Measured live on the FUNDED account TAKEPROFITPRO524207503 (Provider31), bracket 302e7759, 2026-08-17. Plan entry: docs/RISKGUARD_COPIER_HARDENING_PLAN.md '### P2-141'. The bridge half (nt_place_atm_order's schema) is a SEPARATE repo and is NOT in this ticket -- the addon must refuse on its own, because a schema that validates is not a guard that refuses.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "A breakeven offset at or past the trigger is refused at placement, naming both values",
+      "defect": "DynamicAtmManager places the breakeven stop at `entry + BreakevenOffsetTicks * tickSize` (CalculateBreakevenStopPrice) but only triggers it once price has travelled `BreakevenTriggerTicks` (ShouldTriggerBreakeven: `ticksGain >= config.BreakevenTriggerTicks`). For a long, the resulting sell-stop is therefore at or ABOVE the market whenever BreakevenOffsetTicks >= BreakevenTriggerTicks, and a sell-stop at or above the bid is invalid, so the provider holds the old price -- every time, structurally, for the life of the position. Nothing refuses, clamps or warns: not PlaceBracket, not AtmStrategyConfig. MEASURED LIVE on the funded account with breakevenTriggerTicks 1 and breakevenOffsetTicks 2, values nt_place_atm_order accepted without comment: ATM_STOP_MOVE_REQUESTED at 19:06:20 asked for a stop a quarter-point ABOVE the price that had just triggered it, ATM_STOP_CHANGE_IGNORED three times, ATM_STOP_MOVE_ABANDONED at 19:06:40. Twenty seconds from fill to a permanently abandoned stop on a healthy winning position, which then ran to close with its stop never off the initial 10-point distance. It also GUARANTEES the MaxStopModifyAttempts budget is spent: that 3-attempt budget exists so a TRANSIENT refusal can recover, and here the condition is permanent, so the abandonment alarm is certain to fire and the operator can do nothing with it -- which is how a correct alarm gets discounted over time. The defaults (trigger 12 / offset 2) are valid, which is why this was never hit; it needs an operator to tighten the trigger, which is a natural thing to want.",
+      "spec": "Add a PURE static predicate and call it from PlaceBracket before anything is created or registered. The predicate takes the two ints (not AtmStrategyConfig, and NOT Account/Instrument/Order -- it must name no NinjaTrader.Cbi type, so it is reachable from a test without a platform stub; the two existing validators in this repo are shaped exactly this way for exactly this reason, and neither is visible from here) and returns a refusal reason string, or null when the configuration is placeable. The condition is exactly `offsetTicks >= triggerTicks`. Note that EQUAL is also a refusal: a stop exactly at the market is not a valid resting stop, and `>` rather than `>=` is the off-by-one this ticket most expects to be got wrong. Call it in PlaceBracket next to the existing `if (stopPrice <= 0 || targetPrice <= 0)` refusal and BEFORE `string ocoId = Guid.NewGuid().ToString();` -- nothing may be created, submitted, registered in the bracket dictionary, or persisted when the refusal fires. Use the same shape as the precedent: `result.Status = \"error\"; result.Error = <reason>; return result;`. THE REASON MUST NAME BOTH NUMBERS AND WHICH IS WHICH, because 'invalid breakeven configuration' sends the operator to read source to find out which of two knobs to turn; include the words breakeven, offset and trigger, and both integer values. ALSO log it once via RiskGuardAddOn.LogFromComponent with the NEW event name ATM_BRACKET_REFUSED (it does not exist yet -- introduce it; the neighbouring names ATM_BRACKET_RESTORED and ATM_BRACKET_RESTORE_FAILED are the house pattern), so the refusal exists in the audit trail and not only in the caller's return value -- the caller here is an MCP tool whose response nobody keeps. DO NOT CLAMP, and do not silently substitute the default: a caller who asked for a 1-tick trigger and is given 12 has been answered a different question (P1-102's lesson about defaulting in the wrapper). DO NOT change CalculateBreakevenStopPrice, ShouldTriggerBreakeven, MaxStopModifyAttempts, the re-arm, or any part of the stop-move path -- P1-139, P2-135 and P1-133 all live in there, all landed, all pinned by tests and by mutate_p1139.py. Do not touch the defaults on BreakevenTriggerTicks (12) or BreakevenOffsetTicks (2); they are correct and a test pins them. The two negative controls -- 'the default 12/2 pair is accepted' and 'an offset one tick inside the trigger is accepted' -- are GREEN NOW and are deliberately NOT in expect_green. They must STAY green: a validator that refuses everything passes every refusal test ever written for it, and the one-tick-inside case is what catches the guard being off by one in the other direction, refusing a stop that is genuinely below the market.",
+      "regions": [
+        {
+          "id": "TheValidator",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public bool ShouldTriggerBreakeven(AtmStrategyConfig config, double entryPrice, double currentPrice, bool isLong, double tickSize)",
+          "kind": "decl",
+          "note": "Put the new pure predicate beside this method and CalculateBreakevenStopPrice, because those two are the pair whose disagreement is the defect and a reader arriving at either should find the guard next to it. Do not modify either of them."
+        },
+        {
+          "id": "ThePlacementRefusal",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public BracketResult PlaceBracket(",
+          "kind": "decl",
+          "note": "The call site. The refusal goes next to the existing `if (stopPrice <= 0 || targetPrice <= 0)` block and strictly BEFORE `string ocoId = Guid.NewGuid().ToString();`. Everything after that line creates orders or registry state. ⚠️ This method also holds the deferred-leg submission path that P2-150 is filed against -- do not touch it, and do not change what Status it reports."
+        },
+        {
+          "id": "TheConfig",
+          "file": "addons/DynamicAtmManager.cs",
+          "anchor": "public class AtmStrategyConfig",
+          "kind": "decl",
+          "note": "Read-only for this ticket. Holds BreakevenTriggerTicks (12) and BreakevenOffsetTicks (2), the pair whose combination is being validated. The defaults are VALID (2 < 12) and must not change."
+        }
+      ],
+      "expect_green": [
+        "P2-141: an offset PAST the trigger is refused at placement",
+        "P2-141: an offset EQUAL to the trigger is refused at placement",
+        "P2-141: the refusal names both the offset and the trigger values",
+        "P2-141: the measured live pair (trigger 1, offset 2) is refused",
+        "P2-141: no bracket is registered when the refusal fires"
+      ]
+    }
+  ]
+}
