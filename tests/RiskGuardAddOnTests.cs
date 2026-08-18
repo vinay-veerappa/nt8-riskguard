@@ -9714,9 +9714,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string err = result == null ? "" : (result.Error ?? "");
             // "invalid breakeven configuration" sends the operator to read source to find out
             // WHICH of two knobs to turn. Both numbers, and both words, or it is not an answer.
-            bool namesBoth = err.Contains("1") && err.Contains("2")
-                && err.IndexOf("offset", StringComparison.OrdinalIgnoreCase) >= 0
-                && err.IndexOf("trigger", StringComparison.OrdinalIgnoreCase) >= 0;
+            // ⚠️ Assert the two PARAMETER NAMES and the two parenthesised VALUES, not the bare
+            // words. A first version asked only for "offset"/"trigger" anywhere in the string, and a
+            // mutant deleting "breakevenTriggerTicks" from the sentence that matters SURVIVED,
+            // because a later sentence of prose still contained the word "trigger". Same shape as
+            // asserting "1" and being satisfied by an identifier in the same sentence.
+            bool namesBoth = err.Contains("breakevenOffsetTicks") && err.Contains("(1)")
+                && err.Contains("breakevenTriggerTicks") && err.Contains("(2)");
             Assert(namesBoth,
                 "P2-141: the refusal names both the offset and the trigger values");
         }

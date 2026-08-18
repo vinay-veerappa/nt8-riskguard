@@ -797,7 +797,7 @@ jobs:
           # ticket is about refusing something, so it satisfies all of them and ships a validator
           # that makes the endpoint unusable -- P2-115's constant and F-17's always-refuse again.
           # The six ACCEPTANCE cases are the only thing that bans it.
-          - { label: "P1-76+P2-27+P0-67", batteries: "mutate_p1_76.py mutate_p227.py mutate_p0_67.py" }   # 752s = P1-76 304s + P2-27 247s + P0-67 201s
+          - { label: "P1-76+P2-27+P0-67+P2-141", batteries: "mutate_p1_76.py mutate_p227.py mutate_p0_67.py mutate_p2141.py" }   # 992s = P1-76 304s + P2-27 247s + P0-67 201s + P2-141 240s (local measure; re-pack once CI prints its BATTERY_SECONDS)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
