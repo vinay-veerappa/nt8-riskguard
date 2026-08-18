@@ -11431,7 +11431,11 @@ sessions after that stopped being true.
    system working correctly: `Protected` means *something* is covering, not everything, which a
    long-closed entry established deliberately. The loud half was the whole defect. No ID is
    repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
-4. **`P2-141`**, **`P2-142`**, then `P1-140`'s native-partials remainder.
+4. **`P2-142`** — the operator has ruled: ALL configuration is persistent, so a deliberate
+   DISARM must survive a recompile. ⚠️ A persisted disarm means the guard can come up DISARMED
+   with a funded account attached, so the state has to be loud on load, not merely stored.
+   Then **`P2-154`** (the bridge half of the closed breakeven entry) and `P1-140`'s
+   native-partials remainder.
 5. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
    ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
 6. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.

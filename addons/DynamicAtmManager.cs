@@ -457,6 +457,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return result;
             }
 
+            string breakevenRefusal = ValidateBreakevenPlacement(config.BreakevenOffsetTicks, config.BreakevenTriggerTicks);
+            if (breakevenRefusal != null)
+            {
+                RiskGuardAddOn.LogFromComponent(account != null ? account.Name : "", "ATM_BRACKET_REFUSED",
+                    breakevenRefusal);
+                result.Status = "error";
+                result.Error = breakevenRefusal;
+                return result;
+            }
+
             string ocoId = Guid.NewGuid().ToString();
             string bracketId = Guid.NewGuid().ToString().Substring(0, 8);
             string entryName = AtmOrderIdentity.EntryName(bracketId);
@@ -1401,6 +1411,18 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // THE fix, in one line: the cache is what the broker holds. Never what was asked for.
             bracket.CurrentStopPrice = brokerPrice;
+        }
+
+        public static string ValidateBreakevenPlacement(int breakevenOffsetTicks, int breakevenTriggerTicks)
+        {
+            if (breakevenOffsetTicks >= breakevenTriggerTicks)
+            {
+                return string.Format(
+                    "Invalid breakeven configuration: breakevenOffsetTicks ({0}) must be less than breakevenTriggerTicks ({1}). A breakeven stop placed with offset at or past the trigger would rest at or inside the market and is not valid.",
+                    breakevenOffsetTicks,
+                    breakevenTriggerTicks);
+            }
+            return null;
         }
 
         public bool ShouldTriggerBreakeven(AtmStrategyConfig config, double entryPrice, double currentPrice, bool isLong, double tickSize)

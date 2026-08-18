@@ -7780,7 +7780,53 @@ same move was accepted. **So "the Simulator honours everything" is false, and th
 variable is whether the resulting stop is valid against the current market, not the provider.**
 
 
-### P2-141. `BreakevenOffsetTicks >= BreakevenTriggerTicks` is a configuration that CANNOT be honoured, and it is accepted in silence — measured on the FUNDED account 2026-08-17 (session 56) — OPEN
+### P2-141. `BreakevenOffsetTicks >= BreakevenTriggerTicks` is a configuration that CANNOT be honoured, and it is accepted in silence — ✅ FIXED 2026-08-18 (session 59), measured on the FUNDED account 2026-08-17 (session 56)
+
+**FIXED.** `ValidateBreakevenPlacement(offsetTicks, triggerTicks)` — a pure static naming no
+`NinjaTrader.Cbi` type, so it is reachable from the harness without a platform stub — returns a
+refusal reason or `null`. `PlaceBracket` calls it beside the existing `stopPrice <= 0` refusal and
+strictly BEFORE `string ocoId = Guid.NewGuid()`, so nothing is created, submitted or registered.
+The refusal names both parameters and both values, and is logged as `ATM_BRACKET_REFUSED`.
+
+The condition is `offset >= trigger`, not `>`. **Equal is also a refusal** — a stop exactly at the
+market is not a valid resting stop — and that boundary has its own test and its own mutant, because
+it is the off-by-one this defect turns on.
+
+⚠️ **Two negative controls, and they are not optional.** The default 12/2 pair and an offset one
+tick INSIDE the trigger must both still be ACCEPTED. A validator that refuses everything passes
+every refusal test ever written for it ([[a-detector-needs-a-negative-test]]), and the
+one-tick-inside case is the only thing that catches the guard being off by one in the other
+direction, refusing a stop that is genuinely below the market.
+
+**Driven through the agent-loop, which ended `NOT_CONVERGING` after 3 rounds** — tests green,
+compile clean and no regressions every round, but one blocking finding per round with zero overlap
+between consecutive rounds. Arbitrated by hand, which is what that verdict means. The panel's
+blockers were style objections and one of them contradicted the ticket (it asked for the refusal to
+precede the `switch` that computes `stopPrice`, which the ticket had placed deliberately after it).
+
+⚠️ **The panel missed the only real defect, and it was in the line it had just written.**
+`RiskGuardAddOn.LogFromComponent(string account, string eventType, string message)` takes an
+ACCOUNT first, and the candidate passed `"DynamicAtmManager"` — filing the audit row against an
+account that does not exist. Every other call site passes an account name or `""`. Found by reading
+the signature rather than the diff, and it is now group 5 of the battery.
+
+**Evidence**: suite 3163 → 3170 (7 tests, 5 written RED first), `mutation/mutate_p2141.py`
+**7/8 killed + 1 declared EXPECTED SURVIVOR**. The declared one is the audit-row subject:
+`LogFromComponent` is a no-op when `Instance` is null and the ATM tests clear it, so nothing logged
+from here is observable from the harness — the same exemption the reconciler tests cite. Routed
+through `_battery.finish` so a declaration that starts being KILLED is reported STALE rather than
+passing quietly.
+
+⚠️ **One survivor was a defect in the TEST, not the code.** The first version of the
+names-both-values assertion asked only for the words "offset" and "trigger" anywhere in the string,
+and a mutant that deleted `breakevenTriggerTicks` from the sentence that matters SURVIVED — because
+a later sentence of prose still contained the word "trigger". Tightened to assert the two parameter
+identifiers and the two parenthesised values. Same shape as
+[[a-substring-assertion-catches-the-identifier]].
+
+**The bridge half is NOT done**: `nt_place_atm_order`'s schema in `nt8-mcp-bridge` still accepts the
+pair without comment. The addon refusing on its own is the load-bearing half — a schema that
+validates is not a guard that refuses — but the caller still gets the refusal later than it could.
 
 **A breakeven stop placed `offset` ticks past entry, triggered `trigger` ticks past entry, is above
 the market whenever `offset >= trigger`.** For a long, a sell-stop at or above the bid is invalid,
@@ -8347,6 +8393,27 @@ if (state.LockoutWasShadowOnly) return false;
 and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shadow lockout must not bind, or `shadow` would be enforcing.** In `live` that lockout binds and the order is refused pre-trade. So the lockout half was the system behaving correctly and the author reading a `shadow` observation as a defect — [[configured-evaluated-enforcing]] in the OPTIMISTIC direction, and the reason the sizing hole underneath went unnoticed for the length of a session.
 
 
+
+### P2-154. `nt_place_atm_order` still accepts a breakeven pair the addon will refuse, so the operator learns at placement instead of at the schema — OPEN, split out of `P2-141` 2026-08-18 (session 59)
+
+`P2-141` closed the load-bearing half: `DynamicAtmManager.PlaceBracket` now refuses
+`BreakevenOffsetTicks >= BreakevenTriggerTicks` before anything is created, naming both values.
+
+The wrapper half is untouched. `McpBridgeAddOn.cs` reads `breakevenTriggerTicks` and
+`breakevenOffsetTicks` straight into `AtmStrategyConfig` with no relation between them checked, so
+the pair is accepted by the tool, travels to the addon, and comes back as an error. That is a worse
+answer than a schema refusal, not a broken one — the trade is still refused.
+
+⚠️ **The addon must KEEP its refusal regardless.** A schema that validates is not a guard that
+refuses: the bridge is one of several callers, and a check that lives only in the wrapper is absent
+for every other path. This is additive.
+
+⚠️ **Do not implement it as a schema `default:`.** A `default` on a field the receiver merges is a
+WRITE, which is how a wrapper came to answer a different question than the caller asked. Refuse and
+name both values; do not substitute one.
+
+**Where**: `nt8-mcp-bridge`, `McpBridgeAddOn.cs` around the `breakevenTriggerTicks` read. Its own
+repo, its own suite, its own contract tests.
 
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
