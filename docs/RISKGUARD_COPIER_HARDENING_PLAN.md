@@ -8348,6 +8348,74 @@ and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shad
 
 
 
+### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
+
+Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by
+reading anything.
+
+`Main` invoked all 677 tests as bare statements:
+
+```csharp
+TestMaxPositionSizeEnforcement();
+TestDailyLossLimitLockout();
+```
+
+with no per-test `try`/`catch`. The first test to throw took the process down, so `RESULTS:
+Passed = x, Failed = y` was never printed at all. **A run that dies prints no failure**, and the
+suite therefore read `3158 / 0` in exactly the case where something was badly wrong.
+
+Two gates were defeated by that, in opposite directions:
+
+1. **Every battery in `mutation/` scores `NO RESULT LINE` as KILLED.** So a mutant that made
+   production code *throw* counted as detected while nothing had asserted anything. `P2-148`
+   started requiring a `[FAIL]` before believing a crash, and **7 mutants across 5 CI bins
+   immediately flipped KILLED → SURVIVED** — every one a null-handling mutant:
+
+   | battery | mutant |
+   |---|---|
+   | `mutate_ui6.py` | the latency metric flattened to its value (`P1-22`) |
+   | `mutate_ui6.py` | the slippage metric flattened the same way |
+   | `mutate_ui6.py` | a missing copier serialises without an error (`P2-83`) |
+   | `mutate_p2119.py` | a null config accepted and written as literal `null` |
+   | `mutate_p1121.py` | `GetRelationshipMetrics` throws on a null relationship |
+   | `mutate_ui2.py` | a `JArray` arrives as one nonsense account name |
+   | `mutate_p2123.py` | `ComputeEffectiveRatio` drops its null guard |
+
+2. **The agent-loop's `expect_green` gate matches this runner's `[FAIL]` lines**, so a test that
+   throws instead of failing silently *removes itself from the gate* — the thing standing between
+   this repo and a suite that asserts whatever the implementation happens to do.
+
+⚠️ **The hazard was already written down, twice, in the file it applies to** — `:1325` and
+`:11807`, both saying "a test that throws instead of failing produces no `[FAIL]` line and
+silently removes itself from the gate." It was stated and never closed. The same family has bitten
+this repo before: `TestHarness_AllDeclaredTestsAreInvoked`'s own docstring records a stray
+`Environment.Exit` that aborted a run at test 92 of 117, undetected for as long as the suite was
+green.
+
+**The fix is the class, not the 7 instances.** A `Run(Action)` wrapper reports an escaping
+exception as `[FAIL] <name> THREW <Type>: <message>` and *continues*, so one bad test cannot
+conceal the 676 behind it. Writing 7 individual null tests would have left the next crash-mutant
+mis-scored. Two source-gate tests take a `[CallerFilePath]` parameter and get the named overload,
+because a bare lambda's `Method.Name` renders as `<Main>b__0` on precisely the tests whose failure
+line has to name them.
+
+`Run` deliberately does **not** add to `_invokedTests`: that set is fed by `Assert`'s
+`CallerMemberName` so a test which is *called but asserts nothing* still gets caught, and marking
+invocation in `Run` would make that structural check pass vacuously
+([[a-green-that-can-never-be-red]]).
+
+**The negative control is the load-bearing half** — a wrapper that swallows exceptions and one
+that reports them are indistinguishable from a green suite
+([[a-detector-needs-a-negative-test]]). `TestHarness_AThrowingTestIsAFailureAndTheRunContinues`
+throws on purpose and asserts the count, the continuation, and the emitted text.
+
+⚠️ **It captures stdout, and that is not tidiness.** Every battery decides "did anything object?"
+by searching stdout for `[FAIL]`. A control that printed a real `[FAIL]` would make every
+undetected crash look detected again — re-arming this exact hole from inside its own proof. The
+counters are saved and restored for the same reason.
+
+Suite `3158 / 0` → `3163 / 0` (5 new assertions, same 677 tests).
+
 ### P2-152. A mutant whose anchor now matches only a COMMENT edits prose, can never be killed, and `check_anchors.py` reports it healthy — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by re-running `mutate_p330.py` after `P2-145` landed, not by reading anything.

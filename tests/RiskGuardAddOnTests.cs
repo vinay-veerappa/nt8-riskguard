@@ -28,6 +28,76 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly HashSet<string> _invokedTests = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>
+        /// Invokes one test and turns an ESCAPING EXCEPTION into a [FAIL] line.
+        ///
+        /// ⚠️ THIS IS THE WHOLE POINT. Main used to call all 677 tests as bare statements, so the
+        /// FIRST test to throw killed the process before `RESULTS: Passed = x, Failed = y` was ever
+        /// printed. A run that dies prints no failure at all, so the suite read 3158/0 throughout.
+        ///
+        /// Two gates were silently defeated by that, in opposite directions:
+        ///
+        ///   1. Every mutation battery in `mutation/` scores `NO RESULT LINE` as KILLED. So a mutant
+        ///      that made production code THROW counted as detected while nothing had asserted
+        ///      anything. MEASURED: once P2-148 required a [FAIL] before believing a crash, 7
+        ///      mutants across 5 CI bins flipped from KILLED to SURVIVED -- every one of them a
+        ///      null-handling mutant (a null config serialised as literal `null`, a null
+        ///      relationship in GetRelationshipMetrics, ComputeEffectiveRatio's dropped null
+        ///      guard, two flattened metrics, a missing copier, a JArray account name).
+        ///   2. The agent-loop's `expect_green` gate matches THIS runner's [FAIL] lines, so a test
+        ///      that throws instead of failing REMOVES ITSELF from the gate. That hazard is stated
+        ///      twice in this file already (see the UI1 block) and was never closed.
+        ///
+        /// A throw is now a failure that names itself, and the run CONTINUES, so one bad test
+        /// cannot conceal the 676 behind it. Deliberately does NOT add the name to
+        /// <see cref="_invokedTests"/>: that set is fed by Assert's CallerMemberName precisely so a
+        /// test which is called but asserts nothing still gets caught, and marking invocation here
+        /// would make that structural check pass vacuously.
+        /// </summary>
+        /// <param name="name">
+        /// Overrides the reported name. Needed only for the two source-gate tests that take a
+        /// <c>[CallerFilePath]</c> parameter and so cannot convert to <see cref="Action"/> directly:
+        /// wrapped in a lambda, <c>Method.Name</c> would render as <c>&lt;Main&gt;b__0</c> on
+        /// precisely the tests whose failure line has to name them. The CallerFilePath default
+        /// still resolves to this file, because the lambda lives in it.
+        /// </param>
+        private static void Run(Action test, string name)
+        {
+            RunNamed(test, name);
+        }
+
+        private static void Run(Action test)
+        {
+            RunNamed(test, null);
+        }
+
+        private static void RunNamed(Action test, string name)
+        {
+            if (test == null)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("  [FAIL] a null test delegate reached Run -- the runner lost a test");
+                Console.ResetColor();
+                _testsFailed++;
+                return;
+            }
+
+            try
+            {
+                test();
+            }
+            catch (Exception ex)
+            {
+                // The TYPE and MESSAGE both go on the line: a NullReferenceException and a failed
+                // file write are different defects, and the mutation batteries read this text.
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("  [FAIL] " + (name ?? test.Method.Name) + " THREW "
+                                  + ex.GetType().Name + ": " + (ex.Message ?? "(no message)"));
+                Console.ResetColor();
+                _testsFailed++;
+            }
+        }
+
+        /// <summary>
         /// Deterministic clock for firm-mirror tests: a fixed mid-session UTC timestamp, safely
         /// before the default 22:00 UTC daily-reset boundary. Tests must never read the wall clock.
         /// </summary>
@@ -51,809 +121,810 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine("====================================================");
 
             // - Original 9 tests -
-            TestMaxPositionSizeEnforcement();
-            TestDailyLossLimitLockout();
-            TestTrailingDrawdownLockout();
-            TestMaxTradesOvertradingLockout();
-            TestConsecutiveLossesCooldownLockout();
-            TestAccountExclusionsBypass();
-            TestManualUnlockResetsAllMetricsAndPreventsRelocking();
-            TestRealizedPnLLagHandling();
-            TestMcpBridgeLockoutBlock();
+            Run(TestMaxPositionSizeEnforcement);
+            Run(TestDailyLossLimitLockout);
+            Run(TestTrailingDrawdownLockout);
+            Run(TestMaxTradesOvertradingLockout);
+            Run(TestConsecutiveLossesCooldownLockout);
+            Run(TestAccountExclusionsBypass);
+            Run(TestManualUnlockResetsAllMetricsAndPreventsRelocking);
+            Run(TestRealizedPnLLagHandling);
+            Run(TestMcpBridgeLockoutBlock);
 
             // - Critical gap tests -
-            TestIsArmedFalseBypassesAllRules();
-            TestTradeTodayCountingOnRoundTrip();
-            TestFlipDetectionCountsAsEntry();
-            TestTradeCountingMultiContractScalingDebounced();
-            TestLockoutWatchdogSweepFlattensOpenPosition();
-            TestP0_51_ShadowModeIssuesNoBrokerCallsFromTheLockoutSweep();
-            TestP0_51_ShadowModeDoesNotDrainInterventionCancelsToTheBroker();
-            TestP1_54_LockoutLapsesWhenItsDeadlinePasses();
-            TestP1_54_LockoutDeadlineSurvivesARestart();
-            TestP1_52_NormalAtmBracketIsNotAFlood();
-            TestLockoutAllowsPositionReducingOrders();
-            TestCooldownExpiryAllowsReEntry();
-            TestOrderCancelledWhenLockedOnOrderUpdate();
-            TestOrderCancelledWhenConsecLossesAtMaxNotLocked();
+            Run(TestIsArmedFalseBypassesAllRules);
+            Run(TestTradeTodayCountingOnRoundTrip);
+            Run(TestFlipDetectionCountsAsEntry);
+            Run(TestTradeCountingMultiContractScalingDebounced);
+            Run(TestLockoutWatchdogSweepFlattensOpenPosition);
+            Run(TestP0_51_ShadowModeIssuesNoBrokerCallsFromTheLockoutSweep);
+            Run(TestP0_51_ShadowModeDoesNotDrainInterventionCancelsToTheBroker);
+            Run(TestP1_54_LockoutLapsesWhenItsDeadlinePasses);
+            Run(TestP1_54_LockoutDeadlineSurvivesARestart);
+            Run(TestP1_52_NormalAtmBracketIsNotAFlood);
+            Run(TestLockoutAllowsPositionReducingOrders);
+            Run(TestCooldownExpiryAllowsReEntry);
+            Run(TestOrderCancelledWhenLockedOnOrderUpdate);
+            Run(TestOrderCancelledWhenConsecLossesAtMaxNotLocked);
 
             // - Important gap tests -
-            TestDailyLossIncludesUnrealizedPnL();
-            TestSessionResetInSweep();
-            TestLockoutEnforcementFirstSweep();
-            TestLockoutEnforcementSubsequentSweepNoPosition();
-            TestLockoutEnforcementSubsequentSweepWithNewPosition();
-            TestStopGuardAutoStop();
-            TestStopGuardFlatten();
-            TestP187_AnUnrecognisedStopActionStillProtectsThePosition();
-            TestP187_AnUnrecognisedStopActionFailsPreflight();
-            TestP187_NothingAdvertisesAnActionTheGuardCannotPerform();
-            TestStopGuardNoActionWhenStopPresent();
-            TestStopGuardTransientStateValidation();
-            TestStopGuardPartiallyFilledValidation();
-            TestEdgeWindowGateBreach();
-            TestConsecutiveWinsResetLossCounter();
-            TestAggregateSizeBreach();
+            Run(TestDailyLossIncludesUnrealizedPnL);
+            Run(TestSessionResetInSweep);
+            Run(TestLockoutEnforcementFirstSweep);
+            Run(TestLockoutEnforcementSubsequentSweepNoPosition);
+            Run(TestLockoutEnforcementSubsequentSweepWithNewPosition);
+            Run(TestStopGuardAutoStop);
+            Run(TestStopGuardFlatten);
+            Run(TestP187_AnUnrecognisedStopActionStillProtectsThePosition);
+            Run(TestP187_AnUnrecognisedStopActionFailsPreflight);
+            Run(TestP187_NothingAdvertisesAnActionTheGuardCannotPerform);
+            Run(TestStopGuardNoActionWhenStopPresent);
+            Run(TestStopGuardTransientStateValidation);
+            Run(TestStopGuardPartiallyFilledValidation);
+            Run(TestEdgeWindowGateBreach);
+            Run(TestConsecutiveWinsResetLossCounter);
+            Run(TestAggregateSizeBreach);
 
             // - Lower-priority / boundary tests -
-            TestShadowModeSkipsAction();
-            TestLiveModeExecutesAction();
-            TestMaxSizeAtExactlyLimit();
-            TestDailyLossAtExactlyLimit();
-            TestIsAccountLockedForUnknownAccount();
-            TestMultipleInstrumentsNoPerInstrumentBreach();
+            Run(TestShadowModeSkipsAction);
+            Run(TestLiveModeExecutesAction);
+            Run(TestMaxSizeAtExactlyLimit);
+            Run(TestDailyLossAtExactlyLimit);
+            Run(TestIsAccountLockedForUnknownAccount);
+            Run(TestMultipleInstrumentsNoPerInstrumentBreach);
 
             // - Exclusion deep-dive tests (test-first) -
-            TestExcludedAccountMaxContractsBypassed();
-            TestExcludedAccountAllRulesBypassed();
-            TestExcludedAccountOrderNotCancelledWhenLocked();
-            TestExcludedAccountNotCountedInAggregate();
-            TestExcludedAccountNotFlattenedByAggregateBreach();
-            TestExcludedAccountSweepDoesNotLockout();
-            TestNonExcludedAccountStillCaughtBesideExcludedOne();
-            TestExclusionRemovedReEnablesRules();
+            Run(TestExcludedAccountMaxContractsBypassed);
+            Run(TestExcludedAccountAllRulesBypassed);
+            Run(TestExcludedAccountOrderNotCancelledWhenLocked);
+            Run(TestExcludedAccountNotCountedInAggregate);
+            Run(TestExcludedAccountNotFlattenedByAggregateBreach);
+            Run(TestExcludedAccountSweepDoesNotLockout);
+            Run(TestNonExcludedAccountStillCaughtBesideExcludedOne);
+            Run(TestExclusionRemovedReEnablesRules);
 
             // - Pass 2 Gap Tests (test-first) -
-            TestSweepLockoutSkipsExcludedAccount();
-            TestSweepPnLSyncSkipsConsecutiveLossForExcludedAccount();
-            TestValidateInvariantReturnsFalseForUnknownAccount();
-            TestStopGuardPartialStopGap();
-            TestSweepAutoSetsCooldownOnConsecutiveLosses();
-            TestProcessActionForceLiveBypassesShadowMode();
-            TestEdgeWindowGateInsideWindowNoBreach();
-            TestEdgeWindowGateNoWindowsDefinedNoBreach();
-            TestMultipleRulesFireSimultaneously();
+            Run(TestSweepLockoutSkipsExcludedAccount);
+            Run(TestSweepPnLSyncSkipsConsecutiveLossForExcludedAccount);
+            Run(TestValidateInvariantReturnsFalseForUnknownAccount);
+            Run(TestStopGuardPartialStopGap);
+            Run(TestSweepAutoSetsCooldownOnConsecutiveLosses);
+            Run(TestProcessActionForceLiveBypassesShadowMode);
+            Run(TestEdgeWindowGateInsideWindowNoBreach);
+            Run(TestEdgeWindowGateNoWindowsDefinedNoBreach);
+            Run(TestMultipleRulesFireSimultaneously);
 
             // - Pass 3 Gap Tests -
-            TestAggregateSizingExpectedCopiesScaling();
-            TestFirmMirrorTrailingDDBreachEmitsAction();
-            TestFirmMirrorDailyLossBreachEmitsAction();
-            TestP1_42_MappedAccountIsEvaluatedAgainstItsFirmProfile();
-            TestF9_TheReporterAndTheEnforcerAgreeOnEveryFirmShape();
-            TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan();
-            TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen();
-            TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan();
-            TestF9_TheDeployedFirmMappingPassesPreflight();
-            TestF9b_AMappingToAnAccountThatDoesNotExistFailsPreflight();
-            TestF9b_APlanWhoseStatedSizeContradictsTheAccountFailsPreflight();
-            TestF9b_AnUnstatedSizeAndAnAbsentAccountAreDifferentThings();
-            TestP292_AShadowBreachMustNotStopTheAccountTrading();
-            TestP292_EveryRuleLockoutRecordsWhetherItCouldAct();
-            TestP292_SwitchingToShadowIsNotALockoutBypass();
-            TestP292_ALockoutFromAnOlderStateFileStillBites();
-            TestP292_AManualLockoutBitesInEveryMode();
-            TestP292_TheAuthoritySurvivesASaveLoadRoundTrip();
-            TestP292_AShadowLockoutIsRECORDED();
-            TestP293_PureAndOverrideWithFrictionFailPreflight();
-            TestP294_ATimedManualLockoutStopsNewOrders();
-            TestP295_FirmStartingBalanceUsesPlanAccountSizeNotHeuristic();
-            TestP331_InFlightLedgerSuppressesCreateUntilAccepted();
-            TestP331_LedgerEntryClearedOnAccepted();
-            TestP331_LedgerEntryClearedOnSubmitFailure();
-            TestP331_StaleLedgerEntryIsClearedAfterTimeout();
-            TestP331_TimerCreatesMissingLegWhenNoInFlight();
-            TestP331_TimerDoesNotCreateDuplicateWhenInFlight();
-            TestP330_AuditDetectsNakedPosition();
-            TestP330_AuditDetectsOrphanStop();
-            TestP330_AuditDetectsFsmBrokerDivergence();
-            TestP330_AuditIsSilentOnACorrectlyProtectedAccount();
-            TestP330_AuditIsSilentOnAFlatPositionObject();
-            TestP330_AuditReportsPartialCoverageAsNaked();
-            TestP330_AuditDoesNotCallAStopOverALivePositionAnOrphan();
-            TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder();
-            TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder();
-            TestP113_ConcurrentGuardEventsDoNotCorruptState();
-            TestP225_NewsShieldLoadsEventsFromDisk();
-            TestP334_CopierPreflightDetectsMissingFollower();
-            TestP334_CopierPreflightPassesWhenAllFollowersConnected();
-            TestStopGuardDefaultOffsetFallback();
+            Run(TestAggregateSizingExpectedCopiesScaling);
+            Run(TestFirmMirrorTrailingDDBreachEmitsAction);
+            Run(TestFirmMirrorDailyLossBreachEmitsAction);
+            Run(TestP1_42_MappedAccountIsEvaluatedAgainstItsFirmProfile);
+            Run(TestF9_TheReporterAndTheEnforcerAgreeOnEveryFirmShape);
+            Run(TestF9_TheReportedLimitIsTheOneInForceAndNamesThePlan);
+            Run(TestF9_AnAccountAbsentFromAPopulatedMapIsInertNotGreen);
+            Run(TestF9_ADictionaryEntryHoldingNullIsNotAResolvedPlan);
+            Run(TestF9_TheDeployedFirmMappingPassesPreflight);
+            Run(TestF9b_AMappingToAnAccountThatDoesNotExistFailsPreflight);
+            Run(TestF9b_APlanWhoseStatedSizeContradictsTheAccountFailsPreflight);
+            Run(TestF9b_AnUnstatedSizeAndAnAbsentAccountAreDifferentThings);
+            Run(TestP292_AShadowBreachMustNotStopTheAccountTrading);
+            Run(TestP292_EveryRuleLockoutRecordsWhetherItCouldAct);
+            Run(TestP292_SwitchingToShadowIsNotALockoutBypass);
+            Run(TestP292_ALockoutFromAnOlderStateFileStillBites);
+            Run(TestP292_AManualLockoutBitesInEveryMode);
+            Run(TestP292_TheAuthoritySurvivesASaveLoadRoundTrip);
+            Run(TestP292_AShadowLockoutIsRECORDED);
+            Run(TestP293_PureAndOverrideWithFrictionFailPreflight);
+            Run(TestP294_ATimedManualLockoutStopsNewOrders);
+            Run(TestP295_FirmStartingBalanceUsesPlanAccountSizeNotHeuristic);
+            Run(TestP331_InFlightLedgerSuppressesCreateUntilAccepted);
+            Run(TestP331_LedgerEntryClearedOnAccepted);
+            Run(TestP331_LedgerEntryClearedOnSubmitFailure);
+            Run(TestP331_StaleLedgerEntryIsClearedAfterTimeout);
+            Run(TestP331_TimerCreatesMissingLegWhenNoInFlight);
+            Run(TestP331_TimerDoesNotCreateDuplicateWhenInFlight);
+            Run(TestP330_AuditDetectsNakedPosition);
+            Run(TestP330_AuditDetectsOrphanStop);
+            Run(TestP330_AuditDetectsFsmBrokerDivergence);
+            Run(TestP330_AuditIsSilentOnACorrectlyProtectedAccount);
+            Run(TestP330_AuditIsSilentOnAFlatPositionObject);
+            Run(TestP330_AuditReportsPartialCoverageAsNaked);
+            Run(TestP330_AuditDoesNotCallAStopOverALivePositionAnOrphan);
+            Run(TestP157_SubmittedOrderIsNotTreatedAsLeaderOrder);
+            Run(TestP157_NonSubmittedOrderWithCopierNameIsStillLeaderOrder);
+            Run(TestP113_ConcurrentGuardEventsDoNotCorruptState);
+            Run(TestP225_NewsShieldLoadsEventsFromDisk);
+            Run(TestP334_CopierPreflightDetectsMissingFollower);
+            Run(TestP334_CopierPreflightPassesWhenAllFollowersConnected);
+            Run(TestStopGuardDefaultOffsetFallback);
 
             // - Manual Lockout Tests -
-            TestManualTimedLockout();
-            TestManualEodLockout();
-            TestManualUnlockClearsTimedLockout();
+            Run(TestManualTimedLockout);
+            Run(TestManualEodLockout);
+            Run(TestManualUnlockClearsTimedLockout);
 
             // - FSM StopGuard Tests (-6) -
-            TestFsm_UnprotectedToProtectedViaOcoStopLeg();
-            TestFsm_NoDuplicateAutoStopWhenStopLegPending();
-            TestFsm_GraceExpiryPlacesAutoStopOnce();
-            TestFsm_StopArrivesBeforePositionIsBuffered();
-            TestFsm_FlatTearsDownAndCancelsOrphanAutoStop();
-            TestFsm_StandaloneStopReachesProtected();
-            TestFsm_RejectedStopLegReturnsToUnprotected();
-            TestFsm_PositionFlattenedBeforeGraceNoAutoStop();
-            TestFsm_DuplicateOrderUpdatesAreIdempotent();
-            TestFsm_DuplicatePositionUpdatesAreIdempotent();
-            TestFsm_EvaluateRulesNoLongerEmitsStopGuard();
-            TestFsm_ExcludedAccountSkipsFsm();
+            Run(TestFsm_UnprotectedToProtectedViaOcoStopLeg);
+            Run(TestFsm_NoDuplicateAutoStopWhenStopLegPending);
+            Run(TestFsm_GraceExpiryPlacesAutoStopOnce);
+            Run(TestFsm_StopArrivesBeforePositionIsBuffered);
+            Run(TestFsm_FlatTearsDownAndCancelsOrphanAutoStop);
+            Run(TestFsm_StandaloneStopReachesProtected);
+            Run(TestFsm_RejectedStopLegReturnsToUnprotected);
+            Run(TestFsm_PositionFlattenedBeforeGraceNoAutoStop);
+            Run(TestFsm_DuplicateOrderUpdatesAreIdempotent);
+            Run(TestFsm_DuplicatePositionUpdatesAreIdempotent);
+            Run(TestFsm_EvaluateRulesNoLongerEmitsStopGuard);
+            Run(TestFsm_ExcludedAccountSkipsFsm);
 
             // -- FSM edge-case tests --
-            TestFsm_ProtectedToUnprotectedOnStopFilled();
-            TestFsm_ProtectedPendingToUnprotectedOnCancelled();
-            TestFsm_GraceExpiryFlatten();
-            TestFsm_GraceNotExpiredNoAction();
-            TestFsm_ShortPositionProtected();
-            TestFsm_FlipRecreatesFsm();
-            TestFsm_MultipleInstrumentsIndependent();
-            TestFsm_DisarmedSkipsFsm();
-            TestFsm_LimitOrderDoesNotTransition();
-            TestFsm_PendingStopWorkingConsumed();
+            Run(TestFsm_ProtectedToUnprotectedOnStopFilled);
+            Run(TestFsm_ProtectedPendingToUnprotectedOnCancelled);
+            Run(TestFsm_GraceExpiryFlatten);
+            Run(TestFsm_GraceNotExpiredNoAction);
+            Run(TestFsm_ShortPositionProtected);
+            Run(TestFsm_FlipRecreatesFsm);
+            Run(TestFsm_MultipleInstrumentsIndependent);
+            Run(TestFsm_DisarmedSkipsFsm);
+            Run(TestFsm_LimitOrderDoesNotTransition);
+            Run(TestFsm_PendingStopWorkingConsumed);
 
             // -- FSM OrderAction bug tests (BuyToCover/SellShort) --
-            TestFsm_ShortPositionBuyToCoverStopRecognized();
-            TestFsm_LongPositionSellShortStopRecognized();
+            Run(TestFsm_ShortPositionBuyToCoverStopRecognized);
+            Run(TestFsm_LongPositionSellShortStopRecognized);
 
             // -- AUDIT: Regression tests for identified bugs --
-            TestFsm_QtyOnlyUpdatePreservesProtectedState();
-            TestFsm_PartialFillPreservesProtectedState();
-            TestFsm_GraceExpiryFlattenEmitsOnce();
-            TestFsm_PositionQuantityUpdatedOnQtyChange();
-            TestPnLRulesNotDuplicatedInEvaluateRules();
-            TestExecuteOrderUpdateProcessesActionsOutsideLock();
+            Run(TestFsm_QtyOnlyUpdatePreservesProtectedState);
+            Run(TestFsm_PartialFillPreservesProtectedState);
+            Run(TestFsm_GraceExpiryFlattenEmitsOnce);
+            Run(TestFsm_PositionQuantityUpdatedOnQtyChange);
+            Run(TestPnLRulesNotDuplicatedInEvaluateRules);
+            Run(TestExecuteOrderUpdateProcessesActionsOutsideLock);
 
             // -- PHASE B BACKFILL: acceptance tests for the T1/T2/T3 P0 fixes.
             // Each verified to fail with its fix reverted; see the handover.
-            TestT2_AutoStopSizedFromLivePositionNotSnapshot();
-            TestT2_ScaledDownPositionStillGetsAStop();
-            TestT2_SubmitFailureRollsBackFsmAndClearsGraceEmitted();
-            TestT1_CancelledStopMidPositionReArmsGrace();
-            TestT3_ProfitableFlatAccountEmitsNoGiveback();
-            TestT3_FlipDoesNotCarryPeakOpenGainIntoNewLeg();
-            TestP1_40_NoiseSizedPeakDoesNotTripGiveback();
-            TestP1_39_ConfigLoadDoesNotAppendDefaultCollections();
-            TestP1_19_FlattenIsInstrumentScopedAndActionsCoalesce();
-            TestP1_18_ProfileTrailingDDYieldsOnlyToAnEffectiveFirmRule();
-            TestP1_16_ConsecutiveLossesCountTradesNotPartialExits();
-            TestP1_17_EvaluationTargetUsesCumulativeNotSessionPnL();
-            TestP1_37_ShadowSessionCounterSurvivesRestartWithoutRecounting();
-            TestP1_23_SymbolTranslationAndSizingModesDoNotLie();
-            TestP1_47_ArmDefaultFollowsTheResolvedMode();
-            TestStress_S1toS4_OrderFloodGovernor();
-            TestP2_41_PartialConfigPostMergesInsteadOfReplacing();
-            TestP2_38_DeployGateClassifiesByProviderNotName();
-            TestStress_S5_PartialFillStorm();
-            TestStress_S6_RapidFlipLoop();
-            TestStress_S8_ConfigReloadWhileArmedAndInPosition();
-            TestStress_S9_RestartMidTrade();
-            TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock();
-            TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher();
-            TestP1_77_TheConsistencyCapFiresOnTheDayItWouldVoidTheAccount();
-            TestP1_77_ALosingDayCannotBreachAPROFITCap();
-            TestP1_77_AnUncomputableCapDoesNotFireOnEVERYTHING();
-            TestP1_77_TheRuleIsREGISTEREDWithAnEvaluatorNotJustDeclared();
-            TestP1_77_TheREGISTRYEvaluatorActuallyEvaluates();
-            TestP1_77_NoEvaluationTargetReportsINERTNotEnforcing();
-            TestP1_81_ThePropSuiteHasNoSecondArmingFlag();
-            TestP1_81_TheRegistryNoLongerAdvertisesIt();
-            TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow();
-            TestP1_81_TheCOPIERSArmedForLiveIsUntouched();
-            TestP2_108_AFindingIsLoggedOnceWhileObserving();
-            TestP2_108_SuppressionIsAnnouncedExactlyOnce();
-            TestP2_108_TheRecordClearsOnTheCONDITIONNotATimer();
-            TestP2_108_AKeyNotEVALUATEDKeepsItsCount();
-            TestP2_108_TheKeyCarriesTheFindingTypeNotJustTheSubject();
-            TestP2_108_ArmingToLiveReAdmitsWhatShadowExhausted();
-            TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount();
-            TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne();
-            TestP2_29_TheSourceGatesReadTheWholeAddonTree();
-            TestP2_113_TheNewsEventsFileIsNoLongerReportedAsUnread();
-            TestP2_113_NoRuleClaimsTheNewsPathIsOpenedByNothing();
-            TestP2_113_EverySilentLoadFailureIsNamedInTheStatus();
-            TestP2_113_AConfiguredPathThatLoadedNothingIsNotReportedAsHealthy();
-            TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened();
-            TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus();
-            TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows();
-            TestP2_112_WithNoDispatcherTheSweepStillRuns();
-            TestP2_112_WhenThereIsADispatcherTheSweepIsNotAlsoRunInline();
-            TestP2_112_TheProductionMarshalReportsFailureWhenThereIsNoDispatcher();
-            TestP2_112_TheNoDispatcherFallbackIsAnnouncedOnce();
-            TestP2_78_TheDeadPerInstrumentFieldsAreGone();
-            TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments();
-            TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist();
-            TestP1_12_NoDiskWriteHappensUnderTheStateLock();
-            TestP1_12_PositionChangeDefersThePersistToTheSweep();
-            TestP1_14_SecondBufferedStopDoesNotOverwriteTheFirst();
-            TestP1_14_ABufferedBreakoutEntryIsNotAdoptedAsProtection();
-            TestP1_14_AnUnclaimedBufferedStopExpiresInsteadOfArmingALaterPosition();
-            TestP1_36_TwoPartialStopsCoverThePositionInFull();
-            TestP1_36_LosingOneOfTwoStopsIsPartialCoverNotNakedness();
-            TestP1_36_AutoStopAddsToExistingCoverRatherThanReplacingIt();
-            TestP1_35_OrphanAutoStopCancelHappensOutsideTheLock();
-            TestP1_11_LockoutSweepDoesNotCancelTheProtectiveStopBeforeFlattening();
-            TestP1_15_ReArmingSeedsFsmsForPositionsOpenedWhileDisarmed();
+            Run(TestT2_AutoStopSizedFromLivePositionNotSnapshot);
+            Run(TestT2_ScaledDownPositionStillGetsAStop);
+            Run(TestT2_SubmitFailureRollsBackFsmAndClearsGraceEmitted);
+            Run(TestT1_CancelledStopMidPositionReArmsGrace);
+            Run(TestT3_ProfitableFlatAccountEmitsNoGiveback);
+            Run(TestT3_FlipDoesNotCarryPeakOpenGainIntoNewLeg);
+            Run(TestP1_40_NoiseSizedPeakDoesNotTripGiveback);
+            Run(TestP1_39_ConfigLoadDoesNotAppendDefaultCollections);
+            Run(TestP1_19_FlattenIsInstrumentScopedAndActionsCoalesce);
+            Run(TestP1_18_ProfileTrailingDDYieldsOnlyToAnEffectiveFirmRule);
+            Run(TestP1_16_ConsecutiveLossesCountTradesNotPartialExits);
+            Run(TestP1_17_EvaluationTargetUsesCumulativeNotSessionPnL);
+            Run(TestP1_37_ShadowSessionCounterSurvivesRestartWithoutRecounting);
+            Run(TestP1_23_SymbolTranslationAndSizingModesDoNotLie);
+            Run(TestP1_47_ArmDefaultFollowsTheResolvedMode);
+            Run(TestStress_S1toS4_OrderFloodGovernor);
+            Run(TestP2_41_PartialConfigPostMergesInsteadOfReplacing);
+            Run(TestP2_38_DeployGateClassifiesByProviderNotName);
+            Run(TestStress_S5_PartialFillStorm);
+            Run(TestStress_S6_RapidFlipLoop);
+            Run(TestStress_S8_ConfigReloadWhileArmedAndInPosition);
+            Run(TestStress_S9_RestartMidTrade);
+            Run(TestP1_10_SweepMakesNoBrokerCallsUnderTheStateLock);
+            Run(TestP1_13_NoGuardPathIsSkippedWhenThereIsNoDispatcher);
+            Run(TestP1_77_TheConsistencyCapFiresOnTheDayItWouldVoidTheAccount);
+            Run(TestP1_77_ALosingDayCannotBreachAPROFITCap);
+            Run(TestP1_77_AnUncomputableCapDoesNotFireOnEVERYTHING);
+            Run(TestP1_77_TheRuleIsREGISTEREDWithAnEvaluatorNotJustDeclared);
+            Run(TestP1_77_TheREGISTRYEvaluatorActuallyEvaluates);
+            Run(TestP1_77_NoEvaluationTargetReportsINERTNotEnforcing);
+            Run(TestP1_81_ThePropSuiteHasNoSecondArmingFlag);
+            Run(TestP1_81_TheRegistryNoLongerAdvertisesIt);
+            Run(TestP1_81_ParsingAConfigThatStillCarriesTheKeyDoesNotThrow);
+            Run(TestP1_81_TheCOPIERSArmedForLiveIsUntouched);
+            Run(TestP2_108_AFindingIsLoggedOnceWhileObserving);
+            Run(TestP2_108_SuppressionIsAnnouncedExactlyOnce);
+            Run(TestP2_108_TheRecordClearsOnTheCONDITIONNotATimer);
+            Run(TestP2_108_AKeyNotEVALUATEDKeepsItsCount);
+            Run(TestP2_108_TheKeyCarriesTheFindingTypeNotJustTheSubject);
+            Run(TestP2_108_ArmingToLiveReAdmitsWhatShadowExhausted);
+            Run(TestP2_108_TheThrottleDoesNotFireOnAHealthyAccount);
+            Run(TestP2_108_AllThreeAuditFindingsAreThrottledNotJustTheFiledOne);
+            Run(TestP2_29_TheSourceGatesReadTheWholeAddonTree);
+            Run(TestP2_113_TheNewsEventsFileIsNoLongerReportedAsUnread);
+            Run(TestP2_113_NoRuleClaimsTheNewsPathIsOpenedByNothing);
+            Run(TestP2_113_EverySilentLoadFailureIsNamedInTheStatus);
+            Run(TestP2_113_AConfiguredPathThatLoadedNothingIsNotReportedAsHealthy);
+            Run(TestP2_113_TheStatusBeforeAnyLoadDoesNotClaimOneHappened);
+            Run(TestP2_113_TheAddonsOwnSnapshotCarriesTheRealLoadStatus);
+            Run(TestP2_114_AnUnevaluatedRuleAppearsOnEveryAccountsRows);
+            Run(TestP2_112_WithNoDispatcherTheSweepStillRuns);
+            Run(TestP2_112_WhenThereIsADispatcherTheSweepIsNotAlsoRunInline);
+            Run(TestP2_112_TheProductionMarshalReportsFailureWhenThereIsNoDispatcher);
+            Run(TestP2_112_TheNoDispatcherFallbackIsAnnouncedOnce);
+            Run(TestP2_78_TheDeadPerInstrumentFieldsAreGone);
+            Run(TestP2_78_BlockingAnInstrumentStillWorksThroughBlockedInstruments);
+            Run(TestP2_78_TheRegistryNoteNoLongerWarnsAboutFieldsThatDoNotExist);
+            Run(TestP1_12_NoDiskWriteHappensUnderTheStateLock);
+            Run(TestP1_12_PositionChangeDefersThePersistToTheSweep);
+            Run(TestP1_14_SecondBufferedStopDoesNotOverwriteTheFirst);
+            Run(TestP1_14_ABufferedBreakoutEntryIsNotAdoptedAsProtection);
+            Run(TestP1_14_AnUnclaimedBufferedStopExpiresInsteadOfArmingALaterPosition);
+            Run(TestP1_36_TwoPartialStopsCoverThePositionInFull);
+            Run(TestP1_36_LosingOneOfTwoStopsIsPartialCoverNotNakedness);
+            Run(TestP1_36_AutoStopAddsToExistingCoverRatherThanReplacingIt);
+            Run(TestP1_35_OrphanAutoStopCancelHappensOutsideTheLock);
+            Run(TestP1_11_LockoutSweepDoesNotCancelTheProtectiveStopBeforeFlattening);
+            Run(TestP1_15_ReArmingSeedsFsmsForPositionsOpenedWhileDisarmed);
 
             // -- COPIER GROUPS & STRESS TESTS --
-            TestCopierGroup_GroupManagement();
-            TestCopierGroup_PerGroupConfigurationExecution();
-            TestCopierGroup_GroupPersistence();
-            TestCopierGroup_GroupStressAndConcurrency();
-            RunCopierFixesVerificationTests();
-            TestOrderVerificationWatchdogAndReconciliation();
+            Run(TestCopierGroup_GroupManagement);
+            Run(TestCopierGroup_PerGroupConfigurationExecution);
+            Run(TestCopierGroup_GroupPersistence);
+            Run(TestCopierGroup_GroupStressAndConcurrency);
+            Run(RunCopierFixesVerificationTests);
+            Run(TestOrderVerificationWatchdogAndReconciliation);
 
             // -- DYNAMIC ATM BRACKET TESTS --
-            TestAtm_FixedTicksLong();
-            TestAtm_FixedTicksShort();
-            TestAtm_DrawdownShieldRegistersBracket();
-            TestAtm_ScaledRunnerRegistersBracket();
-            TestAtm_MonitoredStrategiesNotDoubleRegistered();
-            TestAtm_VolatilityScaledQuantityCapped();
-            TestAtm_VolatilityScaledRiskBasedQuantity();
-            TestAtm_AtrAdaptiveFallbackUsesDefaultAtr();
-            TestAtm_AtrAdaptiveUsesLiveAtr();
-            TestAtm_SwingPointUsesSwingLow();
-            TestAtm_SessionAdaptiveMultiplier();
-            TestAtm_UnknownSymbolFallsBackToDefaults();
-            TestAtm_GetProfileKnownAndUnknown();
-            TestAtm_ZeroPriceReturnsError();
-            TestAtm_RejectedExitOrdersPartialSubmit();
-            TestAtm_OcoIdSharedAcrossExitOrders();
-            TestAtm_ShouldTriggerBreakeven();
-            TestAtm_CalculateBreakevenStopPrice();
-            TestAtm_ActiveBracketStatus();
+            Run(TestAtm_FixedTicksLong);
+            Run(TestAtm_FixedTicksShort);
+            Run(TestAtm_DrawdownShieldRegistersBracket);
+            Run(TestAtm_ScaledRunnerRegistersBracket);
+            Run(TestAtm_MonitoredStrategiesNotDoubleRegistered);
+            Run(TestAtm_VolatilityScaledQuantityCapped);
+            Run(TestAtm_VolatilityScaledRiskBasedQuantity);
+            Run(TestAtm_AtrAdaptiveFallbackUsesDefaultAtr);
+            Run(TestAtm_AtrAdaptiveUsesLiveAtr);
+            Run(TestAtm_SwingPointUsesSwingLow);
+            Run(TestAtm_SessionAdaptiveMultiplier);
+            Run(TestAtm_UnknownSymbolFallsBackToDefaults);
+            Run(TestAtm_GetProfileKnownAndUnknown);
+            Run(TestAtm_ZeroPriceReturnsError);
+            Run(TestAtm_RejectedExitOrdersPartialSubmit);
+            Run(TestAtm_OcoIdSharedAcrossExitOrders);
+            Run(TestAtm_ShouldTriggerBreakeven);
+            Run(TestAtm_CalculateBreakevenStopPrice);
+            Run(TestAtm_ActiveBracketStatus);
 
             // -- TDD COPIER, INSTRUMENT CAPS, ATM & PROP-FIRM TESTS --
             // These were previously reachable only from inside the corrupted body of
             // TestExecuteOrderUpdateProcessesActionsOutsideLock. Invoked explicitly here so
             // they are owned by the runner rather than by another test.
-            TestPerInstrumentSizing_MNQVsMES();
-            TestInstrumentBlacklist_BlocksMiniNQ();
-            TestPropFirmProfile_AllowedInstruments();
-            TestTradeCopier_RatioScaling();
-            TestTradeCopier_SymbolMapping();
-            TestAtmStrategy_DrawdownShieldBreakeven();
-            TestNewsShield_FlattensBeforeCPI();
-            TestStrategyApi_CanTradeReturnsFalseWhenLockedOut();
-            TestEvaluationProfitTargetLock_LocksAccount();
-            TestPeakEquityProtection_ClosesOnGiveback();
-            TestOptionC_TradeCopierSingletonIntegration();
-            TestOptionC_MultiPartialFillPositionClamping();
-            TestOptionC_PropProtectionSingletonIntegration();
+            Run(TestPerInstrumentSizing_MNQVsMES);
+            Run(TestInstrumentBlacklist_BlocksMiniNQ);
+            Run(TestPropFirmProfile_AllowedInstruments);
+            Run(TestTradeCopier_RatioScaling);
+            Run(TestTradeCopier_SymbolMapping);
+            Run(TestAtmStrategy_DrawdownShieldBreakeven);
+            Run(TestNewsShield_FlattensBeforeCPI);
+            Run(TestStrategyApi_CanTradeReturnsFalseWhenLockedOut);
+            Run(TestEvaluationProfitTargetLock_LocksAccount);
+            Run(TestPeakEquityProtection_ClosesOnGiveback);
+            Run(TestOptionC_TradeCopierSingletonIntegration);
+            Run(TestOptionC_MultiPartialFillPositionClamping);
+            Run(TestOptionC_PropProtectionSingletonIntegration);
 
             // Previously declared but never invoked from anywhere.
-            TestOrderNotCancelledInFilledStateWhenLocked();
+            Run(TestOrderNotCancelledInFilledStateWhenLocked);
 
             // -- COPY-PATH TESTS (previously impossible: OnExecution was #if !TESTING) --
-            TestCopyPath_ExitDoesNotFlipFollowerShort();
-            TestCopyPath_MicroToMiniDoesNotInflateNotional();
-            TestCopyPath_LockedFollowerReceivesNoCopy();
-            TestCopyPath_LiveAccountNamedSimIsNotTreatedAsSimulated();
-            TestCopyPath_GenuineSimulatorAccountStillReceivesCopies();
+            Run(TestCopyPath_ExitDoesNotFlipFollowerShort);
+            Run(TestCopyPath_MicroToMiniDoesNotInflateNotional);
+            Run(TestCopyPath_LockedFollowerReceivesNoCopy);
+            Run(TestCopyPath_LiveAccountNamedSimIsNotTreatedAsSimulated);
+            Run(TestCopyPath_GenuineSimulatorAccountStillReceivesCopies);
 
             // -- COPIER SUBSCRIPTION TESTS (P1-21) --
-            TestCopierSubs_LateConnectingLeaderIsCopied();
-            TestCopierSubs_RepeatedRefreshAttachesOneHandler();
-            TestCopierSubs_TeardownDetachesHandlers();
+            Run(TestCopierSubs_LateConnectingLeaderIsCopied);
+            Run(TestCopierSubs_RepeatedRefreshAttachesOneHandler);
+            Run(TestCopierSubs_TeardownDetachesHandlers);
 
             // -- COPY SLIPPAGE / LATENCY TESTS (P1-22) --
-            TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage();
-            TestCopierSlip_FavourableFillIsNegativeAndDoesNotQuarantine();
-            TestCopierSlip_EntryQuarantinesButExitStillCopies();
-            TestCopierSlip_IncomparableSymbolsRecordNoSlippage();
+            Run(TestCopierSlip_FollowerFillPopulatesLatencyAndSlippage);
+            Run(TestCopierSlip_FavourableFillIsNegativeAndDoesNotQuarantine);
+            Run(TestCopierSlip_EntryQuarantinesButExitStillCopies);
+            Run(TestCopierSlip_IncomparableSymbolsRecordNoSlippage);
 
             // P?-66: every silent path out of ObserveFollowerFill -- RED until it is instrumented
-            TestCopierSlip_P66_AMeasuredFillIsAnnouncedNotJustStored();
-            TestCopierSlip_P66_AFillForAnUnregisteredOrderIsLoggedAsAMiss();
-            TestCopierSlip_P66_ALatencyRejectedBySanityBoundSaysSo();
-            TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo();
-            TestCopierSlip_FillIsMatchedWhenOrderIdChanges();
+            Run(TestCopierSlip_P66_AMeasuredFillIsAnnouncedNotJustStored);
+            Run(TestCopierSlip_P66_AFillForAnUnregisteredOrderIsLoggedAsAMiss);
+            Run(TestCopierSlip_P66_ALatencyRejectedBySanityBoundSaysSo);
+            Run(TestCopierSlip_P66_SkippedSlippageOnIncomparablePricesSaysSo);
+            Run(TestCopierSlip_FillIsMatchedWhenOrderIdChanges);
 
             // P2-98: the grain of a measurement is the COPY, not the slice.
-            TestP298_APartiallyFilledCopyIsMeasuredOnceAcrossAllItsSlices();
-            TestP298_TheMeasuredSlippageIsTheWholeCopyNotItsFirstSlice();
-            TestP298_AnIncompleteCopyIsNeitherMeasuredNorCalledAMiss();
-            TestP298_ASingleSliceThatBreachesAloneDoesNotQuarantineTheWholeCopy();
-            TestP298_AWholeCopyThatBreachesStillQuarantines();
-            TestP298_LatencyIsTheFirstSlicesNotTheLasts();
-            TestP298_ALatencyRejectedOnTheFirstSliceIsNotRescuedByALaterOne();
-            TestP298_ATerminalOrderStateCompletesACopyThatNeverFilledInFull();
-            TestP298_TheMissEventDoesNotAssertACauseItCannotKnow();
+            Run(TestP298_APartiallyFilledCopyIsMeasuredOnceAcrossAllItsSlices);
+            Run(TestP298_TheMeasuredSlippageIsTheWholeCopyNotItsFirstSlice);
+            Run(TestP298_AnIncompleteCopyIsNeitherMeasuredNorCalledAMiss);
+            Run(TestP298_ASingleSliceThatBreachesAloneDoesNotQuarantineTheWholeCopy);
+            Run(TestP298_AWholeCopyThatBreachesStillQuarantines);
+            Run(TestP298_LatencyIsTheFirstSlicesNotTheLasts);
+            Run(TestP298_ALatencyRejectedOnTheFirstSliceIsNotRescuedByALaterOne);
+            Run(TestP298_ATerminalOrderStateCompletesACopyThatNeverFilledInFull);
+            Run(TestP298_TheMissEventDoesNotAssertACauseItCannotKnow);
 
             // P1-99: the copier sized each leader EXECUTION independently, so a 100-lot order
             // filling 20 x 5 copied NOTHING. These are the only copy-path tests that send more
             // than one execution for a single leader order.
-            TestP199_TheCopiedTotalDoesNotDependOnHowTheLeaderOrderFilled();
-            TestP199_RoundingDoesNotAccumulateAcrossSlices();
-            TestP199_AnEarlySliceReportsADeferralNotALoss();
-            TestP199_AnOrderThatStopsFillingSmallStillReportsTheShortfall();
-            TestP199_TheCapacityClampAppliesToTheDeltaNotTheCumulative();
-            TestP199_AnExitIsStillSizedFromTheFollowersOwnPosition();
-            TestP199_AClampedSliceLeavesItsShortfallOutstanding();
-            TestP199_ACancelledPartialFillStillReleasesItsAccumulator();
-            TestP199_TwoFollowersOnOneOrderAccumulateIndependently();
-            TestP199_ASingleExecutionOrderIsUnchanged();
-            TestP199_ASecondOrderStartsItsOwnCount();
+            Run(TestP199_TheCopiedTotalDoesNotDependOnHowTheLeaderOrderFilled);
+            Run(TestP199_RoundingDoesNotAccumulateAcrossSlices);
+            Run(TestP199_AnEarlySliceReportsADeferralNotALoss);
+            Run(TestP199_AnOrderThatStopsFillingSmallStillReportsTheShortfall);
+            Run(TestP199_TheCapacityClampAppliesToTheDeltaNotTheCumulative);
+            Run(TestP199_AnExitIsStillSizedFromTheFollowersOwnPosition);
+            Run(TestP199_AClampedSliceLeavesItsShortfallOutstanding);
+            Run(TestP199_ACancelledPartialFillStillReleasesItsAccumulator);
+            Run(TestP199_TwoFollowersOnOneOrderAccumulateIndependently);
+            Run(TestP199_ASingleExecutionOrderIsUnchanged);
+            Run(TestP199_ASecondOrderStartsItsOwnCount);
 
             // P1-100: "is this account locked out" had three readers that disagreed. The bridge's
             // order paths used the one that was never taught about shadow authority or deadlines.
-            TestP1100_AShadowOnlyLockoutDoesNotGateTheBridgesOrderPath();
-            TestP1100_ALiveAuthorityLockoutStillGatesTheBridgesOrderPath();
-            TestP1100_ATimedManualLockoutGatesTheBridgesOrderPathToo();
-            TestP1100_AnEodManualLockoutBindsEvenInShadowMode();
-            TestP1100_TheDisarmedBypassIsHonouredByBothReaders();
-            TestP1100_TheReportedGateAndTheEnforcedGateCannotDisagree();
-            TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder();
-            TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels();
+            Run(TestP1100_AShadowOnlyLockoutDoesNotGateTheBridgesOrderPath);
+            Run(TestP1100_ALiveAuthorityLockoutStillGatesTheBridgesOrderPath);
+            Run(TestP1100_ATimedManualLockoutGatesTheBridgesOrderPathToo);
+            Run(TestP1100_AnEodManualLockoutBindsEvenInShadowMode);
+            Run(TestP1100_TheDisarmedBypassIsHonouredByBothReaders);
+            Run(TestP1100_TheReportedGateAndTheEnforcedGateCannotDisagree);
+            Run(TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder);
+            Run(TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels);
 
             // P2-101: a shadow lockout retried its flatten forever, and the warning that should
             // have caught that could never fire.
-            TestP2101_AShadowLockoutStopsAfterOneObservation();
-            TestP2101_ALiveLockoutRetriesToItsBudgetAndNoFurther();
-            TestP2101_TheGiveUpWarningFiresExactlyOnce();
-            TestP2101_EnteringANewPhaseRestoresTheBudget();
-            TestP2101_EndingTheLockoutRestoresTheBudget();
+            Run(TestP2101_AShadowLockoutStopsAfterOneObservation);
+            Run(TestP2101_ALiveLockoutRetriesToItsBudgetAndNoFurther);
+            Run(TestP2101_TheGiveUpWarningFiresExactlyOnce);
+            Run(TestP2101_EnteringANewPhaseRestoresTheBudget);
+            Run(TestP2101_EndingTheLockoutRestoresTheBudget);
 
             // P2-107: the same family on a different path, so the de-duplication moved to where
             // actions LEAVE the guard instead of being written into each producer.
-            TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack();
-            TestP2107_ActingRetriesToItsBudgetAndNoFurther();
-            TestP2107_AbsenceFromABatchIsTheOnlyThingThatClearsTheRecord();
-            TestP2107_OneProducersSilenceDoesNotClearAnothersRecord();
-            TestP2107_TwoAccountsUnderOneProducerAreIndependent();
-            TestP2107_ADuplicateInsideOneBatchSpendsOneAttempt();
-            TestP2107_TheSuppressionIsAnnouncedExactlyOncePerEpisode();
-            TestP2107_ArmingToLiveReAdmitsAKeyShadowHadExhausted();
-            TestP2107_TheMeasuredDefect_SevenShadowLinesBecomeOne();
-            TestP2107_AnAccountThatProducedNothingClearsItsOwnRecord();
-            TestP2107_AnActionOutsideTheDeclaredScopeIsDispatchedNotDropped();
-            TestP2107_TheOperatorsPanicButtonIsNotDeduplicated();
+            Run(TestP2107_ObservingAdmitsOneAndThenHoldsTheRestBack);
+            Run(TestP2107_ActingRetriesToItsBudgetAndNoFurther);
+            Run(TestP2107_AbsenceFromABatchIsTheOnlyThingThatClearsTheRecord);
+            Run(TestP2107_OneProducersSilenceDoesNotClearAnothersRecord);
+            Run(TestP2107_TwoAccountsUnderOneProducerAreIndependent);
+            Run(TestP2107_ADuplicateInsideOneBatchSpendsOneAttempt);
+            Run(TestP2107_TheSuppressionIsAnnouncedExactlyOncePerEpisode);
+            Run(TestP2107_ArmingToLiveReAdmitsAKeyShadowHadExhausted);
+            Run(TestP2107_TheMeasuredDefect_SevenShadowLinesBecomeOne);
+            Run(TestP2107_AnAccountThatProducedNothingClearsItsOwnRecord);
+            Run(TestP2107_AnActionOutsideTheDeclaredScopeIsDispatchedNotDropped);
+            Run(TestP2107_TheOperatorsPanicButtonIsNotDeduplicated);
 
             // - F-6 -----------------------------------------------------------------------------
-            TestF6_ARepeatingConditionAlertsOnceAndThenGoesQuiet();
-            TestF6_ButItStillAlertsWhenTheConditionRECURS();
-            TestF6_ACriticalBreachGetsThreeBecauseDeepeningIsNews();
-            TestF6_AnUnknownEventTypeIsInfoNotCritical();
-            TestF6_TheSeverityFloorIsHonouredAndIsNotAGagOnEverything();
-            TestF6_TwoAccountsAndTwoEventTypesAreIndependent();
-            TestF6_AShadowAlertSaysWOULDAndNeverClaimsAnActionHappened();
-            TestF6_AnArmedLiveAlertDoesNotSayWOULD();
-            TestF6_TheWebhookUrlIsRedactedButStillRecognisable();
-            TestF6_ARefusalAlwaysCarriesAReason();
-            TestF6_AMistypedSeverityFloorFailsCLOSEDNotOpen();
-            TestF6_ArmingIsNotARiskConditionButDisarmingIs();
+            Run(TestF6_ARepeatingConditionAlertsOnceAndThenGoesQuiet);
+            Run(TestF6_ButItStillAlertsWhenTheConditionRECURS);
+            Run(TestF6_ACriticalBreachGetsThreeBecauseDeepeningIsNews);
+            Run(TestF6_AnUnknownEventTypeIsInfoNotCritical);
+            Run(TestF6_TheSeverityFloorIsHonouredAndIsNotAGagOnEverything);
+            Run(TestF6_TwoAccountsAndTwoEventTypesAreIndependent);
+            Run(TestF6_AShadowAlertSaysWOULDAndNeverClaimsAnActionHappened);
+            Run(TestF6_AnArmedLiveAlertDoesNotSayWOULD);
+            Run(TestF6_TheWebhookUrlIsRedactedButStillRecognisable);
+            Run(TestF6_ARefusalAlwaysCarriesAReason);
+            Run(TestF6_AMistypedSeverityFloorFailsCLOSEDNotOpen);
+            Run(TestF6_ArmingIsNotARiskConditionButDisarmingIs);
             // Second round: five mutants that survived the first battery, all of them in parts
             // the first thirteen never touched. The handler one is the P3-30 shape.
-            TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced();
-            TestP2107_TwoActionTypesForOneRuleAreBothDispatched();
-            TestP2107_TheRealAccountItemUpdateHandlerGoesThroughTheDispatcher();
-            TestP2107_TheSessionResetClearsTheRecords();
-            TestP2107_TheAccountWideProducersDeclareARealScope();
+            Run(TestP2107_TwoRulesDemandingTheSameActionAreBothAnnounced);
+            Run(TestP2107_TwoActionTypesForOneRuleAreBothDispatched);
+            Run(TestP2107_TheRealAccountItemUpdateHandlerGoesThroughTheDispatcher);
+            Run(TestP2107_TheSessionResetClearsTheRecords);
+            Run(TestP2107_TheAccountWideProducersDeclareARealScope);
 
             // P1-71: every relationship named in COPY_BEGIN must produce exactly one outcome.
             // RED until the fourteen unlogged exits are routed through CopierLog.
-            TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome();
-            TestCopier_P171_ASuccessfulCopyAnnouncesItself();
-            TestCopier_AShortExitCoversTheFollowerRatherThanDoublingIt();
-            TestCopier_ALongExitStillSellsTheFollowersLong();
-            TestCopier_AnExitClosesTheFollowersOwnSideWhenItDivergedFromTheLeader();
-            TestCopier_AScaleInEntryKeepsTheLeadersDirection();
-            TestCopier_P334_ShadowModeDescribesTheCopyAndDoesNotSendIt();
-            TestCopier_P334_TheShadowLineNamesTheOrderItWouldHaveSent();
-            TestCopier_P334_LiveModeIsUnchangedAndIsTheDefault();
-            TestCopier_P334_DisabledIsDistinctFromShadow();
-            TestCopier_P334_AnUnrecognisedModeDoesNotFallThroughToTrading();
-            TestCopier_P334_GoingLiveRunsPreflightAndARefusalKeepsTheOldMode();
-            TestCopier_P334_APassingPreflightAllowsTheSwitchToLive();
-            TestCopier_P334_LeavingLiveIsNeverBlocked();
-            TestCopier_P334_TheModeSurvivesDiskAndATypoIsNotAdopted();
-            TestCopier_P334_EveryRefusedModeChangeLeavesATrace();
-            TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed();
-            TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog();
-            TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome();
-            TestCopier_P171_AClampWarningIsNotCountedAsAnOutcome();
+            Run(TestCopier_P171_EveryNamedRelationshipProducesExactlyOneOutcome);
+            Run(TestCopier_P171_ASuccessfulCopyAnnouncesItself);
+            Run(TestCopier_AShortExitCoversTheFollowerRatherThanDoublingIt);
+            Run(TestCopier_ALongExitStillSellsTheFollowersLong);
+            Run(TestCopier_AnExitClosesTheFollowersOwnSideWhenItDivergedFromTheLeader);
+            Run(TestCopier_AScaleInEntryKeepsTheLeadersDirection);
+            Run(TestCopier_P334_ShadowModeDescribesTheCopyAndDoesNotSendIt);
+            Run(TestCopier_P334_TheShadowLineNamesTheOrderItWouldHaveSent);
+            Run(TestCopier_P334_LiveModeIsUnchangedAndIsTheDefault);
+            Run(TestCopier_P334_DisabledIsDistinctFromShadow);
+            Run(TestCopier_P334_AnUnrecognisedModeDoesNotFallThroughToTrading);
+            Run(TestCopier_P334_GoingLiveRunsPreflightAndARefusalKeepsTheOldMode);
+            Run(TestCopier_P334_APassingPreflightAllowsTheSwitchToLive);
+            Run(TestCopier_P334_LeavingLiveIsNeverBlocked);
+            Run(TestCopier_P334_TheModeSurvivesDiskAndATypoIsNotAdopted);
+            Run(TestCopier_P334_EveryRefusedModeChangeLeavesATrace);
+            Run(TestCopier_P171_ANothingToExitSkipIsLoggedNotSwallowed);
+            Run(TestCopier_P171_ADisarmedLiveFollowerRefusalReachesTheAuditLog);
+            Run(TestCopier_P171_AQuarantineNoticeIsNotCountedAsAnOutcome);
+            Run(TestCopier_P171_AClampWarningIsNotCountedAsAnOutcome);
 
             // P1-70: a modify is a REQUEST until the provider settles.
-            TestBracket_P170_AModifyIsAnnouncedAsARequestAndConfirmedOnlyOnSettle();
-            TestBracket_P170_AnIgnoredChangeIsNeverConfirmed();
-            TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept();
+            Run(TestBracket_P170_AModifyIsAnnouncedAsARequestAndConfirmedOnlyOnSettle);
+            Run(TestBracket_P170_AnIgnoredChangeIsNeverConfirmed);
+            Run(TestBracket_P170_APartiallyHonouredChangeReportsWhatTheProviderKept);
 
             // P0-67: the third Account.Change() site. MonitorTickCore had ZERO coverage.
-            TestAtm_P1130_AStopRestingInAcceptedIsStillMovable();
-            TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded();
-            TestAtm_P2134_TheAbandonAnnouncementFiresOncePerEpisode();
-            TestAtm_P2134_TheAbandonMessageNamesTheObservedCause();
-            TestAtm_P2134_TheLatchIsScopedToOneBracket();
-            TestAtm_P2134_AbandoningStillReportsFailureToTheCaller();
-            TestAtm_P2134_TheGenuineRefusalKeepsItsName();
-            TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling();
-            TestAtm_P2136_ABracketLeavingManagementSaysSo();
-            TestAtm_P2136_TheOrphanBranchSaysSomethingDIFFERENT();
-            TestAtm_P2135_TheGiveUpLineWaitsForTheBudgetAndForRecovery();
-            TestAtm_P3137_TheStatusAnswersWhetherItGaveUp();
-            TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource();
+            Run(TestAtm_P1130_AStopRestingInAcceptedIsStillMovable);
+            Run(TestAtm_P1130_AStopMoveThatFindsNoOrderIsCountedAndBounded);
+            Run(TestAtm_P2134_TheAbandonAnnouncementFiresOncePerEpisode);
+            Run(TestAtm_P2134_TheAbandonMessageNamesTheObservedCause);
+            Run(TestAtm_P2134_TheLatchIsScopedToOneBracket);
+            Run(TestAtm_P2134_AbandoningStillReportsFailureToTheCaller);
+            Run(TestAtm_P2134_TheGenuineRefusalKeepsItsName);
+            Run(TestAtm_P2135_TheRefusalPathGivesUpOutLoudWithNoOneElseCalling);
+            Run(TestAtm_P2136_ABracketLeavingManagementSaysSo);
+            Run(TestAtm_P2136_TheOrphanBranchSaysSomethingDIFFERENT);
+            Run(TestAtm_P2135_TheGiveUpLineWaitsForTheBudgetAndForRecovery);
+            Run(TestAtm_P3137_TheStatusAnswersWhetherItGaveUp);
+            Run(() => TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource(), "TestAtm_P3137_TheInertCompletionFlagIsGoneFromTheSource");
             // P1-139: the re-arm P0-67 added to un-latch the trail is also what loosens the stop.
-            TestAtm_P1139_ARefusedTrailMoveNeverAsksTheStopBackDown();
-            TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove();
-            TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop();
-            TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice();
-            TestAtm_P1139_AStopAlreadyBetterThanBreakevenIsNotPulledBack();
-            TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall();
+            Run(TestAtm_P1139_ARefusedTrailMoveNeverAsksTheStopBackDown);
+            Run(TestAtm_P1139_TheTrailStillAdvancesAfterARefusedTrailMove);
+            Run(TestAtm_P1139_AFreshShortBracketCanStillMoveItsStop);
+            Run(TestAtm_P1139_ARefusedBreakevenMoveStillRetriesTheSamePrice);
+            Run(TestAtm_P1139_AStopAlreadyBetterThanBreakevenIsNotPulledBack);
+            Run(() => TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall(), "TestAtm_P1139_TheDirectionGuardPrecedesTheBrokerCall");
             // Both written FROM the mutation battery: the guard is unreachable through the sweep by
             // design, and the re-arm rule is repaired within the same sweep, so neither was killable.
-            TestAtm_P1139_TheGuardItselfRefusesEveryWrongWayPrice();
-            TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag();
-            TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped();
+            Run(TestAtm_P1139_TheGuardItselfRefusesEveryWrongWayPrice);
+            Run(TestAtm_P1139_OnlyARefusedBREAKEVENMoveClearsTheFlag);
+            Run(TestAtm_P1139_AnAnnouncementCannotThrowSoTheCacheIsNeverSkipped);
             // P1-140: the partial-profit order joins the protective OCO group. Needs 2+ lots, which
             // is why nothing has ever reached the block.
-            TestAtm_P1140_TheProtectiveGroupNeverGainsAThirdMember();
-            TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket();
-            TestAtm_P1140_AOneLotBracketSaysNothing();
-            TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken();
+            Run(TestAtm_P1140_TheProtectiveGroupNeverGainsAThirdMember);
+            Run(TestAtm_P1140_AnUnavailablePartialSaysSoOncePerBracket);
+            Run(TestAtm_P1140_AOneLotBracketSaysNothing);
+            Run(TestAtm_P1140_TheTakenFlagStaysFalseWhileNoPartialIsTaken);
             // P2-136 "survive it": a compile hot-swaps a new assembly in and the registry starts
             // empty while the position and both broker legs are untouched. Every test below saves
             // through one manager and restores through a SECOND one -- that is the hot-swap.
-            TestAtm_P2136_ABracketWithALiveStopIsPickedBackUp();
-            TestAtm_P2136_TheRestoredStopPriceComesFromTheOrderNotTheFile();
+            Run(TestAtm_P2136_ABracketWithALiveStopIsPickedBackUp);
+            Run(TestAtm_P2136_TheRestoredStopPriceComesFromTheOrderNotTheFile);
             // P1-143. The restore above happens 3-4 times per compile, not once, so the refusal
             // budget must be CARRIED. Every test either side of these instantiates one manager,
             // which is exactly why none of them could see it.
-            TestAtm_P1143_FourRecompilesDoNotHandOutFourBudgets();
-            TestAtm_P1143_AConfirmedMoveStillClearsTheCarriedBudget();
-            TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile();
+            Run(TestAtm_P1143_FourRecompilesDoNotHandOutFourBudgets);
+            Run(TestAtm_P1143_AConfirmedMoveStillClearsTheCarriedBudget);
+            Run(TestAtm_P1143_TheSpentBudgetIsWrittenToTheFile);
             // P2-145. The coverage predicate itself, which no test reached while it was
             // inline in RunGuardAudit -- 21 of 245 logged findings were wrong, suite green.
-            TestAudit_P2145_FullyCoveredWhilePendingIsNotNaked();
-            TestAudit_P2145_ProtectedWithAGapStillFires();
-            TestAudit_P2145_ZeroCoverageIsEntirelyUncovered();
-            TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding();
-            TestAudit_P2145_GapIsAlwaysPositionMinusCovered();
-            TestAudit_P2145_NoPositionIsNeverAFinding();
-            TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted();
-            TestAtm_P2136_AFinishedTradeIsNotResurrected();
-            TestAtm_P2136_AReversedPositionIsNotManaged();
-            TestAtm_P2136_AnAbsentAccountDefersRatherThanDropping();
-            TestAtm_P2136_TheDeferralIsBoundedAndSaysSoWhenItGivesUp();
-            TestAtm_P2136_ALiveBracketIsNeverOverwrittenByTheFile();
-            TestAtm_P2136_ARestoredBracketActuallyMovesItsStop();
-            TestAtm_P2136_TheSweepPersistsWhatItAdvanced();
-            TestAtm_P2136_ARestoredBracketSurvivesASecondRecompile();
-            TestAtm_P2136_NoFileAndAnEmptyFileAreBothSilent();
-            TestAtm_P2136_AnUnparseableFileIsAnnounced();
-            TestAtm_P2136_TheFileStaysValidJsonWithAnOutstandingRequest();
+            Run(TestAudit_P2145_FullyCoveredWhilePendingIsNotNaked);
+            Run(TestAudit_P2145_ProtectedWithAGapStillFires);
+            Run(TestAudit_P2145_ZeroCoverageIsEntirelyUncovered);
+            Run(TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding);
+            Run(TestAudit_P2145_GapIsAlwaysPositionMinusCovered);
+            Run(TestAudit_P2145_NoPositionIsNeverAFinding);
+            Run(TestAtm_P2136_AnOpenPositionWithNoNamedStopIsNotAdopted);
+            Run(TestAtm_P2136_AFinishedTradeIsNotResurrected);
+            Run(TestAtm_P2136_AReversedPositionIsNotManaged);
+            Run(TestAtm_P2136_AnAbsentAccountDefersRatherThanDropping);
+            Run(TestAtm_P2136_TheDeferralIsBoundedAndSaysSoWhenItGivesUp);
+            Run(TestAtm_P2136_ALiveBracketIsNeverOverwrittenByTheFile);
+            Run(TestAtm_P2136_ARestoredBracketActuallyMovesItsStop);
+            Run(TestAtm_P2136_TheSweepPersistsWhatItAdvanced);
+            Run(TestAtm_P2136_ARestoredBracketSurvivesASecondRecompile);
+            Run(TestAtm_P2136_NoFileAndAnEmptyFileAreBothSilent);
+            Run(TestAtm_P2136_AnUnparseableFileIsAnnounced);
+            Run(TestAtm_P2136_TheFileStaysValidJsonWithAnOutstandingRequest);
             // Both written FROM the battery: `if (false)` over EnsureMonitor and over the sweep's own
             // retry each survived a green suite, because every test above drove the restore by name
             // and asked only whether the registry held the bracket.
-            TestAtm_P2136_ARestoreStartsTheSweep();
-            TestAtm_P2136_TheSweepItselfDrivesTheRetry();
-            TestAtm_P2136_TheGuardsOwnSweepDrivesTheRestore();
-            TestAtm_P2136_TheRestoreIsCalledFromGuardStartup();
-            TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing();
+            Run(TestAtm_P2136_ARestoreStartsTheSweep);
+            Run(TestAtm_P2136_TheSweepItselfDrivesTheRetry);
+            Run(TestAtm_P2136_TheGuardsOwnSweepDrivesTheRestore);
+            Run(TestAtm_P2136_TheRestoreIsCalledFromGuardStartup);
+            Run(TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing);
             // P1-133: the three sites keyed on an id the broker replaces on accept.
-            TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop();
-            TestAtm_P1133_TheReconcilerAlsoSurvivesAReId();
-            TestAtm_P1133_ARestingEntryIsNotForgottenAfterAReId();
+            Run(TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop);
+            Run(TestAtm_P1133_TheReconcilerAlsoSurvivesAReId);
+            Run(TestAtm_P1133_ARestingEntryIsNotForgottenAfterAReId);
             // Written from the battery's four survivors, not from reading the fix.
-            TestAtm_P1133_ABlankOrMiscasedNameMatchesNothing();
-            TestAtm_P1133_AbsentAndTerminalStopsSayDifferentThings();
-            TestAtm_P1133_TheReIdHelperReallyReIds();
-            TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened();
-            TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker();
-            TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced();
-            TestAtm_P067_ARefusedTRAILIsBoundedToo();
-            TestAtm_P067_AMissingStopOrderIsNotReportedAsAMove();
+            Run(TestAtm_P1133_ABlankOrMiscasedNameMatchesNothing);
+            Run(TestAtm_P1133_AbsentAndTerminalStopsSayDifferentThings);
+            Run(TestAtm_P1133_TheReIdHelperReallyReIds);
+            Run(TestAtm_P067_ARefusedStopMoveIsNotCachedAsIfItHappened);
+            Run(TestAtm_P067_AnHonouredStopMoveIsAdoptedFromTheBroker);
+            Run(TestAtm_P067_RepeatedRefusalsAreBoundedAndAnnounced);
+            Run(TestAtm_P067_ARefusedTRAILIsBoundedToo);
+            Run(TestAtm_P067_AMissingStopOrderIsNotReportedAsAMove);
 
             // -- BRACKET REPLICATION TESTS (P0-9) --
-            TestBracket_StopMirrorsLeaderDistanceFromFollowerFill();
-            TestBracket_StopBeforeFollowerFillIsAppliedOnFill();
-            TestBracket_P0_55_LeaderStopAcceptedBeforeLeaderPositionIsStillMirrored();
-            TestOrderLiveness_ClassifiesEveryNT8OrderState();
-            TestBracket_P0_59_ALegBeingModifiedIsNotDuplicated();
-            TestP0_60_AStopBeingCancelledStopsCountingAsCoverage();
-            TestBracket_TrailingModifiesTheStopRatherThanRecreatingIt();
-            TestBracket_TargetIsMirroredAsAnOcoPairWithTheStop();
-            TestBracket_P0_9_ALateTargetJoinsTheLiveStopsOcoGroup();
-            TestBracket_P0_9_ARecreatedStopMintsAFreshOcoIdAndRebuildsThePair();
-            TestBracket_P0_9_InterleavedTargetSyncsLeaveExactlyOneTarget();
-            TestBracket_P0_9_TargetResubmissionIsBounded();
-            TestBracket_P0_9_ALegRetiredByItsOcoSiblingIsNotResubmitted();
-            TestBracket_P0_9_AMultiTargetLeaderIsNotMirroredAtAll();
-            TestBracket_P0_9_LegPricesAreRoundedToTheInstrumentsTick();
-            TestBracket_TargetAcceptedBeforeLeaderPositionIsStillMirrored();
-            TestBracket_FollowerGoingFlatCancelsBothLegs();
-            TestBracket_MovingLeaderStopReplacesRatherThanDuplicates();
-            TestBracket_P1_56_InterleavedSyncsLeaveExactlyOneProtectiveStop();
-            TestBracket_P1_56_AThirdSyncStillLeavesExactlyOneProtectiveStop();
-            TestBracket_FollowerGoingFlatCancelsTheMirroredStop();
-            TestBracket_StopTrailedIntoProfitStaysAboveFollowerEntry();
-            TestBracket_ShortStopTrailedIntoProfitStaysBelowFollowerEntry();
-            TestBracket_RejectedStopIsResubmitted();
-            TestBracket_P1_56_AFailedSubmitDoesNotWedgeLaterSyncs();
-            TestBracket_ResubmissionIsBounded();
-            TestBracket_IncomparableInstrumentsAreNotMirrored();
-            TestBracket_P0_49_ExecutionBeforePositionStillGetsAStop();
-            TestBracket_P0_50_NoStopIsPlacedOnAFlatFollower();
-            TestBracket_StopLimitLeaderMirrorsTriggerPriceAsStopMarket();
-            TestBracket_LeaderCancellingItsStopLeavesTheFollowerProtected();
+            Run(TestBracket_StopMirrorsLeaderDistanceFromFollowerFill);
+            Run(TestBracket_StopBeforeFollowerFillIsAppliedOnFill);
+            Run(TestBracket_P0_55_LeaderStopAcceptedBeforeLeaderPositionIsStillMirrored);
+            Run(TestOrderLiveness_ClassifiesEveryNT8OrderState);
+            Run(TestBracket_P0_59_ALegBeingModifiedIsNotDuplicated);
+            Run(TestP0_60_AStopBeingCancelledStopsCountingAsCoverage);
+            Run(TestBracket_TrailingModifiesTheStopRatherThanRecreatingIt);
+            Run(TestBracket_TargetIsMirroredAsAnOcoPairWithTheStop);
+            Run(TestBracket_P0_9_ALateTargetJoinsTheLiveStopsOcoGroup);
+            Run(TestBracket_P0_9_ARecreatedStopMintsAFreshOcoIdAndRebuildsThePair);
+            Run(TestBracket_P0_9_InterleavedTargetSyncsLeaveExactlyOneTarget);
+            Run(TestBracket_P0_9_TargetResubmissionIsBounded);
+            Run(TestBracket_P0_9_ALegRetiredByItsOcoSiblingIsNotResubmitted);
+            Run(TestBracket_P0_9_AMultiTargetLeaderIsNotMirroredAtAll);
+            Run(TestBracket_P0_9_LegPricesAreRoundedToTheInstrumentsTick);
+            Run(TestBracket_TargetAcceptedBeforeLeaderPositionIsStillMirrored);
+            Run(TestBracket_FollowerGoingFlatCancelsBothLegs);
+            Run(TestBracket_MovingLeaderStopReplacesRatherThanDuplicates);
+            Run(TestBracket_P1_56_InterleavedSyncsLeaveExactlyOneProtectiveStop);
+            Run(TestBracket_P1_56_AThirdSyncStillLeavesExactlyOneProtectiveStop);
+            Run(TestBracket_FollowerGoingFlatCancelsTheMirroredStop);
+            Run(TestBracket_StopTrailedIntoProfitStaysAboveFollowerEntry);
+            Run(TestBracket_ShortStopTrailedIntoProfitStaysBelowFollowerEntry);
+            Run(TestBracket_RejectedStopIsResubmitted);
+            Run(TestBracket_P1_56_AFailedSubmitDoesNotWedgeLaterSyncs);
+            Run(TestBracket_ResubmissionIsBounded);
+            Run(TestBracket_IncomparableInstrumentsAreNotMirrored);
+            Run(TestBracket_P0_49_ExecutionBeforePositionStillGetsAStop);
+            Run(TestBracket_P0_50_NoStopIsPlacedOnAFlatFollower);
+            Run(TestBracket_StopLimitLeaderMirrorsTriggerPriceAsStopMarket);
+            Run(TestBracket_LeaderCancellingItsStopLeavesTheFollowerProtected);
 
             // -- S7: copier fan-out under burst (plan §8) --
-            TestStress_S7_CopierFanOutUnderBurst();
+            Run(TestStress_S7_CopierFanOutUnderBurst);
 
             // -- P3-30/P3-31: the reconciler's pure core --
-            TestDesired_SignedOffsetsMirrorBothSidesFromTheFollowersOwnFill();
-            TestDesired_LeaderTrailingIntoProfitKeepsTheStopAboveEntry();
-            TestDesired_OffTickAverageFillIsSnappedToTheInstrumentsTick();
-            TestDesired_QuantityIsClampedToTheLivePositionNotTheBracketSnapshot();
-            TestDesired_FlatFollowerForbidsBothLegs();
-            TestDesired_SideMismatchForbidsBothLegs();
-            TestDesired_UnknownOffsetIsUnspecifiedNotForbidden();
-            TestDesired_NonPositivePriceIsRefusedWithoutCancellingCover();
-            TestReconcile_NothingOwnedCreatesBothLegsRiskLegFirst();
-            TestReconcile_CorrectLegsProduceNoActions();
-            TestReconcile_TwoOwnedLegsAreDeduplicated();
-            TestReconcile_DuplicateStopsBehindMismatchedQuantitiesLeaveOneCorrectLeg();
-            TestReconcile_ChangeSubmittedLegIsNotDuplicated();
-            TestReconcile_DepartingLegIsReplacedAndNotCancelledTwice();
-            TestReconcile_P0_61_ALegMidChangeIsDeferredNotChangedAgain();
-            TestOrderLiveness_P0_61_MidChangeAnswersTheThreeQuestionsDifferently();
-            TestReconcile_TrailStepModifiesRatherThanReplaces();
-            TestReconcile_FlatFollowerCancelsEveryOwnedLeg();
-            TestReconcile_UnspecifiedLegKeepsOneAndCreatesNone();
-            TestReconcile_InFlightSubmitSuppressesOnlyItsOwnCreate();
-            TestReconcile_InFlightNeverSuppressesACancel();
-            TestReconcile_ForeignAndManualOrdersAreNeverTouched();
-            TestReconcile_WrongTypeLegIsReplacedNotLeftInPlace();
-            TestReconcile_TerminalLegsAreIgnoredEntirely();
-            TestReconcile_TheSameOrderListedTwiceIsOneLeg();
-            TestReconcile_IsIdempotentUnderRepetition();
-            TestReconcile_SurvivorPrefersTheLegThatActuallyCovers();
-            TestBracket_P3_30_AStrayLegTheEngineNeverRecordedIsStillCancelled();
-            TestBracket_P3_31_ALegNotYetVisibleAtTheBrokerIsNotDuplicated();
-            TestBracket_P3_30_ACachedLegAlsoInAccountOrdersCountsOnce();
-            TestBracket_P0_50_AFlatFollowerStandsTheBracketDown();
-            TestBracket_P0_61_ADeferredChangeIsReappliedWhenTheLegSettles();
+            Run(TestDesired_SignedOffsetsMirrorBothSidesFromTheFollowersOwnFill);
+            Run(TestDesired_LeaderTrailingIntoProfitKeepsTheStopAboveEntry);
+            Run(TestDesired_OffTickAverageFillIsSnappedToTheInstrumentsTick);
+            Run(TestDesired_QuantityIsClampedToTheLivePositionNotTheBracketSnapshot);
+            Run(TestDesired_FlatFollowerForbidsBothLegs);
+            Run(TestDesired_SideMismatchForbidsBothLegs);
+            Run(TestDesired_UnknownOffsetIsUnspecifiedNotForbidden);
+            Run(TestDesired_NonPositivePriceIsRefusedWithoutCancellingCover);
+            Run(TestReconcile_NothingOwnedCreatesBothLegsRiskLegFirst);
+            Run(TestReconcile_CorrectLegsProduceNoActions);
+            Run(TestReconcile_TwoOwnedLegsAreDeduplicated);
+            Run(TestReconcile_DuplicateStopsBehindMismatchedQuantitiesLeaveOneCorrectLeg);
+            Run(TestReconcile_ChangeSubmittedLegIsNotDuplicated);
+            Run(TestReconcile_DepartingLegIsReplacedAndNotCancelledTwice);
+            Run(TestReconcile_P0_61_ALegMidChangeIsDeferredNotChangedAgain);
+            Run(TestOrderLiveness_P0_61_MidChangeAnswersTheThreeQuestionsDifferently);
+            Run(TestReconcile_TrailStepModifiesRatherThanReplaces);
+            Run(TestReconcile_FlatFollowerCancelsEveryOwnedLeg);
+            Run(TestReconcile_UnspecifiedLegKeepsOneAndCreatesNone);
+            Run(TestReconcile_InFlightSubmitSuppressesOnlyItsOwnCreate);
+            Run(TestReconcile_InFlightNeverSuppressesACancel);
+            Run(TestReconcile_ForeignAndManualOrdersAreNeverTouched);
+            Run(TestReconcile_WrongTypeLegIsReplacedNotLeftInPlace);
+            Run(TestReconcile_TerminalLegsAreIgnoredEntirely);
+            Run(TestReconcile_TheSameOrderListedTwiceIsOneLeg);
+            Run(TestReconcile_IsIdempotentUnderRepetition);
+            Run(TestReconcile_SurvivorPrefersTheLegThatActuallyCovers);
+            Run(TestBracket_P3_30_AStrayLegTheEngineNeverRecordedIsStillCancelled);
+            Run(TestBracket_P3_31_ALegNotYetVisibleAtTheBrokerIsNotDuplicated);
+            Run(TestBracket_P3_30_ACachedLegAlsoInAccountOrdersCountsOnce);
+            Run(TestBracket_P0_50_AFlatFollowerStandsTheBracketDown);
+            Run(TestBracket_P0_61_ADeferredChangeIsReappliedWhenTheLegSettles);
 
             // P0-63: Change() accepted and silently ignored -- RED until remedy 3 lands
-            TestBracket_P0_63_ASilentlyIgnoredChangeIsCaughtOnSettleAndReplaced();
-            TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange();
-            TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace();
-            TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored();
-            TestBracket_P0_63_AQuantityOnlyNoOpIsAlsoCaught();
-            TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmissionBudget();
+            Run(TestBracket_P0_63_ASilentlyIgnoredChangeIsCaughtOnSettleAndReplaced);
+            Run(TestBracket_P0_63_AFurtherTrailDoesNotWaitOnAnotherIgnoredChange);
+            Run(TestBracket_P0_63_AnHonouredChangeStillModifiesInPlace);
+            Run(TestBracket_P0_63_TheTargetLegIsAlsoReplacedWhenItsChangeIsIgnored);
+            Run(TestBracket_P0_63_AQuantityOnlyNoOpIsAlsoCaught);
+            Run(TestBracket_P0_63_ALongTrailIsNotStoppedByTheReSubmissionBudget);
 
             // CM1: copier ratio converter, slice 1 -- RED until the fix lands
-            TestCM1_MatrixSizesFromTheTableWithoutTheSymbolMultiplier();
-            TestCM1_MatrixFailsClosedOnEntriesAndNeverOnExits();
-            TestCM1_MatrixTreatsAnInvalidRatioAsNoRule();
-            TestCM1_MatrixKeepsTheLeadersInstrument();
+            Run(TestCM1_MatrixSizesFromTheTableWithoutTheSymbolMultiplier);
+            Run(TestCM1_MatrixFailsClosedOnEntriesAndNeverOnExits);
+            Run(TestCM1_MatrixTreatsAnInvalidRatioAsNoRule);
+            Run(TestCM1_MatrixKeepsTheLeadersInstrument);
 
             // CM2: copier ratio converter, slice 3a -- RED until the fix lands
-            TestCM2_RelationshipRoundTripKeepsSizingAndTheMatrix();
-            TestCM2_GroupRoundTripKeepsSizingAndTheMatrix();
-            TestCM2_ReloadedMatrixLookupIsStillCaseInsensitive();
-            TestCM2_ALoadedMatrixActuallySizesATrade();
-            TestCM2_LegacyAndAliasFormsStillLoad();
-            TestCM2_AMalformedFieldDoesNotDiscardTheWholeConfig();
-            TestCM2_AMalformedNumberNeverBecomesAZeroLimit();
-            TestCM2_AnEmptySectionIsNotAParseFailure();
+            Run(TestCM2_RelationshipRoundTripKeepsSizingAndTheMatrix);
+            Run(TestCM2_GroupRoundTripKeepsSizingAndTheMatrix);
+            Run(TestCM2_ReloadedMatrixLookupIsStillCaseInsensitive);
+            Run(TestCM2_ALoadedMatrixActuallySizesATrade);
+            Run(TestCM2_LegacyAndAliasFormsStillLoad);
+            Run(TestCM2_AMalformedFieldDoesNotDiscardTheWholeConfig);
+            Run(TestCM2_AMalformedNumberNeverBecomesAZeroLimit);
+            Run(TestCM2_AnEmptySectionIsNotAParseFailure);
 
             // CM3: copier bridge merge semantics, slice 3b -- RED until the fix lands
             // UI1: the conformance snapshot. RED until GetSnapshot() is implemented.
-            TestUi1_VerdictsFromThePositionComparison();
-            TestUi1_OrphanIsTheWorstStateAndOutranksDiverged();
-            TestUi1_ConfiguredButNotActingIsItsOwnVerdict();
-            TestUi1_ExpectedComesFromTheEnginesOwnSizingPath();
-            TestUi1_EnumerationMatchesWhatTheEngineActuallyCopies();
-            TestUi1_MetricsCarryTheirSampleCount();
-            TestUi1_TheSnapshotIsAReadAndOnlyARead();
-            TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror();
-            TestUi1b_AShortLeaderIsMirroredRatherThanReadAsFlat();
-            TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt();
-            TestUi2_TheConfigPathHasOneOwnerInCore();
-            TestUi2_TheParameterlessSaveWritesTheFileEverythingElseReads();
-            TestUi2_TheTwoSaveOverloadsAreOneSerializerNotTwo();
-            TestUi2_ThereIsDeliberatelyNoParameterlessLoad();
-            TestUi2_TheAddFormPreservesWhatTheFormCannotSee();
-            TestUi2_TheGroupFormPreservesWhatTheFormCannotSee();
-            TestUi2_EveryFormFieldActuallyReachesTheStoredRelationship();
-            TestUi2_ARowEditNeverMutatesTheStoredObjectFirst();
-            TestUi2_AGroupRowEditCarriesOnlyItsOwnField();
-            TestUi2_TheWindowNamesNoFilePath();
-            TestUi2_TheWindowConstructsNoDomainObject();
-            TestUi2_TheWindowMutatesNoStoredObjectInPlace();
-            TestUi2_TheWindowNeverLoadsFromDiskAndSurfacesARefusal();
-            TestUi2_ARowEditCannotDISARMALiveRelationship();
-            TestUi2_AGroupRowEditCannotDISARMALiveGroup();
-            TestUi2_ArmingStillRequiresConfirmation();
-            TestUi3_EveryConfigLeafIsClassified();
-            TestUi3_NoFieldIsBothARuleAndANonRule();
-            TestUi3_AnUnevaluatedRuleMustSayWhy();
-            TestUi3_TheFourStatesAreDerivedNotDeclared();
-            TestUi3_TheWorstStateSortsFirst();
-            TestUi3_TheThreeKnownDefectsAppearWithTheirRealState();
-            TestUi3_AnEmptyCollectionCanNeverReportEnforcing();
+            Run(TestUi1_VerdictsFromThePositionComparison);
+            Run(TestUi1_OrphanIsTheWorstStateAndOutranksDiverged);
+            Run(TestUi1_ConfiguredButNotActingIsItsOwnVerdict);
+            Run(TestUi1_ExpectedComesFromTheEnginesOwnSizingPath);
+            Run(TestUi1_EnumerationMatchesWhatTheEngineActuallyCopies);
+            Run(TestUi1_MetricsCarryTheirSampleCount);
+            Run(TestUi1_TheSnapshotIsAReadAndOnlyARead);
+            Run(TestUi1b_APositionInAnUnrelatedInstrumentIsNotTheMirror);
+            Run(TestUi1b_AShortLeaderIsMirroredRatherThanReadAsFlat);
+            Run(TestUi1b_ShadowExplainsADivergenceRatherThanCompetingWithIt);
+            Run(TestUi2_TheConfigPathHasOneOwnerInCore);
+            Run(TestUi2_TheParameterlessSaveWritesTheFileEverythingElseReads);
+            Run(TestUi2_TheTwoSaveOverloadsAreOneSerializerNotTwo);
+            Run(TestUi2_ThereIsDeliberatelyNoParameterlessLoad);
+            Run(TestUi2_TheAddFormPreservesWhatTheFormCannotSee);
+            Run(TestUi2_TheGroupFormPreservesWhatTheFormCannotSee);
+            Run(TestUi2_EveryFormFieldActuallyReachesTheStoredRelationship);
+            Run(TestUi2_ARowEditNeverMutatesTheStoredObjectFirst);
+            Run(TestUi2_AGroupRowEditCarriesOnlyItsOwnField);
+            Run(TestUi2_TheWindowNamesNoFilePath);
+            Run(TestUi2_TheWindowConstructsNoDomainObject);
+            Run(TestUi2_TheWindowMutatesNoStoredObjectInPlace);
+            Run(TestUi2_TheWindowNeverLoadsFromDiskAndSurfacesARefusal);
+            Run(TestUi2_ARowEditCannotDISARMALiveRelationship);
+            Run(TestUi2_AGroupRowEditCannotDISARMALiveGroup);
+            Run(TestUi2_ArmingStillRequiresConfirmation);
+            Run(TestUi3_EveryConfigLeafIsClassified);
+            Run(TestUi3_NoFieldIsBothARuleAndANonRule);
+            Run(TestUi3_AnUnevaluatedRuleMustSayWhy);
+            Run(TestUi3_TheFourStatesAreDerivedNotDeclared);
+            Run(TestUi3_TheWorstStateSortsFirst);
+            Run(TestUi3_TheThreeKnownDefectsAppearWithTheirRealState);
+            Run(TestUi3_AnEmptyCollectionCanNeverReportEnforcing);
 
             // P2-116: an equity rule with no equity reading
-            TestP2116_AnAccountWithNoEquityReadingCannotBeEnforcing();
-            TestP2116_AnAccountWithAnEquityReadingStillEnforces();
-            TestP2116_ANegativeEquityIsAReadingNotAnAbsence();
-            TestP2116_ANaNEquityIsNotAReading();
-            TestP2116_AnUnreadAccountReportsNoValueRatherThanZero();
-            TestP2116_TheFirmNoteIsPrefixedNotReplaced();
-            TestP2116_TheInertRowSaysWhatIsMissing();
-            TestP2116_TheFirmTrailingDrawdownIsASecondReader();
-            TestP2116_PeakEquityGivebackNeedsAReadingToo();
-            TestP2116_TheRealizedPnLRulesAreDeliberatelyLeftAlone();
-            TestP2116_EquityBackedRulesAreFoundBySweepNotByHand();
-            TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken();
-            TestP186_TheNewsShieldIsRedOutOfTheBox();
-            TestP182_AFlagThatCannotFireMustNotDefaultOn();
-            TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag();
-            TestP184_TheCopierCapIsNotLooserThanTheGuardCap();
-            TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand();
-            TestP184_TheDefaultActionOnAMissingStopIsToFlatten();
-            TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault();
-            TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited();
-            TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing();
-            TestUi4_TheCanActCopyAgreesWithTheGuardItself();
-            TestUi4_NothingEnforcesUnlessTheSnapshotSaysLiveAndArmed();
-            TestUi4_AnExcludedAccountEnforcesNothingBesideOneThatDoes();
-            TestUi4_TheNewsEvidenceReachesTheRuleThroughTheSnapshot();
-            TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates();
-            TestUi4_TheSnapshotCarriesTheGuardsOwnModeArmingAndAccountFlags();
-            TestUi4_NothingAboutTheBuildCanBlankTheInventoryOrLeaveARedRowMute();
-            TestUi5_TheStatesTravelAsNamesNotNumbers();
-            TestUi5_ANullLimitStaysNullRatherThanBecomingZero();
-            TestUi5_AnEmptyInventoryIsStillAnInventory();
-            TestUi5_TheJsonRoundTripsBackToTheSameStates();
-            TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull();
-            TestUi5_TheFleetSummaryIsDerivedFromTheSameRowsItSummarises();
-            TestUi6_AZeroThatWasNeverMeasuredIsNotAZeroThatWas();
-            TestUi6_TheSeverityRankIsNotTheEnumsOwnOrder();
-            TestUi6_TheVerdictAndSidesTravelAsNamesAndTheRankTravelsWithThem();
-            TestUi6_ANullSnapshotSaysSoAndAnEmptyOneIsStillAnAnswer();
-            TestUi7_ARefusedWriteSaysWhyAndNamesTheGroupResponsible();
-            TestUi7_TheReasonTheCallerGetsIsTheOneThatWasLogged();
-            TestUi7_AnAcceptedWriteReturnsNoReasonAtAll();
-            TestUi7_ARefusedGroupWriteNamesEveryClashingFollower();
-            TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently();
-            TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload();
-            TestP183_EveryCopierConfigFieldIsConsultedByTheEngine();
-            TestP183_NoSurfaceStillAssertsAProtectionThatIsGone();
-            TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed();
-            TestP185_AGroupRequestThatNamesNoGroupIsRefusedRatherThanGuessed();
-            TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot();
-            TestP185_TheCopierEngineNamesNoAccountOfItsOwn();
-            TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented();
-            TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo();
-            TestP185_ABlankAccountIsRefusedLikeAMissingOne();
-            TestP185_ASkippedConfigEntryReachesTheGuardLog();
+            Run(TestP2116_AnAccountWithNoEquityReadingCannotBeEnforcing);
+            Run(TestP2116_AnAccountWithAnEquityReadingStillEnforces);
+            Run(TestP2116_ANegativeEquityIsAReadingNotAnAbsence);
+            Run(TestP2116_ANaNEquityIsNotAReading);
+            Run(TestP2116_AnUnreadAccountReportsNoValueRatherThanZero);
+            Run(TestP2116_TheFirmNoteIsPrefixedNotReplaced);
+            Run(TestP2116_TheInertRowSaysWhatIsMissing);
+            Run(TestP2116_TheFirmTrailingDrawdownIsASecondReader);
+            Run(TestP2116_PeakEquityGivebackNeedsAReadingToo);
+            Run(TestP2116_TheRealizedPnLRulesAreDeliberatelyLeftAlone);
+            Run(TestP2116_EquityBackedRulesAreFoundBySweepNotByHand);
+            Run(TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken);
+            Run(TestP186_TheNewsShieldIsRedOutOfTheBox);
+            Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
+            Run(TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag);
+            Run(TestP184_TheCopierCapIsNotLooserThanTheGuardCap);
+            Run(TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand);
+            Run(TestP184_TheDefaultActionOnAMissingStopIsToFlatten);
+            Run(TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault);
+            Run(TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited);
+            Run(TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing);
+            Run(TestUi4_TheCanActCopyAgreesWithTheGuardItself);
+            Run(TestUi4_NothingEnforcesUnlessTheSnapshotSaysLiveAndArmed);
+            Run(TestUi4_AnExcludedAccountEnforcesNothingBesideOneThatDoes);
+            Run(TestUi4_TheNewsEvidenceReachesTheRuleThroughTheSnapshot);
+            Run(TestUi4_NoAccountsStillReportsTheRulesNothingEvaluates);
+            Run(TestUi4_TheSnapshotCarriesTheGuardsOwnModeArmingAndAccountFlags);
+            Run(TestUi4_NothingAboutTheBuildCanBlankTheInventoryOrLeaveARedRowMute);
+            Run(TestUi5_TheStatesTravelAsNamesNotNumbers);
+            Run(TestUi5_ANullLimitStaysNullRatherThanBecomingZero);
+            Run(TestUi5_AnEmptyInventoryIsStillAnInventory);
+            Run(TestUi5_TheJsonRoundTripsBackToTheSameStates);
+            Run(TestUi5_ANullSnapshotSaysSoInsteadOfServingTheWordNull);
+            Run(TestUi5_TheFleetSummaryIsDerivedFromTheSameRowsItSummarises);
+            Run(TestUi6_AZeroThatWasNeverMeasuredIsNotAZeroThatWas);
+            Run(TestUi6_TheSeverityRankIsNotTheEnumsOwnOrder);
+            Run(TestUi6_TheVerdictAndSidesTravelAsNamesAndTheRankTravelsWithThem);
+            Run(TestUi6_ANullSnapshotSaysSoAndAnEmptyOneIsStillAnAnswer);
+            Run(TestUi7_ARefusedWriteSaysWhyAndNamesTheGroupResponsible);
+            Run(TestUi7_TheReasonTheCallerGetsIsTheOneThatWasLogged);
+            Run(TestUi7_AnAcceptedWriteReturnsNoReasonAtAll);
+            Run(TestUi7_ARefusedGroupWriteNamesEveryClashingFollower);
+            Run(TestUi7_AnEmptyRequestIsRefusedOutLoudRatherThanSilently);
+            Run(TestUi7_NoOperatorSurfaceCallsTheReasonLosingOverload);
+            Run(TestP183_EveryCopierConfigFieldIsConsultedByTheEngine);
+            Run(TestP183_NoSurfaceStillAssertsAProtectionThatIsGone);
+            Run(TestP185_ARequestThatNamesNoAccountsIsRefusedRatherThanGuessed);
+            Run(TestP185_AGroupRequestThatNamesNoGroupIsRefusedRatherThanGuessed);
+            Run(TestP185_ANewGroupMustNameItsLeaderButAnEditNeedNot);
+            Run(TestP185_TheCopierEngineNamesNoAccountOfItsOwn);
+            Run(TestP185_AStoredRelationshipThatNamesNoFollowerIsSkippedNotInvented);
+            Run(TestP185_AnEditThatBLANKSTheLeaderIsRefusedToo);
+            Run(TestP185_ABlankAccountIsRefusedLikeAMissingOne);
+            Run(TestP185_ASkippedConfigEntryReachesTheGuardLog);
 
-            TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField();
-            TestCM3_APartialUpdateIsWhatGetsStoredAndSaved();
-            TestCM3_APartialRelationshipUpdateKeepsEveryUnmentionedField();
-            TestCM3_TheMatrixIsSettableThroughTheBridgeAtAll();
-            TestCM3_BothFollowerListSpellingsStillArrive();
-            TestCM3_AnExplicitNullDoesNotWipeStoredConfig();
-            TestCM3_AStoredNullMatrixIsRepairedRatherThanPropagated();
-            TestCM3_AnUnknownGroupIsStillCreated();
-            TestCM3_APartialUpdateCannotArmForLive();
-            TestCM3_AnUnrelatedEditDoesNotSilentlyDisarm();
+            Run(TestCM3_APartialGroupUpdateKeepsEveryUnmentionedField);
+            Run(TestCM3_APartialUpdateIsWhatGetsStoredAndSaved);
+            Run(TestCM3_APartialRelationshipUpdateKeepsEveryUnmentionedField);
+            Run(TestCM3_TheMatrixIsSettableThroughTheBridgeAtAll);
+            Run(TestCM3_BothFollowerListSpellingsStillArrive);
+            Run(TestCM3_AnExplicitNullDoesNotWipeStoredConfig);
+            Run(TestCM3_AStoredNullMatrixIsRepairedRatherThanPropagated);
+            Run(TestCM3_AnUnknownGroupIsStillCreated);
+            Run(TestCM3_APartialUpdateCannotArmForLive);
+            Run(TestCM3_AnUnrelatedEditDoesNotSilentlyDisarm);
 
             // P1-74: which camelCase argument names the request path actually honours.
             // The MCP wrapper is a separate repo with its own tests; those pin the JSON
             // it EMITS, and can say nothing about whether this engine reads it. These do.
-            TestP1_74_EveryDocumentedCamelCaseArgumentReachesTheRelationship();
-            TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped();
-            TestP1_74_QuarantineIsSettableThroughTheRequestPath();
+            Run(TestP1_74_EveryDocumentedCamelCaseArgumentReachesTheRelationship);
+            Run(TestP1_74_AutoConversionIsNotAFieldAndIsSilentlyDropped);
+            Run(TestP1_74_QuarantineIsSettableThroughTheRequestPath);
 
             // P1-75: LoadFromDisk disarms, so no READ path may call it.
-            TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem();
+            Run(TestP1_75_ReloadingPropLimitsFromDiskDisarmsThem);
 
             // P1-76: a follower belongs to a direct relationship OR a group, never both.
-            TestP1_76_ARelationshipIsRefusedWhenTheFollowerIsAlreadyInAGroup();
-            TestP1_76_AddFollowerToGroupIsRefusedWhenADirectRelationshipExists();
-            TestP1_76_AGroupIsRefusedWhenAnyFollowerHasADirectRelationship();
-            TestP1_76_TheRefusalIsCaseInsensitiveAndIgnoresGroupEnabledState();
-            TestP1_76_LoadFromDiskTOLERATESAnOverlapAndReportsIt();
-            TestP1_76_DirectWinsOverGroupAndThatIsNowPinned();
-            TestP1_76_ADisabledDirectRelationshipIsNotResurrectedByAGroup();
-            TestP1_76_TwoGroupsSharingAFollowerStillProduceOneCopy();
-            TestCM3_AMalformedRequestDoesNotDestroyTheStoredGroup();
+            Run(TestP1_76_ARelationshipIsRefusedWhenTheFollowerIsAlreadyInAGroup);
+            Run(TestP1_76_AddFollowerToGroupIsRefusedWhenADirectRelationshipExists);
+            Run(TestP1_76_AGroupIsRefusedWhenAnyFollowerHasADirectRelationship);
+            Run(TestP1_76_TheRefusalIsCaseInsensitiveAndIgnoresGroupEnabledState);
+            Run(TestP1_76_LoadFromDiskTOLERATESAnOverlapAndReportsIt);
+            Run(TestP1_76_DirectWinsOverGroupAndThatIsNowPinned);
+            Run(TestP1_76_ADisabledDirectRelationshipIsNotResurrectedByAGroup);
+            Run(TestP1_76_TwoGroupsSharingAFollowerStillProduceOneCopy);
+            Run(TestCM3_AMalformedRequestDoesNotDestroyTheStoredGroup);
 
             // CM4: cross-instrument ratio rules, slice 2 -- RED until the fix lands
-            TestCM4_OneRuleDecidesBothTheInstrumentAndTheCount();
-            TestCM4_TheRatioIsKeyedByTheLeaderRootNotTheFollower();
-            TestCM4_ACrossMappingWithNoRatioAtAllFailsClosed();
-            TestCM4_AnInvalidCrossInstrumentRatioIsStillNoRule();
-            TestCM4_TheInstrumentDecisionIsMadeInExactlyOnePlace();
-            TestCM4_IncomparableRootsRecordNoSlippageAndNoBracket();
-            TestCM4_MatrixStillNeverAutoConverts();
+            Run(TestCM4_OneRuleDecidesBothTheInstrumentAndTheCount);
+            Run(TestCM4_TheRatioIsKeyedByTheLeaderRootNotTheFollower);
+            Run(TestCM4_ACrossMappingWithNoRatioAtAllFailsClosed);
+            Run(TestCM4_AnInvalidCrossInstrumentRatioIsStillNoRule);
+            Run(TestCM4_TheInstrumentDecisionIsMadeInExactlyOnePlace);
+            Run(TestCM4_IncomparableRootsRecordNoSlippageAndNoBracket);
+            Run(TestCM4_MatrixStillNeverAutoConverts);
 
             // CM5: a collection named in the request replaces the stored one -- RED until the fix
-            TestCM5_AnEmptyCollectionInTheRequestClearsTheStoredOne();
-            TestCM5_APresentCollectionReplacesRatherThanAccumulates();
-            TestCM5_ReplacingAMatrixKeepsItCaseInsensitive();
-            TestCM5_AnAbsentOrNullCollectionIsStillUnchanged();
-            TestCM5_TheFollowerListIsReplaceableToo();
-            TestCM5_ReplacementAppliesToRelationshipsAsWell();
-            TestCM3_AnUnknownEnumFallsBackRatherThanRefusingTheRequest();
+            Run(TestCM5_AnEmptyCollectionInTheRequestClearsTheStoredOne);
+            Run(TestCM5_APresentCollectionReplacesRatherThanAccumulates);
+            Run(TestCM5_ReplacingAMatrixKeepsItCaseInsensitive);
+            Run(TestCM5_AnAbsentOrNullCollectionIsStillUnchanged);
+            Run(TestCM5_TheFollowerListIsReplaceableToo);
+            Run(TestCM5_ReplacementAppliesToRelationshipsAsWell);
+            Run(TestCM3_AnUnknownEnumFallsBackRatherThanRefusingTheRequest);
 
             // P2-27 / P1-117: the guard-config VALUE validator -- RED until GuardConfigEdit exists.
-            TestP227_GuardConfigEditIsReachableFromTheTestBuild();
-            TestP227_AValidConfigIsAccepted();
-            TestP227_AnOmittedModeIsAccepted();
-            TestP227_ModeIsCaseSensitiveBecausePreflightIs();
-            TestP227_AnUnrecognisedModeIsRefused();
-            TestP227_DisabledIsTheCopiersModeNotTheGuards();
-            TestP227_TheValidatorAgreesWithPreflightOnEveryMode();
-            TestP227_ARefusalDoesNotAdviseAFixThatWouldNotWork();
-            TestP227_TheModeRefusalNamesTheValidModes();
-            TestP227_AZeroTrailingDrawdownIsRefused();
-            TestP227_ANegativeTrailingDrawdownIsRefused();
-            TestP227_ANaNTrailingDrawdownIsRefused();
-            TestP227_ANegativeMinShadowSessionsIsRefused();
-            TestP227_TheRefusalNamesTheFieldThatIsWrong();
-            TestP2119_SaveAndReloadConfigReportsAnOutcome();
-            TestP2119_AGoodSaveReportsSavedAndActuallyWrites();
-            TestP2119_AFailedWriteIsReportedAsNotSaved();
-            TestP2119_AChangeThatIntroducesABadValueIsRefusedAndNotWritten();
-            TestP2119_APreExistingBadValueDoesNotTrapTheOperator();
-            TestP2119_AnUnchangedNaNIsNotTreatedAsAChange();
-            TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig();
-            TestP2119_IntroducingAnUnknownModeIsRefused();
-            TestP2119_AConfigWithNoPnLRulesIsNotBackfilledFromTheOldOne();
-            TestP2119_ABlankModeIsNotBackfilledFromTheOldOne();
-            TestP2119_TheFirstConfigOnAFreshBoxIsValidatedStrictly();
-            TestP2119_ANullConfigIsRefused();
-            TestP2119_AWarningIsAbsentOnAHealthySave();
-            TestP1117_DeepCopyIsIndependentOfItsSource();
-            TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace();
+            Run(TestP227_GuardConfigEditIsReachableFromTheTestBuild);
+            Run(TestP227_AValidConfigIsAccepted);
+            Run(TestP227_AnOmittedModeIsAccepted);
+            Run(TestP227_ModeIsCaseSensitiveBecausePreflightIs);
+            Run(TestP227_AnUnrecognisedModeIsRefused);
+            Run(TestP227_DisabledIsTheCopiersModeNotTheGuards);
+            Run(TestP227_TheValidatorAgreesWithPreflightOnEveryMode);
+            Run(TestP227_ARefusalDoesNotAdviseAFixThatWouldNotWork);
+            Run(TestP227_TheModeRefusalNamesTheValidModes);
+            Run(TestP227_AZeroTrailingDrawdownIsRefused);
+            Run(TestP227_ANegativeTrailingDrawdownIsRefused);
+            Run(TestP227_ANaNTrailingDrawdownIsRefused);
+            Run(TestP227_ANegativeMinShadowSessionsIsRefused);
+            Run(TestP227_TheRefusalNamesTheFieldThatIsWrong);
+            Run(TestP2119_SaveAndReloadConfigReportsAnOutcome);
+            Run(TestP2119_AGoodSaveReportsSavedAndActuallyWrites);
+            Run(TestP2119_AFailedWriteIsReportedAsNotSaved);
+            Run(TestP2119_AChangeThatIntroducesABadValueIsRefusedAndNotWritten);
+            Run(TestP2119_APreExistingBadValueDoesNotTrapTheOperator);
+            Run(TestP2119_AnUnchangedNaNIsNotTreatedAsAChange);
+            Run(TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig);
+            Run(TestP2119_IntroducingAnUnknownModeIsRefused);
+            Run(TestP2119_AConfigWithNoPnLRulesIsNotBackfilledFromTheOldOne);
+            Run(TestP2119_ABlankModeIsNotBackfilledFromTheOldOne);
+            Run(TestP2119_TheFirstConfigOnAFreshBoxIsValidatedStrictly);
+            Run(TestP2119_ANullConfigIsRefused);
+            Run(TestP2119_AWarningIsAbsentOnAHealthySave);
+            Run(TestP1117_DeepCopyIsIndependentOfItsSource);
+            Run(TestP1117_TheWindowDoesNotEditTheLiveConfigInPlace);
 
             // P1-121: the copier window reports what the copier does.
-            TestP1121_TheViewAsksTheEngineWhichModesAct();
-            TestP1121_AnUnmeasuredMetricIsNotRenderedAsZero();
-            TestP1121_AMeasuredZeroIsRenderedAsAMeasurement();
-            TestP1121_AnArmedRowUnderAShadowCopierDoesNotClaimToBeLive();
-            TestP1121_AnArmedRowUnderALiveCopierReadsAsLive();
-            TestP1121_QuarantineOutranksEveryOtherRowState();
-            TestP1121_ADisabledRowSaysItIsNotCopying();
-            TestP1121_TheHeaderReportsTheGlobalMode();
-            TestP1121_TheHeaderCanTakeEverySeverity();
-            TestP1121_AllQuarantinedIsCriticalAndNothingConfiguredIsNotOk();
-            TestP3128_AllRelationshipsOffIsNotReportedAsCopyingToSim();
-            TestP3128_AGroupThatIsSwitchedOffCountsAsNothingEnabled();
-            TestP1121_AConfigConflictIsSurfacedAndNeverLowersSeverity();
-            TestP1121_GroupFollowersAreCountedAndInertGroupsSaySo();
-            TestP1121_TheEngineReportsMetricsWithTheirSampleCounts();
-            TestP1121_TheWindowDelegatesItsStatusTextToTheView();
+            Run(TestP1121_TheViewAsksTheEngineWhichModesAct);
+            Run(TestP1121_AnUnmeasuredMetricIsNotRenderedAsZero);
+            Run(TestP1121_AMeasuredZeroIsRenderedAsAMeasurement);
+            Run(TestP1121_AnArmedRowUnderAShadowCopierDoesNotClaimToBeLive);
+            Run(TestP1121_AnArmedRowUnderALiveCopierReadsAsLive);
+            Run(TestP1121_QuarantineOutranksEveryOtherRowState);
+            Run(TestP1121_ADisabledRowSaysItIsNotCopying);
+            Run(TestP1121_TheHeaderReportsTheGlobalMode);
+            Run(TestP1121_TheHeaderCanTakeEverySeverity);
+            Run(TestP1121_AllQuarantinedIsCriticalAndNothingConfiguredIsNotOk);
+            Run(TestP3128_AllRelationshipsOffIsNotReportedAsCopyingToSim);
+            Run(TestP3128_AGroupThatIsSwitchedOffCountsAsNothingEnabled);
+            Run(TestP1121_AConfigConflictIsSurfacedAndNeverLowersSeverity);
+            Run(TestP1121_GroupFollowersAreCountedAndInertGroupsSaySo);
+            Run(TestP1121_TheEngineReportsMetricsWithTheirSampleCounts);
+            Run(TestP1121_TheWindowDelegatesItsStatusTextToTheView);
 
             // P2-123: the tab named after per-ticker ratios now reads them
-            TestP2123_ARatioIsNotRenderedWhereTheSizingModeIgnoresIt();
-            TestP2123_AutoConversionNeedsBothConditions();
-            TestP2123_TheRoundingThatDropsATradeIsStated();
-            TestP2123_TheTabsRatioAndTheCopyPathAgree();
-            TestP2123_TheRatioResolverToleratesNoRelationship();
-            TestP2123_AMicroLeaderAtRatioOneReportsTheDroppedLot();
-            TestP2123_TheRatioIsTheEnginesAndNotTheViewsOwn();
-            TestP2123_ACustomMappingWithNoRatioStillAppears();
-            TestP2123_ConfiguredRootsAreDedupedTheWayTheEngineKeysThem();
-            TestP2123_NothingConfiguredSaysSoRatherThanShowingNothing();
-            TestP2123_AHealthyConfigurationProducesNoWarnings();
-            TestP2123_MatrixModeWithNoEntryForARootSaysItCopiesNothing();
-            TestP2123_DescribeFoldsEveryRelationshipAndSkipsNulls();
-            TestP2123_TheWindowRendersTheTabFromTheView();
+            Run(TestP2123_ARatioIsNotRenderedWhereTheSizingModeIgnoresIt);
+            Run(TestP2123_AutoConversionNeedsBothConditions);
+            Run(TestP2123_TheRoundingThatDropsATradeIsStated);
+            Run(TestP2123_TheTabsRatioAndTheCopyPathAgree);
+            Run(TestP2123_TheRatioResolverToleratesNoRelationship);
+            Run(TestP2123_AMicroLeaderAtRatioOneReportsTheDroppedLot);
+            Run(TestP2123_TheRatioIsTheEnginesAndNotTheViewsOwn);
+            Run(TestP2123_ACustomMappingWithNoRatioStillAppears);
+            Run(TestP2123_ConfiguredRootsAreDedupedTheWayTheEngineKeysThem);
+            Run(TestP2123_NothingConfiguredSaysSoRatherThanShowingNothing);
+            Run(TestP2123_AHealthyConfigurationProducesNoWarnings);
+            Run(TestP2123_MatrixModeWithNoEntryForARootSaysItCopiesNothing);
+            Run(TestP2123_DescribeFoldsEveryRelationshipAndSkipsNulls);
+            Run(TestP2123_TheWindowRendersTheTabFromTheView);
 
             // Structural self-check: fails if the runner silently stops covering declared tests.
-            TestHarness_AllDeclaredTestsAreInvoked();
+            Run(TestHarness_AThrowingTestIsAFailureAndTheRunContinues);
+            Run(TestHarness_AllDeclaredTestsAreInvoked);
 
             Console.WriteLine("\n====================================================");
             Console.WriteLine(string.Format("RESULTS: Passed = {0}, Failed = {1}", _testsPassed, _testsFailed));
@@ -14010,6 +14081,71 @@ namespace NinjaTrader.NinjaScript.AddOns
                     totalCopies, distinctExecs * followers.Count));
 
             Assert(totalCopies > 0, "The burst actually drove the copy path (a stress test that drives nothing reports safety).");
+        }
+
+        /// <summary>
+        /// The NEGATIVE CONTROL for <see cref="Run(Action)"/>. Everything else in this file is a
+        /// positive test of production code; this one asserts that the runner itself still fails
+        /// when it should, because a wrapper that swallows exceptions and a wrapper that reports
+        /// them are indistinguishable from a green suite. [[a-detector-needs-a-negative-test]].
+        ///
+        /// It deliberately throws, and asserts three separate things, because the batteries depend
+        /// on all three and each can break alone:
+        ///
+        ///   1. the throw becomes exactly ONE counted failure, so `RESULTS: Failed = n` is reached
+        ///      at all -- the old runner printed no RESULTS line whatsoever;
+        ///   2. the run CONTINUES past it, so one bad test cannot hide the 676 behind it (this
+        ///      repo has already lost a run to a stray Environment.Exit at test 92 of 117);
+        ///   3. the emitted line carries the TEST NAME and the EXCEPTION TYPE, which is the text
+        ///      `mutation/*.py` reads to tell a detection from a crash (P2-148).
+        ///
+        /// ⚠️ STDOUT IS CAPTURED, AND THAT IS LOAD-BEARING, NOT TIDINESS. Every battery decides
+        /// "did anything object?" by searching stdout for `[FAIL]`. A control that printed a real
+        /// `[FAIL]` would make EVERY undetected crash look detected again -- re-arming the precise
+        /// hole this wrapper closes, from inside its own proof. The counters are restored for the
+        /// same reason: the control must not colour the run's real verdict.
+        /// </summary>
+        private static void TestHarness_AThrowingTestIsAFailureAndTheRunContinues()
+        {
+            Console.WriteLine("\n[TEST] HARNESS: a test that THROWS is a counted failure, and the run continues");
+
+            int passedBefore = _testsPassed;
+            int failedBefore = _testsFailed;
+            bool reachedTheNextTest = false;
+            string emitted;
+
+            var captured = new System.IO.StringWriter();
+            var realOut = Console.Out;
+            Console.SetOut(captured);
+            try
+            {
+                Run(() => { throw new InvalidOperationException("negative control"); },
+                    "TheDeliberatelyThrowingTest");
+                Run(() => { reachedTheNextTest = true; });
+            }
+            finally
+            {
+                // In a finally so a failure inside the control cannot leave the rest of the run
+                // writing into a StringWriter, which would silence every later line.
+                Console.SetOut(realOut);
+                emitted = captured.ToString();
+            }
+
+            int failedAfter = _testsFailed;
+            _testsPassed = passedBefore;
+            _testsFailed = failedBefore;
+
+            Assert(failedAfter == failedBefore + 1,
+                "HARNESS: a throwing test counts as exactly one failure (got "
+                + (failedAfter - failedBefore) + ")");
+            Assert(reachedTheNextTest,
+                "HARNESS: the run continues past a test that threw");
+            Assert(emitted.Contains("TheDeliberatelyThrowingTest"),
+                "HARNESS: the failure line names the test that threw");
+            Assert(emitted.Contains("InvalidOperationException"),
+                "HARNESS: the failure line names the exception type");
+            Assert(emitted.Contains("[FAIL]"),
+                "HARNESS: the throw is reported with the [FAIL] token the batteries match on");
         }
 
         /// <summary>
