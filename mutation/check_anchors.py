@@ -38,6 +38,70 @@ READS_WITH_RAW_NEWLINES = re.compile(
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 
+def strip_cs_comments(src):
+    """`src` with every // and /* */ comment blanked to spaces, offsets and lines preserved.
+
+    ⚠️ WHY THIS EXISTS (P2-152). Counting occurrences cannot tell code from commentary, and
+    this repo's comments quote the code they replaced -- deliberately, because that is how a
+    defect's history stays readable. The two habits collide. When P2-145 replaced the audit's
+    inline predicate, the comment explaining the change contained the old predicate verbatim,
+    so mutate_p330's find-string still matched EXACTLY ONCE and this gate reported it healthy.
+    The mutant was editing a comment: no effect, suite green, scored SURVIVED -- a mutant
+    proving nothing while every gate said otherwise. [[mutation-anchors-go-stale]] in the form
+    that is hardest to see, because the anchor still matches. It matches the wrong thing.
+
+    Offsets are preserved (comments become spaces, newlines kept) so a match position found in
+    the ORIGINAL text indexes the same span here. That is what lets the caller ask "is THIS
+    match inside a comment?" rather than the much weaker "does this text appear outside
+    comments somewhere?" -- an anchor may legitimately SPAN a comment, and 13 of the 508
+    anchors in this repo do exactly that. The weaker question fails all 13.
+    """
+    out = list(src)
+    i, n = 0, len(src)
+    in_line = in_block = in_str = in_chr = False
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ''
+        if in_line:
+            if c == '\n':
+                in_line = False
+            else:
+                out[i] = ' '
+        elif in_block:
+            if c == '*' and nxt == '/':
+                out[i] = out[i + 1] = ' '
+                i += 2
+                in_block = False
+                continue
+            if c != '\n':
+                out[i] = ' '
+        elif in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif in_chr:
+            if c == '\\':
+                i += 2
+                continue
+            if c == "'":
+                in_chr = False
+        else:
+            if c == '/' and nxt == '/':
+                in_line = True
+                out[i] = ' '
+            elif c == '/' and nxt == '*':
+                in_block = True
+                out[i] = ' '
+            elif c == '"':
+                in_str = True
+            elif c == "'":
+                in_chr = True
+        i += 1
+    return ''.join(out)
+
+
 def literal(node):
     """Fold a `'a' 'b'` / `'a' + 'b'` string expression down to its value."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -126,6 +190,7 @@ def main():
             default_path = list(consts.values())[0]
 
         sources = {}
+        stripped_sources = {}
         problems = []
         for entry in mutants.elts:
             if not isinstance(entry, (ast.Tuple, ast.List)):
@@ -168,6 +233,19 @@ def main():
                 short = (label or old).strip().splitlines()[0][:70]
                 problems.append('  x %-16s matched %d time(s): %s'
                                 % (os.path.basename(path), hits, short))
+            else:
+                # P2-152. Exactly one match is necessary and NOT sufficient: that one match may
+                # be inside a comment, in which case the mutant edits prose, cannot be killed,
+                # and this gate calls it healthy. Ask about THIS match's span, not whether the
+                # text appears in code anywhere -- an anchor that SPANS a comment is legitimate.
+                if path not in stripped_sources:
+                    stripped_sources[path] = strip_cs_comments(sources[path])
+                at = sources[path].find(old)
+                if not stripped_sources[path][at:at + len(old)].strip():
+                    short = (label or old).strip().splitlines()[0][:70]
+                    problems.append(
+                        '  x %-16s matches ONLY INSIDE A COMMENT, so the mutant edits prose and '
+                        'can never be killed: %s' % (os.path.basename(path), short))
 
         if problems:
             bad += len(problems)

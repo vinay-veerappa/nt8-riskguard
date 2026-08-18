@@ -8348,6 +8348,65 @@ and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shad
 
 
 
+### P2-152. A mutant whose anchor now matches only a COMMENT edits prose, can never be killed, and `check_anchors.py` reports it healthy — ✅ FIXED 2026-08-18 (session 59), instance and class
+
+Found by re-running `mutate_p330.py` after `P2-145` landed, not by reading anything.
+
+`P2-145` replaced the audit's inline predicate with `AssessCoverage`. `mutate_p330.py` carried a
+mutant anchored on that predicate verbatim:
+
+```python
+'if (!isProtected || covered < positionQty)',
+'if (!isProtected || covered > positionQty)'),
+```
+
+The predicate is gone from the code — but the `P2-145` comment block **quotes it**, deliberately,
+because quoting what you replaced is how a defect's history stays readable here. So the find-string
+still matched **exactly once**, `check_anchors.py` reported the battery healthy, and the mutant
+edited a comment: no effect, suite green, scored **SURVIVED**.
+
+⚠️ **This is [[mutation-anchors-go-stale]] in its least visible form.** The recorded version is an
+anchor that stops matching and prints `[SKIP]`. This one *still matches*. It matches the wrong
+thing, and the gate built to catch stale anchors is the gate that certified it.
+
+**MEASURED BLAST RADIUS: 1 of 508 anchors**, and it was the one this session created. Thirteen
+others *span* a comment — code followed by commentary inside one multi-line anchor — which is
+legitimate and must keep passing. That distinction is what makes the fix non-trivial: the weak
+question ("does this text appear outside comments anywhere?") fails all 13.
+
+**THE FIX, both halves:**
+
+* **Instance.** The mutant is **removed**, not re-pointed. `mutate_p2145coverage.py` groups 1-2
+  already mutate that comparison where it now lives, in more spellings than this one had (the state
+  test, the `<=` off-by-one, and the tempting wrong fix). Two batteries rewriting one line is a
+  collision risk for no extra evidence — and every battery rewrites shared source in place.
+* **Class.** `check_anchors.py` gains `strip_cs_comments`, which blanks `//` and `/* */` to spaces
+  **preserving offsets**, so a match position found in the original indexes the same span in the
+  stripped text. The gate then asks of *that one match*: is its span entirely comment? Exactly one
+  match is now necessary and **not sufficient**.
+
+**Control, run both ways** — because a check that cannot go red is not a check
+([[a-green-that-can-never-be-red]]):
+
+```
+with a probe mutant anchored on the comment:   509 anchors checked, 1 broken
+probe removed:                                 508 anchors checked, 0 broken
+```
+
+⚠️ **`P2-145` and `P2-148` between them are why this surfaced at all.** The stricter scoring from
+`P2-148` is what stopped the crash-and-survivor cases hiding each other, and re-running the battery
+is what exposed it. Nothing here was found by reading code — the same pattern as the rest of this
+session.
+
+**Also closed in passing:** `mutate_p330.py`'s mutants 3 and 4 (the flat-position filter) are now
+declared `EXPECTED SURVIVOR:`. `AssessCoverage` answers `positionQty <= 0` with
+`CoverageFinding.None` before anything else, so removing the caller's filter has no observable
+effect — the mutants became **equivalent**. The coverage moved rather than vanishing:
+`mutate_p2145coverage.py` group 5 mutates that answer directly. ⚠️ Neither the caller's filter nor
+the totality check should be removed to make them killable again — that would be making the code
+worse to keep a battery green. `_battery.finish` fails if a declared survivor is ever KILLED, which
+is the correct coupling: it means the totality check went away.
+
 ### P1-151. `StopGuard.OnMissing: Flatten` at `StopAttachSeconds: 15` would flatten the operator's own manual trades — `P1-84` set that number by guess, and there is now a measurement — OPEN, measured 2026-08-18 (session 59)
 
 Split out of `P1-146` on closure: the detector there was correct and the workflow was the defect, but

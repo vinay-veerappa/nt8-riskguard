@@ -257,6 +257,11 @@ def run():
     if 'error CS' in out:
         return 'BUILD FAILED'
     m = re.search(r'Passed = (\d+), Failed = (\d+)', out)
+    # P2-148: a crash is NOT a detection. The harness prints its result line
+    # last, so an unhandled exception leaves none -- which every spelling of
+    # `killed` below scored as KILLED. Require at least one [FAIL] first.
+    if not m and '[FAIL]' not in ((p.stdout or '') + (p.stderr or '')):
+        return 'NO RESULT LINE + NO ASSERTION FAILED (harness died undetected)'
     return m.group(0) if m else 'NO RESULT LINE'
 
 
@@ -282,6 +287,9 @@ for target, name, old, new in MUTANTS:
         mm = re.search(r'Failed = (\d+)', res)
         killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
             or (mm is not None and int(mm.group(1)) > 0)
+        # P2-148: the verdict above cannot tell a detection from a crash.
+        if 'NO ASSERTION FAILED' in res:
+            killed = False
         print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
         if not killed:
             survivors.append(name)

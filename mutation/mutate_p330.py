@@ -22,13 +22,14 @@ What each mutant is defending:
     one alone breaks ORPHAN_STOP and FSM_DIVERGENCE while NAKED_POSITION still works,
     so it checks that the silence test covers both reads and not just the first.
 
-  * MUTANT 3 drops the flat-position filter. `account.Positions` can carry a flat
-    Position, and without the filter a FLAT account reports NAKED_POSITION on every
-    tick of the audit timer. The FSM-seeding sweep has always filtered these; the
-    audit did not.
-
-  * MUTANT 4 drops only the `Quantity <= 0` half of that filter, keeping the
-    MarketPosition check. A reviewer reading the diff sees a flat filter and moves on.
+  * MUTANT 3 drops the flat-position filter; MUTANT 4 drops only its `Quantity <= 0` half.
+    ⚠️ BOTH ARE `EXPECTED SURVIVOR:` AS OF P2-145 (v1.44.0), with the reason on each marker.
+    In short: the defect they expressed needed the old inline predicate, whose `!isProtected`
+    arm fired on a flat position with gap=0. `AssessCoverage` now answers `positionQty <= 0`
+    with `None` before anything else, so the caller's filter is no longer observable and no
+    test can reach these. The equivalent coverage moved to mutate_p2145coverage.py group 5,
+    which mutates that answer where it is now given. Neither the filter nor the totality check
+    should be removed to make these killable again.
 
   * MUTANT 5 puts `|| !hasFsm` back on the ORPHAN_STOP condition. A stop covering a
     LIVE position is not an orphan -- P0-50's class is a stop left working on a FLAT
@@ -78,15 +79,50 @@ MUTANTS = [
      '                        string instrument = order.Instrument.FullName;',
      '                        string instrument = order.Instrument.ToString();'),
 
-    ("the flat-position filter is removed entirely. account.Positions can carry a flat\n"
-     "     Position, and a FLAT account then reports NAKED_POSITION on every audit tick",
+    ("EXPECTED SURVIVOR: as of P2-145 (v1.44.0) this mutant is EQUIVALENT and cannot be\n"
+     "     killed, and the defect it expressed WAS real. The old inline predicate was\n"
+     "     `!isProtected || covered < positionQty`. On a flat position that reads\n"
+     "     `covered(0) < positionQty(0)` FALSE or `!isProtected` TRUE -- so a flat position with\n"
+     "     no FSM fired NAKED_POSITION with gap=0 on every audit tick, and the caller's filter\n"
+     "     was the only thing between that and the log. `AssessCoverage` now answers\n"
+     "     `positionQty <= 0` with `CoverageFinding.None` before anything else, so removing the\n"
+     "     caller's filter has no observable effect and no test can distinguish it.\n"
+     "     THE COVERAGE MOVED RATHER THAN VANISHING: mutate_p2145coverage.py group 5 mutates\n"
+     "     `positionQty <= 0` to `< 0` directly -- the same question, asked where it is now\n"
+     "     answered. Do NOT delete the caller's filter (defence in depth, and it skips work) and\n"
+     "     do NOT weaken AssessCoverage to make this killable again, which would be making the\n"
+     "     code worse to keep a battery green. [[a-gate-evidence-changes-with-shape]]:\n"
+     "     restructuring what a gate READS changes what it proves while its own code is untouched.\n"
+     "     If this is ever KILLED, `_battery.finish` fails and that is correct -- it means the\n"
+     "     totality check went away and this declaration is stale.\n"
+     "     ORIGINAL INTENT: the flat-position filter is removed entirely.\n"
+     "     account.Positions can carry a flat Position, and a FLAT account then reported\n"
+     "     NAKED_POSITION on every audit tick",
      '                        if (pos == null || pos.MarketPosition == MarketPosition.Flat || pos.Quantity <= 0)\n'
      '                            continue;',
      '                        if (pos == null)\n'
      '                            continue;'),
 
-    ("only the `Quantity <= 0` half of the flat filter is dropped. A reviewer reading the\n"
-     "     diff sees a flat filter and moves on",
+    ("EXPECTED SURVIVOR: as of P2-145 (v1.44.0) this mutant is EQUIVALENT and cannot be\n"
+     "     killed, and the defect it expressed WAS real. The old inline predicate was\n"
+     "     `!isProtected || covered < positionQty`. On a flat position that reads\n"
+     "     `covered(0) < positionQty(0)` FALSE or `!isProtected` TRUE -- so a flat position with\n"
+     "     no FSM fired NAKED_POSITION with gap=0 on every audit tick, and the caller's filter\n"
+     "     was the only thing between that and the log. `AssessCoverage` now answers\n"
+     "     `positionQty <= 0` with `CoverageFinding.None` before anything else, so removing the\n"
+     "     caller's filter has no observable effect and no test can distinguish it.\n"
+     "     THE COVERAGE MOVED RATHER THAN VANISHING: mutate_p2145coverage.py group 5 mutates\n"
+     "     `positionQty <= 0` to `< 0` directly -- the same question, asked where it is now\n"
+     "     answered. Do NOT delete the caller's filter (defence in depth, and it skips work) and\n"
+     "     do NOT weaken AssessCoverage to make this killable again, which would be making the\n"
+     "     code worse to keep a battery green. [[a-gate-evidence-changes-with-shape]]:\n"
+     "     restructuring what a gate READS changes what it proves while its own code is untouched.\n"
+     "     If this is ever KILLED, `_battery.finish` fails and that is correct -- it means the\n"
+     "     totality check went away and this declaration is stale.\n"
+     "     ORIGINAL INTENT: only the `Quantity <= 0` half of the flat filter is dropped. A\n"
+     "     reviewer reading the diff sees a flat filter and moves on. Equivalent for the\n"
+     "     same reason and by the same single line: MarketPosition.Flat implies Quantity 0\n"
+     "     on NT8, so both halves of that filter collapse to one test",
      '                        if (pos == null || pos.MarketPosition == MarketPosition.Flat || pos.Quantity <= 0)\n'
      '                            continue;\n'
      '                        // FullName, not ToString()',
@@ -106,11 +142,22 @@ MUTANTS = [
      '                        if (!hasPosition)\n                        {\n                            firedKeys.Add(orphanKey);',
      '                        if (!hasPosition || !hasFsm)\n                        {\n                            firedKeys.Add(orphanKey);'),
 
-    ("the coverage comparison is inverted to `covered > positionQty`. A partially covered\n"
-     "     position -- P0-55's exact shape -- stops being reported, and a fully covered one\n"
-     "     starts being reported. Both directions wrong from one character",
-     'if (!isProtected || covered < positionQty)',
-     'if (!isProtected || covered > positionQty)'),
+    # ⚠️ MUTANT REMOVED 2026-08-18 (P2-152), and this note is the point of the removal.
+    #
+    # It inverted the coverage comparison in the audit's inline predicate:
+    #     'if (!isProtected || covered < positionQty)' -> '... covered > positionQty'
+    #
+    # P2-145 replaced that predicate with `RiskGuardAddOn.AssessCoverage`, so the only
+    # remaining occurrence of the find-string is the COMMENT in RiskGuardAddOn.cs that quotes
+    # the old predicate to explain what it replaced. The mutant was editing a comment: no
+    # effect, suite green, scored SURVIVED -- and `check_anchors.py` reported it healthy the
+    # whole time, because the text still matched EXACTLY ONCE. An anchor that matches a comment
+    # is as dead as one that matches nothing, and it is harder to see.
+    #
+    # ⚠️ NOT re-pointed at AssessCoverage, deliberately. mutate_p2145coverage.py groups 1 and 2
+    # already mutate that comparison there, in more spellings than this one had (the state test,
+    # the `<=` off-by-one, and the tempting wrong fix). Two batteries rewriting one line is a
+    # collision risk for no extra evidence.
 
     ("EXPECTED SURVIVOR: the audit holds _stateLock across the broker reads (P1-10/P1-12: a\n"
      "     broker call under the state lock is how this addon deadlocks). Survives unless the lock\n"
@@ -132,6 +179,11 @@ def run():
         cwd=os.path.join(REPO, 'tests'), capture_output=True, text=True,
                        encoding='utf-8', errors='replace')
     m = re.search(r'Passed = \d+, Failed = \d+', res.stdout)
+    # P2-148: a crash is NOT a detection. The harness prints its result line
+    # last, so an unhandled exception leaves none -- which every spelling of
+    # `killed` below scored as KILLED. Require at least one [FAIL] first.
+    if not m and '[FAIL]' not in ((res.stdout or '') + (res.stderr or '')):
+        return 'NO RESULT LINE + NO ASSERTION FAILED (harness died undetected)'
     return m.group(0) if m else 'NO RESULT LINE'
 
 
@@ -161,6 +213,9 @@ for name, old, new in MUTANTS:
     mm = re.search(r'Failed = (\d+)', res)
     killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
         or (mm is not None and int(mm.group(1)) > 0)
+    # P2-148: the verdict above cannot tell a detection from a crash.
+    if 'NO ASSERTION FAILED' in res:
+        killed = False
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)
