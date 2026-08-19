@@ -9504,6 +9504,22 @@ ticket (45 refusals, 118 orders, 59 executions, four connection events with time
 deterministically in the suite from those numbers, plus the battery. The next genuine reconnect is
 the test; `DUPLICATE_ENTRY` count for that minute is the reading to take.
 
+⚠️ **THE TICKET'S STATED REASON FOR NEEDING BOTH MECHANISMS IS WRONG, AND THE FIX IS UNAFFECTED.**
+Constraint D said a recompile empties the evaluated-order set exactly when NT8 replays the session,
+so the reconnect stamp was needed to cover the post-recompile case. Measured on this box the same
+day, from `interventions.jsonl`: **six addon restarts** -- 03:29, 04:55, 05:42, 05:43, 15:18, 16:20
+-- produced **zero** duplicate events, while the day's only two clusters were 06:19 (9, the
+per-transition over-count) and 16:44 (45, the reconnect). **An assembly reload does not make NT8
+re-send the session; a reconnect does.** Nor could the stamp cover it if it did: subscribing to
+`Connection.ConnectionStatusUpdate` does not replay past events, so a reload that re-subscribes
+never sees a `Connected` event and arms nothing.
+
+The two mechanisms are still both needed -- they answer two different defects, `P0-171` and
+`P1-167` -- but not because either backs the other up. The corrected reasoning is in the source
+comment beside the fields; the wrong one is recorded here rather than deleted because it was load-
+bearing in the ticket the loop was given, and a spec premise that survives into a comment is how
+[[a-comment-recording-a-defect-goes-stale]] starts.
+
 **Provenance.** Ticket written by hand; `agent-loop --mode test --path-isolated` generated six
 correct scenarios and unusable scaffolding (`CF-30`); patch mode ended `ARBITER_NEVER_RAN` after six
 rounds because it could not see `_config.Overtrading.DuplicateEntryWindowMs` and invented 90 lines

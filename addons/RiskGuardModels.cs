@@ -146,10 +146,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         //
         // ReplaySuppressionUntilUtc is stamped by OnConnectionStatusUpdate and covers the
         // reconnect burst; DuplicateEntryEvaluatedOrderIds makes one order draw one refusal
-        // however many state transitions the platform reports for it. NEITHER COVERS THE
-        // OTHER'S CASE, which is why there are two: a recompile empties the set exactly when
-        // NT8 replays the session, so the set alone is blind to a post-recompile replay -- and
-        // the stamp says nothing about the same genuine duplicate transitioning hours later.
+        // however many state transitions the platform reports for it. There are two because
+        // they answer two different defects -- P0-171 and P1-167 -- not because either backs
+        // the other up.
+        //
+        // ⚠️ THE TICKET SAID THE STAMP COVERS A POST-RECOMPILE REPLAY. IT DOES NOT, AND THERE
+        // IS NO SUCH REPLAY TO COVER. Measured on this box 2026-08-19: SIX addon restarts
+        // (03:29, 04:55, 05:42, 05:43, 15:18, 16:20) produced ZERO duplicate events, while the
+        // day's only two clusters were 06:19 (9, the per-transition over-count) and 16:44 (45,
+        // the reconnect). An assembly reload does not make NT8 re-send the session; a
+        // reconnect does. Nor could the stamp cover it if it did -- subscribing to
+        // Connection.ConnectionStatusUpdate does not replay past events, so a reload that
+        // re-subscribes never sees a Connected event and never arms anything.
         //
         // Not persisting them is the point rather than an omission. A suppression deadline
         // restored from disk would be a suppression the guard cannot account for, and the set
