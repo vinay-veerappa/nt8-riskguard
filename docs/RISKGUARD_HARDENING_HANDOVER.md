@@ -11446,7 +11446,14 @@ sessions after that stopped being true.
    completeness gate cannot see it because it is reachable from neither root it walks. That is how a
    safety-shaped field with a permissive default survived for months behind a green gate. An
    orphan-config-type gate is unfiled.
-4. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
+4. **`P1-170`** — read LIVE off the funded account minutes after `v1.51.0` deployed: the daily-loss
+   rail reported `currentValue: 0` on an account down **$347.75** against a **$250** limit, because
+   `RealizedPnL` is not persisted while BOTH numbers that derive it are. It self-heals on the next
+   fill, so the window is "from assembly reload until the next trade" -- which is precisely when the
+   operator is most likely to trade, because the recompile is something they just did.
+   ⚠️ Check `TRAILING_DD_BREACH` in the same pass: its `PeakEquity` IS persisted while its current
+   value is not, so it may be wrong in the dangerous direction rather than merely blind.
+5. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
    rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
    per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the
    state gate back down -- that restores the `Filled`-only blindness measured on this account, where
@@ -11454,14 +11461,14 @@ sessions after that stopped being true.
    findings are cited from the plan, not from here, because the gate reads any ID in this block as
    work to do. Fold **`P2-165`** in while here: same method, and its three untested rules are the
    other callers of the same missing seam.
-5. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
+6. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
    the previous entry's "what opened those positions" turned it inside out: the detector was right
    every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
    15s would therefore have flattened their own trades — one of them 28 seconds before their own
    stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
    ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
    unvalidated one.
-6. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
+7. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
    IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
    per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in
    `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared), and the instrument allow-list plus its
@@ -11481,21 +11488,21 @@ sessions after that stopped being true.
    settled by measuring post-loss expectancy on this account. Build `P2-161` with the definition
    behind a config key so the answer lands as a number, not a rebuild.
 
-7. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
+8. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
    rather than deleted because its instruction was wrong in an instructive way: it said to drive the
    `Protected`-with-a-gap rows FIRST as "the quiet half that matters", and those four rows were the
    system working correctly: `Protected` means *something* is covering, not everything, which a
    long-closed entry established deliberately. The loud half was the whole defect. No ID is
    repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
 
-8. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
+9. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
    native-partials remainder. ⚠️ The persistent-disarm work is CLOSED, and it left a standing
    operational fact rather than a task: the guard can now come up DISARMED with a funded account
    attached, by design, because all configuration persists. `DISARM_PERSISTED` is the line that
    says so — if it is in the log, nothing is evaluating.
-9. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
+10. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
    ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
-10. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
+11. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
 
 ⚠️ **Standing, and it is not a technical constraint**: the operator asked to be told before any
 trade, and will either give the direction or ask for one. `TAKEPROFITPRO524207503` is a funded 50K

@@ -9307,6 +9307,60 @@ scaffold has **11 different shapes** for the `ORIGINALS` line and where only 21 
 produce the same false alarm, and the gate is what stands between. **If it recurs, fix the harness,
 not the file.**
 
+### P1-170. After a recompile the daily-loss rail reads a loss of ZERO on an account that is down $347, and the value it needs is already persisted beside it — OPEN, filed 2026-08-19 (session 61)
+
+Read live off `TAKEPROFITPRO524207503` minutes after `v1.51.0` deployed, from
+`nt_riskguard_inventory`:
+
+```json
+{ "name": "Daily loss limit", "configPath": "PnLRules.DailyLossLimit",
+  "state": "EvaluatedNotEnforcing", "currentValue": 0, "limit": -250 }
+```
+
+`currentValue: 0`. The account's realized PnL at that moment was **-347.75** against a **250** limit,
+i.e. the rail was **breached by $96** and reporting a flat day.
+
+**Mechanism.** `EvaluatePnLRules` computes `currentPnL = stateModel.RealizedPnL + UnrealizedPnL`, and
+`RealizedPnL` is **not in `AccountPersistedData`**. `LastRealizedPnL` and `SessionStartRealizedPnL`
+both are. So on every restart, recompile or hot-swap the working value resets to `0.0` while the two
+numbers that DERIVE it survive:
+
+```
+LastRealizedPnL (-347.75) - SessionStartRealizedPnL (-1.50) = -346.25
+```
+
+The restore path had everything it needed and reconstructed nothing.
+
+⚠️ **It self-heals on the next `AccountItemUpdate`** -- the first PnL tick recomputes
+`rawRealized - SessionStartRealizedPnL`, the breach fires, and the account locks. So the exposure is
+bounded: *from the moment the assembly reloads until the next fill*. That window is exactly when an
+operator is most likely to place a trade, because a recompile is something THEY just did.
+[[a-successful-compile-wipes-static-state]] -- same cause as the ATM bracket registry emptying,
+different victim.
+
+⚠️ **This is `configured / evaluated / enforcing` at its most literal**: the rule is enabled, is being
+evaluated, has the right limit, and is reading a number that says there is nothing to enforce. The
+inventory row -- the surface that answers *"is the guard actually protecting me"* -- shows
+`EvaluatedNotEnforcing`, which is TRUE and completely misleading.
+[[configured-evaluated-enforcing]].
+
+⚠️ **`TRAILING_DD_BREACH` shares the input** and its `PeakEquity` IS persisted, so it is the asymmetric
+case: peak survives, current does not. Check what that combination reports before assuming it is
+merely blind rather than wrong in the dangerous direction.
+
+**Fix**: reconstruct `RealizedPnL` in the restore path from the two persisted fields, and add the
+field to `AccountPersistedData` so a future reader is not required to know the identity. ⚠️ A test must
+drive the RESTORE, not just the arithmetic -- `P0-166` found that the session-reset path had zero tests
+because it was reachable only from inside the sweep loop, and this path is reached the same way.
+
+⚠️ **Two other rails were reading BREACHING values in the same snapshot and reporting
+`EvaluatedNotEnforcing` purely because the mode is `shadow`**: `Max trades per session` at
+`currentValue 16` against a limit of `8`, and `Max consecutive losses` at `16` against `3`. Those are
+correct readings of real state left by the probe session, not defects -- but they mean **arming `live`
+before the 22:00Z session reset would lock the account out immediately on two rails**, and the daily
+rail would join them on the first fill. That is an operational note for whoever arms it, not a code
+change.
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by
