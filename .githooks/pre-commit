@@ -55,6 +55,69 @@ if [ -n "$big" ]; then
     fail=1
 fi
 
+# 3. A workflow file that cannot be parsed disables EVERY gate in this repo at once.
+#    P0-169's second half: a comment in ci.yml ended up containing real carriage
+#    returns, which split the comment and left a backtick at column 1. GitHub ran
+#    ZERO jobs and reported a bare red X with no logs -- less information than any
+#    ordinary failure, because none of the twelve gates or 53 batteries ever started.
+#
+#    This check CANNOT live in CI. A gate that validates the workflow runs inside the
+#    workflow, so a broken workflow means the validator never executes. Pre-commit is
+#    the only place it can work, and that is the whole reason it is here.
+wf=$(printf '%s\n' "$staged" | grep -E '^\.github/workflows/.*\.ya?ml$')
+if [ -n "$wf" ]; then
+    if command -v python >/dev/null 2>&1; then
+        bad_wf=$(printf '%s\n' "$wf" | while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            python -c "import sys,yaml,io; yaml.safe_load(io.open(sys.argv[1],encoding='utf-8').read())" "$f" 2>/dev/null \
+                || printf '%s\n' "$f"
+        done)
+        if [ -n "$bad_wf" ]; then
+            echo "BLOCKED: workflow file does not parse as YAML." >&2
+            echo "" >&2
+            printf '%s\n' "$bad_wf" | sed 's/^/    /' >&2
+            echo "" >&2
+            echo "  GitHub will run ZERO jobs and report a red X with no logs," >&2
+            echo "  so every gate and every mutation battery is silently skipped." >&2
+            echo "  See the error with:" >&2
+            printf '    python -c "import yaml,io;yaml.safe_load(io.open(%s).read())"\n' "'<file>'" >&2
+            fail=1
+        fi
+    else
+        echo "NOTE: python not on PATH -- skipped the workflow YAML check." >&2
+    fi
+fi
+
+# 4. A stray CR that is not part of a CRLF is invisible and breaks the mutation
+#    harness: Python in text mode reads it as an extra newline, so a battery restores
+#    a file LONGER than it read and CI reports "A MUTANT IS LIVE" for a run in which
+#    every mutant died. Six bins failed that way on 2026-08-19 over two bytes.
+#    tools/check_no_bare_cr.py is the CI-side gate; this stops it entering history.
+if command -v python >/dev/null 2>&1; then
+    bad_cr=$(printf '%s\n' "$staged" | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        case "$f" in
+            *.png|*.jpg|*.jpeg|*.gif|*.ico|*.dll|*.exe|*.pdb|*.zip|*.parquet) continue ;;
+        esac
+        python -c "
+import sys
+d = open(sys.argv[1], 'rb').read()
+if b'\x00' in d[:8192]:
+    sys.exit(0)
+sys.exit(1 if any(c == 13 and (i + 1 >= len(d) or d[i + 1] != 10)
+                  for i, c in enumerate(d)) else 0)
+" "$f" || printf '%s\n' "$f"
+    done)
+    if [ -n "$bad_cr" ]; then
+        echo "BLOCKED: stray carriage return (a CR not followed by LF)." >&2
+        echo "" >&2
+        printf '%s\n' "$bad_cr" | sed 's/^/    /' >&2
+        echo "" >&2
+        echo "  Repair:  python -c \"b=open(F,'rb').read();open(F,'wb').write(b.replace(b'\\r\\r\\n',b'\\r\\n'))\"" >&2
+        fail=1
+    fi
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "" >&2
     echo "  If you are certain, re-run with:  ALLOW_BIG_FILES=1 git commit ..." >&2

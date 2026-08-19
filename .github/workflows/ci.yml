@@ -329,18 +329,22 @@ jobs:
       # a ten-second audit that never ran.
       - name: No dead safety machinery
         run: python tools/check_no_dead_safety_machinery.py
-      # A BARE CR is invisible and it breaks the mutation harness. RiskGuardModels.cs was committed
-      # with two `
-` sequences: it compiled, the suite was 3295/0, git diff looked normal, and
-      # every line still ended CRLF. But Python in TEXT mode reads `
-` as TWO newlines, so every
-      # battery that snapshots a source file and writes it back produced a file 2 lines LONGER than
-      # the one it read -- and the post-battery check below reported `A MUTANT IS LIVE` for SIX bins
-      # in which every mutant had died. `--ignore-cr-at-eol` was already on that check and could not
-      # help: a bare CR is not a CR at end of line, it is content.
+      # A BARE CR is invisible and it breaks the mutation harness. RiskGuardModels.cs was
+      # committed containing two occurrences of CR-CR-LF: a stray carriage return sitting in
+      # front of a normal CRLF line ending. Nothing visible changed. It compiled, the suite was
+      # 3295/0, git diff looked normal, and every line still ended CRLF.
       #
-      # A false `A MUTANT IS LIVE` is the most expensive alarm this repo can raise, because the
-      # honest response is to distrust the entire run.
+      # But Python opened in TEXT mode translates a stray CR into a newline of its own, and every
+      # mutation battery snapshots its target files that way. So any battery touching that file
+      # wrote it back TWO LINES LONGER than the one it read, and the post-battery check below
+      # reported "A MUTANT IS LIVE" for SIX bins in which every mutant had already died.
+      #
+      # The --ignore-cr-at-eol flag was ALREADY on that check and could not help: a stray CR in
+      # front of a line ending is not a CR *at* end of line, it is content.
+      #
+      # A false "A MUTANT IS LIVE" is the most expensive alarm this repo can raise, because the
+      # honest response to it is to distrust the entire run -- the opposite of what a green
+      # battery earned. See P0-169 for the idiom that produced the bytes.
       - name: No bare CR in any tracked file
         run: python tools/check_no_bare_cr.py
 
