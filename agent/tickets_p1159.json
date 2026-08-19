@@ -1,0 +1,55 @@
+{
+  "_comment": "P1-159. The per-instrument contract cap is enforced per-ORDER only, so the operator's `MNQ: 1` refuses a 3-lot order and permits three 1-lot orders that build the identical 3-lot position. The seven acceptance tests are already committed and five of them are RED. This ticket is the fix only; P1-160 (duplicate entry), P2-161/P2-162 (the cooldown ladder) and P2-163 (the allow-list) are separate and NOT in scope.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "One cap dictionary, both enforcement points: InstrumentLimits binds on the position, not only the order",
+      "defect": "`RiskConfig.InstrumentLimits` (a Dictionary<string, PerInstrumentRiskConfig> built with StringComparer.OrdinalIgnoreCase) is read by exactly one production site: the OrderUpdate handler in RiskGuardAddOn.cs, which compares `e.Order.Quantity > perInstCap.MaxContracts` and queues a PER_INSTRUMENT_CAP_CANCEL. That is a check on a single ORDER. The rule that looks at POSITION size is Rule 1 of EvaluateRules, which emits MAX_SIZE_BREACH when `pos.Quantity > limit` where `limit = ResolveMaxContracts(profile, baseSymbol, pos.Instrument)`. ResolveMaxContracts consults only `AccountRiskProfile.InstrumentProfiles` and `AccountRiskProfile.DefaultMaxContracts`. It has never heard of InstrumentLimits. So the two enforcement points read two different configuration surfaces and disagree by construction. CONSEQUENCE, measured live on the funded account TAKEPROFITPRO524207503 on 2026-08-18: the operator's config carries `InstrumentLimits: {MNQ: 1, MES: 5, MGC: 1, MCL: 1, MYM: 5, M2K: 5}` and `Sizing.MaxContractsPerAccount: 5`. `Profiles` is EMPTY, so GetResolvedProfile returns its GlobalFallback with DefaultMaxContracts = 5 and an empty InstrumentProfiles. Three 1-lot MNQ entries therefore build MNQ 3 with nothing objecting, against a configured cap of 1. A duplicate entry that same session produced MNQ 2 and no rule fired. THIS IS NOT A COSMETIC GAP. With DailyLossLimit at 250 for a 50K account, the instrument caps are what make the daily limit reachable-but-not-blown; a 3x position in the instrument capped at 1 is the whole daily limit in one trade. The operator reads config.json and concludes MNQ is limited to one contract. It is not.",
+      "spec": "Make the two enforcement points read ONE dictionary, by merging `_config.InstrumentLimits` into the resolved profile's `InstrumentProfiles` inside `CreateDynamicProfile`. Then `ResolveMaxContracts` needs no signature change and BOTH of its callers -- the reactive MAX_SIZE_BREACH sweep and `EffectiveMaxContracts`, the pre-trade answer the MCP bridge gives before placing an order -- are fixed by the same edit.\n\nDO NOT add a second copy of the numbers. Populating a per-account profile with the same caps, or teaching EvaluateRules to consult InstrumentLimits separately, gives two configuration surfaces that must be kept equal by hand. That is [[a-second-reader-of-the-same-state]], this repo's single most repeated defect shape, and P1-149 extracted ResolveMaxContracts specifically to end it. Undoing that extraction is a worse outcome than the defect.\n\nCOMBINE BY MINIMUM, NOT BY PRECEDENCE. When BOTH a per-account `InstrumentProfiles[root]` and a global `InstrumentLimits[root]` exist for the same root, the effective cap is the SMALLER of the two. A cap is a maximum; the minimum of two maxima can never permit more than either surface intended, so this direction cannot fail unsafely. Any precedence ordering silently ignores one of the two configured numbers, and an operator who tightens the losing one sees no change and concludes the guard is enforcing something it is not. Both directions are asserted by the tests and one of them is currently green -- a fix that consults InstrumentLimits first and returns will turn that green test red.\n\nBUILD A NEW DICTIONARY, WITH THE ORDINAL-IGNORE-CASE COMPARER, AND DO NOT MUTATE THE CALLER'S. `CreateDynamicProfile` today does `InstrumentProfiles = baseProfile.InstrumentProfiles ?? new Dictionary<string, InstrumentProfile>()`, which ALIASES the config object's own dictionary and supplies NO comparer on the fallback path. Two hazards follow and both must be closed: (1) mutating that alias writes the merged caps back into `_config.Profiles[i].InstrumentProfiles` permanently, so a later config save would persist derived values as if the operator had typed them, and repeated resolution would compound; (2) the bare `new Dictionary<string, InstrumentProfile>()` uses the default ordinal COMPARER, so a merge through that path makes the whole lookup case-sensitive and a hand-edited `mnq` key stops capping anything. RiskGuardModels.cs already warns about exactly this in writing, beside the InstrumentLimits declaration. Construct a fresh `new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase)`, copy the base profile's entries into it, then merge the global limits by minimum.\n\nAN INSTRUMENT ABSENT FROM InstrumentLimits MUST BE UNAFFECTED. It keeps the account default. A fix that applies the tightest configured cap to every instrument passes every positive assertion in this ticket and caps ES at 1 because MNQ is 1; there is a negative control test for precisely that, and it is currently green.\n\nTHE COMPARISON STAYS STRICT `>`. `pos.Quantity > limit` is the existing rule and an off-by-one makes the single contract the operator IS allowed to trade in MNQ the one the guard flattens. Do not touch that line.\n\nDO NOT MODIFY the OrderUpdate per-order check. It already reads `_config.InstrumentLimits` directly, which is the same dictionary, so after this change the two sites cannot drift. Do not modify `ResolveMaxContracts` itself, `EvaluateRules`, `EffectiveMaxContracts`, or any model default.\n\nHANDLE A NULL OR EMPTY InstrumentLimits without allocating differently or changing behaviour: the resolved profile must still carry a case-insensitive copy of whatever the base profile had.",
+      "regions": [
+        {
+          "id": "TheMerge",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "private AccountRiskProfile CreateDynamicProfile(Account account, AccountRiskProfile baseProfile)",
+          "kind": "decl",
+          "note": "THE ONLY EDIT SITE. This method already merges global config into a per-account profile -- MaxTradesPerSession, DefaultMaxContracts and DailyLossLimit all fall back to _config here -- so the instrument caps belong in exactly the same place and by the same pattern. Note the existing `InstrumentProfiles = baseProfile.InstrumentProfiles ?? new Dictionary<string, InstrumentProfile>()` line: it aliases the caller's dictionary and its fallback carries no comparer. Both must change."
+        },
+        {
+          "id": "TheResolver",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal static int ResolveMaxContracts(AccountRiskProfile profile, string baseSymbol, string fullInstrument)",
+          "kind": "decl",
+          "note": "READ THIS, DO NOT EDIT IT. It is the single reader of the cap rule that P1-149 extracted so the reactive sweep and the pre-trade gate could not drift, and its doc comment says so. It resolves per-instrument first, then the account default. If the merge above is correct this method already does the right thing for both callers and needs no change. Changing its signature would be a regression of P1-149."
+        },
+        {
+          "id": "ThePreTradeReader",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public int EffectiveMaxContracts(Account account, string instrumentName)",
+          "kind": "decl",
+          "note": "READ-ONLY CONTEXT: the SECOND caller of ResolveMaxContracts, and the reason the merge must happen upstream of it. This is the answer the MCP bridge gives a caller BEFORE placing an order. If it reports 5 for MNQ while the sweep enforces 1, the bridge permits an order the guard then flattens, which reads to an operator as the guard flattening a legal trade. Do not edit it; it must be fixed by the merge, not by its own copy of the rule."
+        },
+        {
+          "id": "TheCallerThatEnforces",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal List<GuardAction> EvaluateRules(Account account, AccountState stateModel)",
+          "kind": "decl",
+          "note": "READ-ONLY CONTEXT: Rule 1 is the position-size sweep that must start binding. It derives baseSymbol as `pos.InstrumentObj?.MasterInstrument?.Name ?? pos.Instrument.Split(' ')[0]`, which is why the cap keys on the instrument ROOT and not on `MNQ 09-26`. Do not edit this method; if the merge is right it needs nothing."
+        },
+        {
+          "id": "TheConfigModels",
+          "file": "addons/RiskGuardModels.cs",
+          "anchor": "public class PerInstrumentRiskConfig",
+          "kind": "decl",
+          "note": "READ-ONLY CONTEXT: PerInstrumentRiskConfig.MaxContracts defaults to 10, InstrumentProfile.MaxContracts defaults to 5, and the comment above RiskConfig explains why InstrumentLimits must keep its OrdinalIgnoreCase comparer and must NOT get ObjectCreationHandling.Replace. Do not change any default here -- the operator's live config sets these explicitly and a default change would move caps on 96 other accounts."
+        }
+      ],
+      "expect_green": [
+        "even though the account default of 5 would permit it",
+        "the tighter cap binds regardless of which surface it came from",
+        "when the cap was configured under the lowercase key",
+        "EffectiveMaxContracts reports 1 for MNQ",
+        "the cap keys on the root"
+      ]
+    }
+  ]
+}

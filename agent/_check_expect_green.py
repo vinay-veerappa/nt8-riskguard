@@ -33,10 +33,20 @@ def names_match(name, failure):
 
 def suite_failures():
     tests = os.path.join(REPO, "tests")
+    # ⚠️ ENCODING PINNED. `text=True` alone decodes with the platform default, which is
+    # cp1252 here, and the suite prints the arrows and warning glyphs its own test names
+    # carry. The reader thread then raised UnicodeDecodeError, `r.stdout` came back None,
+    # and this checker died with an AttributeError -- so THE GATE COULD NOT RUN AT ALL,
+    # which is how a ticket reaches the loop with unverified expect_green strings. Same
+    # class the mutation batteries pin against. [[a-battery-must-reach-its-restore-line]].
     subprocess.run(["dotnet", "build", "RiskGuardTests.csproj", "-v", "q", "--nologo"],
-                   cwd=tests, capture_output=True, text=True)
+                   cwd=tests, capture_output=True, text=True,
+                   encoding="utf-8", errors="replace")
     r = subprocess.run(["dotnet", "run", "--project", "RiskGuardTests.csproj", "--no-build"],
-                       cwd=tests, capture_output=True, text=True)
+                       cwd=tests, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if r.stdout is None:
+        raise SystemExit("the suite produced no stdout -- refusing to report an empty failure set")
     out = set()
     for line in r.stdout.splitlines():
         m = re.match(r"\s*\[FAIL\]\s*(.*)$", line)
