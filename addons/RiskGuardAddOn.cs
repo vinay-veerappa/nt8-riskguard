@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.48.0";
+        public const string Version = "1.49.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -2144,6 +2144,169 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 }
 
                                 LogEvent(accountName, "ORDER_FLOOD_LOCKOUT", $"ORDER FLOOD DETECTED: {stateModel.RecentOrderIds.Count} distinct orders in 1s (limit {maxPerSecond}) triggered lockout.");
+                            }
+                        }
+
+                        // `P1-160`: duplicate-entry guard. A second Market entry for the same
+                        // instrument and side inside the configured window is a platform duplicate,
+                        // not a scale-in. Cancel the second order only; do not lock out the account --
+                        // the operator did not commit this, their platform did, and a rail that takes
+                        // the session away for a broker glitch is a rail that gets switched off.
+                        //
+                        // MEASURED three times in six attempts on the funded account 2026-08-18:
+                        // gaps of 99ms, 26ms and 150ms, each turning two 1-lot orders into a
+                        // position of 2. At 03:50:57 the stop covered 1 of 2 and the FSM reported
+                        // `Protected` -- correct by its own definition, and therefore a naked half
+                        // that looks covered on the chart AND in the guard's own state.
+                        //
+                        // ⚠️ `OrderType.Market` IS THE SAFETY CLAUSE, NOT AN OPTIMISATION. A long
+                        // bracket's stop and target are BOTH sells, arrive 3-11ms apart (measured),
+                        // and `IsPositionReducingOrder` returns false for both while the position
+                        // still reads Flat -- which at 3ms is the ordinary case. Without the market
+                        // restriction this rule cancels the TARGET as a duplicate of the STOP and
+                        // strips a live position of protection the operator did place. A protective
+                        // leg is never a market order, so the filter is drawn where it cannot reach
+                        // one. [[a-filter-that-matches-too-much]].
+                        //
+                        // ⚠️ IT HAS ITS OWN GATE, AND `Filled` IS THE REASON. This first sat INSIDE
+                        // the rate governor's `Submitted || Accepted` branch, sharing one condition
+                        // rather than copying it. The live log settled it: two of the three measured
+                        // duplicates produced exactly ONE event each, in state `Filled`, with no
+                        // Submitted and no Accepted at all --
+                        //
+                        //     03:31:01.441  35921  Market Sell 1  Filled   <- the entire event stream
+                        //     03:31:01.540  35922  Market Sell 1  Filled      for these orders
+                        //
+                        // -- because they were placed on the BROKER platform rather than through NT8,
+                        // which is how the operator normally trades. The ATM entry in the same session
+                        // logged its full lifecycle, so this is not the log dropping states. Sharing
+                        // the governor's gate would have missed two of the three cases this rule was
+                        // written for, and widening THAT gate would change what the governor counts.
+                        // The two rules genuinely need different conditions, so they get two.
+                        //
+                        // Cancelling a filled order is meaningless, and `DrainPendingCancels` already
+                        // declines to try: `Filled` is terminal, so `OccupiesSlot` is false and the
+                        // queued cancel is dropped. On that path the ANNOUNCEMENT is the product --
+                        // it is what ends the silent half-coverage.
+                        //
+                        // ⚠️ THE ANCHOR IS THE FIRST EVENT OBSERVED, AND ORDERING DOES NOT MATTER
+                        // HERE. A reviewer argued that if a duplicate's Submitted somehow overtook the
+                        // first order's, the rule would cancel "the legitimate one". For a platform
+                        // duplicate the two orders are identical -- same instrument, side and size --
+                        // so whichever is anchored, exactly one survives and the resulting position is
+                        // the same. Comparing creation timestamps would add a second ordering source
+                        // to decide something that has no observable consequence.
+                        int dupWindowMs = (_config.Overtrading != null ? _config.Overtrading.DuplicateEntryWindowMs : 0);
+                        bool dupObservable = e.Order.OrderState == OrderState.Submitted
+                            || e.Order.OrderState == OrderState.Accepted
+                            || e.Order.OrderState == OrderState.Filled;
+                        // ⚠️ AN ANCHORED ORDER THAT DIED NEVER BECAME A POSITION. Without this,
+                        // a broker REJECTION is the worst case the rule can produce: the entry is
+                        // anchored at Submitted, the broker refuses it, the operator immediately
+                        // retries -- and the guard cancels the retry as a duplicate of an order that
+                        // does not exist. They end with no position and two refusals, for a rule
+                        // meant to stop them holding TWICE what they intended. This runs outside the
+                        // observable-state gate below, because Rejected and Cancelled are precisely
+                        // the states that gate excludes.
+                        if (dupWindowMs > 0
+                            && (e.Order.OrderState == OrderState.Rejected
+                                || e.Order.OrderState == OrderState.Cancelled))
+                        {
+                            string deadKey = null;
+                            foreach (var kv in stateModel.RecentEntryAnchors)
+                                if (ReferenceEquals(kv.Value.Order, e.Order)) { deadKey = kv.Key; break; }
+                            if (deadKey != null) stateModel.RecentEntryAnchors.Remove(deadKey);
+                        }
+
+                        if (dupWindowMs > 0 && dupObservable)
+                        {
+                            // The account's own injectable clock, not DateTime.UtcNow directly. AccountState
+                            // already routes every read through it precisely so a second clock cannot appear
+                            // beside the first -- and it is what lets a test place two events at an EXACT
+                            // window boundary, which is the only way to prove the gap check below binds.
+                            DateTime dupNow = stateModel.UtcNow();
+                            // ⚠️ THERE IS DELIBERATELY NO PRUNING PASS. There was one, and once the
+                            // anchor started REFRESHING on a non-duplicate entry it became redundant:
+                            // the gap is measured at the decision point, so an expired anchor cannot
+                            // produce a false positive and the next real entry overwrites it. Deleting
+                            // it removed a mutant that no behavioural test could kill -- machinery kept
+                            // "for hygiene" that nothing can distinguish is the shape
+                            // [[dead-safety-machinery-gate]] exists to catch. The dictionary is bounded
+                            // by (instruments traded x 2) per account, not by order count.
+
+                            bool isEntry = e.Order.OrderType == OrderType.Market
+                                && !IsPositionReducingOrder(e.Order, stateModel)
+                                && !string.Equals(e.Order.Name, CopierOrderNames.Follow, StringComparison.Ordinal);
+
+                            if (isEntry)
+                            {
+                                string dupRawInst = e.Order.Instrument != null ? e.Order.Instrument.FullName : "";
+                                string dupInstRoot = dupRawInst.Split(' ')[0].ToUpper();
+                                string side = (e.Order.OrderAction == OrderAction.Buy || e.Order.OrderAction == OrderAction.BuyToCover)
+                                    ? "B"
+                                    : (e.Order.OrderAction == OrderAction.Sell || e.Order.OrderAction == OrderAction.SellShort)
+                                        ? "S"
+                                        : null;
+
+                                if (!string.IsNullOrEmpty(side))
+                                {
+                                    string dupKey = dupInstRoot + "|" + side;
+
+                                    if (stateModel.RecentEntryAnchors.TryGetValue(dupKey, out var anchor))
+                                    {
+                                        // A different Order object for the same (instrument, side)
+                                        // inside the window is the platform duplicate. Key by
+                                        // object reference, not Order.Id: NT8's OrderId is neither
+                                        // unique nor stable.
+                                        double gapMs = (dupNow - anchor.FirstSeenUtc).TotalMilliseconds;
+
+                                        // ⚠️ THE WINDOW IS CHECKED HERE, NOT ONLY BY THE PRUNE ABOVE.
+                                        // Leaving it to the prune makes the window an emergent property
+                                        // of a housekeeping pass: `DateTime.UtcNow` is coarse on Windows,
+                                        // so two events inside one tick share a timestamp, the anchor is
+                                        // not older than the cutoff, and it survives -- which with a
+                                        // window of 0 means a rule the operator switched OFF can still
+                                        // cancel an order. A mutant relaxing the enable to `>= 0` survived
+                                        // the whole suite for exactly that reason. Strict `<`, so a window
+                                        // of 0 can never match.
+                                        if (!ReferenceEquals(anchor.Order, e.Order) && gapMs < dupWindowMs)
+                                        {
+                                            // P1-43: queued, not sent -- this whole block runs under _stateLock.
+                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
+                                            LogEvent(accountName, "DUPLICATE_ENTRY",
+                                                $"DUPLICATE ENTRY CANCELLED: order {e.Order.Id} on {dupInstRoot} "
+                                                + $"{e.Order.OrderAction} duplicated anchor order {anchor.Order.Id} "
+                                                + $"({gapMs:F0}ms within {dupWindowMs}ms window).");
+                                        }
+                                        else if (!ReferenceEquals(anchor.Order, e.Order))
+                                        {
+                                            // ⚠️ A NON-DUPLICATE ENTRY REPLACES THE ANCHOR, AND WITHOUT THIS
+                                            // THE RULE WORKS ONCE PER INSTRUMENT AND SIDE PER SESSION. The
+                                            // key already exists, so the `else` below never runs and the
+                                            // anchor keeps its ORIGINAL timestamp forever -- every later
+                                            // entry measures its gap from the first trade of the day and is
+                                            // therefore never a duplicate. That left the rule depending
+                                            // entirely on the pruning pass to refresh it, and a mutant that
+                                            // deleted the prune survived the whole suite: the second trade
+                                            // of the session onward was unprotected and nothing said so.
+                                            anchor.Order = e.Order;
+                                            anchor.FirstSeenUtc = dupNow;
+                                        }
+                                        // The SAME object on a later state transition changes nothing:
+                                        // the anchor stays on its first observed event.
+                                    }
+                                    else
+                                    {
+                                        // First observed event for this (instrument, side) anchor.
+                                        // Record on whichever state is observed first; an order placed
+                                        // off-platform may only ever be seen as Filled.
+                                        stateModel.RecentEntryAnchors[dupKey] = new RecentEntryAnchor
+                                        {
+                                            Order = e.Order,
+                                            FirstSeenUtc = dupNow
+                                        };
+                                    }
+                                }
                             }
                         }
 

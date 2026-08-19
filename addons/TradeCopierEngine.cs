@@ -5485,7 +5485,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         0,
                         0,
                         "",
-                        "COPIER_FOLLOW",
+                        CopierOrderNames.Follow,
                         null
                     );
 

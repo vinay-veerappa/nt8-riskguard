@@ -189,6 +189,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestDup_P1160_ADuplicateDoesNotLockTheAccountOut);
             Run(TestDup_P1160_InShadowTheRefusalIsLoggedAndWithheld);
             Run(TestDup_P1160_AThirdRapidEntryIsAlsoRefused);
+            Run(TestDup_P1160_AnOrderSeenOnlyAsFilledIsStillDetected);
+            Run(TestDup_P1160_TheSameOrderIsNotCountedTwiceAcrossItsLifecycle);
+            Run(TestDup_P1160_TwoMarketEXITSAreNotDuplicates);
+            Run(TestDup_P1160_BuyAndBuyToCoverAreOneDirection);
+            Run(TestDup_P1160_AGapOfExactlyTheWindowIsNotADuplicate);
+            Run(TestDup_P1160_TheRuleStillWorksOnTheSecondTradeOfTheSession);
+            Run(TestDup_P1160_ARetryAfterARejectionIsNotADuplicate);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -18721,6 +18728,291 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "both the second and the third rapid entry are refused.");
             Assert(third.OrderState == OrderState.Cancelled,
                 "and the third order is cancelled.");
+        }
+
+        private static void TestDup_P1160_AnOrderSeenOnlyAsFilledIsStillDetected()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a duplicate seen ONLY as Filled is still detected");
+
+            // ⚠️ MEASURED, AND IT OVERTURNS THE OBVIOUS GATE. Two of the three duplicates on
+            // 2026-08-18 produced exactly ONE OrderUpdate event each, in state `Filled`:
+            //
+            //     03:31:01.441  35921  Market Sell 1  Filled     <- the whole event stream
+            //     03:31:01.540  35922  Market Sell 1  Filled        for these four orders
+            //     03:50:57.804  35950  Market Sell 1  Filled
+            //     03:50:57.954  35951  Market Sell 1  Filled
+            //
+            // No Submitted, no Accepted, no Working. The ATM entry in the same session logged its
+            // full lifecycle (Initialized, Submitted, Accepted, Working, Filled), so this is not
+            // the log dropping states -- it is what NT8 delivers for an order placed on the BROKER
+            // platform rather than through NT8. The operator trades from Tradovate and TradingView,
+            // so the fill-only path is their NORMAL path, not an edge case.
+            //
+            // The rate governor next door gates on `Submitted || Accepted` and that is right for
+            // counting submissions. Reusing that gate here would have made this rule miss two of
+            // the three cases it was written for, while every test written from the NT8-native
+            // event order passed. [[test-doubles-are-not-evidence]] -- the double was the
+            // event sequence I assumed, and the live log is what settled it.
+            //
+            // Cancelling a filled order is meaningless and the drain already declines to try:
+            // `Filled` is terminal, so `OccupiesSlot` is false and the queued cancel is dropped.
+            // The DETECTION is the product here. The silent half-coverage at 03:50:57 -- a stop
+            // sized for 1 against a position of 2, with the FSM reporting `Protected` -- is
+            // exactly what an announcement at fill time ends.
+            var h = P1160Setup(new RiskConfig(), "live");
+
+            var first  = P1160Order("35950", OrderAction.Sell, OrderType.Market, "MES", 1, null);
+            var second = P1160Order("35951", OrderAction.Sell, OrderType.Market, "MES", 1, null);
+            first.OrderState  = OrderState.Filled;
+            second.OrderState = OrderState.Filled;
+
+            P1160Send(h, first);
+            P1160Send(h, second);
+
+            Assert(P1160SawDuplicate(h),
+                "DUPLICATE_ENTRY is raised for two market fills 150ms apart even though neither "
+                + "order was ever observed in Submitted or Accepted.");
+
+            string line = h.Messages.FirstOrDefault(m => m.StartsWith("DUPLICATE_ENTRY")) ?? "";
+            Assert(line.Contains("35950") && line.Contains("35951"),
+                "and the announcement names both fills, which is the whole product on a path "
+                + "where the cancel can no longer do anything.");
+        }
+
+        private static void TestDup_P1160_TheSameOrderIsNotCountedTwiceAcrossItsLifecycle()
+        {
+            Console.WriteLine("\n[TEST] P1-160: one order walking its whole lifecycle counts once");
+
+            // The companion to the test above. Widening the gate to include Filled means a single
+            // NT8-native order now presents FOUR times -- Submitted, Accepted, Working, Filled --
+            // where before it presented twice. Measured on the ATM entry in the same session,
+            // which additionally logged `Initialized` TWICE for the same order id. If identity is
+            // ever weakened from the order object to something the platform re-issues, every
+            // ordinary entry becomes its own duplicate and is cancelled.
+            var h = P1160Setup(new RiskConfig(), "live");
+            var order = P1160Order("35930", OrderAction.Sell, OrderType.Market, "MES", 1, "Entry");
+
+            foreach (var st in new[] { OrderState.Initialized, OrderState.Initialized,
+                                       OrderState.Submitted, OrderState.Accepted,
+                                       OrderState.Working, OrderState.Filled })
+            {
+                order.OrderState = st;
+                P1160Send(h, order);
+            }
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY for one order observed in six states, including a repeated one.");
+            Assert(order.OrderState == OrderState.Filled,
+                "and the order was not cancelled at any point in its lifecycle.");
+        }
+
+        private static void TestDup_P1160_TwoMarketEXITSAreNotDuplicates()
+        {
+            Console.WriteLine("\n[TEST] P1-160: two market orders CLOSING a position are not duplicates");
+
+            // Written because a mutant that deleted the position-reducing exclusion SURVIVED the
+            // whole suite. Every other test drove entries from flat, where the exclusion is inert
+            // -- so the clause was present, correct, and proved by nothing.
+            //
+            // The failure it guards is the worst kind on this path: the operator scaling out of a
+            // losing position in two clicks, and the guard cancelling the second click. Refusing
+            // to let someone get flat is not a risk control.
+            var config = new RiskConfig();
+            var h = P1160Setup(config, "live");
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 2, 18000, 0, config);
+
+            var exit1 = P1160Order("200", OrderAction.Sell, OrderType.Market, "MNQ", 1, null);
+            var exit2 = P1160Order("201", OrderAction.Sell, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, exit1);
+            P1160Send(h, exit2);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY for two market sells against an open LONG -- both reduce it.");
+            Assert(exit2.OrderState != OrderState.Cancelled,
+                "and the second exit is not cancelled, so the operator can always get flat.");
+        }
+
+        private static void TestDup_P1160_BuyAndBuyToCoverAreOneDirection()
+        {
+            Console.WriteLine("\n[TEST] P1-160: Buy and BuyToCover are the same side");
+
+            // Also written because a mutant survived: splitting these two left the rule blind to a
+            // duplicate that arrives with the other long-side label. Which label a platform sends
+            // is its choice, not a fact about the trade -- the same lesson as
+            // [[nt8-position-quantity-is-absolute]], where OrderAction was read as though it
+            // described the position rather than the caller's intent.
+            var h = P1160Setup(new RiskConfig(), "live");
+            var first  = P1160Order("300", OrderAction.Buy,         OrderType.Market, "MNQ", 1, null);
+            var second = P1160Order("301", OrderAction.BuyToCover,  OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, first);
+            P1160Send(h, second);
+
+            Assert(P1160SawDuplicate(h),
+                "a BuyToCover following a Buy within the window is a duplicate -- both are long-side.");
+
+            // And the mirror, so the pairing cannot be half-implemented.
+            var h2 = P1160Setup(new RiskConfig(), "live");
+            P1160Send(h2, P1160Order("400", OrderAction.SellShort, OrderType.Market, "MES", 1, null));
+            P1160Send(h2, P1160Order("401", OrderAction.Sell,      OrderType.Market, "MES", 1, null));
+            Assert(P1160SawDuplicate(h2),
+                "and a Sell following a SellShort is a duplicate -- both are short-side.");
+        }
+
+        private static void TestDup_P1160_AGapOfExactlyTheWindowIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a gap of EXACTLY the window is not a duplicate");
+
+            // ⚠️ THIS TEST EXISTS TO PROVE THE GAP CHECK BINDS, and it is the only way to do so.
+            //
+            // The window was originally enforced by the pruning pass alone: an anchor older than
+            // the cutoff was deleted, so a later entry found nothing to compare against. That is
+            // the window as an EMERGENT PROPERTY of a housekeeping step, and it fails at the
+            // boundary. `DateTime.UtcNow` is coarse on Windows, so two events inside one tick
+            // carry the same timestamp, `FirstSeenUtc < dupCutoff` is false, and the anchor
+            // SURVIVES -- which with a window of 0 means a rule the operator switched off can
+            // still cancel a live order. A mutant relaxing the enable from `> 0` to `>= 0`
+            // survived the entire suite on exactly that path.
+            //
+            // A wall-clock test cannot reach the boundary: it cannot make two events land at a
+            // chosen microsecond. Freezing the account's injectable clock can, and the clock seam
+            // already exists for the same reason one class over.
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 500;
+
+            var h = P1160Setup(config, "live");
+            var t0 = new DateTime(2026, 8, 19, 3, 31, 0, DateTimeKind.Utc);
+            var now = t0;
+            h.State.UtcNow = () => now;
+
+            P1160Send(h, P1160Order("500", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            // Exactly the window later. The anchor is NOT older than the cutoff -- cutoff is t0
+            // and FirstSeenUtc is t0 -- so pruning leaves it in place, and only the explicit
+            // `gapMs < window` check can refuse to call this a duplicate.
+            now = t0.AddMilliseconds(500);
+            var second = P1160Order("501", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, second);
+
+            Assert(!P1160SawDuplicate(h),
+                "a gap of exactly the window is NOT a duplicate -- the rule is strict `<`, and the "
+                + "surviving anchor proves the pruning pass did not make this decision.");
+            Assert(second.OrderState != OrderState.Cancelled,
+                "and nothing is cancelled at the boundary.");
+
+            // One millisecond inside it, on the same frozen clock, still is -- otherwise the
+            // assertion above would pass just as well if the rule had stopped working entirely.
+            // [[a-green-that-can-never-be-red]].
+            var h2 = P1160Setup(config, "live");
+            var now2 = t0;
+            h2.State.UtcNow = () => now2;
+            P1160Send(h2, P1160Order("600", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            now2 = t0.AddMilliseconds(499);
+            P1160Send(h2, P1160Order("601", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P1160SawDuplicate(h2),
+                "one millisecond inside the window IS a duplicate, so the boundary assertion above "
+                + "is measuring the boundary and not a dead rule.");
+        }
+
+        private static void TestDup_P1160_TheRuleStillWorksOnTheSecondTradeOfTheSession()
+        {
+            Console.WriteLine("\n[TEST] P1-160: the rule still protects the second trade of the session");
+
+            // ⚠️ A MUTANT THAT DELETED THE PRUNING PASS SURVIVED THE WHOLE SUITE, and this is what
+            // it was hiding. The anchor is stored under (instrument, side). Once that key exists,
+            // the `else` branch that records a new anchor can never run again -- so if nothing
+            // refreshes the entry, it keeps the timestamp of the FIRST trade of the day forever and
+            // every later gap is measured from there. The rule then protects trade one and nothing
+            // after it, on the instrument the operator trades all session.
+            //
+            // Every other test opened at most one trade, so the whole suite was blind to it.
+            // [[a-green-that-can-never-be-red]] in its quietest form: the rule was live, correct
+            // for the case under test, and asleep for the rest of the session.
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 500;
+
+            var h = P1160Setup(config, "live");
+            var t0 = new DateTime(2026, 8, 19, 3, 31, 0, DateTimeKind.Utc);
+            var now = t0;
+            h.State.UtcNow = () => now;
+
+            // Trade one, well inside the session.
+            P1160Send(h, P1160Order("700", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            Assert(!P1160SawDuplicate(h), "precondition: a single entry is not a duplicate.");
+
+            // Twenty minutes later, trade two -- a legitimate new entry, not a duplicate.
+            now = t0.AddMinutes(20);
+            var second = P1160Order("701", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, second);
+            Assert(!P1160SawDuplicate(h),
+                "a new entry twenty minutes later is not a duplicate of the first trade.");
+            Assert(second.OrderState != OrderState.Cancelled, "and it is not cancelled.");
+
+            // And now the platform duplicates THAT one. This is the assertion the missing
+            // refresh would have broken: the gap would be measured from t0, not from t0+20min.
+            now = t0.AddMinutes(20).AddMilliseconds(99);
+            var dupe = P1160Order("702", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, dupe);
+
+            Assert(P1160SawDuplicate(h),
+                "a 99ms duplicate of the SECOND trade is still refused -- the anchor moved with the "
+                + "session instead of being pinned to the first entry of the day.");
+            Assert(dupe.OrderState == OrderState.Cancelled, "and it is cancelled.");
+        }
+
+        private static void TestDup_P1160_ARetryAfterARejectionIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a retry after a broker rejection is not a duplicate");
+
+            // ⚠️ THE WORST FALSE POSITIVE THIS RULE CAN PRODUCE, and it took a surviving mutant to
+            // find it. The entry is anchored the moment it is Submitted. If the broker then REJECTS
+            // it, the order never became a position -- but the anchor outlives it, so the operator's
+            // immediate retry lands inside the window against an order that does not exist and gets
+            // cancelled. They end with no position and two refusals, from a rule whose entire
+            // purpose is to stop them holding twice what they intended.
+            //
+            // A rail that punishes someone for their broker's rejection is a rail that gets
+            // switched off, and then it is protecting nothing at all.
+            var h = P1160Setup(new RiskConfig(), "live");
+
+            var rejected = P1160Order("800", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, rejected);
+            rejected.OrderState = OrderState.Rejected;
+            P1160Send(h, rejected);
+
+            var retry = P1160Order("801", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, retry);
+
+            Assert(!P1160SawDuplicate(h),
+                "the retry after a rejection is not a duplicate -- the rejected order never became "
+                + "a position, so there is nothing for it to duplicate.");
+            Assert(retry.OrderState != OrderState.Cancelled,
+                "and the retry is not cancelled.");
+
+            // A CANCELLED anchor is the same case: the operator pulled the order themselves.
+            var h2 = P1160Setup(new RiskConfig(), "live");
+            var pulled = P1160Order("900", OrderAction.SellShort, OrderType.Market, "MES", 1, null);
+            P1160Send(h2, pulled);
+            pulled.OrderState = OrderState.Cancelled;
+            P1160Send(h2, pulled);
+            var reentry = P1160Order("901", OrderAction.SellShort, OrderType.Market, "MES", 1, null);
+            P1160Send(h2, reentry);
+
+            Assert(!P1160SawDuplicate(h2),
+                "and re-entering right after cancelling an order is not a duplicate either.");
+
+            // The negative control: a FILLED anchor must still refuse its duplicate, or the two
+            // assertions above would pass just as well if the rule had been switched off.
+            var h3 = P1160Setup(new RiskConfig(), "live");
+            var filled = P1160Order("950", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h3, filled);
+            filled.OrderState = OrderState.Filled;
+            P1160Send(h3, filled);
+            P1160Send(h3, P1160Order("951", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P1160SawDuplicate(h3),
+                "a duplicate following a FILLED entry is still refused -- only a DEAD anchor is "
+                + "dropped, and a fill is not death.");
         }
 
         private static void TestMaxSizeAtExactlyLimit()

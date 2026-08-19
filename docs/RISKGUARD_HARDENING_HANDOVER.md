@@ -11427,17 +11427,20 @@ sessions after that stopped being true.
    stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
    ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
    unvalidated one.
-3. **The discipline rails the operator specified on 2026-08-18**, in this order. The
-   per-instrument cap is ~~`P1-159`~~ — ✅ CLOSED session 60, `v1.48.0`, suite **3209/0**,
-   battery **9/9**; its ID is not repeated as work, since the gate reads any ID in this block as
-   work to do. Remaining: **`P1-160`** (a duplicate entry doubled size on 3 of 6 measured
-   attempts), then **`P2-163`** (the allow-list is dead config that permits every full-size
-   contract), then **`P2-161`** + **`P2-162`** (the escalating cooldown ladder, and refusing the
-   entry rather than flattening the fill).
-   ⚠️ **`P2-165` came out of closing the cap entry and should be folded into `P1-160`, not
-   done separately**: `ORDER_FLOOD_LOCKOUT`, `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL`
-   all live in `ExecuteOrderUpdate` with ZERO tests, and `P1-160` adds a fourth rule to that same
-   method. Two of the three untested ones are the operator’s own discipline contract.
+3. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
+   IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
+   per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in
+   `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared). Remaining, in order: **`P2-163`** (the
+   allow-list is dead config that permits every full-size contract), then **`P2-161`** +
+   **`P2-162`** (the escalating cooldown ladder, and refusing the entry rather than flattening the
+   fill).
+   ⚠️ **`P2-165` should be folded into whichever ticket next touches `ExecuteOrderUpdate`.**
+   `ORDER_FLOOD_LOCKOUT`, `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` still have ZERO tests,
+   and the duplicate-entry work built the harness they need. **It also raised the stakes**: that
+   rule shipped gated on `Submitted || Accepted` and the live log then showed two of its three
+   measured cases arrive ONLY as `Filled`, because the operator places them on the broker platform.
+   All three untested rules share that gate, so whether they can see a Tradovate order at all is an
+   open question with the evidence pointing the wrong way.
    ⚠️ **`P2-164` is a DECISION, not code, and it gates how the ladder is calibrated** --
    what counts as "a loss". The operator holds two opposing views at once and asked for the right
    answer rather than the one they favour, so **re-asking them is not how this closes**; it is

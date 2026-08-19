@@ -8683,7 +8683,7 @@ model reviewer and was read by hand before applying. The battery is the evidence
 * `MAX_SIZE_BREACH` **flattens the whole position**, not the excess over the cap. That is the
   pre-existing rule and this entry deliberately did not change it, but it means the response to a
   1-contract overshoot on a 5-lot cap is a full exit. Worth an ID if it ever fires in anger.
-### P1-160. A duplicate entry doubles position size with no rule against it, and the second fill is invisible to the operator — OPEN, measured 2026-08-18 (session 59)
+### P1-160. A duplicate entry doubles position size with no rule against it, and the second fill is invisible to the operator — ✅ FIXED 2026-08-19 (session 60), `v1.49.0`
 
 MEASURED **three times in six attempts** on the funded account, across two platforms:
 
@@ -8709,6 +8709,96 @@ whether THIS entry repeats the previous one. Refuse the duplicate (cancel), do n
 
 ⚠️ Must not fire on legitimate scale-ins the operator intends, nor on a bracket's own legs, which
 arrive 3-11ms after the entry fill and are the OPPOSITE side. Keyed on same-direction ENTRY orders.
+
+
+#### ✅ FIXED 2026-08-19 (session 60), `v1.49.0` — suite **3263/0**, battery **23 killed / 1 declared**, 11 gates green
+
+A second `OrderType.Market` entry for the same instrument root and side, within
+`Overtrading.DuplicateEntryWindowMs` (default 1000ms), queues an intervention cancel and emits one
+`DUPLICATE_ENTRY` naming both order ids, the instrument and the gap. It does **not** lock the
+account out: the operator did not cause this, their platform did, and a rail that takes the session
+away for a broker glitch is a rail that gets switched off.
+
+#### ⚠️ THE TICKET WAS WRONG ABOUT THE EVENT PATH, AND THE LOG IS WHAT SAID SO
+
+The rule shipped from the loop gated on `Submitted || Accepted`, copied from the rate governor next
+door. Then the live log:
+
+```
+03:31:01.441  35921  Market Sell 1  Filled     <- the ENTIRE event stream for these four orders
+03:31:01.540  35922  Market Sell 1  Filled
+03:50:57.804  35950  Market Sell 1  Filled
+03:50:57.954  35951  Market Sell 1  Filled
+```
+
+**Two of the three measured duplicates never produce a `Submitted` or an `Accepted` at all**,
+because they were placed on the BROKER platform rather than through NT8 — which is how the operator
+normally trades. The ATM entry in the same session logged its full lifecycle (`Initialized` twice,
+`Submitted`, `Accepted`, `Working`, `Filled`), so this is not the log dropping states.
+
+Thirteen acceptance tests were green over that gap, because every one of them synthesised the
+NT8-native event order. [[test-doubles-are-not-evidence]] — the double here was not a stub, it was
+**the event sequence I assumed**, and nothing but the log could settle it. The rule now has its own
+gate including `Filled`; widening the governor's gate instead would have changed what it counts.
+Cancelling a filled order is meaningless and `DrainPendingCancels` already declines to try, so on
+that path the ANNOUNCEMENT is the entire product — which is exactly right, since the silent
+half-coverage is the harm.
+
+#### ⚠️ THE BATTERY FOUND TWO MORE, BOTH FALSE POSITIVES, WHICH IS THE DANGEROUS DIRECTION
+
+Missing a duplicate leaves the operator where they were. Refusing something that is *not* a
+duplicate takes away an order they meant. Both of these survived four loop rounds, two reviewers
+and eighteen green tests:
+
+* **A retry after a broker REJECTION was cancelled.** The entry is anchored at `Submitted`; the
+  broker rejects it; the immediate retry lands inside the window against an order that no longer
+  exists and is refused. No position and two refusals, from a rule meant to stop the operator
+  holding twice what they intended. A `Rejected` or `Cancelled` anchor is now dropped.
+* **The rule protected only the FIRST trade of the session.** Anchors are keyed by (instrument,
+  side); once the key existed the record-new-anchor branch could never run again, so the anchor kept
+  the timestamp of the first trade of the day and every later gap was measured from there. Trades
+  two onward were unprotected and nothing said so. A non-duplicate entry now refreshes the anchor.
+  Every test had opened exactly one trade, which is why the whole suite was blind to it.
+
+**The pruning pass is gone.** Once the anchor refreshes it is redundant — the gap is checked at the
+decision point, so an expired anchor cannot produce a false positive and the next real entry
+overwrites it. Keeping machinery no behavioural test can distinguish is the shape
+[[dead-safety-machinery-gate]] exists to catch.
+
+#### What the rule deliberately will not do
+
+⚠️ **`OrderType.Market` is a SAFETY clause, not an optimisation.** A long bracket's stop and target
+are both sells, arrive 3-11ms apart (measured), and `IsPositionReducingOrder` returns false for both
+while the position still reads Flat — the ordinary case at 3ms. Without the market restriction the
+rule cancels the TARGET as a duplicate of the STOP and strips a live position of cover the operator
+did place. A protective leg is never a market order, so the filter is drawn where it cannot reach
+one. [[a-filter-that-matches-too-much]].
+
+⚠️ **Copier orders are excluded.** If the LEADER suffers a duplicate the copier mirrors both legs;
+cancelling the second puts the follower out of conformance, the reconciler corrects it, the guard
+refuses it again. `CopierOrderNames.Follow` is now a shared constant read by both the copier's
+`CreateOrder` and this exclusion, so a rename cannot disarm it in silence — there is a mutant for
+that.
+
+**One EXPECTED SURVIVOR is declared** and paired through `_battery.finish`: relaxing the enable from
+`> 0` to `>= 0` is an *equivalent* mutant while `gapMs < dupWindowMs` guards the decision point. It
+is kept because it stops being equivalent the day that check is removed, and the helper reports a
+declared survivor that starts being KILLED as STALE. Its partner — deleting the gap check — IS
+killed, by a frozen-clock test placing two events at the exact window boundary, which wall-clock
+timing cannot reach on purpose.
+
+#### The loop run
+
+Four rounds, `NOT_CONVERGING`; round 3 exported as the last candidate to pass every gate and
+arbitrated by hand. ⚠️ **Its patch also rewrote 11 unrelated comments** across three files — every
+`⚠️` to `WARNING:`, a box-drawing rule to dashes, and two `//` lines to `///` — none of which any
+gate or reviewer flagged. Filtered to the 5 intended hunks before applying. Filed upstream as
+`CF-25`, with the obvious cause ruled out by measurement: the saved implement prompt carries all its
+glyphs intact, so it is not the encoding path.
+
+Of the arbiter's two upheld findings, one was right for a reason it did not give (the shared gate,
+above) and one did not hold: for a platform duplicate the two orders are identical, so which one is
+anchored has no observable consequence. Both are recorded at the site.
 
 ### P2-161. The loss cooldown fires only at the consecutive-loss LIMIT, so losses 1..N-1 cost nothing and it is redundant with the lockout it coincides with — OPEN, 2026-08-18 (session 59)
 
@@ -8812,6 +8902,22 @@ this entry.
 **Do this as characterisation first** — assert what the code does today, then decide what is wrong.
 `P1-160` builds a fourth rule in the same method and has to construct this harness anyway; if it
 lands without covering the neighbours, this stays open on its own.
+
+✅ **THE HARNESS NOW EXISTS AND THIS ENTRY IS STILL OPEN.** `P1-160` landed the fourth rule in
+this method and with it `P1160Setup` / `P1160Send`, which construct an `Account`, an
+`AccountState` and an `OrderEventArgs`, drive the real `ExecuteOrderUpdate`, and capture the log
+through `LogEventMessageObserver`. Reuse them — the remaining work is the assertions, not the
+scaffolding. It did NOT cover the three neighbours; that was deliberate scope discipline, and it
+is why this has its own ID rather than a sentence inside a closed entry.
+
+⚠️ **AND `P1-160` MADE THE CASE STRONGER, NOT WEAKER.** Its own rule first shipped gated on
+`Submitted || Accepted`, copied from the rate governor next door — and the live log then showed
+that two of the three duplicates it was written for produce ONLY a `Filled` event, because they
+were placed on the broker platform. Thirteen green tests did not notice, because every one of them
+synthesised the NT8-native event order. **All three rules here share that gate.** Whether
+`BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` can see an order the operator placed from
+Tradovate at all is now an open question with the evidence pointing the wrong way, and it is the
+first thing to measure rather than the last.
 
 ### P2-164. DECISION PENDING — what counts as "a loss" for the escalating cooldown ladder, to be settled by measurement rather than preference — OPEN, filed 2026-08-18 (session 59)
 

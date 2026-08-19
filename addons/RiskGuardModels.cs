@@ -138,6 +138,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // passing Submitted -> Accepted -> Working counts once, not three times.
         public Dictionary<string, DateTime> RecentOrderIds { get; set; } = new Dictionary<string, DateTime>();
 
+        // P1-160: duplicate-entry anchors. Keyed by (instrument root, side) and stored by
+        // Order OBJECT REFERENCE, because NT8's OrderId is neither unique nor stable.
+        public Dictionary<string, RecentEntryAnchor> RecentEntryAnchors { get; set; } = new Dictionary<string, RecentEntryAnchor>();
+
         // Lockout phase: PendingCancel -> PendingFlatten -> Confirmed.
         // Only Confirmed stops emitting actions. This prevents the infinite
         // flatten loop where account.Flatten() fails silently but the sweep
@@ -371,6 +375,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Simple calculation of PnL can be done if execution updates are matched,
             // but in practice NinjaTrader handles account balance updates directly.
         }
+    }
+
+    // P1-160: anchor record for the duplicate-entry rule. Stored by Order reference, not Id.
+    public class RecentEntryAnchor
+    {
+        public Order Order;
+        public DateTime FirstSeenUtc;
+    }
+
+    // P1-160: shared name for orders placed by the trade copier, so the duplicate-entry guard
+    // and the copier cannot drift apart on a rename.
+    public static class CopierOrderNames
+    {
+        public const string Follow = "COPIER_FOLLOW";
     }
 
     public class FirmMirrorResult

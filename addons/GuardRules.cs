@@ -339,6 +339,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ? c.Config.Overtrading.MaxOrdersPerSecond : 5, 1,
                     c.Config.Overtrading.MaxOrdersPerSecond > 0 ? null : "falling back to the built-in 5/s")
             },
+            new GuardRuleDefinition {
+                Name = "Duplicate entry window", ConfigPath = "Overtrading.DuplicateEntryWindowMs",
+                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerOrder,
+                Evaluator = c => c.Config.Overtrading.DuplicateEntryWindowMs <= 0
+                    ? Off("duplicate entry window is 0")
+                    : R(null, c.Config.Overtrading.DuplicateEntryWindowMs, 1)
+            },
 
             // -- stop guard -------------------------------------------------------------
             new GuardRuleDefinition {
@@ -381,16 +388,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardRuleDefinition {
                 Name = "Per-instrument contract caps", ConfigPath = "InstrumentLimits",
                 EvidenceLabel = "instruments with a configured cap",
-                Source = GuardRuleSource.InstrumentLimit, Scope = GuardRuleScope.PerOrder,
+                Source = GuardRuleSource.InstrumentLimit, Scope = GuardRuleScope.PerPosition,
                 // P2-78: this type used to carry two more fields that nothing read, and the note
                 // below warned about them. They are GONE, so the warning goes with them -- a note
                 // describing fields the config no longer has is the same defect one turn later.
                 // The note now states the positive fact, which stays true however the type changes:
                 // there is exactly ONE way to block an instrument.
+                //
+                // ⚠️ `P1-159` MOVED THE SCOPE, AND THE SCOPE IS THE PART A READER ACTS ON. This
+                // row said `PerOrder` for the life of the rule and it was true: the cap was checked
+                // against `e.Order.Quantity` and nothing else, so N orders of 1 built a position of
+                // N unopposed. It now ALSO binds on the position, through the resolved profile. The
+                // stale half was read live off the funded account minutes after `v1.48.0` deployed --
+                // this inventory is the surface that answers "is the guard actually protecting me",
+                // so a scope here that lags the enforcement is the same defect class `P1-159` closed:
+                // what a rule REPORTS disagreeing with what it DOES.
                 Evaluator = c => R(null, null,
                     c.Config.InstrumentLimits == null ? 0 : c.Config.InstrumentLimits.Count,
-                    "caps the size of an instrument; it does not block it -- "
-                    + "use BlockedInstruments to block")
+                    "caps the size of an instrument on BOTH the order and the position; it does not "
+                    + "block it -- use BlockedInstruments to block")
             },
 
             // -- trading windows --------------------------------------------------------
