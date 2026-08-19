@@ -8594,7 +8594,7 @@ go red is worse than none, and four mutants have already beaten source checks in
 under the lock is correct and required, because it only schedules a callback and makes no broker
 call. Reviewers raise it every round; the ported gate must not.
 
-### P1-159. A per-instrument cap is checked PER ORDER, so N orders of 1 build a position of N -- the cap does not mean what its name says — OPEN, measured on the funded account 2026-08-18 (session 59)
+### P1-159. A per-instrument cap is checked PER ORDER, so N orders of 1 build a position of N -- the cap does not mean what its name says — ✅ FIXED 2026-08-18 (session 60), `v1.48.0`
 
 `InstrumentLimits["MNQ"].MaxContracts = 1` refuses a single 2-lot order and permits **two 1-lot
 orders**, leaving a position of 2. MEASURED three times in one evening on
@@ -8620,6 +8620,60 @@ come to disagree. [[a-second-reader-of-the-same-state]].
 ⚠️ Do NOT let the position check become the only one: refusing the oversized ORDER costs nothing,
 while `MAX_SIZE_BREACH` FLATTENS, which is a fill and a commission to undo a mistake.
 
+
+#### ✅ FIXED 2026-08-18 (session 60), `v1.48.0` — suite **3209/0**, battery **9/9**, 11 gates green
+
+One dictionary, both enforcement points. `_config.InstrumentLimits` is merged into the resolved
+profile inside `CreateDynamicProfile`, so `ResolveMaxContracts` keeps the signature `P1-149` gave
+it and **both** of its callers are fixed by the same edit: the reactive `MAX_SIZE_BREACH` sweep and
+`EffectiveMaxContracts`, the answer the MCP bridge gives a caller *before* it places an order. The
+per-ORDER check in `ExecuteOrderUpdate` was left alone — it already reads the same dictionary, so
+after this change the two sites cannot drift.
+
+**The two caps combine by MINIMUM, not by precedence.** A cap is a maximum, and the minimum of two
+maxima can never permit more than either surface intended, so the direction cannot fail unsafely.
+Any precedence order silently discards one of the two configured numbers, and the operator who
+tightens the losing one sees no change and concludes the guard is enforcing something it is not.
+Both directions are asserted, and the battery mutates both — each one alone looks correct from a
+test written against the other.
+
+⚠️ **The merged dictionary is a fresh `OrdinalIgnoreCase` copy, and that is load-bearing twice
+over.** The line it replaced was `baseProfile.InstrumentProfiles ?? new Dictionary<string,
+InstrumentProfile>()`, which (a) **aliased the config object's own dictionary**, so merging in
+place would have written derived caps into `_config.Profiles[i]` where the next save persists them
+as though the operator had typed them — numerically identical on the first pass, and only visible
+once they LOOSENED a cap and found the tighter derived value still there; and (b) supplied **no
+comparer** on the fallback path, which would have made every instrument lookup case-sensitive so a
+hand-edited `mnq` key capped nothing. `RiskGuardModels.cs` already warns about (b) in writing,
+beside the `InstrumentLimits` declaration. Both are mutants, and (a) needed a test of its own that
+resolves twice — a merge that mutates in place still returns the right answer once.
+
+**Evidence.** 8 acceptance tests, 5 red at baseline; `mutate_p1159.py`, 9 mutants, **9 killed, 0
+survivors**, wired into the `P2-107+P2-134+P2-108` bin (the lightest at 770s, against a 1119s
+critical path, so CI should not get slower). Two of the eight tests were green from the start and
+were kept deliberately: an **unlisted instrument keeps the account default** — the negative control
+against a fix that applies the tightest configured cap to everything, which would otherwise pass
+every positive assertion — and **the tighter wins when the PROFILE is the tighter one**, which the
+obvious implementation (consult `InstrumentLimits` first and return) breaks with nothing else
+noticing. [[detector-needs-a-negative-test]].
+
+⚠️ **The loop went green in ONE round, which is when to trust it least.** The panel returned
+`APPROVE_PARTIAL` on a quorum of one: `deepseek-v4-flash` degenerated again, returning **436
+findings against a cap of 60**, was scored `UNPARSEABLE` and dropped. So the patch had exactly one
+model reviewer and was read by hand before applying. The battery is the evidence, not the verdict.
+
+#### What this does NOT close
+
+* The per-ORDER check, `BLACKLIST_CANCEL` and `ORDER_FLOOD_LOCKOUT` all live in
+  `ExecuteOrderUpdate` — which is `internal` and therefore perfectly reachable from a test — and
+  **not one of the three has a single test**. Three enforcement rules with no coverage, in a method
+  the suite can already call. **Filed as `P2-165`** rather than left as prose here -- a remainder
+  hiding under a closed entry is invisible to every count. `P1-160` builds a fourth rule in the
+  same method and has to construct that harness anyway, but it does not automatically cover the
+  other three.
+* `MAX_SIZE_BREACH` **flattens the whole position**, not the excess over the cap. That is the
+  pre-existing rule and this entry deliberately did not change it, but it means the response to a
+  1-contract overshoot on a 5-lot cap is a full exit. Worth an ID if it ever fires in anger.
 ### P1-160. A duplicate entry doubles position size with no rule against it, and the second fill is invisible to the operator — OPEN, measured 2026-08-18 (session 59)
 
 MEASURED **three times in six attempts** on the funded account, across two platforms:
@@ -8717,6 +8771,38 @@ what makes the daily limit coherent.
 **Fix**: make the allow-list enforce, defaulting to the micros actually traded, with
 `BlockedInstruments` retained as the day-by-day override (the operator asked to sometimes exclude
 MNQ). Default-deny is the correct shape for a rule set that defines how one MUST trade.
+
+### P2-165. Three enforcement rules live in a method the suite can already call, and not one of them has a test — OPEN, filed 2026-08-18 (session 60)
+
+Found while closing `P1-159`. `ExecuteOrderUpdate` is `internal`, takes a plain
+`(object sender, OrderEventArgs e)`, drains its own pending cancels at the end, and both
+`LogEventObserver` and `LogEventMessageObserver` are available to assert against it. It is
+straightforwardly reachable from a test. Three rules inside it have **zero** coverage:
+
+| rule | what it does | tests |
+|---|---|---|
+| `ORDER_FLOOD_LOCKOUT` | > N distinct orders in 1s → lockout + cancel | 0 |
+| `BLACKLIST_CANCEL` | instrument root in `BlockedInstruments` → cancel | 0 |
+| `PER_INSTRUMENT_CAP_CANCEL` | order quantity over `InstrumentLimits[root]` → cancel | 0 |
+
+`grep` for each rule id across `tests/` returns nothing. This is not "hard to test and therefore
+untested" — it is untested with the harness already sitting there.
+
+⚠️ **`BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` are the two rules carrying the operator's
+2026-08-18 discipline contract** — every full-size future blocked, and `MNQ`/`MGC`/`MCL` capped at
+one. `P1-159` gave the per-instrument cap a second enforcement point on the POSITION and mutation
+coverage to go with it. The per-ORDER halves of both rules are still proved by nothing.
+
+⚠️ Both rules are **cancel** paths, which is the asymmetric direction: `P1-44` exists because a
+rate-limit cancel once stripped a live position of its protective stop. `BLACKLIST_CANCEL` has
+**no `IsPositionReducingOrder` guard at all** — read it before assuming that is safe. If a
+blacklisted instrument is somehow already open, the rule as written would cancel the stop covering
+it. That is a hypothesis from reading, not a measurement; the test that settles it is the point of
+this entry.
+
+**Do this as characterisation first** — assert what the code does today, then decide what is wrong.
+`P1-160` builds a fourth rule in the same method and has to construct this harness anyway; if it
+lands without covering the neighbours, this stays open on its own.
 
 ### P2-164. DECISION PENDING — what counts as "a loss" for the escalating cooldown ladder, to be settled by measurement rather than preference — OPEN, filed 2026-08-18 (session 59)
 

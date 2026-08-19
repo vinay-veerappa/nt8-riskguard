@@ -174,6 +174,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestSize_P1159_TheTighterOfTheTwoCapsWins);
             Run(TestSize_P1159_TheInstrumentLookupStaysCaseInsensitive);
             Run(TestSize_P1159_ThePreTradeGateAgreesWithTheSweep);
+            Run(TestSize_P1159_ResolvingTheProfileDoesNotMutateTheConfig);
             Run(TestSize_P1159_TheCapAppliesToTheROOT_NotTheContractMonth);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
@@ -18284,6 +18285,54 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "EffectiveMaxContracts reports 1 for MNQ, the same cap MAX_SIZE_BREACH enforces.");
             Assert(addon.EffectiveMaxContracts(account, "ES") == 5,
                 "EffectiveMaxContracts still reports the account default of 5 for an unlisted instrument.");
+        }
+
+        private static void TestSize_P1159_ResolvingTheProfileDoesNotMutateTheConfig()
+        {
+            Console.WriteLine("\n[TEST] P1-159: resolving a profile leaves the operator's config untouched");
+
+            // The merge writes into a dictionary that used to be an ALIAS of the config object's
+            // own `InstrumentProfiles`. Merging into that alias would write DERIVED caps back into
+            // `_config.Profiles[i]`, where the next config save persists them as though the
+            // operator had typed them -- and every subsequent resolution would compound against
+            // the already-merged value. Nothing else in the suite would notice: the caps would be
+            // numerically identical on the first pass, and only diverge once the operator LOOSENED
+            // one and found the tighter derived value still there.
+            //
+            // Resolution runs twice deliberately. A merge that mutates in place can still produce
+            // the right answer once; it is the second call that reads its own output.
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            config.InstrumentLimits["MNQ"] = new PerInstrumentRiskConfig { MaxContracts = 1 };
+            config.Profiles.Add(new AccountRiskProfile
+            {
+                ProfileName         = "P1159",
+                AccountNamePattern  = "TestAcc",
+                DefaultMaxContracts = 5,
+                InstrumentProfiles  = new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "MNQ", new InstrumentProfile { MaxContracts = 5 } }
+                }
+            });
+
+            var account = new Account { Name = "TestAcc" };
+            var addon   = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            addon.EffectiveMaxContracts(account, "MNQ");
+            addon.EffectiveMaxContracts(account, "MNQ");
+
+            Assert(config.Profiles[0].InstrumentProfiles["MNQ"].MaxContracts == 5,
+                "the per-account profile in the config still reads 5 after resolution -- the merge "
+                + "did not write its derived cap back into the operator's configuration.");
+            Assert(config.InstrumentLimits["MNQ"].MaxContracts == 1,
+                "InstrumentLimits still reads 1 after resolution -- the merge did not write back "
+                + "into the global cap dictionary either.");
+            Assert(addon.EffectiveMaxContracts(account, "MNQ") == 1,
+                "and the resolved cap is still 1 on the third call -- the merge is not compounding "
+                + "against its own previous output.");
         }
 
         private static void TestSize_P1159_TheCapAppliesToTheROOT_NotTheContractMonth()

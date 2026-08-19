@@ -11427,23 +11427,29 @@ sessions after that stopped being true.
    stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
    ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
    unvalidated one.
+3. **The discipline rails the operator specified on 2026-08-18**, in this order. The
+   per-instrument cap is ~~`P1-159`~~ — ✅ CLOSED session 60, `v1.48.0`, suite **3209/0**,
+   battery **9/9**; its ID is not repeated as work, since the gate reads any ID in this block as
+   work to do. Remaining: **`P1-160`** (a duplicate entry doubled size on 3 of 6 measured
+   attempts), then **`P2-163`** (the allow-list is dead config that permits every full-size
+   contract), then **`P2-161`** + **`P2-162`** (the escalating cooldown ladder, and refusing the
+   entry rather than flattening the fill).
+   ⚠️ **`P2-165` came out of closing the cap entry and should be folded into `P1-160`, not
+   done separately**: `ORDER_FLOOD_LOCKOUT`, `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL`
+   all live in `ExecuteOrderUpdate` with ZERO tests, and `P1-160` adds a fourth rule to that same
+   method. Two of the three untested ones are the operator’s own discipline contract.
+   ⚠️ **`P2-164` is a DECISION, not code, and it gates how the ladder is calibrated** --
+   what counts as "a loss". The operator holds two opposing views at once and asked for the right
+   answer rather than the one they favour, so **re-asking them is not how this closes**; it is
+   settled by measuring post-loss expectancy on this account. Build `P2-161` with the definition
+   behind a config key so the answer lands as a number, not a rebuild.
+
 4. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
    rather than deleted because its instruction was wrong in an instructive way: it said to drive the
    `Protected`-with-a-gap rows FIRST as "the quiet half that matters", and those four rows were the
    system working correctly: `Protected` means *something* is covering, not everything, which a
    long-closed entry established deliberately. The loud half was the whole defect. No ID is
    repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
-3. **The discipline rails the operator specified on 2026-08-18** (session 59), in this order:
-   **`P1-159`** (the per-instrument cap is per-ORDER, not per-position, so the `MNQ: 1` now in the
-   live config does not mean what a reader assumes), then **`P1-160`** (a duplicate entry doubled
-   size on 3 of 6 measured attempts), then **`P2-163`** (the allow-list is dead config that permits
-   every full-size contract), then **`P2-161`** + **`P2-162`** (the escalating cooldown ladder, and
-   refusing the entry rather than flattening the fill).
-   ⚠️ **`P2-164` is a DECISION, not code, and it gates how the ladder is calibrated** --
-   what counts as "a loss". The operator holds two opposing views at once and asked for the right
-   answer rather than the one they favour, so **re-asking them is not how this closes**; it is
-   settled by measuring post-loss expectancy on this account. Build `P2-161` with the definition
-   behind a config key so the answer lands as a number, not a rebuild.
 
 5. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
    native-partials remainder. ⚠️ The persistent-disarm work is CLOSED, and it left a standing

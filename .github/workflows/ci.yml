@@ -742,7 +742,7 @@ jobs:
           # ALL SURVIVED -- including a revert of the AccountItemUpdate handler to its old bare
           # loop, i.e. the one path the defect was measured on walking around the entire
           # mechanism while eleven tests of that mechanism passed. That is P3-30's shape.
-          - { label: "P2-107+P2-134+P2-108", batteries: "mutate_p2107.py mutate_p2134.py mutate_p2108.py" }   # 770s = P2-107 390s + P2-134 219s + P2-108 161s
+          - { label: "P2-107+P2-134+P2-108+P1-159", batteries: "mutate_p2107.py mutate_p2134.py mutate_p2108.py mutate_p1159.py" }   # ~1100s = P2-107 390s + P2-134 219s + P2-108 161s + P1-159 ~330s (P1-159 ESTIMATED at 11 runs x ~30s; this was the LIGHTEST bin at 770s and the critical path is 1119s, so the estimate has to be wrong by nearly 20s/run before CI gets slower. Re-pack once CI prints its real BATTERY_SECONDS.)
 
           # UI3 (the guard rule inventory), 376s. Every mutant here makes the inventory MORE
           # REASSURING than the truth, because that is the only direction that can hurt anyone:

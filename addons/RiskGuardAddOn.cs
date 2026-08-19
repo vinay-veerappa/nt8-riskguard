@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.47.0";
+        public const string Version = "1.48.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -2700,13 +2700,71 @@ namespace NinjaTrader.NinjaScript.AddOns
             return CreateDynamicProfile(account, fallback);
         }
 
+        /// <summary>
+        /// `P1-159`. The per-instrument cap is merged into the resolved profile HERE, so that
+        /// `ResolveMaxContracts` -- and therefore BOTH of its callers, the reactive
+        /// `MAX_SIZE_BREACH` sweep and the bridge's pre-trade `EffectiveMaxContracts` -- enforce
+        /// `_config.InstrumentLimits` without any of them holding a second copy of it.
+        ///
+        /// ⚠️ `InstrumentLimits` used to be read by exactly ONE production site: the per-ORDER
+        /// check in `ExecuteOrderUpdate`, against `e.Order.Quantity`. So `MNQ: 1` refused a 3-lot
+        /// order and permitted three 1-lot orders that built the identical 3-lot POSITION.
+        /// Measured live on the funded account 2026-08-18, whose config carries `MNQ: 1` beside
+        /// `MaxContractsPerAccount: 5` and an EMPTY `Profiles` list -- so every position resolved
+        /// to 5 and the cap the operator had configured bound nothing that could lose money.
+        ///
+        /// ⚠️ THE TWO CAPS COMBINE BY MINIMUM, NOT BY PRECEDENCE. A cap is a maximum, and the
+        /// minimum of two maxima can never permit more than either surface intended, so this
+        /// direction cannot fail unsafely. Any precedence order silently ignores one of the two
+        /// configured numbers, and an operator who tightens the losing one sees no change and
+        /// concludes the guard is enforcing something it is not.
+        ///
+        /// ⚠️ THE MERGED DICTIONARY IS A FRESH COPY, WITH THE ORDINAL-IGNORE-CASE COMPARER.
+        /// This line used to be `baseProfile.InstrumentProfiles ?? new Dictionary<...>()`, which
+        /// ALIASED the config object's own dictionary and supplied no comparer on the fallback.
+        /// Merging into that alias would write derived caps back into `_config.Profiles[i]`, where
+        /// a later save would persist them as if the operator had typed them; and the bare
+        /// constructor would make every instrument lookup case-SENSITIVE, so a hand-edited `mnq`
+        /// key would cap nothing. `RiskGuardModels.cs` warns about that second hazard in writing,
+        /// beside the `InstrumentLimits` declaration.
+        /// </summary>
         private AccountRiskProfile CreateDynamicProfile(Account account, AccountRiskProfile baseProfile)
         {
+            var mergedProfiles = new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase);
+
+            if (baseProfile.InstrumentProfiles != null)
+            {
+                foreach (var kvp in baseProfile.InstrumentProfiles)
+                {
+                    mergedProfiles[kvp.Key] = kvp.Value;
+                }
+            }
+
+            if (_config.InstrumentLimits != null)
+            {
+                foreach (var kvp in _config.InstrumentLimits)
+                {
+                    int globalCap = kvp.Value.MaxContracts;
+                    InstrumentProfile existing;
+                    if (mergedProfiles.TryGetValue(kvp.Key, out existing))
+                    {
+                        mergedProfiles[kvp.Key] = new InstrumentProfile
+                        {
+                            MaxContracts = Math.Min(existing.MaxContracts, globalCap)
+                        };
+                    }
+                    else
+                    {
+                        mergedProfiles[kvp.Key] = new InstrumentProfile { MaxContracts = globalCap };
+                    }
+                }
+            }
+
             var p = new AccountRiskProfile
             {
                 ProfileName = baseProfile.ProfileName,
                 AccountNamePattern = baseProfile.AccountNamePattern,
-                InstrumentProfiles = baseProfile.InstrumentProfiles ?? new Dictionary<string, InstrumentProfile>(),
+                InstrumentProfiles = mergedProfiles,
                 MaxTradesPerSession = baseProfile.MaxTradesPerSession > 0 ? baseProfile.MaxTradesPerSession : _config.Overtrading.MaxTradesPerSession,
                 DefaultMaxContracts = baseProfile.DefaultMaxContracts > 0 ? baseProfile.DefaultMaxContracts : _config.Sizing.MaxContractsPerAccount
             };
