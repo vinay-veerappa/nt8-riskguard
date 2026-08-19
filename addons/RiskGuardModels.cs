@@ -925,6 +925,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // P2-46: was hardcoded at 5 in the order-rate governor, unlike every other limit here.
         public int MaxOrdersPerSecond { get; set; } = 5;
         public int LockoutMinutes { get; set; } = 60;
+
+        // `P1-160`. Two entries for the same instrument and side inside this window are a
+        // duplicate, not a scale-in. 0 switches the rule off, matching every other limit here.
+        //
+        // ⚠️ 1000ms is a DELIBERATE default, not a placeholder. The measured duplicate gaps
+        // were 26ms, 99ms and 150ms, so the margin is nearly sevenfold -- and the value is bounded
+        // from the other side by what a human can do on purpose: nobody places two separate
+        // entries a second apart and means both. A rule that ships at 0 is a rule nobody turns on.
+        public int DuplicateEntryWindowMs { get; set; } = 1000;
     }
 
     public class StopGuardConfig

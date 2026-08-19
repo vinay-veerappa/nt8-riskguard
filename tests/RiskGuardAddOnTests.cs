@@ -176,6 +176,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestSize_P1159_ThePreTradeGateAgreesWithTheSweep);
             Run(TestSize_P1159_ResolvingTheProfileDoesNotMutateTheConfig);
             Run(TestSize_P1159_TheCapAppliesToTheROOT_NotTheContractMonth);
+            Run(TestDup_P1160_ASecondMarketEntryOnTheSameSideIsRefused);
+            Run(TestDup_P1160_TheSameOrderChangingStateIsNotADuplicate);
+            Run(TestDup_P1160_AProtectiveLegIsNeverTreatedAsAnEntry);
+            Run(TestDup_P1160_TheOppositeSideIsNotADuplicate);
+            Run(TestDup_P1160_ADifferentInstrumentIsNotADuplicate);
+            Run(TestDup_P1160_OutsideTheWindowIsNotADuplicate);
+            Run(TestDup_P1160_AZeroWindowDisablesTheRule);
+            Run(TestDup_P1160_TheWindowDefaultsOn);
+            Run(TestDup_P1160_ACopierOrderIsNotRefused);
+            Run(TestDup_P1160_TheRefusalNamesBothOrdersAndTheGap);
+            Run(TestDup_P1160_ADuplicateDoesNotLockTheAccountOut);
+            Run(TestDup_P1160_InShadowTheRefusalIsLoggedAndWithheld);
+            Run(TestDup_P1160_AThirdRapidEntryIsAlsoRefused);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -18359,6 +18372,355 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(addon.EvaluateRules(account, state).Any(a => a.RuleId == "MAX_SIZE_BREACH"),
                 "MNQ 09-26 at 3 lots breaches the MNQ cap of 1 -- the cap keys on the root.");
+        }
+
+        // -
+        // P1-160: A DUPLICATE ENTRY DOUBLES THE POSITION AND NOTHING REFUSES IT
+        //
+        // MEASURED three times in six attempts on the funded account, 2026-08-18, across two
+        // platforms:
+        //
+        //     03:31:01   99ms gap   two Sell 1  -> position 2
+        //     03:33:27   26ms gap   two ATM entries -> two brackets, position 2
+        //     03:50:57  150ms gap   two Sell 1  -> position 2, stop covered 1 of 2
+        //
+        // Tradovate's own order list shows two SEPARATE orders, so the duplication happens upstream
+        // of NT8 and neither the bridge nor the guard causes it. The cause does not matter for the
+        // rule: a second entry for the same account, instrument and direction within a few hundred
+        // milliseconds is never intentional, and the guard is the only component positioned to
+        // refuse it.
+        //
+        // THE HARM IS NOT THE SIZE, IT IS THE SILENT HALF-COVERAGE. The operator sizes the stop for
+        // the position they believe they have. At 03:50:57 the stop covered 1 of 2 and the FSM
+        // reported `Protected` -- a naked half that looks protected on the chart and in the state.
+        // A fully naked position at least announces itself.
+        //
+        // THE RULE IS RESTRICTED TO `OrderType.Market`, AND THAT IS THE LOAD-BEARING CONSTRAINT.
+        // A protective leg is never a market order: stops are StopMarket/StopLimit and targets are
+        // Limit. Without that restriction the rule can cancel a bracket's TARGET as a "duplicate"
+        // of its STOP -- same side, same instrument, 3-11ms apart, and `IsPositionReducingOrder`
+        // returns FALSE for both whenever the position update has not landed yet, which at 3ms is
+        // the common case. That failure direction removes protection from a live position, so the
+        // filter is drawn where it cannot reach. [[a-filter-that-matches-too-much]].
+        //
+        // AND IT REFUSES, IT DOES NOT LOCK OUT. The duplication is a platform defect the operator
+        // did not commit. Cancelling the second order is proportionate; taking their session away
+        // for it is not, and a rail that punishes someone for a broker glitch is a rail that gets
+        // switched off.
+        // -
+
+        private sealed class P1160Harness
+        {
+            public RiskGuardAddOn Addon;
+            public Account Account;
+            public AccountState State;
+            public List<string> Events = new List<string>();
+            public List<string> Messages = new List<string>();
+        }
+
+        private static P1160Harness P1160Setup(RiskConfig config, string mode)
+        {
+            var h = new P1160Harness();
+            h.Account = new Account { Name = "TestAcc" };
+            h.Addon   = new RiskGuardAddOn();
+            h.Addon.SetConfigForTest(config);
+            h.Addon.SetModeForTest(mode);
+            h.State = new AccountState("TestAcc");
+            h.Addon.SetAccountStateForTest("TestAcc", h.State);
+
+            Account.All.Clear();
+            Account.All.Add(h.Account);
+            return h;
+        }
+
+        private static Order P1160Order(string id, OrderAction action, OrderType type, string root,
+                                        int qty, string name)
+        {
+            return new Order
+            {
+                Id          = id,
+                Name        = name ?? "",
+                OrderState  = OrderState.Submitted,
+                OrderType   = type,
+                Quantity    = qty,
+                Instrument  = new Instrument(root),
+                OrderAction = action
+            };
+        }
+
+        /// <summary>
+        /// Drives the real production entry point. `ExecuteOrderUpdate` is `internal`, takes a
+        /// plain (object, OrderEventArgs), and drains its own pending cancels once the lock is
+        /// released -- so the rules inside it are directly reachable from a test. P2-165 exists
+        /// because three of them have never been driven this way.
+        /// </summary>
+        private static void P1160Send(P1160Harness h, Order order)
+        {
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                h.Events.Add(evt);
+                h.Messages.Add(evt + ": " + msg);
+            };
+            try { h.Addon.ExecuteOrderUpdate(h.Account, new OrderEventArgs { Order = order }); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        private static bool P1160SawDuplicate(P1160Harness h)
+        {
+            return h.Events.Any(e => e == "DUPLICATE_ENTRY");
+        }
+
+        private static void TestDup_P1160_ASecondMarketEntryOnTheSameSideIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a second market entry on the same side is refused");
+
+            var config = new RiskConfig();
+            var h = P1160Setup(config, "live");
+
+            var first  = P1160Order("100", OrderAction.SellShort, OrderType.Market, "MNQ", 1, null);
+            var second = P1160Order("101", OrderAction.SellShort, OrderType.Market, "MNQ", 1, null);
+
+            P1160Send(h, first);
+            P1160Send(h, second);
+
+            Assert(P1160SawDuplicate(h),
+                "the second same-side market entry raises DUPLICATE_ENTRY.");
+            Assert(second.OrderState == OrderState.Cancelled,
+                "the duplicate order is cancelled in live mode.");
+            Assert(first.OrderState != OrderState.Cancelled,
+                "the FIRST order is untouched -- the guard refuses the repeat, not the trade.");
+        }
+
+        private static void TestDup_P1160_TheSameOrderChangingStateIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: one order transitioning Submitted->Accepted is not a duplicate");
+
+            // THE FIRST WAY TO GET THIS WRONG, and it fires on every single order ever placed.
+            // The surrounding rate governor deliberately runs on BOTH Submitted and Accepted, and
+            // P2-46 records that counting state transitions instead of orders once made a nominal
+            // "5 per second" fire at about three. Keyed on the order id, one order is one entry.
+            var h = P1160Setup(new RiskConfig(), "live");
+            var order = P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+
+            P1160Send(h, order);
+            order.OrderState = OrderState.Accepted;
+            P1160Send(h, order);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY when the SAME order is seen twice in two states.");
+            Assert(order.OrderState != OrderState.Cancelled,
+                "and the order is not cancelled.");
+        }
+
+        private static void TestDup_P1160_AProtectiveLegIsNeverTreatedAsAnEntry()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a bracket's stop and target are never a duplicate pair");
+
+            // THE SAFETY TEST, and the reason the rule is restricted to OrderType.Market.
+            //
+            // A long bracket's stop and target are BOTH sells, arrive 3-11ms apart (measured), and
+            // `IsPositionReducingOrder` returns false for both while the position still reads Flat
+            // -- which at 3ms is the ordinary case, not an edge one. A same-side rule that did not
+            // exclude non-market orders would cancel the TARGET as a duplicate of the STOP, or
+            // worse the stop as a duplicate of the target, stripping a live position of the
+            // protection the operator did place. There is no acceptable rate of that.
+            var h = P1160Setup(new RiskConfig(), "live");
+
+            var entry  = P1160Order("100", OrderAction.Buy,  OrderType.Market,     "MNQ", 1, null);
+            var stop   = P1160Order("101", OrderAction.Sell, OrderType.StopMarket, "MNQ", 1, "Stop1");
+            var target = P1160Order("102", OrderAction.Sell, OrderType.Limit,      "MNQ", 1, "Target1");
+
+            P1160Send(h, entry);
+            P1160Send(h, stop);
+            P1160Send(h, target);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY for a bracket's stop and target, which are the same side as "
+                + "each other and arrive milliseconds apart.");
+            Assert(stop.OrderState != OrderState.Cancelled,
+                "the protective STOP is not cancelled.");
+            Assert(target.OrderState != OrderState.Cancelled,
+                "the TARGET is not cancelled.");
+        }
+
+        private static void TestDup_P1160_TheOppositeSideIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: an entry on the opposite side is not a duplicate");
+
+            var h = P1160Setup(new RiskConfig(), "live");
+            P1160Send(h, P1160Order("100", OrderAction.Buy,       OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, P1160Order("101", OrderAction.SellShort, OrderType.Market, "MNQ", 1, null));
+
+            Assert(!P1160SawDuplicate(h),
+                "a market order on the opposite side is a reversal or a close, not a duplicate.");
+        }
+
+        private static void TestDup_P1160_ADifferentInstrumentIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: the same side in a different instrument is not a duplicate");
+
+            var h = P1160Setup(new RiskConfig(), "live");
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, P1160Order("101", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+            Assert(!P1160SawDuplicate(h),
+                "two different instruments are two different trades, however close together.");
+        }
+
+        private static void TestDup_P1160_OutsideTheWindowIsNotADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a second entry outside the window is a scale-in, not a duplicate");
+
+            // The operator may legitimately add to a position. The window is the whole
+            // discriminator between an add and a glitch, so it has to actually be consulted --
+            // a rule that fires on any second same-side entry would refuse every scale-in the
+            // operator ever intends.
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 1;
+            var h = P1160Setup(config, "live");
+
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            System.Threading.Thread.Sleep(40);
+            var second = P1160Order("101", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, second);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY once the window has elapsed.");
+            Assert(second.OrderState != OrderState.Cancelled,
+                "and the deliberate scale-in is not cancelled.");
+        }
+
+        private static void TestDup_P1160_AZeroWindowDisablesTheRule()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a zero window switches the rule off");
+
+            // Every other limit in OvertradingConfig treats 0 as off, and P1-84 records what
+            // happens when a rule reads its own disable value as a threshold instead: live arming
+            // was gated on nothing at all for weeks because `MinShadowSessions: 0` switched the
+            // gate OFF rather than relaxing it.
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 0;
+            var h = P1160Setup(config, "live");
+
+            var second = P1160Order("101", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, second);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY when the window is 0.");
+            Assert(second.OrderState != OrderState.Cancelled,
+                "and nothing is cancelled when the rule is off.");
+        }
+
+        private static void TestDup_P1160_TheWindowDefaultsOn()
+        {
+            Console.WriteLine("\n[TEST] P1-160: the window has a working default, not 0");
+
+            // A rule that ships disabled is a rule nobody turns on. [[dead-safety-machinery-gate]].
+            Assert(new RiskConfig().Overtrading.DuplicateEntryWindowMs > 0,
+                "DuplicateEntryWindowMs defaults to a non-zero window, so the rule is live "
+                + "without the operator having to discover it.");
+            Assert(new RiskConfig().Overtrading.DuplicateEntryWindowMs >= 200,
+                "and the default is wider than the widest measured duplicate gap of 150ms.");
+        }
+
+        private static void TestDup_P1160_ACopierOrderIsNotRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a copier-placed follow order is never refused");
+
+            // The copier mirrors each leader fill into the followers. If the LEADER suffers a
+            // duplicate, the copier faithfully mirrors both -- and a guard that cancels the second
+            // follower leg puts the follower out of conformance, which the copier's reconciler
+            // then corrects, which the guard then refuses again. Two subsystems correcting each
+            // other is worse than the duplicate. The leader's own guard is where the refusal
+            // belongs.
+            var h = P1160Setup(new RiskConfig(), "live");
+
+            var a = P1160Order("100", OrderAction.SellShort, OrderType.Market, "MNQ", 1, "COPIER_FOLLOW");
+            var b = P1160Order("101", OrderAction.SellShort, OrderType.Market, "MNQ", 1, "COPIER_FOLLOW");
+            P1160Send(h, a);
+            P1160Send(h, b);
+
+            Assert(!P1160SawDuplicate(h),
+                "no DUPLICATE_ENTRY for orders the copier placed.");
+            Assert(b.OrderState != OrderState.Cancelled,
+                "and the copier's second leg is not cancelled out from under it.");
+        }
+
+        private static void TestDup_P1160_TheRefusalNamesBothOrdersAndTheGap()
+        {
+            Console.WriteLine("\n[TEST] P1-160: the refusal names both order ids, the instrument and the gap");
+
+            // The operator's report of this was 'for some reason I am getting two contracts even
+            // though I specify one... not sure why that is happening'. A log line that does not
+            // name the two orders and how far apart they were leaves them exactly there.
+            var h = P1160Setup(new RiskConfig(), "live");
+            P1160Send(h, P1160Order("4001", OrderAction.SellShort, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, P1160Order("4002", OrderAction.SellShort, OrderType.Market, "MNQ", 1, null));
+
+            string line = h.Messages.FirstOrDefault(m => m.StartsWith("DUPLICATE_ENTRY")) ?? "";
+
+            Assert(line.Contains("4002"), "the refusal names the duplicate order id 4002.");
+            Assert(line.Contains("4001"), "the refusal names the FIRST order id 4001, so the pair can be found.");
+            Assert(line.Contains("MNQ"), "the refusal names the instrument.");
+            Assert(line.Contains("ms"), "the refusal states the gap in milliseconds.");
+        }
+
+        private static void TestDup_P1160_ADuplicateDoesNotLockTheAccountOut()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a duplicate refuses the order and does not lock the account out");
+
+            // Proportionality, and it is the difference between a rail that survives and one that
+            // gets switched off. The operator did not commit this; their platform did.
+            var h = P1160Setup(new RiskConfig(), "live");
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, P1160Order("101", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P1160SawDuplicate(h), "precondition: the duplicate was detected.");
+            Assert(!h.State.IsLockedOut,
+                "the account is NOT locked out for a duplicate the platform generated.");
+            Assert(h.State.LockoutUntil <= DateTime.UtcNow,
+                "and no lockout deadline is set either -- the flag and the deadline are an OR, "
+                + "so setting only one of them is still a lockout (P1-45).");
+        }
+
+        private static void TestDup_P1160_InShadowTheRefusalIsLoggedAndWithheld()
+        {
+            Console.WriteLine("\n[TEST] P1-160: in shadow the duplicate is announced but not cancelled");
+
+            // P1-100: a log line that asserts an action the mode does not perform is its own
+            // defect. Shadow must still SEE the duplicate -- that observation is the whole product
+            // of shadow mode -- while the cancel is withheld by the drain, which says so itself.
+            var h = P1160Setup(new RiskConfig(), "shadow");
+            var second = P1160Order("101", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, second);
+
+            Assert(P1160SawDuplicate(h),
+                "shadow still raises DUPLICATE_ENTRY -- observing is what shadow is for.");
+            Assert(second.OrderState != OrderState.Cancelled,
+                "but the order is not cancelled in shadow.");
+            Assert(h.Events.Any(e => e == "SHADOW_PENDING_CANCEL"),
+                "and the drain says it withheld the cancel, rather than the refusal line implying "
+                + "an action that did not happen.");
+        }
+
+        private static void TestDup_P1160_AThirdRapidEntryIsAlsoRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-160: a third rapid entry is refused too");
+
+            // The window anchors on the first LEGITIMATE entry, so a burst of three does not let
+            // the third through by comparing it against the second refused one.
+            var h = P1160Setup(new RiskConfig(), "live");
+            var third = P1160Order("102", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, P1160Order("100", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, P1160Order("101", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+            P1160Send(h, third);
+
+            Assert(h.Events.Count(e => e == "DUPLICATE_ENTRY") == 2,
+                "both the second and the third rapid entry are refused.");
+            Assert(third.OrderState == OrderState.Cancelled,
+                "and the third order is cancelled.");
         }
 
         private static void TestMaxSizeAtExactlyLimit()
