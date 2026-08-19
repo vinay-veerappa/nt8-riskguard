@@ -1253,6 +1253,34 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     state.LastRealizedPnL = kvp.Value.LastRealizedPnL;
                                     state.SessionStartRealizedPnL = kvp.Value.SessionStartRealizedPnL;
                                     state.CumulativeRealizedPnL = kvp.Value.CumulativeRealizedPnL;
+                                    // P1-170. RealizedPnL is what EVERY PnL rail reads, and it is
+                                    // the one number in this cluster that is not persisted -- so a
+                                    // recompile left it at 0.0 while the two values that DERIVE it
+                                    // survived directly above. Measured on the funded account:
+                                    // -347.75 and -1.50 on disk, the daily rail reporting
+                                    // currentValue 0 against a 250 limit it had already breached
+                                    // by $96, and the inventory row reading EvaluatedNotEnforcing
+                                    // -- true, and completely misleading.
+                                    //
+                                    // ⚠️ DERIVED, NOT PERSISTED, AND DELIBERATELY SO. The identity
+                                    // below holds at every site that writes any of the three:
+                                    // AccountItemUpdate sets Last = raw and Realized = raw -
+                                    // SessionStart in the same breath, and both session-reset paths
+                                    // set all three to make it zero. Adding RealizedPnL to
+                                    // AccountPersistedData would create a SECOND source for one
+                                    // number, free to disagree with the identity after any future
+                                    // edit that updates one and not the other, with no way to tell
+                                    // which is right. [[a-second-reader-of-the-same-state]].
+                                    //
+                                    // ⚠️ The worse half of P1-170 is fixed here too, and it is not
+                                    // obvious from this line. Left at 0.0, the next
+                                    // AccountItemUpdate computed its delta against zero and handed
+                                    // the whole session's loss to RecordRealizedDelta as ONE losing
+                                    // trade -- ConsecutiveLosses 16 -> 17 while TradesToday stayed
+                                    // 16. Restoring the value makes that first tick the no-op it
+                                    // always should have been.
+                                    state.RealizedPnL =
+                                        kvp.Value.LastRealizedPnL - kvp.Value.SessionStartRealizedPnL;
                                     state.FirmTrailingPeak = kvp.Value.FirmTrailingPeak;
                                     state.FirmFloorLocked = kvp.Value.FirmFloorLocked;
                                     state.FirmDailyDate = kvp.Value.FirmDailyDate;

@@ -9307,7 +9307,7 @@ scaffold has **11 different shapes** for the `ORIGINALS` line and where only 21 
 produce the same false alarm, and the gate is what stands between. **If it recurs, fix the harness,
 not the file.**
 
-### P1-170. After a recompile the daily-loss rail reads a loss of ZERO on an account that is down $347, and the value it needs is already persisted beside it — OPEN, filed 2026-08-19 (session 61)
+### P1-170. After a recompile the daily-loss rail reads a loss of ZERO on an account that is down $347, and the value it needs is already persisted beside it — ✅ FIXED 2026-08-19 (session 62), v1.52.2 — suite 3367/0, battery 5/5 + 1 declared, and the gate written for it found `P1-173` on its first run
 
 Read live off `TAKEPROFITPRO524207503` minutes after `v1.51.0` deployed, from
 `nt_riskguard_inventory`:
@@ -9378,6 +9378,104 @@ correct readings of real state left by the probe session, not defects -- but the
 before the 22:00Z session reset would lock the account out immediately on two rails**, and the daily
 rail would join them on the first fill. That is an operational note for whoever arms it, not a code
 change.
+
+
+**CLOSED 2026-08-19 (session 62), `v1.52.2`.** Suite **3367 / 0**, `mutate_p1170.py` **5 killed + 1
+declared equivalent**, 13 gates green, 633 anchors / 0 broken.
+
+**One line, in the restore path:**
+
+```csharp
+state.RealizedPnL = kvp.Value.LastRealizedPnL - kvp.Value.SessionStartRealizedPnL;
+```
+
+⚠️ **DERIVED, NOT PERSISTED, AND THE PLAN'S OWN "FIX" LINE ASKED FOR BOTH.** Adding `RealizedPnL` to
+`AccountPersistedData` as well would create a SECOND source for one number, free to disagree with the
+identity that defines it after any future edit that updates one and not the other — with no way to
+tell which is right. The identity holds at every site that writes any of the three: `AccountItemUpdate`
+sets `Last = raw` and `Realized = raw - SessionStart` in the same breath, and both session-reset paths
+set all three so it is zero. One source.
+
+⚠️ **IT READS `kvp.Value`, NOT `state`, AND THAT IS LOAD-BEARING.** The two fields it needs are
+assigned from `kvp.Value` immediately above, so `state.X` would read identically today — and would
+break the day those two assignments move below it. Reading the persisted record makes the line
+order-independent. The mutant that swaps it is EQUIVALENT and is declared as such, kept to record the
+choice rather than to score it; `_battery.finish` reports it STALE if it ever starts being killed.
+
+**The tests reproduced the live numbers before the fix went in**, which is the part worth keeping:
+
+```
+[FAIL] the daily loss survives a recompile (got 0.00)
+[FAIL] and the rail actually BREACHES ... $346.25 against a $250 limit
+[FAIL] a recompile followed by an unchanged PnL tick invents no losing trade (got 17)
+[FAIL] ConsecutiveLosses <= TradesToday ... violated at 17 against 16
+```
+
+`got 17` is the funded account's own number, regenerated from 16 by a restore plus one *unchanged*
+PnL tick. That pins `P1-172`'s phantom loss as **caused by** this defect rather than merely
+correlated with it.
+
+⚠️ **TWO NEGATIVE CONTROLS, BECAUSE THE FIX IS A SUBTRACTION AND EVERY MEASURED NUMBER IS NEGATIVE.**
+A flat session restores at zero rather than at its own $5,000 offset, and a WINNING session restores
+as `+750` not `-750`. Inverting the operands still produces something loss-shaped, so it fails only on
+a green day — which is the day nobody is looking at the daily-loss rail. Both mutants die only because
+those two tests exist.
+
+⚠️ **A TEST OF THIS FIX CAUGHT ITSELF ABOUT TO PASS VACUOUSLY.** The "does the rail actually breach"
+assertion failed after the fix, and the cause was not the fix: `LoadPersistedState` deliberately
+clears `_isArmed` (FR-30/31 — a restart must never silently re-arm), and `EvaluatePnLRules` returns an
+empty list while disarmed. The assertion was about to be checked against a guard evaluating **no rules
+at all**. Armed explicitly, with the reason in the test. Worth carrying separately: **after every
+recompile the guard is disarmed until preflight re-arms it.**
+
+**THE CLASS FIX: `tools/check_account_state_persisted.py`, the 13th gate.** Nothing about any
+individual line here was wrong — the defect was an OMISSION, and an omission has no source location
+for a reviewer to look at, which is the one kind of defect a gate is strictly better at catching than
+a person. Every `AccountState` field must now be persisted, or declared runtime-only / derived /
+persisted-elsewhere / reset-by-design, each with a reason. Watched failing in BOTH directions before
+being wired: an unclassified new field, and a declaration naming a field that no longer exists.
+
+⚠️ **IT IS A RATCHET, NOT AN AUDIT, AND SAYS SO.** Three fields sit in an explicitly UNREVIEWED
+baseline. Writing justifications for all 37 would have made the file read as a review that never
+happened; the guarantee is narrower and real — nothing NEW can be added without someone deciding.
+It is also a NAME match, so a field that is persisted, written and never restored would still pass it.
+That gap is stated in the file rather than papered over.
+
+**On its first run the gate found [[P1-173]]**: `CooldownUntil` is written on a consecutive-loss
+breach, read at `RiskGuardAddOn.cs:4545` raising `COOLDOWN_BREACH` → `FlattenPosition`, cleared on
+session reset — and absent from `AccountPersistedData` entirely. A recompile clears an active loss
+cooldown. That is this defect's class with a worse property: the action that defeats it is one the
+operator already performs, six times on this box today.
+
+**THE `TRAILING_DD_BREACH` REMAINDER, CHECKED RATHER THAN CARRIED FORWARD.** The ordering entry
+asked whether the asymmetry — `PeakEquity` persisted, current value not — made that rail wrong in
+the dangerous direction rather than merely blind. It did, conditionally, and the mechanism is a
+**ratchet**:
+
+```csharp
+if (currentPnL > stateModel.PeakEquity)
+    stateModel.PeakEquity = currentPnL;          // persisted, and only ever climbs
+if (!firmTrailingInEffect && currentPnL < stateModel.PeakEquity - profile.TrailingDrawdown)
+```
+
+With `RealizedPnL` reset to `0.0`, `currentPnL` reads 0 for one evaluation. On a session whose
+peak was NEGATIVE — a day that never traded green — `0 > PeakEquity` is true, so the phantom zero
+is written into the peak *and persisted there*. The rail then measures every later drawdown from a
+high the account never reached, and fires EARLY and permanently, on a value no log explains.
+
+⚠️ **It did not fire on the measured account, and the reason is luck, not design**: that account's
+persisted `PeakEquity` was **121.5**, so `0 > 121.5` was false and the ratchet was not fed. Any
+session whose peak sat below zero at the moment of a recompile would have taken the other branch.
+
+Fixed by this ticket rather than separately: the phantom zero was the only input that could feed
+the ratchet, and the restore now reconstructs the real value before any rule sees it. **No new ID**
+— the remainder is answered, not deferred, which is what the ordering gate demands before an entry
+may be struck.
+
+⚠️ **NOT live-validated.** The measurement that produced the ticket is reproduced deterministically in
+the suite from the funded account's own figures. The reading to take after the next recompile is the
+`Daily loss limit` row's `currentValue` in `nt_riskguard_inventory` on an account with a non-zero
+session P&L.
 
 ### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — ✅ FIXED 2026-08-19 (session 62), v1.52.0 — suite 3352/0, battery 15/15, closed together with `P1-167`
 
@@ -9560,6 +9658,69 @@ rounds because it could not see `_config.Overtrading.DuplicateEntryWindowMs` and
 of reflection to look for it (`CF-31`). The two-mechanism structure and the field placement in the
 loop's patch were correct and were kept; the reflection was deleted and replaced with one property
 path.
+
+### P1-173. A recompile clears an active loss cooldown, and recompiling is something the operator does — OPEN, filed 2026-08-19 (session 62), found by the gate written for `P1-170`
+
+Found by `tools/check_account_state_persisted.py` on its first run, which is the entire argument for
+that gate: this was not spotted by reading the cooldown code, it fell out of asking *which
+`AccountState` fields are not persisted* and looking at the answers.
+
+**The three sites.**
+
+| | |
+|---|---|
+| written | `RiskGuardAddOn.cs:1894` on a consecutive-loss breach, and `RiskGuardModels.cs:303` in `ApplyTradeJudgement` |
+| read | `RiskGuardAddOn.cs:4545`, inside `EvaluateRules` |
+| cleared | `RiskGuardAddOn.cs:4962`, the session reset |
+| persisted | **nowhere** — `AccountPersistedData` has no `Cooldown` member at all |
+
+The read is an enforcement point, not a display:
+
+```csharp
+if (DateTime.UtcNow < stateModel.CooldownUntil)
+{
+    bool hasOpen = stateModel.Positions.Values.Any(p => p.MarketPosition != MarketPosition.Flat);
+    if (hasOpen)
+        actions.Add(new GuardAction { ... RuleId = "COOLDOWN_BREACH",
+                                      ActionType = GuardActionType.FlattenPosition });
+}
+```
+
+So a restart, a recompile or a hot-swap sets `CooldownUntil` back to `DateTime.MinValue`, every
+comparison against it is false, and `COOLDOWN_BREACH` cannot fire for the rest of the cooldown that
+was supposed to be running.
+
+⚠️ **THE DEFEAT IS AN ACTION THE OPERATOR ALREADY TAKES.** This is the same class as `P1-170` —
+[[a-successful-compile-wipes-static-state]] — but with a worse property: the cooldown exists to
+interrupt revenge trading after a run of losses, and the state that enforces it is cleared by
+NinjaScript's recompile button. Six recompiles happened on this box on 2026-08-19 alone, none of them
+for this reason. Nothing about that is deliberate and nothing logs it, which is why it needs an ID
+rather than a note.
+
+**Scope, stated precisely so the fix is not over-sold.** The cooldown as currently written does not
+refuse entries — it flattens an open position — and `P2-162` is already open on exactly that (a pause
+that costs a fill, a commission and slippage instead of preventing the entry). So what a recompile
+currently destroys is *the flatten*, not an entry block. If `P2-162` is fixed first and the cooldown
+becomes an entry refusal, this defect silently becomes more serious, because the thing being cleared
+would then be the whole rail rather than its recovery action. **Fix this before `P2-162`, or fix them
+together.**
+
+**Fix.** Add `CooldownUntil` to `AccountPersistedData` and to both copy sites, and restore it. It is
+an absolute UTC deadline, so unlike `P1-170` there is nothing to reconstruct and nothing to derive —
+it is simply a field that was never added. ⚠️ A test must drive the RESTORE, not the arithmetic: the
+same requirement `P0-166` and `P1-170` both hit, because this path is reachable only through
+`LoadPersistedState`.
+
+⚠️ **Do NOT also persist the P2-101 lockout-phase cluster while you are in there.** Those are
+classified `RESET_BY_DESIGN` in the gate for a reason that survives a restart being *correct*: a new
+process should re-attempt a flatten rather than believe a dead one already did it. The cooldown is
+different because its deadline is a fact about time, not a record of an attempt.
+
+**Three other fields remain in the gate's `UNREVIEWED_BASELINE`** — `PeakOpenGain`,
+`PeakGivebackTriggered`, `PeakGivebackLastTriggerUnrealized`. They are the peak-giveback rule's
+working state and they may be the same defect again; they are listed as unreviewed rather than
+classified because I did not measure them, and writing a justification I had not verified would have
+made the gate read as a review that never happened.
 
 ### P1-172. `ConsecutiveLosses` reads **17** on an account that took **16** trades — a realized delta arriving while the guard sees no position counts as a losing trade, and the counter it inflates refuses every entry — OPEN, filed 2026-08-19 (session 62)
 

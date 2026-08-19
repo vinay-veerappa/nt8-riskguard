@@ -368,6 +368,25 @@ jobs:
       - name: Ordering lists name only open defects
         run: python tools/check_next_list_ids.py
 
+      # P1-170: RealizedPnL is the number every PnL rail reads and was the one field in its
+      # cluster missing from AccountPersistedData, while the two values that DERIVE it were
+      # both persisted. A recompile left the daily-loss rail reporting currentValue 0 on an
+      # account down $347.75 against a $250 limit it had already breached, and the next tick
+      # handed the whole session loss to the loss counter as one fabricated trade.
+      #
+      # No line was wrong. The defect was an OMISSION, and an omission has no source location
+      # for a reviewer to look at -- which is the only kind of defect a gate is strictly
+      # better at catching than a person. Watched failing in BOTH directions before being
+      # added: an unclassified new field, and a declaration naming a field that no longer
+      # exists.
+      #
+      # It is a RATCHET, not an audit. Three fields sit in an explicitly unreviewed baseline
+      # and one (CooldownUntil) is flagged as a suspected instance of the same class under
+      # P1-173. The gate does not claim they are right; it claims nothing NEW can be added
+      # without someone deciding.
+      - name: Every AccountState field is persisted or declared runtime-only
+        run: python tools/check_account_state_persisted.py
+
       - name: Build
         run: dotnet build tests/RiskGuardTests.csproj -v q --nologo
 
@@ -872,6 +891,23 @@ jobs:
           # wrong in one direction or the other -- replace this with CI's own BATTERY_SECONDS on
           # the first green run.
           - { label: "P0-171", batteries: "mutate_p0171.py" }   # ~505s ESTIMATED (18 mutants)
+          # P1-170: the daily-loss rail's input survives a recompile. Small battery, so it
+          # shares no bin only because the three above it are already at the critical path.
+          #
+          # WARNING: group 2 is the one that must never be dropped. The fix is a SUBTRACTION
+          # and every number in the measured case is negative, so inverting the operands or
+          # dropping a term still restores something loss-shaped -- the two mutants that catch
+          # those are only killed by the WINNING-session and flat-session tests, which exist
+          # for no other reason.
+          #
+          # This battery declares ONE expected survivor and routes through _battery.finish.
+          # Do not "fix" that survivor by rewriting the reconstruction to read the live state
+          # object: reading the persisted record is what makes the line order-independent, and
+          # the mutant is kept to record that choice rather than to score it.
+          #
+          # WARNING: ~170s ESTIMATED (6 mutants). Replace with CI's own BATTERY_SECONDS on the
+          # first green run; every estimate in this file so far has been wrong.
+          - { label: "P1-170", batteries: "mutate_p1170.py" }   # ~170s ESTIMATED (6 mutants)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

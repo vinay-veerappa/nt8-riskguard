@@ -241,6 +241,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP0171_TwoOrdersSharingAnIdAreBothEvaluated);
             Run(TestP0171_TheSessionResetClearsTheEvaluatedSet);
             Run(TestP1160_AnOrderFirstSeenAsRejectedNeverAnchors);
+            Run(TestP1_170_TheDailyLossRailReadsTheRealLossAfterARestart);
+            Run(TestP1_170_ARestartDoesNotFabricateALoss);
+            Run(TestP1_170_AFlatSessionRestoresToZero);
+            Run(TestP1_170_AProfitableSessionRestoresAsProfit);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -20250,6 +20254,230 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "is not a duplicate of a trade that never existed");
             Assert(genuine.OrderState != OrderState.Cancelled,
                 "and the genuine entry is not cancelled");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P1-170. RealizedPnL is the number every PnL rail reads, and it is the one
+        // number in that cluster that is NOT persisted. LastRealizedPnL and
+        // SessionStartRealizedPnL both are, and RealizedPnL is exactly their
+        // difference at every write site in the addon -- so the restore path had
+        // everything it needed and reconstructed nothing.
+        //
+        // MEASURED on TAKEPROFITPRO524207503 minutes after v1.51.0 deployed:
+        //
+        //     { "name": "Daily loss limit", "state": "EvaluatedNotEnforcing",
+        //       "currentValue": 0, "limit": -250 }
+        //
+        // currentValue 0 on an account down $347.75 against a $250 limit -- breached
+        // by $96 and reporting a flat day. Configured, evaluated, and enforcing
+        // nothing, which is the one combination that reads as safe.
+        //
+        // ⚠️ IT DOES NOT MERELY UNDER-REPORT, IT FABRICATES A LOSS. With RealizedPnL
+        // reset to 0, the next AccountItemUpdate computes a delta against zero and
+        // hands the whole session's loss to RecordRealizedDelta as ONE losing trade.
+        // On the funded account ConsecutiveLosses went 16 -> 17 while TradesToday
+        // stayed at 16, and that arithmetic impossibility is the only reason any of
+        // this was visible. [[a-successful-compile-wipes-static-state]].
+        // ---------------------------------------------------------------------------
+
+        private static void TestP1_170_TheDailyLossRailReadsTheRealLossAfterARestart()
+        {
+            Console.WriteLine("\n[TEST] P1-170: the daily-loss rail survives a recompile");
+
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1170_a_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Account.All.Clear();
+                var account = new Account { Name = "P1170Acc", Provider = Provider.Simulator };
+                Account.All.Add(account);
+
+                // The measured numbers, to the cent.
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1170Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.SessionStartRealizedPnL = -1.50;
+                s1.LastRealizedPnL = -347.75;
+                s1.RealizedPnL = -346.25;
+                first.SetAccountStateForTest("P1170Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                var cfg = new RiskConfig();
+                cfg.PnLRules.DailyLossLimit = 250.0;
+                second.SetConfigForTest(cfg);
+                second.SetAccountStateForTest("P1170Acc", new AccountState("P1170Acc"));
+                second.LoadPersistedStateForTest();
+                // LoadPersistedState deliberately clears _isArmed (FR-30/31: a restart must never
+                // silently re-arm), and EvaluatePnLRules returns nothing at all while disarmed.
+                // Preflight arms it in production. Arm it here, or the breach assertion below
+                // passes vacuously against a guard that is evaluating no rule whatsoever.
+                second.SetArmedForTest(true);
+
+                var restored = second.GetAccountStateForTest("P1170Acc");
+                Assert(restored != null && Math.Abs(restored.RealizedPnL - (-346.25)) < 0.01,
+                    "the daily loss survives a recompile (got "
+                    + (restored == null ? "no state" : restored.RealizedPnL.ToString("F2")) + ")");
+
+                // ⚠️ THE VALUE BEING RIGHT IS NOT THE SAME AS THE RAIL FIRING, and the
+                // inventory row that reads EvaluatedNotEnforcing is what conflates them.
+                // Drive the rule.
+                var actions = second.EvaluatePnLRules(account, restored);
+                Assert(actions.Any(a => a.RuleId == "DAILY_LOSS_BREACH"),
+                    "and the rail actually BREACHES on the restored value -- $346.25 against a "
+                    + "$250 limit is not a flat day");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+                Account.All.Clear();
+            }
+        }
+
+        private static void TestP1_170_ARestartDoesNotFabricateALoss()
+        {
+            Console.WriteLine("\n[TEST] P1-170: the first tick after a recompile is not a losing trade");
+
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1170_b_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Account.All.Clear();
+                var account = new Account { Name = "P1170Acc", Provider = Provider.Simulator };
+                Account.All.Add(account);
+
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1170Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.SessionStartRealizedPnL = -1.50;
+                s1.LastRealizedPnL = -347.75;
+                s1.RealizedPnL = -346.25;
+                s1.TradesToday = 16;
+                s1.ConsecutiveLosses = 16;
+                first.SetAccountStateForTest("P1170Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                var cfg = new RiskConfig();
+                cfg.PnLRules.DailyLossLimit = 10000.0;   // out of the way; this test is about the counter
+                second.SetConfigForTest(cfg);
+                second.SetSubscribedAccountForTest("P1170Acc");
+                second.SetAccountStateForTest("P1170Acc", new AccountState("P1170Acc"));
+                second.LoadPersistedStateForTest();
+
+                // The broker re-sends the SAME realized total it sent before the recompile.
+                // Nothing has been traded. This must be a no-op.
+                second.ExecuteAccountItemUpdate(account, new AccountItemEventArgs
+                {
+                    AccountItem = AccountItem.RealizedProfitLoss,
+                    Value = -347.75,
+                    Currency = Currency.UsDollar
+                });
+
+                var restored = second.GetAccountStateForTest("P1170Acc");
+                Assert(restored != null && restored.ConsecutiveLosses == 16,
+                    "a recompile followed by an unchanged PnL tick invents no losing trade (got "
+                    + (restored == null ? "no state" : restored.ConsecutiveLosses.ToString()) + ")");
+                Assert(restored != null && restored.TradesToday == 16,
+                    "and the trade counter is unchanged, so the two counters still agree");
+                Assert(restored != null && restored.ConsecutiveLosses <= restored.TradesToday,
+                    "ConsecutiveLosses <= TradesToday -- an invariant that holds for every genuine "
+                    + "sequence, and the one the live account violated at 17 against 16");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+                Account.All.Clear();
+            }
+        }
+
+        private static void TestP1_170_AFlatSessionRestoresToZero()
+        {
+            Console.WriteLine("\n[TEST] P1-170: a flat session restores as flat, not as its own offset");
+
+            // THE NEGATIVE CONTROL. The reconstruction is a SUBTRACTION, and the failure
+            // mode of getting it backwards or dropping a term is a rail that reads a loss
+            // on an account that has not traded -- which locks a clean account out on the
+            // first evaluation after a recompile. An account whose broker-side realized
+            // total is large and NEGATIVE from previous sessions is the case that catches
+            // it: the session started there, so the session's loss is zero.
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1170_c_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1170Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.SessionStartRealizedPnL = -5000.00;
+                s1.LastRealizedPnL = -5000.00;
+                s1.RealizedPnL = 0.0;
+                first.SetAccountStateForTest("P1170Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(new RiskConfig());
+                second.SetAccountStateForTest("P1170Acc", new AccountState("P1170Acc"));
+                second.LoadPersistedStateForTest();
+
+                var restored = second.GetAccountStateForTest("P1170Acc");
+                Assert(restored != null && Math.Abs(restored.RealizedPnL) < 0.01,
+                    "an account that started the session $5,000 down and has not traded restores "
+                    + "at ZERO for the day (got "
+                    + (restored == null ? "no state" : restored.RealizedPnL.ToString("F2")) + ")");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+            }
+        }
+
+        private static void TestP1_170_AProfitableSessionRestoresAsProfit()
+        {
+            Console.WriteLine("\n[TEST] P1-170: a winning session restores with its SIGN intact");
+
+            // The second half of the negative control, and the one that catches a
+            // reconstruction written as `SessionStart - Last`. Every measured number in
+            // this ticket is negative, so a sign inversion reproduces the live case
+            // exactly and fails only on a green day -- which is the day nobody is looking.
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1170_d_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1170Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.SessionStartRealizedPnL = -1.50;
+                s1.LastRealizedPnL = 748.50;
+                s1.RealizedPnL = 750.00;
+                first.SetAccountStateForTest("P1170Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(new RiskConfig());
+                second.SetAccountStateForTest("P1170Acc", new AccountState("P1170Acc"));
+                second.LoadPersistedStateForTest();
+
+                var restored = second.GetAccountStateForTest("P1170Acc");
+                Assert(restored != null && Math.Abs(restored.RealizedPnL - 750.00) < 0.01,
+                    "a $750 winning session restores as +750, not -750 (got "
+                    + (restored == null ? "no state" : restored.RealizedPnL.ToString("F2")) + ")");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+            }
         }
 
         private static void TestMaxSizeAtExactlyLimit()
