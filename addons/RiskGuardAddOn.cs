@@ -1453,6 +1453,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                     SubscribeToAccount(account);
                     if (e.Status.ToString() == "Connected")
                     {
+                        // P0-171. A reconnect makes NT8 REPLAY the session -- measured here as 118
+                        // orders inside one second, every one already Filled, and all 59 executions
+                        // inside two. The duplicate-entry rule times orders by when the GUARD FIRST
+                        // SAW them, so on a replay every pair is inside any window and the rule
+                        // raised 45 false refusals from this one event.
+                        //
+                        // Suppress it for EXACTLY one window from now, and never further. The bound
+                        // is the whole safety argument: a suppression that could be extended, or set
+                        // from a value the operator controls independently, is a rule that can be
+                        // switched off silently while every test still passes.
+                        if (_config != null && _config.Overtrading != null
+                            && _config.Overtrading.DuplicateEntryWindowMs > 0
+                            && _accountStates.TryGetValue(account.Name, out var replayState))
+                        {
+                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()
+                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);
+                        }
+
                         foreach (Position pos in account.Positions)
                         {
                             if (pos.MarketPosition != MarketPosition.Flat && pos.Instrument != null)
@@ -2242,11 +2260,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // [[dead-safety-machinery-gate]] exists to catch. The dictionary is bounded
                             // by (instruments traded x 2) per account, not by order count.
 
+                            // P0-171, first half. Inside the replay window this rule does NOTHING --
+                            // it does not refuse, and it does not anchor. Not anchoring is the half
+                            // that is easy to miss and worse to get wrong: a replayed order that
+                            // becomes an anchor moves the false positive off the replay and onto the
+                            // next genuine entry, by which time the operator is actually trading.
+                            bool replaySuppressed = dupNow <= stateModel.ReplaySuppressionUntilUtc;
+
+                            // P0-171 / P1-167, second half. ExecuteOrderUpdate runs once per order
+                            // EVENT, so one duplicate order drew one refusal per state transition --
+                            // measured as order 35996 producing three cancels and three log lines at
+                            // 881ms, 884ms and 917ms. SHADOW_PENDING_CANCEL then reported 96 withheld
+                            // cancels against far fewer offending orders, and that count is the one
+                            // number an operator reads to judge how often the guard intervened.
+                            bool alreadyEvaluated = stateModel.DuplicateEntryEvaluatedOrderIds.Contains(e.Order.Id);
+
                             bool isEntry = e.Order.OrderType == OrderType.Market
                                 && !IsPositionReducingOrder(e.Order, stateModel)
                                 && !string.Equals(e.Order.Name, CopierOrderNames.Follow, StringComparison.Ordinal);
 
-                            if (isEntry)
+                            if (isEntry && !replaySuppressed && !alreadyEvaluated)
                             {
                                 string dupRawInst = e.Order.Instrument != null ? e.Order.Instrument.FullName : "";
                                 string dupInstRoot = dupRawInst.Split(' ')[0].ToUpper();
@@ -2314,6 +2347,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                                             FirstSeenUtc = dupNow
                                         };
                                     }
+
+                                    // P0-171. Recorded whether the order was REFUSED or became the
+                                    // anchor -- both are decisions, and a later transition of the
+                                    // same order must not produce a second one. Deliberately not
+                                    // recorded when the rule was suppressed above: a replayed order
+                                    // was never evaluated, so a genuine later event for it must
+                                    // still be able to be.
+                                    stateModel.DuplicateEntryEvaluatedOrderIds.Add(e.Order.Id);
                                 }
                             }
                         }

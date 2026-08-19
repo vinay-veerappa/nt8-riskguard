@@ -11446,14 +11446,25 @@ sessions after that stopped being true.
    completeness gate cannot see it because it is reachable from neither root it walks. That is how a
    safety-shaped field with a permissive default survived for months behind a green gate. An
    orphan-config-type gate is unfiled.
-4. **`P0-171`** — ⚠️ **BLOCKS ARMING `live`, and it was measured with NO trading taking place.** A
-   broker reconnect at 16:44:39-44 made NT8 replay the session: 118 orders in one second, all already
-   `Filled`, all 59 executions inside two seconds. The duplicate-entry rule then raised **45** false
-   refusals, every gap 135-190ms, because it times orders by **when the guard first SAW them, not when
-   they were PLACED** -- on a replay that interval is an artefact of the replay's own speed. In `live`
-   that is 45 queued cancels off one disconnect. ⚠️ Not confined to that rule: the per-instrument cap
-   fired 32 times on another account in the same second, so it is `ExecuteOrderUpdate`'s shape -- fix
-   it together with the next item. ⚠️ Do NOT fix it by narrowing the state gate back down.
+4. **`P1-172`** — ⚠️ read LIVE off the funded account's persisted state at 19:01:02Z:
+   `ConsecutiveLosses` **17** against `TradesToday` **16**. A streak cannot exceed the trades since
+   the last win, so at least one increment did not come from a trade.
+   `AccountState.RecordRealizedDelta`'s third case judges any negative realized delta arriving while
+   every tracked position reads `Flat` as a losing trade on its own; `TradesToday` is incremented by
+   a different event that IS debounced to the trade lifecycle. The partial-exit fix names that
+   residue and accepts it for a position the guard never saw -- which is not this case: the guard saw
+   the position and is being told about the same fill twice, because the reconnect replayed all 59
+   executions with the account flat. ⚠️ **The phantom increment is quieter than the phantom refusals
+   beside it** -- a refusal writes to `interventions.jsonl`, an increment writes nowhere. (Plan entry
+   names the related IDs; they are omitted here because this block's IDs are read as work to do.)
+   ⚠️ **What makes it P1 is the SECOND READER**: the per-order refusal fires on
+   `LockoutBinds(...) || ConsecutiveLosses >= Max`, so no lockout need be active and no deadline is
+   consulted. At 17 against a cap of 3 every entry is refused, and the counter's only reachable cure
+   today is the 22:00Z session reset -- a winning trade is unreachable while entries are refused, and
+   the `CONSECUTIVE_LOSS_BREACH` lapse that was taught to zero it cannot run because the account is
+   locked by EOD-scoped `DAILY_LOSS_BREACH`. Fix the reader before the counter.
+   ⚠️ `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and **nothing in 3352 tests
+   asserts it**, which is why an impossible value sat in persisted state unremarked.
 5. **`P1-170`** — read LIVE off the funded account minutes after `v1.51.0` deployed: the daily-loss
    rail reported `currentValue: 0` on an account down **$347.75** against a **$250** limit, because
    `RealizedPnL` is not persisted while BOTH numbers that derive it are. It self-heals on the next

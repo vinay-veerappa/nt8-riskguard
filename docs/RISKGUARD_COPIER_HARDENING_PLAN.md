@@ -9129,7 +9129,7 @@ exactly like a protection the operator has set. [[configured-evaluated-enforcing
 breached the moment it is evaluated. It will clear at the session boundary through the path this entry
 just made testable. Verify it did, rather than assuming.
 
-### P1-167. Every rule in `ExecuteOrderUpdate` refuses the same order once per state transition, so one order draws N cancels and N log lines — OPEN, filed 2026-08-19 (session 61)
+### P1-167. Every rule in `ExecuteOrderUpdate` refuses the same order once per state transition, so one order draws N cancels and N log lines — ⚠️ PARTIALLY FIXED 2026-08-19 (session 62), v1.52.0 — closed for the DUPLICATE_ENTRY rule only, with `P0-171`; the other rules in that method are untouched and this entry stays OPEN for them
 
 Measured on the funded account the day `v1.49.0` went out. One duplicate order, three refusals:
 
@@ -9379,7 +9379,7 @@ before the 22:00Z session reset would lock the account out immediately on two ra
 rail would join them on the first fill. That is an operational note for whoever arms it, not a code
 change.
 
-### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — OPEN, filed 2026-08-19 (session 61)
+### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — ✅ FIXED 2026-08-19 (session 62), v1.52.0 — suite 3352/0, battery 15/15, closed together with `P1-167`
 
 ⚠️ **BLOCKS ARMING `live`.** Measured on `TAKEPROFITPRO524207503` within half an hour of `v1.51.0`
 deploying, with no trading taking place at all:
@@ -9449,6 +9449,67 @@ Connected" would fire on all 19 and suppress the rule during 18 occasions that n
 ⚠️ **A `try/finally`-style suppression is not enough on its own**: whatever gates the replay must FAIL
 LOUD if it is ever left on, or the duplicate rule silently stops protecting anything. Pair it with the
 `DISARM_PERSISTED` pattern -- a line that says so on every evaluation while suppressed.
+
+
+**CLOSED 2026-08-19 (session 62), `v1.52.0`.** Suite **3352 / 0**, battery `mutate_p0171.py`
+**15 / 15**, no survivors; 623 anchors / 0 broken; 12 gates green.
+
+**The fix is two runtime-only fields on `AccountState`, and NEITHER covers the other's case.**
+
+```csharp
+public DateTime ReplaySuppressionUntilUtc { get; set; } = DateTime.MinValue;
+public HashSet<string> DuplicateEntryEvaluatedOrderIds { get; set; } = new HashSet<string>();
+```
+
+Neither is in `AccountPersistedData`, deliberately. `OnConnectionStatusUpdate` stamps the first with
+`replayState.UtcNow().AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs)` on `Connected`
+only; the rule guard became `if (isEntry && !replaySuppressed && !alreadyEvaluated)`, and the id is
+recorded after the anchor block — reached whether the order was refused or became the anchor, and
+NOT reached when the rule was suppressed.
+
+⚠️ **A suppressed order does not ANCHOR, and that is the half that is easy to half-do.** Suppressing
+only the refusal moves the false positive off the replay and onto the next genuine entry, by which
+time the operator is actually trading. Mutant `group 4` is the one that proves it: it lets the FIRST
+replayed order anchor and suppresses the rest, so the burst itself looks cured and no refusal is
+logged during the replay.
+
+⚠️ **The bound is the entire safety argument.** A suppression that never lapses is strictly WORSE
+than the defect — the duplicate rule then protects nothing from the first reconnect of the session
+onward and says nothing about it, while every test that asserts something is *not* refused passes.
+Group 2 mutates it four ways: wrong unit, ten windows, hard-coded to the default, and
+`DateTime.MaxValue`. All four die.
+
+**Three tests exist only because a mutant demanded them**, and all three were green the moment the
+fix landed — which is exactly why they needed the mutant rather than the other way round:
+
+| test | mutant it kills |
+|---|---|
+| the boundary is at-or-before, to the millisecond | `<=` weakened to `<` |
+| only `Connected` arms it, not `Disconnected`/`Connecting` | armed on any status |
+| the length follows the CONFIGURED window, not a constant | hard-coded `1000`, which is the default |
+
+The second matters more than it looks. The measured sequence is four events over five seconds —
+`Disconnecting` 16:44:39, `Disconnected` :40, `Connecting` :42, `Connected` :44 — so arming on the
+wrong one starts a 1000ms window **four seconds before the replay** and it has lapsed by the time it
+is needed. The guard would carry a suppression, log nothing unusual, and refuse all 45 orders
+anyway: a silent failure that looks identical to the fix simply not working.
+
+**`OnConnectionStatusUpdate` is now `internal`**, for the same reason `ExecuteOrderUpdate` is. The
+suppression has to be armed by the path a real reconnect takes; a test driving a stand-in proves
+only that a field can be assigned. [[an-alarm-wired-to-a-dead-output]].
+
+⚠️ **NOT live-validated.** Reproducing this needs a broker disconnect on the funded account, which
+is not something to arrange deliberately. What is behind it is the measurement that produced the
+ticket (45 refusals, 118 orders, 59 executions, four connection events with timestamps) reproduced
+deterministically in the suite from those numbers, plus the battery. The next genuine reconnect is
+the test; `DUPLICATE_ENTRY` count for that minute is the reading to take.
+
+**Provenance.** Ticket written by hand; `agent-loop --mode test --path-isolated` generated six
+correct scenarios and unusable scaffolding (`CF-30`); patch mode ended `ARBITER_NEVER_RAN` after six
+rounds because it could not see `_config.Overtrading.DuplicateEntryWindowMs` and invented 90 lines
+of reflection to look for it (`CF-31`). The two-mechanism structure and the field placement in the
+loop's patch were correct and were kept; the reflection was deleted and replaced with one property
+path.
 
 ### P1-172. `ConsecutiveLosses` reads **17** on an account that took **16** trades — a realized delta arriving while the guard sees no position counts as a losing trade, and the counter it inflates refuses every entry — OPEN, filed 2026-08-19 (session 62)
 

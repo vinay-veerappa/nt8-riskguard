@@ -234,6 +234,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP0171_AnOrderSeenOnlyAsFilledIsStillEvaluated);
             Run(TestP0171_AReducingOrderIsNeverRefused);
             Run(TestP0171_TheReplaySuppressionExpiresOnItsOwn);
+            Run(TestP0171_TheSuppressionEndsAtExactlyTheWindow);
+            Run(TestP0171_ADisconnectDoesNotArmTheSuppression);
+            Run(TestP0171_TheSuppressionLengthFollowsTheConfiguredWindow);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -20008,6 +20011,124 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "an entry well outside the window is not a duplicate of the suppressed replay");
             Assert(P0171Refusals(h, "70003") == 1,
                 "and the rule refuses a genuine duplicate again once the suppression has lapsed");
+        }
+
+        private static P1160Harness P0171Setup(RiskConfig config, string mode, DateTime start)
+        {
+            var h = P1160Setup(config, mode);
+            _p0171Now = start;
+            h.State.UtcNow = () => _p0171Now;
+            return h;
+        }
+
+        private static void TestP0171_TheSuppressionEndsAtExactlyTheWindow()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the suppression boundary is the window, to the millisecond");
+
+            // The spec says AT OR BEFORE the deadline is suppressed. An off-by-one here is
+            // invisible to every other test in this block, because they all place their
+            // orders hundreds of milliseconds clear of the boundary -- and a boundary that
+            // nothing measures is a boundary the next edit is free to move.
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+
+            var onTheDeadline = P0171Setup("live", start);
+            P0171Connect(onTheDeadline);
+
+            _p0171Now = start.AddMilliseconds(1000);
+            P1160Send(onTheDeadline, P1160Order("80000", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(1900);
+            P1160Send(onTheDeadline, P1160Order("80001", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P0171Refusals(onTheDeadline, "80001") == 0,
+                "an order arriving at EXACTLY the suppression deadline is still suppressed, so it "
+                + "does not anchor the order 900ms behind it");
+
+            // One millisecond later the rule is live again, and the same pair IS a duplicate.
+            // Without this half the assertion above is satisfied by suppressing forever.
+            var oneMsLater = P0171Setup("live", start);
+            P0171Connect(oneMsLater);
+
+            _p0171Now = start.AddMilliseconds(1001);
+            P1160Send(oneMsLater, P1160Order("80010", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(1900);
+            P1160Send(oneMsLater, P1160Order("80011", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P0171Refusals(oneMsLater, "80011") == 1,
+                "and one millisecond past the deadline the very same pair is a duplicate again");
+        }
+
+        private static void TestP0171_ADisconnectDoesNotArmTheSuppression()
+        {
+            Console.WriteLine("\n[TEST] P0-171: only a RECONNECT arms the suppression, not any status change");
+
+            // ⚠️ THE MEASURED SEQUENCE IS FOUR EVENTS, NOT ONE: Disconnecting 16:44:39,
+            // Disconnected 16:44:40, Connecting 16:44:42, Connected 16:44:44. Arming on
+            // any of the first three starts a 1000ms suppression FOUR SECONDS before the
+            // replay arrives, so it has already lapsed by the time it is needed -- the
+            // guard would carry a suppression, log nothing unusual, and refuse all 45
+            // orders exactly as it does today. The failure is silent and looks like the
+            // fix simply not working.
+            var start = new DateTime(2026, 8, 19, 16, 44, 40, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                h.Events.Add(evt);
+                h.Messages.Add(evt + ": " + msg);
+            };
+            try
+            {
+                h.Addon.OnConnectionStatusUpdate(null,
+                    new ConnectionStatusEventArgs { Status = ConnectionStatus.Disconnected });
+                h.Addon.OnConnectionStatusUpdate(null,
+                    new ConnectionStatusEventArgs { Status = ConnectionStatus.Connecting });
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+            _p0171Now = start.AddMilliseconds(100);
+            P1160Send(h, P1160Order("81000", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+            _p0171Now = start.AddMilliseconds(200);
+            P1160Send(h, P1160Order("81001", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+            Assert(P0171Refusals(h, "81001") == 1,
+                "a Disconnected or Connecting status does not arm the suppression -- only the "
+                + "reconnect that actually triggers the replay does");
+        }
+
+        private static void TestP0171_TheSuppressionLengthFollowsTheConfiguredWindow()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the suppression is one CONFIGURED window, not a constant");
+
+            // The default window is 1000ms, so every other test here would pass just as
+            // well against a hard-coded 1000. An operator who narrows the window to 250ms
+            // is asking for a narrower suppression too: the suppression exists to cover a
+            // replay burst, and its whole safety argument is that it is bounded BY THE
+            // WINDOW. A constant is not bounded by anything the operator can see.
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 250;
+
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var h = P0171Setup(config, "live", start);
+
+            P0171Connect(h);
+
+            _p0171Now = start.AddMilliseconds(200);
+            P1160Send(h, P1160Order("82000", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(300);
+            P1160Send(h, P1160Order("82001", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(400);
+            P1160Send(h, P1160Order("82002", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P0171Refusals(h, "82000") == 0,
+                "an order inside a 250ms suppression is not refused");
+            Assert(P0171Refusals(h, "82002") == 1,
+                "and the suppression has lapsed by 300ms, so the pair at 300ms and 400ms is a "
+                + "duplicate -- a suppression hard-coded to the 1000ms default would swallow both");
         }
 
         private static void TestMaxSizeAtExactlyLimit()

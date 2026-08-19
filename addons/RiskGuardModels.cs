@@ -142,6 +142,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Order OBJECT REFERENCE, because NT8's OrderId is neither unique nor stable.
         public Dictionary<string, RecentEntryAnchor> RecentEntryAnchors { get; set; } = new Dictionary<string, RecentEntryAnchor>();
 
+        // P0-171. Both are RUNTIME-ONLY and deliberately absent from AccountPersistedData.
+        //
+        // ReplaySuppressionUntilUtc is stamped by OnConnectionStatusUpdate and covers the
+        // reconnect burst; DuplicateEntryEvaluatedOrderIds makes one order draw one refusal
+        // however many state transitions the platform reports for it. NEITHER COVERS THE
+        // OTHER'S CASE, which is why there are two: a recompile empties the set exactly when
+        // NT8 replays the session, so the set alone is blind to a post-recompile replay -- and
+        // the stamp says nothing about the same genuine duplicate transitioning hours later.
+        //
+        // Not persisting them is the point rather than an omission. A suppression deadline
+        // restored from disk would be a suppression the guard cannot account for, and the set
+        // is unbounded in principle -- it is bounded in practice only by a session's order
+        // count, which a session reset clears along with everything else.
+        public DateTime ReplaySuppressionUntilUtc { get; set; } = DateTime.MinValue;
+        public HashSet<string> DuplicateEntryEvaluatedOrderIds { get; set; } = new HashSet<string>();
+
         // Lockout phase: PendingCancel -> PendingFlatten -> Confirmed.
         // Only Confirmed stops emitting actions. This prevents the infinite
         // flatten loop where account.Flatten() fails silently but the sweep
