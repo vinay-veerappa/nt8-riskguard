@@ -1,0 +1,69 @@
+{
+  "_comment": "P1-160. A duplicate entry doubles position size and nothing refuses it. Thirteen acceptance tests are already committed and eleven are RED; Overtrading.DuplicateEntryWindowMs already exists as a config surface with a default of 1000. This ticket is the rule only. P2-163 (the allow-list), P2-161/P2-162 (the cooldown ladder) and P2-165 (characterising the three untested neighbours in the same method) are separate and NOT in scope.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "Refuse a second market entry on the same side within the duplicate window, and only that",
+      "defect": "Nothing in the guard asks whether an entry REPEATS the previous one. `ExecuteOrderUpdate` has a rate governor that counts distinct orders per second across everything (`ORDER_FLOOD_LOCKOUT`, default 5/s), a blacklist cancel, and a per-order contract cap -- but two 1-lot entries 99ms apart are two orders in one second, which is under the flood limit, on a permitted instrument, each within the per-order cap. Every existing rule permits them individually and the position they build is twice what the operator intended. MEASURED three times in six attempts on the funded account TAKEPROFITPRO524207503 on 2026-08-18, across two platforms: 03:31:01 with a 99ms gap (two Sell 1 -> position 2); 03:33:27 with a 26ms gap (two ATM entries -> two brackets, position 2); 03:50:57 with a 150ms gap (two Sell 1 -> position 2, stop covering 1 of 2). Tradovate's own order list shows two SEPARATE orders for the cycle, so the duplication happens upstream of NT8 and neither the bridge nor the guard causes it. THE HARM IS NOT THE SIZE, IT IS THE SILENT HALF-COVERAGE. The operator sizes the stop for the position they believe they have; at 03:50:57 the stop covered 1 of 2 and the FSM reported `Protected`, which is correct by its own definition -- `Protected` means something is covering, not everything -- and is therefore a naked half that looks protected both on the chart and in the guard's own state. A fully naked position at least announces itself through the StopGuard FSM. The operator's account of this was 'for some reason I am getting two contracts even though I specify one... not sure why that is happening', which is exactly the position someone is left in when a system observes an event and says nothing about it.",
+      "spec": "Add a duplicate-entry rule to `ExecuteOrderUpdate`, beside the existing rate governor. It is the same shape as that governor and a different question: the governor counts orders per second across everything, this one asks whether THIS entry repeats the previous one for the same instrument and side.\n\nDEFINITION OF AN ENTRY, and every clause is load-bearing:\n  (a) `OrderType.Market` ONLY;\n  (b) NOT `IsPositionReducingOrder(order, stateModel)`;\n  (c) NOT an order the copier placed -- its entries are created with the name `COPIER_FOLLOW`.\n\nCLAUSE (a) IS THE SAFETY CONSTRAINT AND MUST NOT BE RELAXED. A long bracket's STOP and TARGET are both sells, arrive 3-11ms apart (measured), and `IsPositionReducingOrder` returns FALSE for both whenever the position update has not landed yet -- which at 3ms is the ordinary case, not an edge one. A same-side rule without the market-order restriction cancels the TARGET as a duplicate of the STOP, or the stop as a duplicate of the target, and strips a live position of protection the operator did place. A protective leg is never a market order, so the filter is drawn where it structurally cannot reach one. There is a test for exactly this and it is currently green -- if it goes red, the fix is wrong no matter what else passes.\n\nCLAUSE (c) EXISTS BECAUSE TWO SUBSYSTEMS MUST NOT CORRECT EACH OTHER. If the LEADER suffers a duplicate, the copier faithfully mirrors both fills; a guard that cancels the second follower leg puts the follower out of conformance, the copier's reconciler corrects it, and the guard refuses it again. The refusal belongs on the leader. Introduce a shared constant for the copier's order name -- it is a bare string literal `\"COPIER_FOLLOW\"` at the CreateOrder call in TradeCopierEngine.cs today -- and have BOTH the copier and this exclusion read it, so a rename cannot silently disarm the exclusion. That is the only edit permitted in TradeCopierEngine.cs.\n\nTHE RULE. On `OrderState.Submitted` or `OrderState.Accepted` (the same gate the rate governor uses), for an entry as defined above, key on (instrument ROOT, side) where the root is `FullName.Split(' ')[0].ToUpper()` -- matching how the neighbouring blacklist and per-instrument checks derive theirs -- and side is Buy/BuyToCover versus Sell/SellShort. If an entry with the SAME key and a DIFFERENT order id was recorded within `_config.Overtrading.DuplicateEntryWindowMs`, this order is a duplicate. Otherwise record it as the new anchor for that key.\n\nKEY ON THE ORDER ID, NOT ON THE ARRIVAL OF AN EVENT. The gate fires on both Submitted and Accepted, so one order produces two events. `P2-46` records what counting state transitions instead of orders did to the rate governor -- a nominal 5/s that actually fired at about three. There is a test.\n\nDO NOT MOVE THE ANCHOR WHEN A DUPLICATE IS DETECTED. It stays on the first legitimate entry, so a burst of three is three refusals rather than the window sliding forward with each one. There is a test for the third.\n\nWHAT IT DOES: queue a cancel of the duplicate with `PendingCancelIntent.Intervention` -- queued, never sent here, because this block runs under `_stateLock` and `P1-43`/`P1-35` are both about exactly that -- and emit ONE log event of type `DUPLICATE_ENTRY`. The message must name the duplicate's order id, the FIRST order's id, the instrument, and the gap in milliseconds. Anything less leaves the operator where they started.\n\nWHAT IT MUST NOT DO: it must NOT set `IsLockedOut`, must NOT set `LockoutUntil`, and must NOT emit a Flatten action. The duplication is a platform defect the operator did not commit. Cancelling the second order is proportionate; taking their session away for it is not, and a rail that punishes someone for a broker glitch is a rail that gets switched off. Note that the lockout test is `IsLockedOut || UtcNow < LockoutUntil`, an OR, so setting either one alone is still a lockout (`P1-45`).\n\nA WINDOW OF 0 SWITCHES THE RULE OFF, matching every other limit in `OvertradingConfig`. `P1-84` records what happens when a rule reads its own disable value as a threshold instead.\n\nSTATE. The recent-entry anchors belong on `AccountState` beside `RecentOrderIds`, so they are per-account and are cleared with the rest of the session state. Prune entries older than the window on each pass, the way the rate governor prunes its own one-second map -- an unbounded dictionary keyed by instrument and side would grow for the life of the session.\n\nREGISTER THE RULE. `Overtrading.DuplicateEntryWindowMs` is currently an unclassified config leaf and `TestUi3_EveryConfigLeafIsClassified` is RED because of it. Add a `GuardRuleDefinition` to `GuardRuleRegistry.Rules` with `ConfigPath = \"Overtrading.DuplicateEntryWindowMs\"`, `Scope = GuardRuleScope.PerOrder`, and an evaluator in the same shape as the `Max orders per second` entry directly above it, reporting `Off(...)` when the window is 0. Do NOT classify it as a NonRule -- it is enforced.",
+      "regions": [
+        {
+          "id": "TheRule",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal void ExecuteOrderUpdate(object sender, OrderEventArgs e)",
+          "kind": "decl",
+          "note": "THE MAIN EDIT SITE. Put the duplicate check beside the rate governor's `if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted)` block, which is the same shape and shares the same gate. Read the P1-43 comments on the neighbouring `_pendingCancels.Add` calls: this whole method body runs under _stateLock and no broker call may be made from it. Do not modify the rate governor, the blacklist cancel, the per-instrument cap check, the lockout-enforcement block, or the ORDER_UPDATE log payload."
+        },
+        {
+          "id": "TheState",
+          "file": "addons/RiskGuardModels.cs",
+          "anchor": "public class AccountState",
+          "kind": "decl",
+          "note": "Where the recent-entry anchors live, beside `RecentOrderIds` (the rate governor's own one-second map) which is the precedent for both the shape and the pruning. Do not change any existing member."
+        },
+        {
+          "id": "TheConfig",
+          "file": "addons/RiskGuardModels.cs",
+          "anchor": "public class OvertradingConfig",
+          "kind": "decl",
+          "note": "READ-ONLY CONTEXT: `DuplicateEntryWindowMs` already exists here with a default of 1000 and a comment explaining why. Do NOT change the default or the comment; the value is a decision about how the operator must trade, not something to tune to make a test pass."
+        },
+        {
+          "id": "TheRuleRegistry",
+          "file": "addons/GuardRules.cs",
+          "anchor": "public static class GuardRuleRegistry",
+          "kind": "decl",
+          "note": "Add the GuardRuleDefinition here, immediately after the `Max orders per second` entry, which is the closest sibling in both scope and shape. This registry is what `TestUi3_EveryConfigLeafIsClassified` reads, and that gate exists because P1-77, P2-25 and P2-78 all reached production as a config field wired to nothing."
+        },
+        {
+          "id": "TheReducingPredicate",
+          "file": "addons/RiskGuardModels.cs",
+          "anchor": "public static bool IsPositionReducingOrder(Order order, AccountState stateModel)",
+          "kind": "decl",
+          "note": "READ THIS, DO NOT EDIT IT. Note that it returns FALSE when there is no known position for the instrument -- which is why it cannot carry the whole exclusion on its own and why clause (a) exists. Changing it would affect P1-44's protection of stop orders during a lockout."
+        },
+        {
+          "id": "TheCopierName",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "Order followerOrder = followerAcc.CreateOrder(",
+          "kind": "stmt",
+          "note": "The ONLY permitted edit in this file: replace the bare \"COPIER_FOLLOW\" string literal in this CreateOrder call with a shared constant that the guard's exclusion also reads. Nothing else in the copier may change -- not the sizing, not the reconciler, not the submit path."
+        }
+      ],
+      "expect_green": [
+        "the second same-side market entry raises DUPLICATE_ENTRY",
+        "the duplicate order is cancelled in live mode",
+        "the refusal names the duplicate order id 4002",
+        "the refusal names the FIRST order id 4001, so the pair can be found",
+        "the refusal names the instrument",
+        "the refusal states the gap in milliseconds",
+        "precondition: the duplicate was detected",
+        "shadow still raises DUPLICATE_ENTRY -- observing is what shadow is for",
+        "and the drain says it withheld the cancel, rather than the refusal line implying an action that did not happen",
+        "both the second and the third rapid entry are refused",
+        "and the third order is cancelled",
+        "risk-config leaves are classified"
+      ]
+    }
+  ]
+}
