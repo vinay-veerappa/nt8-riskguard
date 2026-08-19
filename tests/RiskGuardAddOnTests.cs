@@ -587,6 +587,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAudit_P2145_FullCoverageUnderAWrongStateIsItsOwnFinding);
             Run(TestAudit_P2145_GapIsAlwaysPositionMinusCovered);
             Run(TestAudit_P2145_NoPositionIsNeverAFinding);
+            Run(TestStopGuard_P1157_TheAutoStopIsWithdrawnWhenTheOperatorStopCovers);
+            Run(TestStopGuard_P1157_APartialOperatorStopDoesNotWithdrawIt);
             Run(TestArm_P1156_ArmingOnStartSeedsFsmsForOpenPositions);
             Run(TestArm_P1156_EverySubscribedAccountIsSeededNotJustTheFirst);
             Run(TestArm_P2142_ADeliberateDisarmSurvivesTheNextStart);
@@ -9814,6 +9816,105 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P1-156: the first subscribed account is seeded");
             Assert(addon.TestGetFsm("ZzzFunded", es.FullName) != null,
                 "P1-156: the SECOND subscribed account is seeded too, not just the first");
+
+            Account.All.Clear();
+        }
+        // ── P1-157: the auto-stop hands over to the operator own stop ──────────────────────
+        // The operator forgets a stop, the guard places one, and THEN the operator attaches their
+        // own bracket. Without a handover both stay working and one position carries TWO stops --
+        // on a fast move both can fill before the flat-teardown cancels the survivor, which does
+        // not leave you flat, it leaves you REVERSED. That is the same failure the guard exists to
+        // prevent, arriving by the guard own hand.
+        //
+        // ⚠️ THIS IS THE PRECONDITION FOR TURNING OnMissing:AutoStop ON AT ALL.
+
+        private static PositionGuardFsm P1157Setup(RiskGuardAddOn addon, Account account,
+                                                   Instrument instr, int positionQty, out Order autoStop)
+        {
+            account.Positions.Add(new Position
+            {
+                Instrument = instr, MarketPosition = MarketPosition.Long,
+                Quantity = positionQty, AveragePrice = 18000
+            });
+            addon.TestFsmOnPosition(account, instr.FullName, MarketPosition.Long, positionQty);
+
+            // The guard own stop, recognised exactly as the production path names it.
+            autoStop = new Order
+            {
+                Id = "AUTO-1", Name = "RiskGuardAutoStop", Instrument = instr,
+                OrderType = OrderType.StopMarket, OrderAction = OrderAction.Sell,
+                Quantity = positionQty, OrderState = OrderState.Working
+            };
+            addon.TestFsmOnOrder(account, instr.FullName, autoStop);
+            return addon.TestGetFsm(account.Name, instr.FullName);
+        }
+
+        private static void TestStopGuard_P1157_TheAutoStopIsWithdrawnWhenTheOperatorStopCovers()
+        {
+            Console.WriteLine("\n[TEST] STOPGUARD P1-157: the auto-stop is withdrawn once the operator own stop covers");
+            var mnq = new Instrument("MNQ");
+            Account.All.Clear();
+            var account = new Account { Name = "TestAcc", Provider = Provider.Simulator };
+            Account.All.Add(account);
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(FsmTestConfig(graceSeconds: 60, onMissing: "AutoStop"));
+            addon.SetSubscribedAccountForTest("TestAcc");
+            addon.TestClearFsms();
+            addon.SetArmedForTest(true);
+
+            Order autoStop;
+            var fsm = P1157Setup(addon, account, mnq, 1, out autoStop);
+            Assert(fsm != null && fsm.AutoStopOrder != null,
+                "Precondition: the guard own auto-stop is tracked");
+
+            // The operator attaches their own stop for the FULL position.
+            var operatorStop = new Order
+            {
+                Id = "OP-1", Name = "Stop1", Instrument = mnq,
+                OrderType = OrderType.StopMarket, OrderAction = OrderAction.Sell,
+                Quantity = 1, OrderState = OrderState.Working
+            };
+            addon.TestFsmOnOrder(account, mnq.FullName, operatorStop);
+
+            Assert(autoStop.OrderState == OrderState.Cancelled,
+                "P1-157: the guard withdraws its own stop once the operator stop covers the position");
+            Assert(operatorStop.OrderState == OrderState.Working,
+                "P1-157: the OPERATOR stop is the one left working, not the guard own");
+
+            Account.All.Clear();
+        }
+
+        private static void TestStopGuard_P1157_APartialOperatorStopDoesNotWithdrawIt()
+        {
+            Console.WriteLine("\n[TEST] STOPGUARD P1-157: a PARTIAL operator stop does not withdraw the auto-stop");
+            // ⚠️ THE NEGATIVE CONTROL, AND THE DANGEROUS DIRECTION. Withdrawing on the mere
+            // APPEARANCE of an operator stop, rather than on full coverage, leaves the remainder
+            // naked -- the guard cancelling the only protection over half the position.
+            var mnq = new Instrument("MNQ");
+            Account.All.Clear();
+            var account = new Account { Name = "TestAcc", Provider = Provider.Simulator };
+            Account.All.Add(account);
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(FsmTestConfig(graceSeconds: 60, onMissing: "AutoStop"));
+            addon.SetSubscribedAccountForTest("TestAcc");
+            addon.TestClearFsms();
+            addon.SetArmedForTest(true);
+
+            Order autoStop;
+            var fsm = P1157Setup(addon, account, mnq, 2, out autoStop);
+            Assert(fsm != null && fsm.AutoStopOrder != null, "Precondition: auto-stop tracked on a 2-lot");
+
+            var partialStop = new Order
+            {
+                Id = "OP-2", Name = "Stop1", Instrument = mnq,
+                OrderType = OrderType.StopMarket, OrderAction = OrderAction.Sell,
+                Quantity = 1, OrderState = OrderState.Working
+            };
+            addon.TestFsmOnOrder(account, mnq.FullName, partialStop);
+
+            Assert(autoStop.OrderState != OrderState.Cancelled,
+                "P1-157: a partial operator stop leaves the auto-stop in place -- the remainder "
+                + "must not be stripped of its only cover");
 
             Account.All.Clear();
         }

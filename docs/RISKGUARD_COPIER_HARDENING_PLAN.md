@@ -8543,6 +8543,57 @@ going to intervene. In `live` it would have reported healthy over an unguarded p
 
 **Evidence**: suite 3185 → 3191, `mutation/mutate_p1156.py` 4/4.
 
+### P1-157. The auto-stop is never withdrawn when the operator attaches their own, so one position carries TWO stops — ✅ FIXED 2026-08-18 (session 59), the precondition for turning `OnMissing: AutoStop` on
+
+Found while designing the `AutoStop` direction the operator asked for, not by a failure.
+
+The operator forgets a stop, the guard places `RiskGuardAutoStop`, and then the operator attaches
+their own bracket. The guard recognises the new stop and moves to `Protected` — and leaves its own
+order working. **Both stay live.** On a fast move both can fill before the flat-teardown cancels the
+survivor, which does not leave you flat, it leaves you **REVERSED** — the failure the guard exists
+to prevent, arriving by the guard's own hand. Same shape as `P1-56` and `P1-140`.
+
+Nothing detected it: `AssessCoverage` tests `covered < positionQty` for nakedness and treats
+`covered >= positionQty` as fine, so OVER-coverage is invisible to the audit.
+
+**Fixed** in `UpdateFsmOnOrder`: when a stop that is not the auto-stop is recognised and coverage
+**excluding the auto-stop** reaches the whole position, the auto-stop is dropped from the
+recognised set and its cancel is QUEUED, then logged as `AUTOSTOP_HANDOVER`.
+
+⚠️ **THE CONDITION IS FULL COVERAGE BY SOMEONE ELSE, NOT THE APPEARANCE OF ANOTHER STOP**, and the
+two directions are not symmetric: withdrawing eagerly strips the remainder of a partly-covered
+position of its only cover — the guard cancelling the protection it just placed. A partial
+operator stop therefore leaves the auto-stop alone, with its own test and its own mutant.
+
+⚠️ **The cancel is QUEUED, never sent inline**: `_stateLock` is held there, and the teardown
+comment a few lines above says a nested lock is re-entrant and only hides the violation.
+`TestFsmOnOrder` gained a `DrainPendingCancels()` to mirror the live path, which already drains.
+
+**Evidence**: suite 3191 → 3196, `mutation/mutate_p1157.py` **6/7 + 1 declared**.
+
+⚠️ **The declared survivor is a GATE gap, not a test gap** — see `P2-158`. Lock scope is not
+observable from a unit test: the stub `Account.Cancel` succeeds either way and the re-entrancy
+hazard needs a concurrent caller. The real detector is a source gate, the agent-loop profile has
+one (`lock_name="_stateLock"`), and it runs **only on loop-authored changes** — this fix was
+hand-written, so nothing checked it.
+
+### P2-158. The lock-discipline check exists in the agent-loop profile and NOT in CI, so it only guards code the loop wrote — OPEN, split out of `P1-157` 2026-08-18 (session 59)
+
+`agent/nt8_riskguard.py:27` configures a `lock_name="_stateLock"` gate, and the loop reports
+`[lock-scope] ok — no risk calls under _stateLock` on every round. That check does not exist in
+`tools/`, so a HAND-WRITTEN change gets no lock-discipline review at all — which is exactly what
+happened in `P1-157`, where a mutant putting `account.Cancel` under the lock survived.
+
+⚠️ **This is the per-repo gate lesson turned inward**: not a gate missing from a sibling REPO, but
+a gate missing from a sibling PATH into the same repo. Two ways code arrives, one of them checked.
+
+**Where**: port the check to `tools/check_lock_scope.py` and wire it into the `checks` job. It must
+brace-match rather than regex line-by-line, and it needs a NEGATIVE CONTROL — a gate that cannot
+go red is worse than none, and four mutants have already beaten source checks in this project.
+⚠️ Note `agent/nt8_riskguard.py:172` records a KNOWN false positive to preserve: `ArmGraceTimer`
+under the lock is correct and required, because it only schedules a callback and makes no broker
+call. Reviewers raise it every round; the ported gate must not.
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by

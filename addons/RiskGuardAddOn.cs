@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.46.0";
+        public const string Version = "1.47.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -848,6 +848,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal void TestFsmOnOrder(Account account, string instrument, Order order)
         {
             lock (_stateLock) { UpdateFsmOnOrder(account, instrument, order); }
+            // Mirror the live order path, which drains after releasing the lock (P1-157
+            // queues the auto-stop handover cancel here). Without this a test driving the
+            // FSM directly leaves the queue full and the withdrawn stop alive.
+            DrainPendingCancels();
         }
         internal PositionGuardFsm TestGetFsm(string accountName, string instrument)
         {
@@ -3405,6 +3409,45 @@ namespace NinjaTrader.NinjaScript.AddOns
                             fsm.State = fsm.RecognizedStops.Any(o => o.OrderState != OrderState.Working)
                                 ? GuardFsmState.ProtectedPending
                                 : GuardFsmState.Protected;
+
+                            // P1-157. THE HANDOVER. The guard placed a stop because none existed;
+                            // the operator has now attached their own. Leaving both working means
+                            // ONE position carries TWO stops, and on a fast move both can fill
+                            // before the flat-teardown cancels the survivor -- which does not
+                            // leave you flat, it leaves you REVERSED. That is the failure the
+                            // guard exists to prevent, arriving by the guard's own hand, and it
+                            // is the same shape as P1-56 and P1-140.
+                            //
+                            // ⚠️ THE CONDITION IS FULL COVERAGE BY SOMEONE ELSE, NOT THE MERE
+                            // APPEARANCE OF ANOTHER STOP. Withdrawing on appearance strips the
+                            // remainder of a partly-covered position of its only cover -- the
+                            // guard cancelling the protection it just placed. Coverage is
+                            // therefore summed EXCLUDING the auto-stop, and must reach the whole
+                            // position before the auto-stop goes.
+                            //
+                            // Queued, never cancelled inline: _stateLock is held here and
+                            // DrainPendingCancels runs after the caller releases it. See the
+                            // teardown comment above -- a nested lock only hides the violation.
+                            if (fsm.AutoStopOrder != null && !ReferenceEquals(order, fsm.AutoStopOrder))
+                            {
+                                int coveredByOthers = 0;
+                                foreach (var o in fsm.RecognizedStops)
+                                    if (!ReferenceEquals(o, fsm.AutoStopOrder)) coveredByOthers += o.Quantity;
+
+                                if (fsm.PositionQuantity > 0 && coveredByOthers >= fsm.PositionQuantity)
+                                {
+                                    var toCancel = fsm.AutoStopOrder;
+                                    fsm.RemoveRecognizedStop(toCancel);
+                                    fsm.AutoStopOrder = null;
+                                    if (OccupiesSlot(toCancel.OrderState))
+                                        _pendingCancels.Add(new PendingCancelEntry(
+                                            account, toCancel, PendingCancelIntent.Cleanup));
+                                    LogEvent(account.Name, "AUTOSTOP_HANDOVER",
+                                        $"{key}: operator stop covers {coveredByOthers} of "
+                                        + $"{fsm.PositionQuantity}; withdrawing RiskGuardAutoStop so the "
+                                        + "position is not carrying two stops.");
+                                }
+                            }
                             if (isNew)
                                 LogEvent(account.Name, "FSM_TRANSITION",
                                     $"{key}: stop {order.Name} Working -> {fsm.State} "
