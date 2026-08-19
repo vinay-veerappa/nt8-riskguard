@@ -9450,6 +9450,105 @@ Connected" would fire on all 19 and suppress the rule during 18 occasions that n
 LOUD if it is ever left on, or the duplicate rule silently stops protecting anything. Pair it with the
 `DISARM_PERSISTED` pattern -- a line that says so on every evaluation while suppressed.
 
+### P1-172. `ConsecutiveLosses` reads **17** on an account that took **16** trades — a realized delta arriving while the guard sees no position counts as a losing trade, and the counter it inflates refuses every entry — OPEN, filed 2026-08-19 (session 62)
+
+Read live off `TAKEPROFITPRO524207503` from `RiskGuard/state.json` at `2026-08-19T19:01:02Z`:
+
+```json
+"TradesToday": 16,
+"ConsecutiveLosses": 17,
+"LastRealizedPnL": -347.75,
+"SessionStartRealizedPnL": -1.5
+```
+
+**17 consecutive losses out of 16 trades is arithmetically impossible.** A consecutive-loss streak
+cannot exceed the number of trades in the session, and it resets to 0 on any win, so it cannot exceed
+the number of trades *since the last win* either. At least one increment did not come from a trade,
+and the two counters cannot both be right.
+
+**Mechanism.** `AccountState.RecordRealizedDelta` (`RiskGuardModels.cs`) has three cases, and the
+third is the one that fires:
+
+```csharp
+if (!HasOpenPosition())
+{
+    ConsecutiveLossesBeforeSettlement = ConsecutiveLosses;
+    ApplyTradeJudgement(config);          // ConsecutiveLosses++ on any delta < -0.01
+    OpenTradeRealizedDelta = 0.0;
+    ConsecutiveLossesBeforeSettlement = ConsecutiveLosses;
+}
+```
+
+Any negative realized delta arriving while every tracked position reads `Flat` is judged **on its
+own** as a losing trade. `TradesToday` is not touched — that increments only inside the position-update
+path, gated on a genuine new trade lifecycle (`P1-16`). So the two counters are incremented by two
+different events and only one of them is debounced to a trade.
+
+`P1-16`'s comment says this in as many words and treats it as the acceptable residue:
+
+> 3. No trade is tracked at all (the guard never saw the position, or this is a standalone
+>    adjustment) -> judge the delta on its own, preserving the pre-existing behaviour. Silently
+>    ignoring untracked realized losses would make the lockout less sensitive than before, which is
+>    not an acceptable trade for this fix.
+
+That reasoning is sound for the case it names — a position the guard genuinely never saw. It is wrong
+for the case that actually produces these numbers, because **the guard did see the position; it is
+being told about the same fill twice.**
+
+**Why today.** `P0-171` measured the mechanism: one `Disconnected -> Connected` cycle at 16:44 replayed
+118 orders and **all 59 executions inside two seconds**, with the account flat. Every replayed negative
+execution takes case 3 and increments the streak. The reconnect that produced 45 phantom
+`DUPLICATE_ENTRY` refusals also produced an unknown number of phantom losses, and the second effect is
+worse than the first because nothing logs it — a refusal writes to `interventions.jsonl`, an increment
+writes nowhere.
+
+`P1-170` is the same input reaching the same counter by the other route: `RealizedPnL` is not persisted,
+so a recompile resets the working value while `LastRealizedPnL` survives, and the next tick's delta is
+computed against a zero.
+
+**Why P1 and not P0.** The refusal path exempts reducing orders, so a phantom streak cannot trap the
+operator in a position:
+
+```csharp
+if (LockoutBinds(accountName, stateModel)
+    || stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses)
+{
+    ...
+    if (!IsPositionReducingOrder(e.Order, stateModel))
+```
+
+It fails in the safe direction. It is P1 rather than P2 because of what that `||` means, below.
+
+⚠️ **THE SECOND READER IS NOT GATED ON A LOCKOUT.** The condition above refuses entries whenever the
+raw counter is at or over the cap — `LockoutBinds(...)` **or** `ConsecutiveLosses >= Max`. No lockout
+need be active, no cooldown need be running, and no deadline is consulted. With `MaxConsecutiveLosses`
+at its default of 3 and the counter at 17, **every entry on this account is refused right now**, and
+in `live` that is the operator unable to open a trade at all.
+
+The counter has exactly three cures: a winning trade, a session reset, and a `CONSECUTIVE_LOSS_BREACH`
+lockout *lapsing* (`P0-166`'s fix, `RiskGuardAddOn.cs:4136`). The first is **unreachable while entries
+are refused** — the cure requires the action the rule is blocking. The third does not apply here: the
+account is locked by `DAILY_LOSS_BREACH`, which `P0-166` deliberately made EOD-scoped, so
+`LockoutUntil` is `MinValue` and no lapse ever runs. That leaves the 22:00Z session reset as the only
+cure, for a counter whose value is partly fabricated.
+
+This is `P0-166`'s shape one reader over — a trigger paired with a cure that cannot clear it — and
+[[a-second-reader-of-the-same-state]]'s: `EvaluateLockoutPhase` learned to zero the counter on lapse
+and this reader never did.
+
+**Do not fix it by making case 3 ignore untracked deltas.** That is the trade `P1-16` explicitly
+refused, and it would blind the streak to a real loss on a position the guard never saw. The two
+candidate fixes are (a) suppress realized-delta judgement during the same reconnect replay window
+`P0-171` establishes, which is guard-owned state that already has to exist, and (b) make the entry
+refusal read the same cure the lockout reader does, so a streak at the cap with nothing locked is not a
+permanent refusal. **(b) is the load-bearing half** — it is what turns a wrong count into a temporary
+wrong count instead of a session-long trading ban.
+
+⚠️ **`TradesToday` vs `ConsecutiveLosses` is a free invariant and nothing asserts it.** No test in the
+suite compares the two counters, which is why a value that cannot occur sat in persisted state
+unremarked. `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and is checkable at
+every settlement.
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by
