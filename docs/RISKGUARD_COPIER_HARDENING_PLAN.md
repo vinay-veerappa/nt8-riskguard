@@ -8671,6 +8671,15 @@ model reviewer and was read by hand before applying. The battery is the evidence
   hiding under a closed entry is invisible to every count. `P1-160` builds a fourth rule in the
   same method and has to construct that harness anyway, but it does not automatically cover the
   other three.
+* ⚠️ **The rule inventory still describes the cap as `PerOrder` only.** Read live from the
+  funded account minutes after deploying `v1.48.0`: the `InstrumentLimits` row reports
+  `scope: PerOrder` and the note *"caps the size of an instrument; it does not block it"*. Both
+  were true this morning and the scope half is now wrong -- the cap binds on the POSITION as well.
+  `nt_riskguard_inventory` is the surface that answers "is the guard actually protecting me", so a
+  stale scope there is the same class as the defect just closed: what a rule REPORTS disagreeing
+  with what it DOES. Folded into the `P1-160` landing commit rather than given its own ID, because
+  `GuardRules.cs` is a region of that ticket and editing it mid-run would collide with the patch.
+  ⚠️ If `P1-160` lands without it, file it.
 * `MAX_SIZE_BREACH` **flattens the whole position**, not the excess over the cap. That is the
   pre-existing rule and this entry deliberately did not change it, but it means the response to a
   1-contract overshoot on a 5-lot cap is a full exit. Worth an ID if it ever fires in anger.
