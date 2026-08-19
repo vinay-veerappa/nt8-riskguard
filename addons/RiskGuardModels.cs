@@ -147,7 +147,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // flatten loop where account.Flatten() fails silently but the sweep
         // keeps re-firing every second.
         public enum LockoutPhase { None, PendingCancel, PendingFlatten, Confirmed }
-        public LockoutPhase CurrentLockoutPhase { get; set; } = LockoutPhase.None;
+        public LockoutPhase CurrentLockoutPhase { get; set; } = LockoutPhase.None;
+
+        /// <summary>
+        /// P0-166. WHICH rule locked the account. A lockout pairs a trigger with a cure, and the
+        /// cure that fits depends on the trigger: a session-scoped counter can only be cured by the
+        /// session reset, while an order-rate burst really is cured by waiting. Without this field
+        /// the lapse path cannot tell those apart, so "clear the counter when the cool-off ends"
+        /// would be a blanket amnesty that forgave a loss streak because an unrelated flood lockout
+        /// happened to expire. Persisted: a lockout survives a restart, so its reason must too.
+        /// </summary>
+        public string LockoutRuleId { get; set; } = null;
         
         // Session and Overtrading
         public DateTime LastSessionDate { get; set; } = DateTime.MinValue;
@@ -735,6 +745,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double PeakEquity { get; set; }
         public double LastRealizedPnL { get; set; }
         public double SessionStartRealizedPnL { get; set; }
+        public string LockoutRuleId { get; set; }   // P0-166
         // P1-17: must persist -- a cumulative evaluation target that resets on recompile is
         // not cumulative.
         public double CumulativeRealizedPnL { get; set; }

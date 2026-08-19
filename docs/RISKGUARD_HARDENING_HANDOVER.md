@@ -11420,14 +11420,45 @@ sessions after that stopped being true.
    ⚠️ **Its remainder is real and now has its own ID, `P2-155`**: `EnsureMonitor`'s latch is still
    per-instance, so a recompile may start a second sweep. ⚠️ MEASURE FIRST — whether the old timer
    survives a compile is unknown, and the two answers are a duplicated sweep or nothing at all.
-2. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
+2. ~~The hourly re-locking lockout~~ — ✅ CLOSED this session, `v1.50.0`, suite **3295/0**, battery
+   **19/19**. Struck rather than deleted because of what the battery caught that review did not: TWO
+   of its new tests passed vacuously (a fresh `AccountState` is already `MinValue`, so asserting
+   `MinValue` proved nothing) and a THIRD named the trailing-drawdown rail while actually measuring
+   the daily one, because `DailyLossLimit` defaults to `1000` and fired first. Its ID is not repeated
+   here -- the gate reads any ID in this block as work to do.
+   ⚠️ **Its remainder is real and unfiled**: five more rules -- `NEWS_SHIELD_LOCKOUT`,
+   `EVALUATION_TARGET_REACHED`, `MAX_SIZE_BREACH`, `FIRM_DAILY_LOSS_BREACH`,
+   `FIRM_TRAILING_DD_BREACH` -- set a lockout with NO deadline at all and inherit whichever one the
+   previously-firing rule left behind. Characterise before changing; for the firm rules EOD is
+   probably already right.
+   ⚠️ **The operator's counters still read `TradesToday 16` / `ConsecutiveLosses 16`** against a cap
+   of 3, so the consecutive-loss rail is breached the instant it evaluates. It should clear at the
+   session boundary. VERIFY that it did.
+3. **`P1-168`** — ⚠️ **the operator's own "every full-size future blocked" contract does not bind**
+   for a market order that fills instantly. Measured: **17 of 99** orders on the funded account
+   2026-08-19 arrived ONLY as `Filled`, and `BlockedInstruments` has exactly two readers, both blind
+   to that -- a pre-trade `CanTrade` an off-platform order never reaches, and a cancel gated on the
+   live states. Nothing checks whether an open POSITION is in a blocked instrument. Three sibling
+   rules survive the same blindness only because a position rule catches what their order rule
+   missed; this one has no backstop. ⚠️ Do NOT fix it by adding `Filled` to the gate -- cancelling a
+   filled order is meaningless; the answer is a flatten, which is a different action in a different
+   method. ⚠️ **Do this together with `P2-163`**, not before it: they are one change.
+4. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
+   rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
+   per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the
+   state gate back down -- that restores the `Filled`-only blindness measured on this account, where
+   2 of 3 live cases arrived as `Filled` and nothing else. The closed entries that named those
+   findings are cited from the plan, not from here, because the gate reads any ID in this block as
+   work to do. Fold **`P2-165`** in while here: same method, and its three untested rules are the
+   other callers of the same missing seam.
+5. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
    the previous entry's "what opened those positions" turned it inside out: the detector was right
    every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
    15s would therefore have flattened their own trades — one of them 28 seconds before their own
    stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
    ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
    unvalidated one.
-3. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
+6. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
    IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
    per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in
    `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared). Remaining, in order: **`P2-163`** (the
@@ -11447,21 +11478,21 @@ sessions after that stopped being true.
    settled by measuring post-loss expectancy on this account. Build `P2-161` with the definition
    behind a config key so the answer lands as a number, not a rebuild.
 
-4. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
+7. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
    rather than deleted because its instruction was wrong in an instructive way: it said to drive the
    `Protected`-with-a-gap rows FIRST as "the quiet half that matters", and those four rows were the
    system working correctly: `Protected` means *something* is covering, not everything, which a
    long-closed entry established deliberately. The loud half was the whole defect. No ID is
    repeated here as work — the gate reads any ID in this block as work to do, closed ones included.
 
-5. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
+8. **`P2-154`** (the bridge half of the closed breakeven entry), then `P1-140`'s
    native-partials remainder. ⚠️ The persistent-disarm work is CLOSED, and it left a standing
    operational fact rather than a task: the guard can now come up DISARMED with a funded account
    attached, by design, because all configuration persists. `DISARM_PERSISTED` is the line that
    says so — if it is in the log, nothing is evaluating.
-6. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
+9. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
    ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
-7. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
+10. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
 
 ⚠️ **Standing, and it is not a technical constraint**: the operator asked to be told before any
 trade, and will either give the direction or ask for one. `TAKEPROFITPRO524207503` is a funded 50K

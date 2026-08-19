@@ -814,6 +814,19 @@ jobs:
           # because it stops being equivalent the day that check is removed, and _battery.finish
           # reports a declared survivor that starts being KILLED as STALE.
           - { label: "P1-160", batteries: "mutate_p1160.py" }   # 555s MEASURED in CI (24 mutants). The local estimate said ~840s and was 34% high; CI total went 23m54s -> 24m23s, i.e. unchanged. Its own bin is still right at 555s: every other bin is 770-1119s, so folding it into any of them would push that bin past the 1119s critical path.
+          # P0-166: the lockout cure. Its own bin for the same reason P1-160 has one -- every other
+          # bin sits at 770-1119s and the critical path is 1119s, so folding ~530s into any of them
+          # makes that bin the new critical path.
+          #
+          # WARNING: this is an ESTIMATE (19 mutants x ~28s local). The P1-160 estimate was 34% HIGH,
+          # so do not treat this number as measured -- replace it with CI's own BATTERY_SECONDS on
+          # the first green run, exactly as that bin's comment was replaced.
+          #
+          # WARNING: group 2 of this battery is the one that must never be dropped. It asserts that
+          # CONSECUTIVE_LOSS_BREACH still uses a TIMEOUT, because making the fix uniform would decide
+          # P2-164 -- what counts as a loss -- from inside a bug fix, and P2-164 is open precisely
+          # because the operator asked for that to be measured rather than assumed.
+          - { label: "P0-166", batteries: "mutate_p0166.py" }   # ~530s ESTIMATED (19 mutants)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

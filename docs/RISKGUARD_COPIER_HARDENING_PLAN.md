@@ -8976,6 +8976,211 @@ the key must round-trip the recompile like everything else.
 
 Related: `P2-161` (the ladder), `P2-162` (refuse the entry rather than flatten the fill).
 
+### P0-166. A lockout whose trigger is session-scoped but whose cure is a 60-minute timeout re-locks forever, and says "tradeable again" every hour while doing it — ✅ FIXED 2026-08-19 (session 61), v1.50.0 — suite 3295/0, battery 19/19, instance and class
+
+⚠️ **This is a harder blocker on arming `live` than `P1-151`.** Measured on the funded account
+`TAKEPROFITPRO524207503`, which has been cycling once an hour since 07:15Z:
+
+```
+14:16:17 LOCKOUT_LAPSED    Lockout deadline 2026-08-19T14:16:12Z has passed; the account is tradeable again.
+14:16:17 SHADOW_LOCKOUT    Rule DAILY_LOSS_BREACH recorded a shadow-only lockout observation; no flatten executed.
+14:16:22 LOCKOUT_CONFIRMED Lockout confirmed: all orders cancelled, position flat.
+```
+
+Eight identical cycles, 07:15Z through 14:16Z, five seconds from "tradeable again" to locked. It
+will not stop on its own. In `shadow` the cancels were withheld, so nothing was enforced -- the
+80 `ENTRY_CANCEL` events of that session all say `account is locked out` and all were withheld.
+**Arm `live` on a day this fires and the account is locked for the session, with a false all-clear
+once an hour that invites an order and then cancels it.**
+
+**The class.** A lockout pairs a *trigger condition* with a *cure*. The cure must be capable of
+clearing the trigger. Six sites set a timeout cure; four of their triggers are session-scoped
+counters that only `SESSION_RESET` clears, so the deadline lapses into the same true condition:
+
+| site | rule | trigger | what clears the trigger | timeout valid |
+|---|---|---|---|---|
+| `RiskGuardAddOn.cs:1918` | `DAILY_LOSS_BREACH` | session realized PnL under `PnLRules.DailyLossLimit` | session reset | ❌ |
+| `RiskGuardAddOn.cs:1958` | `TRAILING_DD_BREACH` | drawdown off `PeakEquity` | session reset | ❌ |
+| `RiskGuardAddOn.cs:4409` | `MAX_TRADES_BREACH` | `TradesToday` at the cap | session reset | ❌ |
+| `RiskGuardAddOn.cs:4428` | `CONSECUTIVE_LOSS_BREACH` | `ConsecutiveLosses` at the cap | a WIN, or session reset | ❌ while flat |
+| `RiskGuardAddOn.cs:2132` | `ORDER_FLOOD_LOCKOUT` | N orders inside 1 second | one second of time | ✅ |
+| `RiskGuardAddOn.cs:4894` | operator `LockAccount(name, minutes)` | the operator asked | the operator's own intent | ✅ |
+
+**The mechanism already exists and is already documented.** `EvaluateLockoutPhase` skips the lapse
+when `LockoutUntil == DateTime.MinValue`, and the comment at `RiskGuardAddOn.cs:4113` states the
+intent outright: *"MinValue means no deadline, NOT expired. LockAccount(name, -1) uses exactly that
+to express an EOD lockout."* The three hard rails should have been using it from the start.
+
+**The fix is not uniform, and that is the point.** Do not lock all four to EOD:
+
+* `DAILY_LOSS_BREACH`, `TRAILING_DD_BREACH`, `MAX_TRADES_BREACH` -- EOD is correct and is what the
+  prop firm itself enforces. Breaching the daily limit ends the day; a cure that hands the account
+  back after an hour would walk it through the firm's real rail.
+* `CONSECUTIVE_LOSS_BREACH` -- a timeout is the INTENDED cure ("cool off, then resume"), so the
+  defect here is the other half: nothing clears `ConsecutiveLosses` when the lockout lapses, so it
+  re-locks on the next evaluation with the account still flat. Clear the counter on lapse. ⚠️ Do
+  not make this one EOD -- three scratches ending the day is exactly the outcome `P2-164` is open
+  to decide, and `P2-161` replaces the flat 60 with the escalating ladder. This entry must not
+  pre-empt either.
+
+⚠️ **`LockoutMinutes` stops applying to three rules, and a config key that quietly stops meaning
+anything is its own defect** ([[configured-evaluated-enforcing]]). Whatever shape the fix takes, the
+inventory row for these rules must report the cure it will actually apply, not the config value it
+no longer reads.
+
+⚠️ **`LOCKOUT_LAPSED` names no numbers**, which is why eight hours of this read as routine. Neither
+does `SHADOW_LOCKOUT`: *"Rule DAILY_LOSS_BREACH recorded a shadow-only lockout observation"* omits
+the PnL and the limit, so the log cannot answer whether the breach was real. It was -- realized was
+`-347.75` against a `250.0` limit -- but that had to be reconstructed from `nt_accounts` and
+`SessionStartRealizedPnL`. Make both lines state the value and the bound.
+
+⚠️ **Five further rules set `MarkRuleLockout` with NO deadline at all** -- `NEWS_SHIELD_LOCKOUT`,
+`EVALUATION_TARGET_REACHED`, `MAX_SIZE_BREACH`, `FIRM_DAILY_LOSS_BREACH`, `FIRM_TRAILING_DD_BREACH`.
+They inherit whatever `LockoutUntil` already held, so their cure depends on which rule fired before
+them. `P1-45` is the precedent for the flag-without-a-deadline shape. Characterise before changing:
+for the firm rules and the evaluation target, EOD is likely right already.
+
+**FIXED** in `v1.50.0`. `ApplySessionScopedCure` sets `LockoutUntil = DateTime.MinValue` for the three
+hard rails; `CONSECUTIVE_LOSS_BREACH` keeps its timeout and now clears `ConsecutiveLosses` when that
+timeout lapses, keyed on a new persisted `AccountState.LockoutRuleId` so the clear cannot become a
+blanket amnesty. Every lockout line now carries its numbers. Suite **3295/0**, battery **19 mutants,
+19 killed, 0 survivors**, 11 gates green.
+
+**Three things this entry got wrong on the first attempt, all caught by machinery rather than review:**
+
+1. ⚠️ **A "fix" that contradicted a deliberate decision.** `LockAccount(name, minutes > 0)` sets the
+   deadline and NOT `IsLockedOut`, which reads exactly like the `P1-45` flag-without-a-deadline shape
+   inverted -- so it was "fixed". Three existing tests failed, and they were right: `P2-94` pins the
+   flag to *indefinite/EOD* lockouts specifically, the deadline is what refuses a timed one, and
+   `CanTrade` consults both. Reverted, with the reasoning left in the source so the next reader does
+   not re-make it. [[a-wrong-red-test-enforces-itself]] in the reverse direction -- here the existing
+   test was the spec and the new change was the error.
+2. ⚠️ **Two of the new tests passed vacuously**, and the mutation battery is the only reason that is
+   known. A fresh `AccountState` **already** has `LockoutUntil == MinValue`, so asserting `MinValue`
+   after a breach passes whether or not the cure ran -- the mutant that emptied the helper survived.
+   Every such test now starts from a live deadline (`UtcNow.AddHours(3)`) so the cure has to clear it.
+   [[a-green-that-can-never-be-red]].
+3. ⚠️ **The trailing-drawdown test was measuring the wrong rail.** `PnLRules.DailyLossLimit` DEFAULTS
+   to `1000.0`, so a test that drove realized PnL to `-1100` to trigger a 1500 trailing drawdown
+   breached the DAILY rule first; that locked the account, and the trailing rule's own
+   `if (!IsLockedOut)` never ran. The test named one rule and proved another, and the mutant that left
+   the trailing rail on a timeout survived. [[check-the-exemplar-belongs-to-the-class]]. The test now
+   raises the daily limit out of the way and asserts that `DAILY_LOSS_BREACH` did **not** fire.
+
+**`ResetAccountForNewSession` was extracted from the sweep loop** and is `internal`, because the
+session boundary is now the cure for three rails and it had **zero** tests -- it was reachable only
+from inside a `while` loop. The battery found that mechanically: the mutant that stopped it clearing
+`LockoutRuleId` survived because nothing could call it. The body is unchanged.
+
+⚠️ **`PnLRules.LockoutMinutes` now governs nothing at all**, and `Overtrading.LockoutMinutes` governs
+two rules rather than three. Both are declared in `GuardRules.cs` as `GuardNonRule` and both `Reason`
+strings were rewritten to say so, because a config key that quietly stops meaning anything reads
+exactly like a protection the operator has set. [[configured-evaluated-enforcing]].
+
+⚠️ **The operator's counters were NOT reset as part of this.** `TradesToday 16` and
+`ConsecutiveLosses 16` on the funded account are real state from the 2026-08-18/19 probe session, and
+`ConsecutiveLosses 16` against a `MaxConsecutiveLosses` of 3 means the consecutive-loss rail is
+breached the moment it is evaluated. It will clear at the session boundary through the path this entry
+just made testable. Verify it did, rather than assuming.
+
+### P1-167. Every rule in `ExecuteOrderUpdate` refuses the same order once per state transition, so one order draws N cancels and N log lines — OPEN, filed 2026-08-19 (session 61)
+
+Measured on the funded account the day `v1.49.0` went out. One duplicate order, three refusals:
+
+```
+06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 on MNQ Buy duplicated anchor order 35993 (881ms within 1000ms window).
+06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 on MNQ Buy duplicated anchor order 35993 (884ms within 1000ms window).
+06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 on MNQ Buy duplicated anchor order 35993 (917ms within 1000ms window).
+```
+
+Three `PendingCancelEntry` values queued for one order, three log lines, and three *different* gap
+values because each state transition recomputes the gap against the same anchor.
+
+**It is not specific to the new rule** -- the per-instrument cap does it too, same session:
+
+```
+06:14:19 Cancelled order 35972 because quantity 3 exceeds MNQ cap (1).   (x3)
+```
+
+So this is `ExecuteOrderUpdate`'s shape, not `P1-160`'s: the method runs per order event, and no
+rule inside it records that it has already refused a given order. `P1-160` only made it visible, by
+widening its own gate to include `Filled` -- at `Submitted || Accepted` the count was 2 rather
+than 3, which is equally wrong and simply looked less like it.
+
+⚠️ **The consequence is not only noise.** `SHADOW_PENDING_CANCEL` reported 96 withheld cancels
+that session against far fewer offending orders, so the one number an operator would use to judge
+how often the guard intervened is inflated by a factor of the platform's state-transition count --
+a quantity no rule controls and the broker chooses. [[measure-the-deployed-system]].
+
+⚠️ In `live` the second and third cancels land on an order that is already `Cancelled` or `Filled`.
+`Filled` is terminal and `DrainPendingCancels` drops it, so the likely outcome is a no-op -- but
+"likely" is doing load-bearing work in that sentence and it has never been measured against
+`Provider31`. [[the-simulator-re-ids-nothing]].
+
+⚠️ Fix the class: one refusal per order per rule. The natural seam is a per-account set of
+already-refused order references, cleared where `RecentEntryAnchors` is. Do **not** fix it by
+narrowing the state gate back down -- that reintroduces the `Filled`-only blindness `P1-160`
+measured, where 2 of 3 live cases arrived as `Filled` and nothing else.
+
+### P1-168. Every per-order rule shares a state gate that cannot see an instantly-filled market order, and `BLACKLIST_CANCEL` is the one with no position-level backstop — OPEN, filed 2026-08-19 (session 61)
+
+⚠️ **This is the operator's own discipline contract not binding.** "Every full-size future blocked"
+is carried by `BlockedInstruments`, and `BlockedInstruments` has exactly two readers:
+
+| reader | reached by | reaches a broker-placed market order? |
+|---|---|---|
+| `CanTrade()` (`RiskGuardAddOn.cs:251`) | NT8 strategies and the bridge, pre-trade | ❌ never consulted -- the order did not originate in NT8 |
+| `BLACKLIST_CANCEL` (`ExecuteOrderUpdate`) | order events, gated `Submitted \|\| Accepted \|\| Working` | ❌ the state is `Filled` |
+
+There is no third. **No rule anywhere checks whether an open POSITION is in a blocked instrument.**
+
+**The measurement.** Of the 99 orders the guard saw on `TAKEPROFITPRO524207503` on 2026-08-19,
+**17 arrived only as `Filled`** -- never `Submitted`, never `Accepted`, never `Working`:
+
+```
+35919 ['Filled']          35925 ['Suspended', 'Accepted', 'Working', 'Cancelled']
+35920 ['Filled']          35926 ['Suspended', 'Accepted', 'Working', 'Cancelled']
+35921 ['Filled']   ...    (resting orders DO show their lifecycle, so the log is not dropping states)
+```
+
+A market order that fills immediately is reported once, already terminal. Every rule gated on the
+live states is blind to all 17.
+
+**The class, and which instances are already covered.** This is the same shape `P1-159` closed for
+the contract cap -- one enforcement point on the ORDER, none on the POSITION -- and it was closed
+for that rule only:
+
+| rule | order gate sees `Filled`-only | position-level backstop |
+|---|---|---|
+| `ENTRY_CANCEL` (lockout) | ❌ | ✅ the lockout flatten sweep |
+| `PER_INSTRUMENT_CAP_CANCEL` | ❌ | ✅ `MAX_SIZE_BREACH`, via `P1-159` |
+| `DUPLICATE_ENTRY` | ✅ (its gate includes `Filled`) | n/a -- refusal is the whole rule |
+| `BLACKLIST_CANCEL` | ❌ | ❌ **nothing** |
+
+So three of the four survive the blindness, two because a position rule catches what the order rule
+missed and one because its gate was widened. `BLACKLIST_CANCEL` has neither. ⚠️ Do not "fix" this by
+adding `Filled` to its gate: **cancelling a filled order is meaningless**. The correct response to a
+filled order in a blocked instrument is to FLATTEN the position, which is a different action, in a
+different method, and needs the arbiter's risk-reducing invariant to permit it.
+
+⚠️ **This also explains `P2-162` rather than merely relating to it.** That entry asks why the cooldown
+flattens the fill instead of refusing the entry; the answer is that for these 17 orders it *cannot*
+refuse -- there is no cancellable state to refuse in. Refusing the entry is the right default and
+flattening must stay as the backstop, exactly as that entry says, but the backstop is load-bearing
+for a measurable fraction of real orders rather than a belt-and-braces afterthought.
+
+⚠️ **Fold this together with `P2-163`.** That entry makes `AllowedInstruments` enforce as default-deny;
+this one says instrument permission has to bind on the POSITION. They are one change -- "is this
+instrument permitted for this account", asked at both enforcement points -- and doing them separately
+means writing the position-side hook twice. [[a-second-reader-of-the-same-state]] is the failure mode
+if they are split.
+
+⚠️ `PropFirmProtectionSuite.cs:27` carries its OWN `BlockedInstruments` defaulting to
+`ZB, ZN, 6E, 6B`. Whether anything reads it, and whether it agrees with the config's list, is
+unmeasured -- and "what is blocked on this account?" having two answers is
+[[configured-evaluated-enforcing]] in its most literal form. Establish that before adding a third
+reader.
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by

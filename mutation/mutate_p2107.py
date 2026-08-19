@@ -204,8 +204,8 @@ MUTANTS = [
     ("the daily session reset stops clearing the records, so a suppression is carried across the\n"
      "     session boundary and the rule fires on the new day saying nothing",
      ADDON,
-     '                        _actionDedup.ClearAccount(accName);',
-     '                        if (false) _actionDedup.ClearAccount(accName);'),
+     '            _actionDedup.ClearAccount(accName);',
+     '            if (false) _actionDedup.ClearAccount(accName);'),
 
     ("THE P3-30 SHAPE: the machinery is all there and the AccountItemUpdate handler -- the very\n"
      "     path the defect was measured on -- goes back to dispatching around it. Everything that\n"

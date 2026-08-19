@@ -168,6 +168,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             // - Lower-priority / boundary tests -
             Run(TestShadowModeSkipsAction);
             Run(TestLiveModeExecutesAction);
+            Run(TestLockout_P0166_ADailyLossBreachLocksToSessionResetNotAnHour);
+            Run(TestLockout_P0166_TheDailyLossLockoutCannotStartTheRelockCycle);
+            Run(TestLockout_P0166_ASessionScopedLockoutDoesNotLapseHoweverLongYouWait);
+            Run(TestLockout_P0166_ATrailingDrawdownBreachLocksToSessionReset);
+            Run(TestLockout_P0166_AMaxTradesBreachLocksToSessionReset);
+            Run(TestLockout_P0166_AConsecutiveLossBreachKEEPSItsTimeout);
+            Run(TestLockout_P0166_AConsecutiveLossLapseClearsTheCounter);
+            Run(TestLockout_P0166_AConsecutiveLossLapseDoesNotImmediatelyReLock);
+            Run(TestLockout_P0166_AnUnrelatedLapseDoesNotClearTheLossCounter);
+            Run(TestLockout_P0166_AnOrderFloodLockoutStillUsesATimeout);
+            Run(TestLockout_P0166_AnOperatorTimeoutIsStillHonoured);
+            Run(TestLockout_P0166_TheBreachNamesThePnLAndTheLimit);
+            Run(TestLockout_P0166_TheLapseClearsTheRecordedReason);
+            Run(TestLockout_P0166_AnOperatorUnlockClearsTheRecordedReason);
+            Run(TestLockout_P0166_TheSessionResetClearsTheRecordedReason);
+            Run(TestLockout_P0166_TheLapseNamesTheRuleThatLocked);
             Run(TestSize_P1159_InstrumentLimitCapsThePosition);
             Run(TestSize_P1159_AtExactlyTheInstrumentLimitIsNotABreach);
             Run(TestSize_P1159_AnUnlistedInstrumentKeepsTheAccountDefault);
@@ -18475,6 +18491,378 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool P1160SawDuplicate(P1160Harness h)
         {
             return h.Events.Any(e => e == "DUPLICATE_ENTRY");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P0-166. A lockout pairs a TRIGGER with a CURE, and the cure has to be able
+        // to clear the trigger. Four rules cured a session-scoped counter with a
+        // 60-minute timeout, which cannot: the deadline lapses, the counter is still
+        // over its bound, and the rule re-locks. Measured on the funded account as
+        // eight identical cycles between 07:15Z and 14:16Z, each one announcing
+        // "the account is tradeable again" five seconds before locking again.
+        //
+        // The fix is deliberately NOT uniform. EOD is right for the three hard rails
+        // and is what the prop firm itself enforces. It is NOT right for
+        // CONSECUTIVE_LOSS_BREACH, whose timeout is the intended cure -- there the
+        // missing half is clearing the counter when the lockout lapses. P2-164 is
+        // open on what should even count as a loss, and P2-161 replaces the flat 60
+        // with the escalating ladder, so this entry must not pre-empt either.
+        //
+        // The negative controls matter as much as the positives here: ORDER_FLOOD's
+        // trigger IS cured by time and must keep its timeout, an operator's explicit
+        // LockAccount(name, minutes) must still expire, and an unrelated lapse must
+        // not clear the loss counter.
+        // ---------------------------------------------------------------------------
+
+        private static RiskGuardAddOn P0166Addon(RiskConfig config)
+        {
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            return addon;
+        }
+
+        private static List<string> P0166Capture(Action body)
+        {
+            var seen = new List<string>();
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) => seen.Add(evt + "|" + msg);
+            try { body(); }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            return seen;
+        }
+
+        private static void TestLockout_P0166_ADailyLossBreachLocksToSessionResetNotAnHour()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a daily loss breach locks to session reset, not for an hour");
+            var config = new RiskConfig();
+            config.PnLRules.DailyLossLimit = 250.0;
+            config.PnLRules.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.RealizedPnL = -346.25;
+            // A FRESH AccountState already has LockoutUntil == MinValue, so asserting MinValue on one
+            // is [[a-green-that-can-never-be-red]] -- a mutation battery caught exactly that: the
+            // mutant that emptied the cure helper survived. Start from a live deadline so the cure
+            // has to actively clear it.
+            state.LockoutUntil = DateTime.UtcNow.AddHours(3);
+
+            var actions = addon.EvaluatePnLRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "DAILY_LOSS_BREACH"), "the breach is still raised");
+            Assert(state.IsLockedOut, "the account is locked out");
+            Assert(state.LockoutUntil == DateTime.MinValue,
+                "the cure is the session reset, expressed as LockoutUntil == MinValue -- NOT a 60-minute deadline");
+        }
+
+        private static void TestLockout_P0166_TheDailyLossLockoutCannotStartTheRelockCycle()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the daily loss lockout cannot start the re-lock cycle");
+            var config = new RiskConfig();
+            config.PnLRules.DailyLossLimit = 250.0;
+            config.PnLRules.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.RealizedPnL = -346.25;
+            addon.EvaluatePnLRules(account, state);
+
+            // This is the measured defect: the deadline lapses, the PnL has not
+            // recovered, and the rule locks again. Drive the lapse check directly.
+            var seen = P0166Capture(() => addon.EvaluateLockoutPhase(account, state));
+
+            Assert(state.IsLockedOut, "the account is STILL locked out after the lapse check ran");
+            Assert(!seen.Any(l => l.StartsWith("LOCKOUT_LAPSED|")),
+                "nothing announced 'the account is tradeable again' -- that line is what invited an order and then cancelled it");
+        }
+
+        private static void TestLockout_P0166_ASessionScopedLockoutDoesNotLapseHoweverLongYouWait()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a session-scoped lockout does not lapse however long you wait");
+            var config = new RiskConfig();
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.IsLockedOut = true;
+            state.LockoutUntil = DateTime.MinValue;
+
+            var seen = P0166Capture(() => addon.EvaluateLockoutPhase(account, state));
+
+            Assert(state.IsLockedOut, "MinValue means 'no deadline', not 'expired' -- the lockout holds");
+            Assert(!seen.Any(l => l.StartsWith("LOCKOUT_LAPSED|")), "and nothing reports it as lapsed");
+        }
+
+        private static void TestLockout_P0166_ATrailingDrawdownBreachLocksToSessionReset()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a trailing drawdown breach locks to session reset");
+            var config = new RiskConfig();
+            config.PnLRules.TrailingDrawdown = 1500.0;
+            config.PnLRules.LockoutMinutes = 60;
+            // ⚠️ DailyLossLimit DEFAULTS to 1000. Without this line the -1100 below breaches the
+            // DAILY rule first, which locks the account, and the trailing rule's own
+            // `if (!IsLockedOut)` never runs -- so the test passed while proving nothing about the
+            // rail it names. A mutation battery found it: the mutant that left the trailing rail on
+            // a timeout survived. [[check-the-exemplar-belongs-to-the-class]].
+            config.PnLRules.DailyLossLimit = 100000.0;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.RealizedPnL = 500.0;
+            addon.EvaluatePnLRules(account, state);   // establish the peak
+            state.RealizedPnL = -1100.0;
+            state.LockoutUntil = DateTime.UtcNow.AddHours(3);
+            var actions = addon.EvaluatePnLRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "TRAILING_DD_BREACH"), "the breach is still raised");
+            Assert(!actions.Any(a => a.RuleId == "DAILY_LOSS_BREACH"),
+                "and it is the TRAILING rail being measured, not the daily one firing first");
+            Assert(state.LockoutUntil == DateTime.MinValue,
+                "PeakEquity only resets at the session boundary, so only the session boundary can cure it");
+        }
+
+        private static void TestLockout_P0166_AMaxTradesBreachLocksToSessionReset()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a max trades breach locks to session reset");
+            var config = new RiskConfig();
+            config.Overtrading.MaxTradesPerSession = 5;
+            config.Overtrading.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.TradesToday = 6;
+            state.LockoutUntil = DateTime.UtcNow.AddHours(3);   // the cure must CLEAR it, not inherit it
+
+            var actions = addon.EvaluateRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "MAX_TRADES_BREACH"), "the breach is still raised");
+            Assert(state.LockoutUntil == DateTime.MinValue,
+                "TradesToday only resets at the session boundary; an hour does not give the trades back");
+        }
+
+        private static void TestLockout_P0166_AConsecutiveLossBreachKEEPSItsTimeout()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a consecutive loss breach KEEPS its timeout");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 3;
+            config.Overtrading.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.ConsecutiveLosses = 3;
+
+            var before = DateTime.UtcNow;
+            var actions = addon.EvaluateRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "CONSECUTIVE_LOSS_BREACH"), "the breach is still raised");
+            Assert(state.LockoutUntil > before,
+                "a cool-off IS the intended cure here -- this must NOT become an EOD lockout, because "
+                + "three scratches ending the day is precisely what P2-164 is open to decide");
+        }
+
+        private static void TestLockout_P0166_AConsecutiveLossLapseClearsTheCounter()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a consecutive loss lapse clears the counter");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 3;
+            config.Overtrading.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.ConsecutiveLosses = 3;
+            addon.EvaluateRules(account, state);
+
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);   // the cool-off has run its course
+            addon.EvaluateLockoutPhase(account, state);
+
+            Assert(!state.IsLockedOut, "the timeout lapses, as intended for this rule");
+            Assert(state.ConsecutiveLosses == 0,
+                "and the counter is cleared -- otherwise the very next evaluation re-locks with the account still flat");
+        }
+
+        private static void TestLockout_P0166_AConsecutiveLossLapseDoesNotImmediatelyReLock()
+        {
+            Console.WriteLine("\n[TEST] P0-166: a consecutive loss lapse does not immediately re-lock");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 3;
+            config.Overtrading.LockoutMinutes = 60;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.ConsecutiveLosses = 3;
+            addon.EvaluateRules(account, state);
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
+            addon.EvaluateLockoutPhase(account, state);
+
+            var actions = addon.EvaluateRules(account, state);
+
+            Assert(!actions.Any(a => a.RuleId == "CONSECUTIVE_LOSS_BREACH"),
+                "the cool-off actually cooled something off -- the trader gets the account back");
+            Assert(!state.IsLockedOut, "and is not re-locked on the spot");
+        }
+
+        private static void TestLockout_P0166_AnUnrelatedLapseDoesNotClearTheLossCounter()
+        {
+            Console.WriteLine("\n[TEST] P0-166: an unrelated lapse does not clear the loss counter");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 3;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+
+            // A lockout from a DIFFERENT rule lapsing must not forgive the loss streak.
+            // Without this control, "clear the counter on lapse" is a blanket amnesty.
+            state.ConsecutiveLosses = 2;
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "ORDER_FLOOD_LOCKOUT";
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
+
+            addon.EvaluateLockoutPhase(account, state);
+
+            Assert(!state.IsLockedOut, "the flood lockout lapses on time");
+            Assert(state.ConsecutiveLosses == 2,
+                "and the loss streak is untouched -- only the rule that locked gets its counter cleared");
+        }
+
+        private static void TestLockout_P0166_AnOrderFloodLockoutStillUsesATimeout()
+        {
+            Console.WriteLine("\n[TEST] P0-166: an order flood lockout still uses a timeout");
+            var config = new RiskConfig();
+            config.Overtrading.MaxOrdersPerSecond = 2;
+            config.Overtrading.LockoutMinutes = 60;
+
+            var h = P1160Setup(config, "shadow");
+            var before = DateTime.UtcNow;
+            for (int i = 0; i < 6; i++)
+                P1160Send(h, P1160Order((9500 + i).ToString(), OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+
+            Assert(h.State.LockoutUntil > before,
+                "a burst of orders IS cured by one second of time, so this rule keeps its deadline -- "
+                + "making it EOD would end the session over a fat-fingered double click");
+        }
+
+        private static void TestLockout_P0166_AnOperatorTimeoutIsStillHonoured()
+        {
+            Console.WriteLine("\n[TEST] P0-166: an operator timeout is still honoured");
+            var config = new RiskConfig();
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            addon.SetAccountStateForTest("TestAcc", state);
+
+            var before = DateTime.UtcNow;
+            addon.LockAccount("TestAcc", 30);
+
+            // NOT `IsLockedOut` -- P2-94 pins that flag to indefinite/EOD lockouts only, and for a
+            // timed one the DEADLINE is what refuses trading. Asserting the flag here is how this
+            // test first got written, and it took a real invariant down with it.
+            Assert(state.LockoutUntil > before && state.LockoutUntil != DateTime.MinValue,
+                "when the operator names a duration, that duration is what they get -- the "
+                + "session-scoped cure must not swallow an explicit operator timeout into an EOD hold");
+        }
+
+        private static void TestLockout_P0166_TheBreachNamesThePnLAndTheLimit()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the breach names the PnL and the limit");
+            var config = new RiskConfig();
+            config.PnLRules.DailyLossLimit = 250.0;
+
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.RealizedPnL = -346.25;
+
+            var seen = P0166Capture(() => addon.EvaluatePnLRules(account, state));
+            var line = seen.FirstOrDefault(l => l.StartsWith("SHADOW_LOCKOUT|"));
+
+            Assert(line != null, "the shadow lockout is announced");
+            Assert(line.Contains("346.25") && line.Contains("250"),
+                "and it states the loss AND the bound -- eight hours of this read as routine because "
+                + "the line carried neither, and the numbers had to be rebuilt from nt_accounts");
+        }
+
+        private static void TestLockout_P0166_TheLapseClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the lapse clears the recorded reason");
+            var config = new RiskConfig();
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "CONSECUTIVE_LOSS_BREACH";
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
+
+            addon.EvaluateLockoutPhase(account, state);
+
+            Assert(state.LockoutRuleId == null,
+                "a reason left set outlives the lockout it explains, and the NEXT lapse would act on "
+                + "it -- stale state that only misbehaves on the second lockout of a session");
+        }
+
+        private static void TestLockout_P0166_AnOperatorUnlockClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: an operator unlock clears the recorded reason");
+            var config = new RiskConfig();
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            addon.SetAccountStateForTest("TestAcc", state);
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "DAILY_LOSS_BREACH";
+
+            addon.UnlockAccount("TestAcc");
+
+            Assert(!state.IsLockedOut, "the operator's release takes");
+            Assert(state.LockoutRuleId == null,
+                "and takes the reason with it -- this is the path an operator reaches for when a rail "
+                + "has ALREADY misfired, so leaving state behind here compounds the original fault");
+        }
+
+        private static void TestLockout_P0166_TheSessionResetClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the session reset clears the recorded reason");
+            var config = new RiskConfig();
+            var addon = P0166Addon(config);
+            var account = new Account { Name = "TestAcc" };
+            var state = new AccountState("TestAcc");
+            addon.SetAccountStateForTest("TestAcc", state);
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "DAILY_LOSS_BREACH";
+            state.LockoutUntil = DateTime.MinValue;
+            state.TradesToday = 16;
+            state.ConsecutiveLosses = 16;
+
+            // The session boundary is the cure for all three hard rails, and it had NO test at all
+            // -- it was reachable only from inside the sweep's while loop until P0-166 extracted it.
+            addon.ResetAccountForNewSession(state, account, "TestAcc", DateTime.UtcNow.Date);
+
+            Assert(!state.IsLockedOut, "the session boundary releases the hard rails, which is what makes them survivable");
+            Assert(state.LockoutRuleId == null, "and clears the reason");
+            Assert(state.TradesToday == 0 && state.ConsecutiveLosses == 0,
+                "and the counters those rails trigger on -- otherwise the new day starts already breached");
+        }
+
+        private static void TestLockout_P0166_TheLapseNamesTheRuleThatLocked()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the lapse names the rule that locked");
+            var config = new RiskConfig();
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "CONSECUTIVE_LOSS_BREACH";
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
+
+            var seen = P0166Capture(() => addon.EvaluateLockoutPhase(account, state));
+            var line = seen.FirstOrDefault(l => l.StartsWith("LOCKOUT_LAPSED|"));
+
+            Assert(line != null, "the lapse is announced");
+            Assert(line.Contains("CONSECUTIVE_LOSS_BREACH"),
+                "and names which rule is releasing the account, so the pair can be found in the log");
         }
 
         private static void TestDup_P1160_ASecondMarketEntryOnTheSameSideIsRefused()

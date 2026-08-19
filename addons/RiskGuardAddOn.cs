@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.49.0";
+        public const string Version = "1.50.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -1243,6 +1243,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // shorten a lockout that was meant to hold.
                                     state.LockoutUntil = kvp.Value.LockoutUntil;
                                     state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;
+                                    state.LockoutRuleId = kvp.Value.LockoutRuleId;   // P0-166
                                     state.LastSessionDate = kvp.Value.LastSessionDate;
                                     state.TradesToday = kvp.Value.TradesToday;
                                     state.ConsecutiveLosses = kvp.Value.ConsecutiveLosses;
@@ -1316,7 +1317,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             FirmDailyStartRealized = state.FirmDailyStartRealized,
                             FirmStartingBalance = state.FirmStartingBalance,
                             LockoutUntil = state.LockoutUntil,   // P1-54
-                            LockoutWasShadowOnly = state.LockoutWasShadowOnly
+                            LockoutWasShadowOnly = state.LockoutWasShadowOnly,
+                            LockoutRuleId = state.LockoutRuleId   // P0-166
                         };
                     }
                     return new PersistedStateData
@@ -1913,9 +1915,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    MarkRuleLockout(stateModel, "DAILY_LOSS_BREACH");
-                    if (_config.PnLRules.LockoutMinutes > 0)
-                        stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.PnLRules.LockoutMinutes);
+                    MarkRuleLockout(stateModel, "DAILY_LOSS_BREACH",
+                        $"Realized {currentPnL:F2} against a {profile.DailyLossLimit:F2} limit.");
+                    ApplySessionScopedCure(stateModel);   // P0-166
                     _stateDirty = true;
                 }
             }
@@ -1953,9 +1955,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    MarkRuleLockout(stateModel, "TRAILING_DD_BREACH");
-                    if (_config.PnLRules.LockoutMinutes > 0)
-                        stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.PnLRules.LockoutMinutes);
+                    MarkRuleLockout(stateModel, "TRAILING_DD_BREACH",
+                        $"Realized {currentPnL:F2} is {(stateModel.PeakEquity - currentPnL):F2} off a peak of "
+                        + $"{stateModel.PeakEquity:F2}, against a {profile.TrailingDrawdown:F2} drawdown limit.");
+                    ApplySessionScopedCure(stateModel);   // P0-166
                     _stateDirty = true;
                 }
             }
@@ -2528,28 +2531,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         var account = Account.All.FirstOrDefault(a => a.Name == accName);
                         if (account == null) continue;
 
-                        stateModel.LastSessionDate = currentSessionDate;
-                        stateModel.TradesToday = 0;
-                        stateModel.ConsecutiveLosses = 0;
-                        stateModel.PeakEquity = 0.0;
-                        stateModel.PeakOpenGain = 0.0;
-                        stateModel.PeakGivebackTriggered = false;
-                        stateModel.PeakGivebackLastTriggerUnrealized = double.NaN;
-                        stateModel.IsLockedOut = false;
-                        stateModel.ResetLockoutPhase();   // P2-101
-                        // P2-107. A new session is a new set of conditions. Absence-based
-                        // clearing would get there on its own, but only after each producer next
-                        // evaluates -- and a suppression carried across a session boundary is a
-                        // rule that fires on the new day and says nothing.
-                        _actionDedup.ClearAccount(accName);
-                        stateModel.SessionStartRealizedPnL = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
-                        stateModel.LastRealizedPnL = stateModel.SessionStartRealizedPnL;
-                        // P1-17: bank the session that just ended before zeroing it, so the
-                        // cumulative evaluation total survives the daily reset.
-                        stateModel.CumulativeRealizedPnL += stateModel.RealizedPnL;
-                        stateModel.RealizedPnL = 0.0;
-                        LogEvent(accName, "SESSION_RESET", $"Session reset for {currentSessionDate:yyyy-MM-dd}");
-                        _stateDirty = true;
+                        ResetAccountForNewSession(stateModel, account, accName, currentSessionDate);
                     }
 
                     // FR-29: increment the shadow-session counter once per day when running in shadow mode.
@@ -4118,11 +4100,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 && stateModel.LockoutUntil > DateTime.MinValue
                 && DateTime.UtcNow >= stateModel.LockoutUntil)
             {
+                string lapsedRule = stateModel.LockoutRuleId;   // P0-166: read before it is cleared
                 stateModel.IsLockedOut = false;
                 stateModel.ResetLockoutPhase();   // P2-101
+                // P0-166. A cool-off that hands the account back with the counter still at its cap
+                // re-locks on the very next evaluation, with the account flat and the trader having
+                // done nothing. Clear it -- but ONLY for the rule that actually locked, because a
+                // blanket clear here would forgive a loss streak because an unrelated
+                // ORDER_FLOOD_LOCKOUT happened to expire.
+                if (lapsedRule == "CONSECUTIVE_LOSS_BREACH")
+                    stateModel.ConsecutiveLosses = 0;
+                stateModel.LockoutRuleId = null;
                 _stateDirty = true;
                 LogEvent(stateModel.AccountName, "LOCKOUT_LAPSED",
-                    $"Lockout deadline {stateModel.LockoutUntil:o} has passed; the account is tradeable again.");
+                    $"Lockout deadline {stateModel.LockoutUntil:o} has passed; the account is tradeable again"
+                    + (string.IsNullOrEmpty(lapsedRule) ? "." : $" (locked by {lapsedRule})."));
                 return actions;
             }
 
@@ -4403,11 +4395,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    MarkRuleLockout(stateModel, "MAX_TRADES_BREACH");
-                    if (_config.Overtrading.LockoutMinutes > 0)
-                    {
-                        stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.LockoutMinutes);
-                    }
+                    MarkRuleLockout(stateModel, "MAX_TRADES_BREACH",
+                        $"{stateModel.TradesToday} trades against a {profile.MaxTradesPerSession} per-session cap.");
+                    ApplySessionScopedCure(stateModel);   // P0-166
                     _stateDirty = true;
                 }
             }
@@ -4422,7 +4412,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 });
                 if (!stateModel.IsLockedOut)
                 {
-                    MarkRuleLockout(stateModel, "CONSECUTIVE_LOSS_BREACH");
+                    // P0-166: this rule KEEPS its timeout -- a cool-off is the intended cure. See
+                    // ApplySessionScopedCure for why it must not become an EOD lockout.
+                    MarkRuleLockout(stateModel, "CONSECUTIVE_LOSS_BREACH",
+                        $"{stateModel.ConsecutiveLosses} consecutive losses against a "
+                        + $"{_config.Overtrading.MaxConsecutiveLosses} cap; cooling off for "
+                        + $"{_config.Overtrading.LockoutMinutes} minute(s).");
                     if (_config.Overtrading.LockoutMinutes > 0)
                     {
                         stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.LockoutMinutes);
@@ -4841,6 +4836,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     state.IsLockedOut = false;
                     state.LockoutUntil = DateTime.MinValue;
+                    state.LockoutRuleId = null;   // P0-166
                     state.PeakEquity = 0.0;
                     state.PeakOpenGain = 0.0;
                     state.PeakGivebackTriggered = false;
@@ -4891,6 +4887,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     else if (minutes > 0)
                     {
+                        // P0-166 considered setting IsLockedOut here and was WRONG to: P2-94
+                        // deliberately leaves the flag false for a TIMED lockout -- the flag means
+                        // "indefinite / EOD", the deadline is what refuses a timed one, and CanTrade
+                        // consults both. Setting it would have made this lockout announce a
+                        // LOCKOUT_LAPSED it has no business announcing, and broken three tests that
+                        // exist to pin exactly that. Left alone on purpose.
                         state.LockoutUntil = DateTime.UtcNow.AddMinutes(minutes);
                         state.InitialLockoutFlattened = false; // force flatten sweep
                     }
@@ -4908,15 +4910,87 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        private void MarkRuleLockout(AccountState st, string ruleId)
+        /// <summary>
+        /// P0-166. `detail` is not decoration. Eight hours of hourly re-locking on the funded
+        /// account read as routine because this line named the rule and nothing else -- no PnL, no
+        /// bound -- so the log could not answer whether the breach was even real. It was, but that
+        /// had to be rebuilt from `nt_accounts` and `SessionStartRealizedPnL` after the fact. Every
+        /// caller that has the numbers passes them.
+        /// </summary>
+        private void MarkRuleLockout(AccountState st, string ruleId, string detail = null)
         {
             st.IsLockedOut = true;
+            st.LockoutRuleId = ruleId;   // P0-166: the lapse path needs to know which cure applies
             st.LockoutWasShadowOnly = !IsActingMode();
             _stateDirty = true;
             if (st.LockoutWasShadowOnly)
             {
-                LogEvent(st.AccountName, "SHADOW_LOCKOUT", $"Rule {ruleId} recorded a shadow-only lockout observation; no flatten executed.");
+                LogEvent(st.AccountName, "SHADOW_LOCKOUT",
+                    $"Rule {ruleId} recorded a shadow-only lockout observation; no flatten executed."
+                    + (string.IsNullOrEmpty(detail) ? "" : " " + detail));
             }
+        }
+
+        /// <summary>
+        /// P0-166. A lockout pairs a TRIGGER with a CURE, and the cure has to be able to clear the
+        /// trigger. `DAILY_LOSS_BREACH`, `TRAILING_DD_BREACH` and `MAX_TRADES_BREACH` all trigger on
+        /// counters that ONLY `SESSION_RESET` clears, so a 60-minute deadline lapsed straight back
+        /// into the same true condition: measured live as eight identical cycles between 07:15Z and
+        /// 14:16Z, each announcing "the account is tradeable again" five seconds before locking
+        /// again, with 80 entry cancels in between.
+        ///
+        /// `MinValue` is the existing, documented way to say "no deadline" -- see the lapse guard in
+        /// EvaluateLockoutPhase and `LockAccount(name, -1)`. Setting it UNCONDITIONALLY also closes
+        /// the P1-45 shape, where a rule that skipped the assignment inherited whatever deadline the
+        /// previously-firing rule had left behind.
+        ///
+        /// WARNING: deliberately NOT applied to `CONSECUTIVE_LOSS_BREACH`. A cool-off IS the intended
+        /// cure there; its missing half is clearing the counter on lapse. Three scratches ending the
+        /// session is exactly the question P2-164 is open to decide, and P2-161 replaces the flat 60
+        /// with an escalating ladder -- neither should be pre-empted from here.
+        /// </summary>
+        private void ApplySessionScopedCure(AccountState st)
+        {
+            st.LockoutUntil = DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// P0-166. Extracted from the sweep loop so it can be driven by a test. This is the CURE for
+        /// all three session-scoped rails -- `DAILY_LOSS_BREACH`, `TRAILING_DD_BREACH` and
+        /// `MAX_TRADES_BREACH` now hold until this runs -- and it had zero tests while being reachable
+        /// only from inside a `while` loop in the sweep. A mutation battery found that directly: the
+        /// mutant that stops this method clearing `LockoutRuleId` survived, because nothing could
+        /// call it.
+        ///
+        /// Body unchanged from the inline version; the P1-17 and P2-107 notes below are load-bearing
+        /// history, not commentary.
+        /// </summary>
+        internal void ResetAccountForNewSession(AccountState stateModel, Account account,
+                                                string accName, DateTime currentSessionDate)
+        {
+            stateModel.LastSessionDate = currentSessionDate;
+            stateModel.TradesToday = 0;
+            stateModel.ConsecutiveLosses = 0;
+            stateModel.PeakEquity = 0.0;
+            stateModel.PeakOpenGain = 0.0;
+            stateModel.PeakGivebackTriggered = false;
+            stateModel.PeakGivebackLastTriggerUnrealized = double.NaN;
+            stateModel.IsLockedOut = false;
+            stateModel.LockoutRuleId = null;   // P0-166
+            stateModel.ResetLockoutPhase();   // P2-101
+            // P2-107. A new session is a new set of conditions. Absence-based
+            // clearing would get there on its own, but only after each producer next
+            // evaluates -- and a suppression carried across a session boundary is a
+            // rule that fires on the new day and says nothing.
+            _actionDedup.ClearAccount(accName);
+            stateModel.SessionStartRealizedPnL = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+            stateModel.LastRealizedPnL = stateModel.SessionStartRealizedPnL;
+            // P1-17: bank the session that just ended before zeroing it, so the
+            // cumulative evaluation total survives the daily reset.
+            stateModel.CumulativeRealizedPnL += stateModel.RealizedPnL;
+            stateModel.RealizedPnL = 0.0;
+            LogEvent(accName, "SESSION_RESET", $"Session reset for {currentSessionDate:yyyy-MM-dd}");
+            _stateDirty = true;
         }
 
         internal string ProcessAction(GuardAction action, bool forceLive = false)

@@ -668,8 +668,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardNonRule { ConfigPath = "ExcludedAccounts", Reason = "scoping, not a limit -- an excluded account reports EvaluatedNotEnforcing on every rule" },
             new GuardNonRule { ConfigPath = "LockoutBypassWhileDisarmedAccounts", Reason = "scoping for lockout persistence while disarmed" },
             new GuardNonRule { ConfigPath = "MinShadowSessions", Reason = "an arming PRECONDITION (FR-29), not a trading limit" },
-            new GuardNonRule { ConfigPath = "PnLRules.LockoutMinutes", Reason = "the consequence of a P&L breach, not a threshold" },
-            new GuardNonRule { ConfigPath = "Overtrading.LockoutMinutes", Reason = "the consequence of an overtrading breach" },
+            // P0-166: this key now governs NOTHING. Both rules that read it -- DAILY_LOSS_BREACH
+            // and TRAILING_DD_BREACH -- trigger on session-scoped counters that only SESSION_RESET
+            // clears, so both lock to the session boundary instead. Saying so here is the point: a
+            // key that quietly stops meaning anything reads exactly like a protection that is set.
+            new GuardNonRule { ConfigPath = "PnLRules.LockoutMinutes", Reason = "DEAD since P0-166 -- both P&L rails now lock to the session boundary, which is the only thing that can clear their trigger" },
+            // P0-166: still live, but for FEWER rules than it reads like. MAX_TRADES_BREACH moved to
+            // the session boundary with the P&L rails; CONSECUTIVE_LOSS_BREACH and
+            // ORDER_FLOOD_LOCKOUT still use it, because a cool-off and a rate burst are genuinely
+            // cured by waiting.
+            new GuardNonRule { ConfigPath = "Overtrading.LockoutMinutes", Reason = "the cool-off for CONSECUTIVE_LOSS_BREACH and ORDER_FLOOD_LOCKOUT only -- since P0-166 MAX_TRADES_BREACH locks to the session boundary instead" },
             new GuardNonRule { ConfigPath = "Overtrading.CooldownMinutes", Reason = "the consequence of a loss streak" },
             new GuardNonRule { ConfigPath = "Sizing.ExpectedCopies", Reason = "a divisor used when sizing across copied accounts; not a cap" },
             new GuardNonRule { ConfigPath = "Override.ConfirmPhrase", Reason = "friction for escaping a lockout (FR-35/36)" },
