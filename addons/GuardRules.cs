@@ -377,13 +377,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             },
 
             // -- instruments ------------------------------------------------------------
+            // P2-163 / P1-168: these two are ONE question, and the pair is DEFAULT-DENY. The allow
+            // list is checked second and the block list wins, so the block list stays the day-by-day
+            // override. Both bind on the ORDER and on the POSITION -- the position half is what makes
+            // them bind at all for a market order that fills instantly, which 17 of 99 orders on the
+            // funded account did on 2026-08-19.
+            new GuardRuleDefinition {
+                Name = "Permitted instruments", ConfigPath = "AllowedInstruments",
+                EvidenceLabel = "instruments on the permitted list",
+                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerPosition,
+                // An EMPTY allow list permits EVERYTHING -- the documented escape hatch -- so empty
+                // is INERT here for the same reason an empty block list is, and for the opposite
+                // mechanical reason. Saying so is the point: the two lists read alike and behave
+                // oppositely when empty.
+                Evaluator = c => R(null, null,
+                    c.Config.AllowedInstruments == null ? 0 : c.Config.AllowedInstruments.Count,
+                    "default-deny: an instrument absent from this list is refused on the order AND "
+                    + "flattened as a position. An EMPTY list disables the rule and permits everything")
+            },
             new GuardRuleDefinition {
                 Name = "Blocked instruments", ConfigPath = "BlockedInstruments",
                 EvidenceLabel = "instruments on the block list",
-                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerOrder,
+                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerPosition,
                 // An EMPTY block list blocks nothing. INERT is the honest reading, not green.
                 Evaluator = c => R(null, null,
-                    c.Config.BlockedInstruments == null ? 0 : c.Config.BlockedInstruments.Count)
+                    c.Config.BlockedInstruments == null ? 0 : c.Config.BlockedInstruments.Count,
+                    "checked BEFORE the permitted list and wins over it -- the day-by-day override. "
+                    + "Enforced on the order AND the position since P1-168")
             },
             new GuardRuleDefinition {
                 Name = "Per-instrument contract caps", ConfigPath = "InstrumentLimits",

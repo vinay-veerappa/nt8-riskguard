@@ -8847,7 +8847,7 @@ position of its protection. The cooldown should use the same mechanism.
 cooldown -- a fill that beat the cancel, or a position opened before the cooldown began -- refusing
 future entries does nothing about it. The two are not alternatives.
 
-### P2-163. `AllowedInstruments` is read by one unit test and no production code, and its default PERMITS the minis — OPEN, 2026-08-18 (session 59)
+### P2-163. `AllowedInstruments` is read by one unit test and no production code, and its default PERMITS the minis — ✅ FIXED 2026-08-19 (session 61), v1.51.0 — suite 3332/0, battery 17/17, closed together with `P1-168`
 
 ```csharp
 public List<string> AllowedInstruments { get; set; } =
@@ -8870,6 +8870,52 @@ what makes the daily limit coherent.
 **Fix**: make the allow-list enforce, defaulting to the micros actually traded, with
 `BlockedInstruments` retained as the day-by-day override (the operator asked to sometimes exclude
 MNQ). Default-deny is the correct shape for a rule set that defines how one MUST trade.
+
+**FIXED** in `v1.51.0`, **together with `P1-168`, because they are one change**: instrument permission
+is ONE question -- "may this account trade this instrument" -- and it is now asked in exactly one
+place, `ResolveInstrumentPermission`, by all three readers (the pre-trade `CanTrade`, the per-ORDER
+refusal in `ExecuteOrderUpdate`, and a NEW per-POSITION sweep in `EvaluateRules`). Doing them
+separately would have meant writing the position-side hook twice.
+[[a-second-reader-of-the-same-state]].
+
+* `AllowedInstruments` moved to `RiskConfig`, beside the list it pairs with, defaulting to
+  `MNQ, MES, MYM, MCL, MGC, M2K`.
+* `PropFirmProfile.AllowedInstruments` and `PropFirmProfile.BlockedInstruments` were **deleted, not
+  deprecated** -- the precedent `P1-81` set for `ArmedForLive` in that same file. The second had
+  **zero** readers, not even a test.
+* The tautological test went with them: it built its own list and asserted `Contains("MNQ")` against
+  that, so it could not fail for any value of the production default.
+* The comparison is now case-insensitive. The old path used an ordinal `List.Contains` against an
+  upper-cased root, so a lowercase entry a human typed **silently matched nothing** and the block did
+  not exist. That was a live defect nobody had filed.
+
+Suite **3332/0** with 16 new tests. Battery **17 mutants, 17 killed, 0 survivors**.
+
+⚠️ **The two properties that matter most are the ones that stop this hurting more than the defect
+did**, and both are asserted and mutated: an order that REDUCES a position is never refused (otherwise
+an instrument becoming non-permitted traps the operator in it -- [[a-lockout-must-not-trap-you]]), and
+an EMPTY allow-list permits everything rather than refusing every order
+([[an-inapplicable-state-is-not-unreadable]] -- an upgrade that deserialized the list as empty must
+not silently halt a funded account).
+
+⚠️ **A non-permitted position is FLATTENED but does NOT lock the account out.** A size breach is a
+discipline failure; a wrong instrument can be a mistyped symbol, and ending the session over one is
+how a rail stops being tolerated.
+
+⚠️ **THE TESTS WERE WRITTEN AFTER THE IMPLEMENTATION HERE**, because the defect was found mid-session
+while closing `P0-166`. So "the tests pass" carries much less weight than usual for this entry and
+**the battery is the primary evidence**. That is recorded in the battery header and in the CI bin
+comment so the bin cannot be quietly dropped. One mutant in the first run *survived* and it was the
+mutant's fault, not a coverage gap: it appended `if (false) { }` AFTER the `actions.Add(...)`, which
+is a no-op. Rewritten to genuinely compute-and-discard, it dies. **A survivor is evidence only once
+the mutant provably changes behaviour.**
+
+⚠️ **What the completeness gate could not see.** `PropFirmProfile` is not a property of
+`PropFirmProtectionConfig` and is not reachable from `RiskConfig`, so `TestUi3_EveryConfigLeafIsClassified`
+-- which walks both roots -- **never inspected it**. That is how a safety-shaped field with a
+permissive default survived for months while a gate reported every config leaf classified. Fifth-plus
+instance of [[state-the-region-a-gate-inspects]]. `PropFirmProfile` now has one member (`Name`) and
+still no referrer; an orphan-config-type gate is the unfiled follow-up.
 
 ### P2-165. Three enforcement rules live in a method the suite can already call, and not one of them has a test — OPEN, filed 2026-08-18 (session 60)
 
@@ -9122,7 +9168,7 @@ already-refused order references, cleared where `RecentEntryAnchors` is. Do **no
 narrowing the state gate back down -- that reintroduces the `Filled`-only blindness `P1-160`
 measured, where 2 of 3 live cases arrived as `Filled` and nothing else.
 
-### P1-168. Every per-order rule shares a state gate that cannot see an instantly-filled market order, and `BLACKLIST_CANCEL` is the one with no position-level backstop — OPEN, filed 2026-08-19 (session 61)
+### P1-168. Every per-order rule shares a state gate that cannot see an instantly-filled market order, and `BLACKLIST_CANCEL` is the one with no position-level backstop — ✅ FIXED 2026-08-19 (session 61), v1.51.0 — suite 3332/0, battery 17/17, closed with `P2-163`
 
 ⚠️ **This is the operator's own discipline contract not binding.** "Every full-size future blocked"
 is carried by `BlockedInstruments`, and `BlockedInstruments` has exactly two readers:
@@ -9180,6 +9226,86 @@ if they are split.
 unmeasured -- and "what is blocked on this account?" having two answers is
 [[configured-evaluated-enforcing]] in its most literal form. Establish that before adding a third
 reader.
+
+**MEASURED, then FIXED** in `v1.51.0`. That suite-side list had **zero** readers -- not one, not even
+a test -- so "what is blocked on this account?" did not have two answers; it had one live list and two
+dead ones. Both dead fields were deleted. The fix and its evidence are recorded under `P2-163`, which
+this entry was closed together with, because instrument permission is one question and now has exactly
+one answering method.
+
+⚠️ **The blindness itself is NOT fixed and was not the fix.** `ENTRY_CANCEL`,
+`PER_INSTRUMENT_CAP_CANCEL` and `BLACKLIST_CANCEL` still gate on `Submitted || Accepted || Working`
+and still cannot see the 17-of-99 orders that arrive already `Filled`. What changed is that
+instrument permission no longer *depends* on that gate, because it now also binds on the POSITION --
+the same remedy `P1-159` applied to the contract cap. Adding `Filled` to a cancel path would be
+meaningless: **you cannot cancel a filled order.** `P1-167` covers the remaining per-order rules, and
+the open question there is not the count of log lines but whether each rule has a backstop at all.
+
+### P0-169. Two invisible bytes made SIX mutation bins report `A MUTANT IS LIVE` for runs in which every mutant died — ✅ FIXED 2026-08-19 (session 61), v1.51.0 — gate added, both directions verified
+
+`addons/RiskGuardModels.cs` was committed containing **two `\r\r\n` sequences** -- a bare CR before a
+CRLF. Nothing visible changed. It compiled. The suite was **3295/0**. `git diff` looked normal. Every
+line still ended in CRLF.
+
+But Python opened in TEXT mode translates `\r\r\n` into TWO newlines, and every mutation battery
+snapshots its targets exactly that way:
+
+```python
+ORIGINALS = {p: open(p, encoding='utf-8').read() ...}          # \r\r\n -> \n\n
+open(path, 'w', encoding='utf-8', newline='').write(text)      # writes 2 EXTRA lines
+```
+
+So every battery that touched that file restored it **1028 lines long where HEAD has 1026**. CI's
+post-battery check compares the tree to HEAD, found a difference, and reported
+`<battery> did not restore the tree -- A MUTANT IS LIVE`. **Six bins failed identically**
+(`mutate_p1160`, `mutate_p2119`, `mutate_p2101`, `mutate_p292`, and the two others in that set), each
+printing `1 file changed, 1028 insertions(+), 1026 deletions(-)`, and in every one of them **every
+mutant had already died and the battery had printed `OK`**.
+
+⚠️ **`--ignore-cr-at-eol` was ALREADY on that check and could not help.** A bare CR is not a CR *at
+end of line*; it is content. Three successive theories -- that I had flipped the file's line endings,
+that `core.autocrlf` was normalising one side, that a BOM had changed -- were all wrong, and each was
+disproved by measuring rather than by reasoning. What identified it was the arithmetic: `1028 - 1026`
+is exactly `2`, and the file contained exactly 2 bad sequences.
+
+⚠️ **A false `A MUTANT IS LIVE` is the most expensive alarm this repo can raise**, because the honest
+response to it is to distrust the whole run -- which is the opposite of what a green battery earned.
+[[weigh-the-quiet-failure-above-the-loud]] inverted: this failure was loud, and being loud about the
+wrong thing cost more than silence would have.
+
+**How it got there, and the idiom is still in use.** A patch script detects the target's line ending
+and re-applies it:
+
+```python
+nl = '\r\n' if '\r\n' in s else '\n'
+s = s.replace(old, new.replace('\n', nl))
+```
+
+If the script's OWN source was saved with CRLF -- which is what happens when it is written by a tool
+on Windows -- then a multi-line string literal inside it already contains `\r\n`, and
+`.replace('\n', nl)` rewrites each of those to `\r\r\n`. **The defect is invisible in the script and
+invisible in its output.** The correct idiom normalises first:
+
+```python
+new.replace('\r\n', '\n').replace('\n', nl)
+```
+
+`tests/RiskGuardAddOnTests.cs` carried **60** of them from the same cause and was pure luck: no
+battery targets the test file, so nothing had gone red yet.
+
+**FIXED** by `tools/check_no_bare_cr.py`, the 12th gate, wired into CI. It walks `git ls-files`,
+skips genuine binaries, and fails listing byte offsets. ⚠️ Verified in BOTH directions before being
+trusted -- injecting one `\r\r\n` into `GuardRules.cs` makes it exit 1 naming the file and offset 98,
+and removing it returns exit 0. It also refuses to pass vacuously: an empty `git ls-files` raises
+rather than reporting a clean tree. 160 text files inspected, 0 offenders.
+
+⚠️ **The batteries were NOT changed, and that is a deliberate choice with a cost.** The real defect is
+that a battery snapshots in text mode and restores in binary-ish mode, so it can write back different
+BYTES than it read. Fixing that properly means byte-exact snapshots in all 53 batteries, whose
+scaffold has **11 different shapes** for the `ORIGINALS` line and where only 21 even define
+`def restore()`. That is a real remaining hazard: any future bare CR from any other source will
+produce the same false alarm, and the gate is what stands between. **If it recurs, fix the harness,
+not the file.**
 
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 

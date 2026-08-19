@@ -23,8 +23,15 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class PropFirmProfile
     {
         public string Name { get; set; } = "Apex Trader Funding";
-        public List<string> AllowedInstruments { get; set; } = new List<string> { "NQ", "MNQ", "ES", "MES", "YM", "MYM", "CL", "MCL", "GC", "MGC", "RTY", "M2K" };
-        public List<string> BlockedInstruments { get; set; } = new List<string> { "ZB", "ZN", "6E", "6B" };
+        // P2-163: `AllowedInstruments` and `BlockedInstruments` WERE HERE and are deleted, not
+        // deprecated -- the same call P1-81 made for `ArmedForLive` a few lines below, for the same
+        // reason. AllowedInstruments had exactly one reader in the whole solution, a unit test that
+        // constructed its own list and asserted Contains("MNQ") against that, so its default --
+        // which PERMITTED NQ, ES, YM, CL, GC and RTY -- was consulted by nothing. BlockedInstruments
+        // here had ZERO readers, not even a test, while defaulting to ZB/ZN/6E/6B and reading like a
+        // live restriction. Instrument permission is now ONE question asked in one place:
+        // RiskConfig.AllowedInstruments + RiskConfig.BlockedInstruments, via
+        // RiskGuardAddOn.ResolveInstrumentPermission.
     }
 
     public class PropFirmProtectionConfig

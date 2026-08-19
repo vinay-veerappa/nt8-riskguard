@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.50.0";
+        public const string Version = "1.51.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -248,8 +248,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accountName)) return true;
                 if (!string.IsNullOrEmpty(instrument))
                 {
-                    string root = instrument.Split(' ')[0].ToUpper();
-                    if (_config.BlockedInstruments != null && _config.BlockedInstruments.Contains(root)) return false;
+                    // P2-163: was `BlockedInstruments.Contains(root)` -- default-ALLOW, and an
+                    // ordinal Contains that a lowercase config entry defeated silently.
+                    if (ResolveInstrumentPermission(instrument) != InstrumentPermission.Permitted)
+                        return false;
                 }
                 return true;
             }
@@ -2340,13 +2342,32 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                     string rawInst = e.Order.Instrument != null ? e.Order.Instrument.FullName : "";
                     string instRoot = rawInst.Split(' ')[0].ToUpper();
-                    if (_config.BlockedInstruments != null && _config.BlockedInstruments.Contains(instRoot))
+
+                    // P1-168. The `stateModel` acquired further up is scoped to the `else if` that
+                    // declared it and is NOT in scope here -- which is why none of the rules in this
+                    // region ever consulted it, and why the refusal below could not tell an entry from
+                    // an exit. A null state means no KNOWN position, and a position always creates
+                    // state, so null cannot be hiding an exit.
+                    AccountState instState;
+                    _accountStates.TryGetValue(accountName, out instState);
+
+                    var instPermission = ResolveInstrumentPermission(rawInst);
+                    if (instPermission != InstrumentPermission.Permitted)
                     {
                         if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                         {
-                            // P1-43: queued, not sent -- this whole block runs under _stateLock.
-                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
-                            LogEvent(accountName, "BLACKLIST_CANCEL", $"Cancelled order {e.Order.Id} because instrument {instRoot} is blacklisted.");
+                            // ⚠️ P1-168: an order that REDUCES the position is never refused here. If
+                            // an instrument stops being permitted while a position is open, refusing
+                            // the exit would trap the operator in the very instrument the rule wants
+                            // them out of. The position sweep flattens it; this must not fight that.
+                            if (!IsPositionReducingOrder(e.Order, instState))
+                            {
+                                // P1-43: queued, not sent -- this whole block runs under _stateLock.
+                                _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
+                                LogEvent(accountName, "BLACKLIST_CANCEL",
+                                    $"Cancelled order {e.Order.Id} because instrument {instRoot} is not permitted: "
+                                    + DescribeInstrumentDenial(instPermission) + ".");
+                            }
                         }
                     }
                     if (_config.InstrumentLimits != null && _config.InstrumentLimits.TryGetValue(instRoot, out var perInstCap))
@@ -4364,6 +4385,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var pos = posPair.Value;
                 if (pos.MarketPosition != MarketPosition.Flat)
                 {
+                    // P1-168. The enforcement point the instrument rules never had. 17 of the 99
+                    // orders on the funded account 2026-08-19 arrived only as `Filled`, which the
+                    // per-order refusal cannot see -- so this is what makes instrument permission
+                    // bind at all for an instantly-filled market order.
+                    //
+                    // ⚠️ Flatten, do NOT lock out. Being in the wrong instrument should not cost the
+                    // session: the operator can switch to a permitted one immediately. MAX_SIZE_BREACH
+                    // below marks a lockout because a size breach is a discipline failure; this can be
+                    // a fat-fingered symbol.
+                    var posPermission = ResolveInstrumentPermission(pos.Instrument);
+                    if (posPermission != InstrumentPermission.Permitted)
+                    {
+                        actions.Add(new GuardAction
+                        {
+                            AccountName = stateModel.AccountName,
+                            ActionType = GuardActionType.FlattenPosition,
+                            Instrument = pos.Instrument,
+                            InstrumentObj = pos.InstrumentObj,
+                            Quantity = pos.Quantity,
+                            RuleId = "INSTRUMENT_NOT_PERMITTED"
+                        });
+                    }
+
                     string baseSymbol = pos.InstrumentObj?.MasterInstrument?.Name ?? pos.Instrument.Split(' ')[0];
                     int limit = ResolveMaxContracts(profile, baseSymbol, pos.Instrument);
 
@@ -4952,6 +4996,54 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void ApplySessionScopedCure(AccountState st)
         {
             st.LockoutUntil = DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// P2-163 / P1-168. The ONE answer to "may this account trade this instrument". Three callers:
+        /// the pre-trade `CanTrade` gate, the per-ORDER refusal in `ExecuteOrderUpdate`, and the
+        /// per-POSITION sweep in `EvaluateRules`.
+        ///
+        /// All three matter, and the third is the one that was missing. Of the 99 orders the guard saw
+        /// on the funded account on 2026-08-19, **17 arrived only as `Filled`** -- never `Submitted`,
+        /// never `Accepted`, never `Working` -- because a market order that fills instantly is
+        /// reported once, already terminal. Every per-order rule gated on the live states is blind to
+        /// all 17, and `BLACKLIST_CANCEL` was the one such rule with no position-level backstop. So
+        /// "every full-size future blocked" did not bind for an instantly-filled market order, which
+        /// is the ordinary case. `P1-159` closed this exact shape for the contract cap; this closes it
+        /// for instrument permission.
+        ///
+        /// ⚠️ Returns WHICH list denied it, because "blocked" and "not on the allow-list" are two
+        /// different things for the operator to do something about.
+        /// </summary>
+        internal InstrumentPermission ResolveInstrumentPermission(string instrument)
+        {
+            if (string.IsNullOrEmpty(instrument)) return InstrumentPermission.Permitted;
+            string root = instrument.Split(' ')[0].ToUpper();
+
+            // The day-by-day override is checked FIRST and wins: the operator asked to be able to
+            // exclude an instrument they normally trade without editing the permitted set.
+            if (_config.BlockedInstruments != null)
+                foreach (var b in _config.BlockedInstruments)
+                    if (string.Equals(b, root, StringComparison.OrdinalIgnoreCase))
+                        return InstrumentPermission.Blocked;
+
+            // An EMPTY allow-list permits everything -- see the field's own doc comment. This is why
+            // the Count check is here and not folded into the loop below.
+            if (_config.AllowedInstruments == null || _config.AllowedInstruments.Count == 0)
+                return InstrumentPermission.Permitted;
+
+            foreach (var a in _config.AllowedInstruments)
+                if (string.Equals(a, root, StringComparison.OrdinalIgnoreCase))
+                    return InstrumentPermission.Permitted;
+
+            return InstrumentPermission.NotAllowed;
+        }
+
+        internal static string DescribeInstrumentDenial(InstrumentPermission p)
+        {
+            return p == InstrumentPermission.Blocked
+                ? "it is on BlockedInstruments"
+                : "it is not on AllowedInstruments (the permitted set is default-deny)";
         }
 
         /// <summary>

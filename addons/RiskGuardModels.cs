@@ -147,8 +147,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // flatten loop where account.Flatten() fails silently but the sweep
         // keeps re-firing every second.
         public enum LockoutPhase { None, PendingCancel, PendingFlatten, Confirmed }
-        public LockoutPhase CurrentLockoutPhase { get; set; } = LockoutPhase.None;
-
+        public LockoutPhase CurrentLockoutPhase { get; set; } = LockoutPhase.None;
+
+
+
         /// <summary>
         /// P0-166. WHICH rule locked the account. A lockout pairs a trigger with a cure, and the
         /// cure that fits depends on the trigger: a session-scoped counter can only be cured by the
@@ -784,6 +786,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Dictionary<string, InstrumentProfile> InstrumentProfiles { get; set; } = new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// P2-163. Not a bool, because "blocked" and "not on the allow-list" are different things for the
+    /// operator to act on -- one is a day-by-day exclusion they set, the other means the instrument
+    /// was never in the permitted set at all.
+    /// </summary>
+    public enum InstrumentPermission
+    {
+        Permitted,
+        Blocked,
+        NotAllowed
+    }
+
     public class PerInstrumentRiskConfig
     {
         // Only MaxContracts is enforced. Per-instrument blocking is intentionally
@@ -827,6 +841,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         public int AuditIntervalSeconds { get; set; } = 10;
         public Dictionary<string, PerInstrumentRiskConfig> InstrumentLimits { get; set; } = new Dictionary<string, PerInstrumentRiskConfig>(StringComparer.OrdinalIgnoreCase);
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        /// <summary>
+        /// P2-163 / P1-168. DEFAULT-DENY, and it lives here rather than on `PropFirmProfile` because
+        /// it and `BlockedInstruments` are one question -- "may this account trade this instrument" --
+        /// and a question with its two halves in two config objects gets two answers.
+        ///
+        /// There WAS an `AllowedInstruments` on `PropFirmProfile`, defaulting to
+        /// `NQ, MNQ, ES, MES, YM, MYM, CL, MCL, GC, MGC, RTY, M2K`. Its only reader anywhere was a
+        /// unit test that built its own list and asserted `Contains("MNQ")` on it -- so the default
+        /// that PERMITTED every full-size contract was never consulted by anything. Deleted rather
+        /// than deprecated, which is the precedent `P1-81` set in that same file for `ArmedForLive`.
+        ///
+        /// ⚠️ The default is MICROS ONLY, and that is a deliberate behaviour change. With
+        /// `DailyLossLimit: 250`, ONE full-size contract at the guard's own catastrophe-stop distance
+        /// is $200 -- 80% of the day in a single trade (ES 16 ticks x $12.50, NQ 40 ticks x $5.00).
+        /// The instrument restriction is not a preference; it is what makes the daily limit coherent.
+        ///
+        /// ⚠️ An EMPTY list permits everything. That is the documented escape hatch, not an oversight:
+        /// default-deny driven by a list that an upgrade could deserialize as empty would otherwise
+        /// refuse every order on the account, and "fail closed" applied to a legitimately empty set is
+        /// how 95 of 97 accounts once got painted WORST. A list you have emptied on purpose reads the
+        /// same as one an upgrade lost, so this errs toward not trapping the operator -- the guard
+        /// still has BlockedInstruments, the caps, and the P&L rails.
+        /// </summary>
+        public List<string> AllowedInstruments { get; set; } =
+            new List<string> { "MNQ", "MES", "MYM", "MCL", "MGC", "M2K" };
+
+        /// <summary>
+        /// The day-by-day override. Checked FIRST and wins over the allow-list, because the operator
+        /// asked to be able to exclude an instrument they normally trade (MNQ) without rewriting the
+        /// permitted set.
+        /// </summary>
         public List<string> BlockedInstruments { get; set; } = new List<string>();
         public AlertsConfig Alerts { get; set; } = new AlertsConfig();
         public SizingConfig Sizing { get; set; } = new SizingConfig();

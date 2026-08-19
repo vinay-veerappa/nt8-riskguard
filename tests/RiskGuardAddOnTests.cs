@@ -184,6 +184,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestLockout_P0166_AnOperatorUnlockClearsTheRecordedReason);
             Run(TestLockout_P0166_TheSessionResetClearsTheRecordedReason);
             Run(TestLockout_P0166_TheLapseNamesTheRuleThatLocked);
+            Run(TestInst_P2163_AFullSizeContractIsRefusedByDefault);
+            Run(TestInst_P2163_AMicroContractIsPermittedByDefault);
+            Run(TestInst_P2163_AnInstrumentOnNeitherListIsRefused);
+            Run(TestInst_P2163_TheBlockListStillWinsOverTheAllowList);
+            Run(TestInst_P2163_AnEmptyAllowListPermitsEverything);
+            Run(TestInst_P2163_AnEmptyAllowListStillHonoursTheBlockList);
+            Run(TestInst_P2163_TheRootIsComparedNotTheContractMonth);
+            Run(TestInst_P2163_TheComparisonIsCaseInsensitive);
+            Run(TestInst_P1168_AnOpenPositionInARefusedInstrumentIsFlattened);
+            Run(TestInst_P1168_AnOpenPositionInAPermittedInstrumentIsLeftAlone);
+            Run(TestInst_P1168_ABlockedPositionIsFlattenedToo);
+            Run(TestInst_P1168_TheRefusedPositionIsNotAlsoLockedOut);
+            Run(TestInst_P1168_AnExitOrderIsNeverRefused);
+            Run(TestInst_P1168_AnEntryOrderInARefusedInstrumentIsCancelled);
+            Run(TestInst_P1168_TheRefusalNamesWhichListDeniedIt);
+            Run(TestInst_P1168_ThePreTradeGateAgreesWithBothEnforcementPoints);
             Run(TestSize_P1159_InstrumentLimitCapsThePosition);
             Run(TestSize_P1159_AtExactlyTheInstrumentLimitIsNotABreach);
             Run(TestSize_P1159_AnUnlistedInstrumentKeepsTheAccountDefault);
@@ -431,7 +447,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             // they are owned by the runner rather than by another test.
             Run(TestPerInstrumentSizing_MNQVsMES);
             Run(TestInstrumentBlacklist_BlocksMiniNQ);
-            Run(TestPropFirmProfile_AllowedInstruments);
             Run(TestTradeCopier_RatioScaling);
             Run(TestTradeCopier_SymbolMapping);
             Run(TestAtmStrategy_DrawdownShieldBreakeven);
@@ -2707,6 +2722,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             cfg.FirmMirror.DailyLoss.Enabled = true;
             cfg.EnableWindowGate = true;
             cfg.BlockedInstruments.Clear();
+            // ⚠️ P2-163: AllowedInstruments is the FIRST collection-backed rule in this config whose
+            // default is NON-empty -- it ships with the six micros, because default-deny that starts
+            // out permitting everything is not default-deny. So `new RiskConfig()` is no longer an
+            // "every collection empty" config, and this line is what keeps that assumption true.
+            // Without it the rule read Enforcing here and never varied below, failing both halves of
+            // this test for the same reason.
+            cfg.AllowedInstruments.Clear();
             cfg.InstrumentLimits.Clear();
             cfg.FirmMirror.AccountFirmMap.Clear();
             cfg.StopGuard.Offsets.Clear();
@@ -2764,6 +2786,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             rich.FirmMirror.DailyLoss.Enabled = true;
             rich.EnableWindowGate = true;
             rich.BlockedInstruments.Add("ZB");
+            rich.AllowedInstruments.Clear();
+            rich.AllowedInstruments.Add("MNQ");   // moves with the collection, so it must carry a label
             rich.InstrumentLimits["NQ"] = new PerInstrumentRiskConfig { MaxContracts = 2 };
             rich.FirmMirror.AccountFirmMap["Ui3Empty"] = "Apex";
 
@@ -18432,6 +18456,276 @@ namespace NinjaTrader.NinjaScript.AddOns
         // switched off.
         // -
 
+        // ---------------------------------------------------------------------------
+        // P2-163 + P1-168, one entry because they are one change: instrument permission
+        // is ONE question, asked at BOTH enforcement points.
+        //
+        // P2-163: `AllowedInstruments` lived on `PropFirmProfile`, had exactly one reader
+        // in the solution -- a unit test that built its own list and asserted Contains on
+        // that -- and its default PERMITTED NQ, ES, YM, CL, GC and RTY. So a reader of the
+        // config would conclude instruments were governed by an allow-list; nothing
+        // consulted it, and the live mechanism was default-ALLOW.
+        //
+        // P1-168: of the 99 orders the guard saw on the funded account 2026-08-19, 17
+        // arrived ONLY as `Filled` -- a market order that fills instantly is reported once,
+        // already terminal. Every per-order rule gated on the live states is blind to all
+        // 17, and the blocking rule was the one such rule with NO position-level backstop.
+        //
+        // ⚠️ WHY THE DEFAULT MATTERS AT THIS OPERATOR'S SETTINGS: with DailyLossLimit 250,
+        // ONE full-size contract at the guard's own catastrophe-stop distance is $200 --
+        // 80% of the day in a single trade. The instrument restriction is not a preference,
+        // it is what makes the daily limit coherent.
+        //
+        // ⚠️ THE TESTS THAT MATTER MOST HERE ARE THE TWO THAT PROVE IT DOES NOT TRAP YOU:
+        // an exit is never refused, and an empty list permits everything.
+        // ---------------------------------------------------------------------------
+
+        private static RiskConfig P2163Config()
+        {
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 0;   // not the rule under test
+            return config;
+        }
+
+        private static bool P2163PositionFlattened(RiskConfig config, string instrument)
+        {
+            var account = new Account { Name = "TestAcc" };
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            var state = new AccountState("TestAcc");
+            state.UpdatePosition(account, new Instrument(instrument.Split(' ')[0]),
+                                 MarketPosition.Long, 1, 100, 0, config);
+            // UpdatePosition keys on the instrument it is given; drive the real rule sweep.
+            var actions = addon.EvaluateRules(account, state);
+            return actions.Any(a => a.RuleId == "INSTRUMENT_NOT_PERMITTED");
+        }
+
+        private static void TestInst_P2163_AFullSizeContractIsRefusedByDefault()
+        {
+            Console.WriteLine("\n[TEST] P2-163: a full-size contract is refused by default");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(P2163Config());
+
+            Assert(addon.ResolveInstrumentPermission("ES SEP26") == InstrumentPermission.NotAllowed,
+                "ES is refused with NO configuration at all -- the old default explicitly listed "
+                + "NQ/ES/YM/CL/GC/RTY as ALLOWED, and one ES stop is 80% of a 250 daily limit");
+            Assert(addon.ResolveInstrumentPermission("NQ SEP26") == InstrumentPermission.NotAllowed,
+                "and so is NQ");
+        }
+
+        private static void TestInst_P2163_AMicroContractIsPermittedByDefault()
+        {
+            Console.WriteLine("\n[TEST] P2-163: a micro contract is permitted by default");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(P2163Config());
+
+            foreach (var root in new[] { "MNQ", "MES", "MYM", "MCL", "MGC", "M2K" })
+                Assert(addon.ResolveInstrumentPermission(root + " SEP26") == InstrumentPermission.Permitted,
+                    root + " is permitted -- default-deny that refuses what the operator actually "
+                    + "trades is a guard that gets switched off");
+        }
+
+        private static void TestInst_P2163_AnInstrumentOnNeitherListIsRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-163: an instrument on neither list is refused");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(P2163Config());
+
+            // THE default-deny assertion. Under the old mechanism SI, NG, HG, 6E, ZB and every
+            // future product ever listed were permitted, because absence meant yes.
+            Assert(addon.ResolveInstrumentPermission("SI SEP26") == InstrumentPermission.NotAllowed,
+                "silver is refused without anyone having had to think of silver -- which is the "
+                + "whole difference between default-deny and default-allow");
+        }
+
+        private static void TestInst_P2163_TheBlockListStillWinsOverTheAllowList()
+        {
+            Console.WriteLine("\n[TEST] P2-163: the block list still wins over the allow list");
+            var config = P2163Config();
+            config.BlockedInstruments.Add("MNQ");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+
+            Assert(addon.ResolveInstrumentPermission("MNQ SEP26") == InstrumentPermission.Blocked,
+                "MNQ is on the permitted list AND on the block list, and the block list wins -- the "
+                + "operator asked to be able to exclude an instrument they normally trade for a day "
+                + "without rewriting the permitted set");
+        }
+
+        private static void TestInst_P2163_AnEmptyAllowListPermitsEverything()
+        {
+            Console.WriteLine("\n[TEST] P2-163: an empty allow list permits everything");
+            var config = P2163Config();
+            config.AllowedInstruments.Clear();
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+
+            // The documented escape hatch. Default-deny driven by a list an upgrade could
+            // deserialize as empty would refuse every order on the account -- and fail-closed
+            // applied to a legitimately empty set is how 95 of 97 accounts once got painted WORST.
+            Assert(addon.ResolveInstrumentPermission("ES SEP26") == InstrumentPermission.Permitted,
+                "an EMPTY permitted list disables the rule rather than refusing everything");
+            Assert(addon.ResolveInstrumentPermission("ZB SEP26") == InstrumentPermission.Permitted,
+                "for every instrument, not just the ones that used to be listed");
+        }
+
+        private static void TestInst_P2163_AnEmptyAllowListStillHonoursTheBlockList()
+        {
+            Console.WriteLine("\n[TEST] P2-163: an empty allow list still honours the block list");
+            var config = P2163Config();
+            config.AllowedInstruments.Clear();
+            config.BlockedInstruments.Add("ES");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+
+            Assert(addon.ResolveInstrumentPermission("ES SEP26") == InstrumentPermission.Blocked,
+                "the escape hatch disables DEFAULT-DENY, not blocking -- otherwise clearing the "
+                + "permitted list would silently unblock everything the operator had excluded");
+        }
+
+        private static void TestInst_P2163_TheRootIsComparedNotTheContractMonth()
+        {
+            Console.WriteLine("\n[TEST] P2-163: the root is compared, not the contract month");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(P2163Config());
+
+            Assert(addon.ResolveInstrumentPermission("MNQ DEC26") == InstrumentPermission.Permitted,
+                "a roll to the next contract month must not silently un-permit the instrument");
+            Assert(addon.ResolveInstrumentPermission("MNQ") == InstrumentPermission.Permitted,
+                "and a bare root with no month resolves the same way");
+        }
+
+        private static void TestInst_P2163_TheComparisonIsCaseInsensitive()
+        {
+            Console.WriteLine("\n[TEST] P2-163: the comparison is case-insensitive");
+            var config = P2163Config();
+            config.AllowedInstruments.Clear();
+            config.AllowedInstruments.Add("mnq");     // as a human would type it
+            config.BlockedInstruments.Add("mes");
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+
+            Assert(addon.ResolveInstrumentPermission("MNQ SEP26") == InstrumentPermission.Permitted,
+                "a lowercase permitted entry still permits -- the old blocking path used an ordinal "
+                + "List.Contains against an upper-cased root, so a lowercase entry silently matched "
+                + "nothing and the operator's block did not exist");
+            Assert(addon.ResolveInstrumentPermission("MES SEP26") == InstrumentPermission.Blocked,
+                "and a lowercase blocked entry still blocks");
+        }
+
+        private static void TestInst_P1168_AnOpenPositionInARefusedInstrumentIsFlattened()
+        {
+            Console.WriteLine("\n[TEST] P1-168: an open position in a refused instrument is flattened");
+            // The enforcement point that did not exist. This is what makes the rule bind for the
+            // 17 of 99 orders that arrived only as `Filled` and could never be cancelled.
+            Assert(P2163PositionFlattened(P2163Config(), "ES SEP26"),
+                "a position in a non-permitted instrument raises a flatten -- cancelling was the "
+                + "only response available before, and you cannot cancel a filled order");
+        }
+
+        private static void TestInst_P1168_AnOpenPositionInAPermittedInstrumentIsLeftAlone()
+        {
+            Console.WriteLine("\n[TEST] P1-168: an open position in a permitted instrument is left alone");
+            Assert(!P2163PositionFlattened(P2163Config(), "MNQ SEP26"),
+                "the negative control, and the one that matters -- a rule that flattens everything "
+                + "passes every positive test ever written for it");
+        }
+
+        private static void TestInst_P1168_ABlockedPositionIsFlattenedToo()
+        {
+            Console.WriteLine("\n[TEST] P1-168: a blocked position is flattened too");
+            var config = P2163Config();
+            config.BlockedInstruments.Add("MNQ");
+            Assert(P2163PositionFlattened(config, "MNQ SEP26"),
+                "both halves of the one question reach the position sweep, not just the allow-list "
+                + "half -- the block list is the one the operator changes day to day");
+        }
+
+        private static void TestInst_P1168_TheRefusedPositionIsNotAlsoLockedOut()
+        {
+            Console.WriteLine("\n[TEST] P1-168: the refused position is not also locked out");
+            var config = P2163Config();
+            var account = new Account { Name = "TestAcc" };
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            var state = new AccountState("TestAcc");
+            state.UpdatePosition(account, new Instrument("ES"), MarketPosition.Long, 1, 100, 0, config);
+
+            addon.EvaluateRules(account, state);
+
+            Assert(!state.IsLockedOut,
+                "being in the wrong instrument must not cost the session -- the operator switches to "
+                + "a permitted one and carries on. MAX_SIZE_BREACH locks out because a size breach is "
+                + "a discipline failure; this can be a mistyped symbol");
+        }
+
+        private static void TestInst_P1168_AnExitOrderIsNeverRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-168: an exit order is NEVER refused");
+            var config = P2163Config();
+            config.BlockedInstruments.Add("MNQ");
+
+            var h = P1160Setup(config, "shadow");
+            // Long 1 MNQ, and MNQ has just been blocked. The exit must go through.
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 1, 100, 0, config);
+            var exit = P1160Order("900", OrderAction.Sell, OrderType.Market, "MNQ", 1, "Exit");
+            P1160Send(h, exit);
+
+            Assert(!h.Events.Any(e => e == "BLACKLIST_CANCEL"),
+                "refusing the exit would trap the operator in the very instrument the rule wants them "
+                + "out of. [[a-lockout-must-not-trap-you]] -- the refusal half is worthless if the "
+                + "quantity that closes the position cannot get out");
+        }
+
+        private static void TestInst_P1168_AnEntryOrderInARefusedInstrumentIsCancelled()
+        {
+            Console.WriteLine("\n[TEST] P1-168: an entry order in a refused instrument IS cancelled");
+            var config = P2163Config();
+            var h = P1160Setup(config, "shadow");
+            var entry = P1160Order("901", OrderAction.Buy, OrderType.Limit, "ES", 1, "Entry");
+            P1160Send(h, entry);
+
+            Assert(h.Events.Any(e => e == "BLACKLIST_CANCEL"),
+                "the positive control for the exit test above -- without it, 'never refuse an exit' "
+                + "is satisfied by never refusing anything");
+        }
+
+        private static void TestInst_P1168_TheRefusalNamesWhichListDeniedIt()
+        {
+            Console.WriteLine("\n[TEST] P1-168: the refusal names which list denied it");
+            var blocked = P2163Config();
+            blocked.BlockedInstruments.Add("MES");
+            var h1 = P1160Setup(blocked, "shadow");
+            P1160Send(h1, P1160Order("902", OrderAction.Buy, OrderType.Limit, "MES", 1, "Entry"));
+            var m1 = h1.Messages.FirstOrDefault(m => m.StartsWith("BLACKLIST_CANCEL"));
+
+            var h2 = P1160Setup(P2163Config(), "shadow");
+            P1160Send(h2, P1160Order("903", OrderAction.Buy, OrderType.Limit, "ES", 1, "Entry"));
+            var m2 = h2.Messages.FirstOrDefault(m => m.StartsWith("BLACKLIST_CANCEL"));
+
+            Assert(m1 != null && m1.Contains("BlockedInstruments"),
+                "a blocked instrument says so -- the operator undoes that by editing the block list");
+            Assert(m2 != null && m2.Contains("AllowedInstruments"),
+                "and one that was never permitted says THAT -- a different edit entirely, and the "
+                + "two were indistinguishable when the message just said 'is blacklisted'");
+        }
+
+        private static void TestInst_P1168_ThePreTradeGateAgreesWithBothEnforcementPoints()
+        {
+            Console.WriteLine("\n[TEST] P1-168: the pre-trade gate agrees with both enforcement points");
+            var config = P2163Config();
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            addon.SetAccountStateForTest("TestAcc", new AccountState("TestAcc"));
+
+            // The third reader. P1-159's lesson: two readers of one rule drift, so all three go
+            // through the same predicate and this asserts they answer alike.
+            Assert(!addon.CanTrade("TestAcc", "ES SEP26"),
+                "CanTrade refuses what the order path cancels and the position path flattens");
+            Assert(addon.CanTrade("TestAcc", "MNQ SEP26"),
+                "and permits what they both permit");
+        }
+
         private sealed class P1160Harness
         {
             public RiskGuardAddOn Addon;
@@ -18786,66 +19080,66 @@ namespace NinjaTrader.NinjaScript.AddOns
                 + "the line carried neither, and the numbers had to be rebuilt from nt_accounts");
         }
 
-        private static void TestLockout_P0166_TheLapseClearsTheRecordedReason()
-        {
-            Console.WriteLine("\n[TEST] P0-166: the lapse clears the recorded reason");
-            var config = new RiskConfig();
-            var account = new Account(); account.Name = "TestAcc";
-            var addon = P0166Addon(config);
-            var state = new AccountState("TestAcc");
-            state.IsLockedOut = true;
-            state.LockoutRuleId = "CONSECUTIVE_LOSS_BREACH";
-            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
-
-            addon.EvaluateLockoutPhase(account, state);
-
-            Assert(state.LockoutRuleId == null,
-                "a reason left set outlives the lockout it explains, and the NEXT lapse would act on "
-                + "it -- stale state that only misbehaves on the second lockout of a session");
-        }
-
-        private static void TestLockout_P0166_AnOperatorUnlockClearsTheRecordedReason()
-        {
-            Console.WriteLine("\n[TEST] P0-166: an operator unlock clears the recorded reason");
-            var config = new RiskConfig();
-            var addon = P0166Addon(config);
-            var state = new AccountState("TestAcc");
-            addon.SetAccountStateForTest("TestAcc", state);
-            state.IsLockedOut = true;
-            state.LockoutRuleId = "DAILY_LOSS_BREACH";
-
-            addon.UnlockAccount("TestAcc");
-
-            Assert(!state.IsLockedOut, "the operator's release takes");
-            Assert(state.LockoutRuleId == null,
-                "and takes the reason with it -- this is the path an operator reaches for when a rail "
-                + "has ALREADY misfired, so leaving state behind here compounds the original fault");
-        }
-
-        private static void TestLockout_P0166_TheSessionResetClearsTheRecordedReason()
-        {
-            Console.WriteLine("\n[TEST] P0-166: the session reset clears the recorded reason");
-            var config = new RiskConfig();
-            var addon = P0166Addon(config);
-            var account = new Account { Name = "TestAcc" };
-            var state = new AccountState("TestAcc");
-            addon.SetAccountStateForTest("TestAcc", state);
-            state.IsLockedOut = true;
-            state.LockoutRuleId = "DAILY_LOSS_BREACH";
-            state.LockoutUntil = DateTime.MinValue;
-            state.TradesToday = 16;
-            state.ConsecutiveLosses = 16;
-
-            // The session boundary is the cure for all three hard rails, and it had NO test at all
-            // -- it was reachable only from inside the sweep's while loop until P0-166 extracted it.
-            addon.ResetAccountForNewSession(state, account, "TestAcc", DateTime.UtcNow.Date);
-
-            Assert(!state.IsLockedOut, "the session boundary releases the hard rails, which is what makes them survivable");
-            Assert(state.LockoutRuleId == null, "and clears the reason");
-            Assert(state.TradesToday == 0 && state.ConsecutiveLosses == 0,
-                "and the counters those rails trigger on -- otherwise the new day starts already breached");
-        }
-
+        private static void TestLockout_P0166_TheLapseClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the lapse clears the recorded reason");
+            var config = new RiskConfig();
+            var account = new Account(); account.Name = "TestAcc";
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "CONSECUTIVE_LOSS_BREACH";
+            state.LockoutUntil = DateTime.UtcNow.AddSeconds(-1);
+
+            addon.EvaluateLockoutPhase(account, state);
+
+            Assert(state.LockoutRuleId == null,
+                "a reason left set outlives the lockout it explains, and the NEXT lapse would act on "
+                + "it -- stale state that only misbehaves on the second lockout of a session");
+        }
+
+        private static void TestLockout_P0166_AnOperatorUnlockClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: an operator unlock clears the recorded reason");
+            var config = new RiskConfig();
+            var addon = P0166Addon(config);
+            var state = new AccountState("TestAcc");
+            addon.SetAccountStateForTest("TestAcc", state);
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "DAILY_LOSS_BREACH";
+
+            addon.UnlockAccount("TestAcc");
+
+            Assert(!state.IsLockedOut, "the operator's release takes");
+            Assert(state.LockoutRuleId == null,
+                "and takes the reason with it -- this is the path an operator reaches for when a rail "
+                + "has ALREADY misfired, so leaving state behind here compounds the original fault");
+        }
+
+        private static void TestLockout_P0166_TheSessionResetClearsTheRecordedReason()
+        {
+            Console.WriteLine("\n[TEST] P0-166: the session reset clears the recorded reason");
+            var config = new RiskConfig();
+            var addon = P0166Addon(config);
+            var account = new Account { Name = "TestAcc" };
+            var state = new AccountState("TestAcc");
+            addon.SetAccountStateForTest("TestAcc", state);
+            state.IsLockedOut = true;
+            state.LockoutRuleId = "DAILY_LOSS_BREACH";
+            state.LockoutUntil = DateTime.MinValue;
+            state.TradesToday = 16;
+            state.ConsecutiveLosses = 16;
+
+            // The session boundary is the cure for all three hard rails, and it had NO test at all
+            // -- it was reachable only from inside the sweep's while loop until P0-166 extracted it.
+            addon.ResetAccountForNewSession(state, account, "TestAcc", DateTime.UtcNow.Date);
+
+            Assert(!state.IsLockedOut, "the session boundary releases the hard rails, which is what makes them survivable");
+            Assert(state.LockoutRuleId == null, "and clears the reason");
+            Assert(state.TradesToday == 0 && state.ConsecutiveLosses == 0,
+                "and the counters those rails trigger on -- otherwise the new day starts already breached");
+        }
+
         private static void TestLockout_P0166_TheLapseNamesTheRuleThatLocked()
         {
             Console.WriteLine("\n[TEST] P0-166: the lapse names the rule that locked");
@@ -24392,9 +24686,42 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var code = AllAddonCode();
 
-            Assert(code.Contains("_config.BlockedInstruments.Contains(instRoot)"),
-                "the real blocking path still consults BlockedInstruments -- this is the ONE way "
-                + "to block an instrument, and P2-78 exists because a second one appeared to");
+            // P2-163 rewrote this assertion. It used to pin the literal
+            // `_config.BlockedInstruments.Contains(instRoot)`, which was the ONE blocking site at the
+            // time -- so a pure relocation of that expression would have failed the gate while
+            // preserving everything it cared about. The invariant was never the spelling; it is that
+            // there is exactly ONE place that decides whether an instrument may be traded. Assert
+            // THAT, which is now both stronger and refactor-proof: every reader of the list must be
+            // inside the single predicate.
+            Assert(code.Contains("internal InstrumentPermission ResolveInstrumentPermission("),
+                "the single instrument-permission predicate exists (positive control -- without this "
+                + "the two assertions below pass vacuously on an empty match set)");
+
+            var blockedReads = System.Text.RegularExpressions.Regex.Matches(
+                code, @"_config\.BlockedInstruments");
+            Assert(blockedReads.Count > 0,
+                "BlockedInstruments is still read by production code -- it remains the day-by-day "
+                + "override, and P2-78 exists because a second mechanism once appeared to work");
+
+            // The body of ResolveInstrumentPermission, and nothing else, may read either list. Two
+            // readers of one question is how "what is blocked on this account?" gets two answers.
+            int predStart = code.IndexOf("internal InstrumentPermission ResolveInstrumentPermission(");
+            int predEnd = code.IndexOf("internal static string DescribeInstrumentDenial(", predStart);
+            Assert(predStart >= 0 && predEnd > predStart,
+                "the predicate's extent is locatable (positive control for the containment test)");
+
+            foreach (System.Text.RegularExpressions.Match m in blockedReads)
+                Assert(m.Index > predStart && m.Index < predEnd,
+                    "every read of BlockedInstruments is inside ResolveInstrumentPermission -- one "
+                    + "question, one answer. A read outside it is a second blocking mechanism");
+
+            var allowedReads = System.Text.RegularExpressions.Regex.Matches(
+                code, @"_config\.AllowedInstruments");
+            Assert(allowedReads.Count > 0, "the allow-list is read by production code at all -- it was "
+                + "dead config on PropFirmProfile, consulted by one tautological unit test");
+            foreach (System.Text.RegularExpressions.Match m in allowedReads)
+                Assert(m.Index > predStart && m.Index < predEnd,
+                    "and every read of AllowedInstruments is inside the same predicate");
 
             // Every member read off a PerInstrumentRiskConfig value. If a future edit starts
             // reading a second one, this fires -- which is the invariant, not the deletion.
@@ -25889,19 +26216,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             var mnqOrder = new Order { Id = "2", OrderState = OrderState.Working, OrderType = OrderType.Market, Quantity = 1, Instrument = new Instrument("MNQ SEP26") };
             addon.ExecuteOrderUpdate(account, new OrderEventArgs { Order = mnqOrder });
             Assert(mnqOrder.OrderState == OrderState.Working, "Non-blacklisted Micro MNQ order allowed");
-        }
-
-        private static void TestPropFirmProfile_AllowedInstruments()
-        {
-            Console.WriteLine("\n[TEST] TestPropFirmProfile_AllowedInstruments");
-            var profile = new PropFirmProfile
-            {
-                Name = "Apex Trader Funding",
-                AllowedInstruments = new List<string> { "NQ", "MNQ", "ES", "MES" },
-                BlockedInstruments = new List<string> { "ZB", "ZN" }
-            };
-            Assert(profile.AllowedInstruments.Contains("MNQ"), "Apex profile allows MNQ");
-            Assert(profile.BlockedInstruments.Contains("ZB"), "Apex profile blocks ZB");
         }
 
         private static void TestTradeCopier_RatioScaling()

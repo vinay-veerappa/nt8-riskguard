@@ -11434,15 +11434,18 @@ sessions after that stopped being true.
    ⚠️ **The operator's counters still read `TradesToday 16` / `ConsecutiveLosses 16`** against a cap
    of 3, so the consecutive-loss rail is breached the instant it evaluates. It should clear at the
    session boundary. VERIFY that it did.
-3. **`P1-168`** — ⚠️ **the operator's own "every full-size future blocked" contract does not bind**
-   for a market order that fills instantly. Measured: **17 of 99** orders on the funded account
-   2026-08-19 arrived ONLY as `Filled`, and `BlockedInstruments` has exactly two readers, both blind
-   to that -- a pre-trade `CanTrade` an off-platform order never reaches, and a cancel gated on the
-   live states. Nothing checks whether an open POSITION is in a blocked instrument. Three sibling
-   rules survive the same blindness only because a position rule catches what their order rule
-   missed; this one has no backstop. ⚠️ Do NOT fix it by adding `Filled` to the gate -- cancelling a
-   filled order is meaningless; the answer is a flatten, which is a different action in a different
-   method. ⚠️ **Do this together with `P2-163`**, not before it: they are one change.
+3. ~~The instrument allow-list, and the rail that did not bind for an instantly-filled order~~ —
+   ✅ CLOSED this session, `v1.51.0`, suite **3332/0**, battery **17/17**. Two entries closed as ONE
+   change, because instrument permission is one question and now has exactly one answering method.
+   Their IDs are not repeated here -- the gate reads any ID in this block as work to do.
+   ⚠️ **What it did NOT fix**: the shared per-order state gate is still blind to the 17-of-99 orders
+   that arrive already `Filled`. Instrument permission simply no longer depends on it, because it
+   binds on the POSITION too. Adding `Filled` to a cancel path is meaningless -- you cannot cancel a
+   filled order.
+   ⚠️ **`PropFirmProfile` is now an orphan type** with one member and no referrer, and the config
+   completeness gate cannot see it because it is reachable from neither root it walks. That is how a
+   safety-shaped field with a permissive default survived for months behind a green gate. An
+   orphan-config-type gate is unfiled.
 4. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
    rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
    per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the
@@ -11461,10 +11464,10 @@ sessions after that stopped being true.
 6. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
    IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
    per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in
-   `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared). Remaining, in order: **`P2-163`** (the
-   allow-list is dead config that permits every full-size contract), then **`P2-161`** +
-   **`P2-162`** (the escalating cooldown ladder, and refusing the entry rather than flattening the
-   fill).
+   `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared), and the instrument allow-list plus its
+   position-level enforcement in `v1.51.0` (suite 3332/0, battery 17/17). Remaining, in order:
+   **`P2-161`** + **`P2-162`** -- the escalating cooldown ladder, and refusing the entry rather than
+   flattening the fill. ⚠️ Both are gated on **`P2-164`**, which is a DECISION and not code.
    ⚠️ **`P2-165` should be folded into whichever ticket next touches `ExecuteOrderUpdate`.**
    `ORDER_FLOOD_LOCKOUT`, `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` still have ZERO tests,
    and the duplicate-entry work built the harness they need. **It also raised the stakes**: that

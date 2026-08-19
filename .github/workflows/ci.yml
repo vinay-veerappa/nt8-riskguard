@@ -329,6 +329,20 @@ jobs:
       # a ten-second audit that never ran.
       - name: No dead safety machinery
         run: python tools/check_no_dead_safety_machinery.py
+      # A BARE CR is invisible and it breaks the mutation harness. RiskGuardModels.cs was committed
+      # with two `
+` sequences: it compiled, the suite was 3295/0, git diff looked normal, and
+      # every line still ended CRLF. But Python in TEXT mode reads `
+` as TWO newlines, so every
+      # battery that snapshots a source file and writes it back produced a file 2 lines LONGER than
+      # the one it read -- and the post-battery check below reported `A MUTANT IS LIVE` for SIX bins
+      # in which every mutant had died. `--ignore-cr-at-eol` was already on that check and could not
+      # help: a bare CR is not a CR at end of line, it is content.
+      #
+      # A false `A MUTANT IS LIVE` is the most expensive alarm this repo can raise, because the
+      # honest response is to distrust the entire run.
+      - name: No bare CR in any tracked file
+        run: python tools/check_no_bare_cr.py
 
       # TradeCopierWindow.cs is one 1100-line `#if !TESTING` block, so the Build and Test
       # steps below compile it to NOTHING -- a stray brace there passes every other gate
@@ -827,6 +841,18 @@ jobs:
           # P2-164 -- what counts as a loss -- from inside a bug fix, and P2-164 is open precisely
           # because the operator asked for that to be measured rather than assumed.
           - { label: "P0-166", batteries: "mutate_p0166.py" }   # ~530s ESTIMATED (19 mutants)
+          # P2-163 + P1-168: instrument permission. Own bin for the same reason as its two
+          # neighbours -- every other bin is 770-1119s against a 1119s critical path.
+          #
+          # WARNING: this battery is the PRIMARY evidence for its entry, not a supplement. The
+          # acceptance tests were written after the implementation, so if this bin is ever dropped or
+          # skipped the entry has almost nothing behind it. Group 5 is the one to never lose: it
+          # proves the fix cannot refuse the order that CLOSES a position in an instrument it has
+          # just decided is not permitted.
+          #
+          # WARNING: ~475s ESTIMATED (17 mutants). The P1-160 estimate was 34% HIGH -- replace this
+          # with CI's own BATTERY_SECONDS on the first green run.
+          - { label: "P2-163", batteries: "mutate_p2163.py" }   # ~475s ESTIMATED (17 mutants)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

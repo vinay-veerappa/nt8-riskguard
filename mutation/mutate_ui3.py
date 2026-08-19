@@ -119,7 +119,9 @@ MUTANTS = [
     ("an EMPTY blocked-instruments list reports green, so 'nothing is blocked' looks\n"
      "     identical to 'blocking is working'",
      '                Evaluator = c => R(null, null,\n'
-     '                    c.Config.BlockedInstruments == null ? 0 : c.Config.BlockedInstruments.Count)',
+     '                    c.Config.BlockedInstruments == null ? 0 : c.Config.BlockedInstruments.Count,\n'
+     '                    "checked BEFORE the permitted list and wins over it -- the day-by-day override. "\n'
+     '                    + "Enforced on the order AND the position since P1-168")',
      '                Evaluator = c => R(null, null, 1)'),
 
     ("the aggregate contract cap hardcodes its evidence, so a cap across ZERO known\n"
