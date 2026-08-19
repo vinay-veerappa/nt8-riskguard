@@ -799,11 +799,10 @@ jobs:
           # The six ACCEPTANCE cases are the only thing that bans it.
           - { label: "P1-76+P2-27+P0-67+P2-141", batteries: "mutate_p1_76.py mutate_p227.py mutate_p0_67.py mutate_p2141.py" }   # 992s = P1-76 304s + P2-27 247s + P0-67 201s + P2-141 240s (local measure; re-pack once CI prints its BATTERY_SECONDS)
 
-          # P1-160, the duplicate-entry rule. 24 mutants and its OWN BIN, because at ~840s it
-          # does not fit anywhere: the lightest existing bin is now ~1100s and the critical path
-          # is 1119s, so appending it would add roughly 14 minutes to CI. A 14th bin runs beside
+          # P1-160, the duplicate-entry rule. 24 mutants in its OWN BIN. A 14th bin runs beside
           # the others and costs nothing -- the ceiling is 19, to leave a slot for the sibling
-          # repo, and the measured queueing knee is well above 14.
+          # repo, and the measured queueing knee is well above 14. Confirmed after the fact:
+          # CI total moved 23m54s -> 24m23s, which is noise.
           #
           # ⚠️ Its anchors moved once already. The rule was lifted out of the rate governor's
           # branch into its own gate, re-indenting all nineteen of them in a single edit. A
@@ -814,7 +813,7 @@ jobs:
           # EQUIVALENT mutant while `gapMs < dupWindowMs` guards the decision point. It is kept
           # because it stops being equivalent the day that check is removed, and _battery.finish
           # reports a declared survivor that starts being KILLED as STALE.
-          - { label: "P1-160", batteries: "mutate_p1160.py" }   # ~840s = 24 mutants x ~35s (local measure; re-pack once CI prints its BATTERY_SECONDS)
+          - { label: "P1-160", batteries: "mutate_p1160.py" }   # 555s MEASURED in CI (24 mutants). The local estimate said ~840s and was 34% high; CI total went 23m54s -> 24m23s, i.e. unchanged. Its own bin is still right at 555s: every other bin is 770-1119s, so folding it into any of them would push that bin past the 1119s critical path.
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
