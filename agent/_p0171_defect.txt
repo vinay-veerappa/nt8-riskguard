@@ -1,0 +1,134 @@
+Two defects that share one fix, in the duplicate-entry rule inside ExecuteOrderUpdate.
+
+=====================================================================
+WHERE THE CODE IS (grounding -- these names are real, verified 2026-08-19)
+=====================================================================
+
+addons/RiskGuardAddOn.cs
+  - ExecuteOrderUpdate(object sender, OrderEventArgs e)   -- internal, ~line 2072.
+    Contains the duplicate-entry rule at ~line 2204 onward. Local variables in that
+    block: dupWindowMs, dupObservable, dupNow, dupKey, dupInstRoot, anchor.
+  - The window comes from _config.Overtrading.DuplicateEntryWindowMs.
+  - The clock is stateModel.UtcNow(), an injectable Func<DateTime>.
+  - The refusal queues _pendingCancels.Add(new PendingCancelEntry(account, e.Order,
+    PendingCancelIntent.Intervention)) and logs LogEvent(accountName,
+    "DUPLICATE_ENTRY", "DUPLICATE ENTRY CANCELLED: order ... duplicated anchor order
+    ... (Nms within Nms window).")
+  - IsPositionReducingOrder(e.Order, stateModel) is the reducing-position test.
+  - CopierOrderNames.Follow is the copier exclusion.
+  - OnConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e) at ~line 1441
+    logs CONNECTION_CHANGE and reacts when e.Status.ToString() == "Connected". It
+    currently stores NO connection state of any kind.
+  - Other rules in the same method: ENTRY_CANCEL, BLACKLIST_CANCEL,
+    PER_INSTRUMENT_CAP_CANCEL, ORDER_FLOOD_LOCKOUT.
+
+addons/RiskGuardModels.cs
+  - AccountState.RecentEntryAnchors : Dictionary<string, RecentEntryAnchor>  (~line 143)
+  - AccountState.UtcNow : internal Func<DateTime>                            (~line 181)
+  - class RecentEntryAnchor { public Order Order; public DateTime FirstSeenUtc; } (~line 393)
+  - OvertradingConfig.DuplicateEntryWindowMs, default 1000                    (~line 1010)
+  - AccountPersistedData is the persisted shape; anything added to AccountState that
+    must survive a restart has to be added there and to both copy sites in
+    RiskGuardAddOn.cs.
+
+tests/RiskGuardAddOnTests.cs
+  - Harness already exists: P1160Setup(RiskConfig, string mode),
+    P1160Order(id, action, type, root, qty, name), P1160Send(harness, order).
+    P1160Send drives the real ExecuteOrderUpdate and captures LogEvent output into
+    harness.Events and harness.Messages.
+  - Tests are registered by hand with Run(TestName) inside Main.
+
+=====================================================================
+DEFECT 1 -- a reconnect replay is refused as duplicates
+=====================================================================
+
+MEASURED on the live funded account TAKEPROFITPRO524207503 on 2026-08-19, with no
+trading taking place:
+
+    16:44:39  CONNECTION_CHANGE  Disconnecting, Connection: TPT
+    16:44:40  CONNECTION_CHANGE  Disconnected,  Connection: TPT
+    16:44:42  CONNECTION_CHANGE  Connecting,    Connection: TPT
+    16:44:44  CONNECTION_CHANGE  Connected,     Connection: TPT
+
+On reconnect NinjaTrader replayed the session: 118 distinct orders inside one second,
+every one already in state Filled, and all 59 executions inside two seconds. The rule
+raised 45 DUPLICATE_ENTRY refusals, every reported gap between 135ms and 190ms,
+against only four much older anchor orders. Examples:
+
+    DUPLICATE ENTRY CANCELLED: order 36129 on MES Sell duplicated anchor order 36040 (152ms within 1000ms window).
+    DUPLICATE ENTRY CANCELLED: order 36135 on MNQ Buy  duplicated anchor order 36047 (140ms within 1000ms window).
+
+The rule measures the interval between the moments the GUARD FIRST OBSERVED two
+orders (stateModel.UtcNow() at the time the event arrives). It does not measure the
+interval between the moments the orders were PLACED. On a replay the observed
+interval is an artefact of how fast the platform re-sends history, so it is always
+inside any window.
+
+=====================================================================
+DEFECT 2 -- one order draws one refusal per state transition
+=====================================================================
+
+MEASURED on the same account. A single duplicate order produced three refusals,
+because ExecuteOrderUpdate runs once per order event and no rule records that it has
+already refused a given order:
+
+    06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 ... (881ms within 1000ms window).
+    06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 ... (884ms within 1000ms window).
+    06:19:07 DUPLICATE ENTRY CANCELLED: order 35996 ... (917ms within 1000ms window).
+
+Three PendingCancelEntry values for one order, three log lines, three different gaps.
+The per-instrument cap does the same thing, so it is the method's shape, not one
+rule's. SHADOW_PENDING_CANCEL consequently reported 96 withheld cancels against far
+fewer offending orders -- the one number an operator uses to judge how often the guard
+intervened is inflated by the platform's transition count.
+
+=====================================================================
+REQUIRED BEHAVIOUR
+=====================================================================
+
+1. A replayed historical order must not be refused as a duplicate, and must not
+   become an anchor that a later genuine entry is compared against.
+
+2. One order draws at most ONE refusal per rule, however many state transitions the
+   platform reports for it.
+
+3. A genuine duplicate must still be refused: two market entry orders on the same
+   instrument root and the same side, arriving within DuplicateEntryWindowMs of each
+   other, where neither reduces a position and neither is a copier order.
+
+4. The rule must still see orders that are only ever reported in state Filled. On the
+   same account that day 17 of 99 orders arrived only as Filled, never Submitted,
+   Accepted or Working, because a market order that fills instantly is reported once,
+   already terminal. Narrowing the state gate is NOT an acceptable fix.
+
+5. An order that reduces a position must never be refused, in any circumstance,
+   including during a replay.
+
+6. The refusal message must keep naming both order ids and the measured gap.
+
+7. Behaviour must be identical in live and shadow apart from whether the cancel is
+   actually sent.
+
+=====================================================================
+CONSTRAINTS ON THE FIX
+=====================================================================
+
+A. DO NOT key the fix on Order.Time or any other broker-owned value. Order.Time
+   exists on the test stub (tests/TestingStubs.cs) but is read by NO production code
+   anywhere in this repo, so its semantics on this account's provider (Provider31) are
+   completely unmeasured. Brokers differ on exactly this kind of field. A test that
+   sets the stub's Time and asserts on it would be testing the stub, not the platform.
+   If placement time is used at all it must be corroborating, never load-bearing.
+
+B. PREFER state the guard itself owns. OnConnectionStatusUpdate already sees every
+   connection transition and stores nothing; a reconnect timestamp recorded there is
+   guard-owned and measurable. An "already evaluated" set of orders is likewise
+   guard-owned, and it is what satisfies requirement 2.
+
+C. Whatever suppresses the rule during a replay must FAIL LOUD if it is ever left on.
+   A silent permanent suppression would mean the rule protects nothing while every
+   test still passes.
+
+D. A recompile wipes all in-memory state, so an already-evaluated set can be empty
+   when a replay arrives. The two mechanisms in B are therefore both needed: the set
+   alone does not cover the post-recompile replay.

@@ -9420,6 +9420,20 @@ replay. Every rule inside `ExecuteOrderUpdate` treats a replayed order as a new 
 `ExecuteOrderUpdate`'s shape and not one rule's -- the same finding as `P1-167`, reached from a
 different direction, and it argues for fixing them together.
 
+**FREQUENCY, measured rather than assumed.** There were **36** `CONNECTION_CHANGE` events on
+2026-08-19 and **19** of them reported `Connected`, but exactly **ONE** was a genuine
+`Disconnected -> Connected` cycle (down `16:44:40`, up `16:44:44`). Only that one produced a storm.
+The other 18 were re-subscribes with no preceding disconnect -- including the two recompiles at
+`15:18` and `16:20`, which logged `Connected` and replayed nothing.
+
+So this is **rare and severe, not constant noise**: 45 of the day's 54 `DUPLICATE_ENTRY` events --
+**83%** -- came from that single reconnect, and the other 9 were the genuine duplicates from the probe
+session. ⚠️ Do not let the rarity reprioritise it downward: one disconnect is 45 queued cancels in
+`live`, and a disconnect is not something the operator controls or can see coming.
+
+⚠️ **The trigger is the DISCONNECT, not the `Connected` event.** A fix that keys on "we just saw
+Connected" would fire on all 19 and suppress the rule during 18 occasions that never needed it.
+
 **Fix direction.** The rule needs an age, not an arrival order:
 
 * Prefer the order's OWN timestamp (`Order.Time`) over `stateModel.UtcNow()` when computing the gap,
