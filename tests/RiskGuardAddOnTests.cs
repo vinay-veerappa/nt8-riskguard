@@ -168,6 +168,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             // - Lower-priority / boundary tests -
             Run(TestShadowModeSkipsAction);
             Run(TestLiveModeExecutesAction);
+            Run(TestSize_P1159_InstrumentLimitCapsThePosition);
+            Run(TestSize_P1159_AtExactlyTheInstrumentLimitIsNotABreach);
+            Run(TestSize_P1159_AnUnlistedInstrumentKeepsTheAccountDefault);
+            Run(TestSize_P1159_TheTighterOfTheTwoCapsWins);
+            Run(TestSize_P1159_TheInstrumentLookupStaysCaseInsensitive);
+            Run(TestSize_P1159_ThePreTradeGateAgreesWithTheSweep);
+            Run(TestSize_P1159_TheCapAppliesToTheROOT_NotTheContractMonth);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -18121,6 +18128,188 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             Assert(result == "EXECUTED", "ProcessAction returns 'EXECUTED' in live mode.");
             Assert(account.Positions.Count == 0, "Position was actually flattened in live mode.");
+        }
+
+        // -
+        // P1-159: THE PER-INSTRUMENT CAP IS PER-ORDER, NOT PER-POSITION
+        //
+        // `InstrumentLimits` is enforced in exactly one place -- the `OrderUpdate` handler --
+        // against `e.Order.Quantity`. So `MNQ: 1` refuses a 3-lot ORDER and permits three 1-lot
+        // orders that build the identical 3-lot POSITION. The reactive sweep that DOES look at
+        // position size (`MAX_SIZE_BREACH`) resolves its cap through `ResolveMaxContracts`, which
+        // has never heard of `InstrumentLimits` and falls through to `Sizing.MaxContractsPerAccount`.
+        //
+        // Measured live 2026-08-18: the operator's config carries `MNQ: 1` and
+        // `MaxContractsPerAccount: 5`, and a duplicate entry produced MNQ 2 with nothing objecting.
+        //
+        // THE FIX MUST NOT BE A SECOND COPY OF THE RULE. Populating a per-account profile with
+        // the same numbers gives two configuration surfaces that must be kept equal by hand, which
+        // is [[a-second-reader-of-the-same-state]] -- this repo's most repeated shape. There is one
+        // dictionary and both enforcement points read it.
+        //
+        // AND IT MUST COMBINE WITH THE PER-ACCOUNT PROFILE BY TAKING THE TIGHTER, NOT BY
+        // PRECEDENCE. A cap is a maximum; the minimum of two maxima can never permit more than
+        // either intended. Any precedence order silently ignores one of the two configured
+        // numbers, so an operator who tightens the losing one sees no change and concludes the
+        // guard is enforcing something it is not. [[configured-evaluated-enforcing]].
+        // -
+
+        private static RiskConfig P1159Config(int perAccount, int mnqCap)
+        {
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = perAccount;
+            config.InstrumentLimits["MNQ"] = new PerInstrumentRiskConfig { MaxContracts = mnqCap };
+            return config;
+        }
+
+        private static bool P1159Breaches(RiskConfig config, string root, int quantity)
+        {
+            var account = new Account { Name = "TestAcc" };
+            var addon   = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+
+            var state = new AccountState("TestAcc");
+            state.UpdatePosition(account, new Instrument(root), MarketPosition.Long, quantity, 18000, 0, config);
+
+            return addon.EvaluateRules(account, state).Any(a => a.RuleId == "MAX_SIZE_BREACH");
+        }
+
+        private static void TestSize_P1159_InstrumentLimitCapsThePosition()
+        {
+            Console.WriteLine("\n[TEST] P1-159: InstrumentLimits caps the POSITION, not just the order");
+
+            // The operator's live shape exactly: MNQ 1, account default 5. Three 1-lot orders each
+            // pass the per-order check; the position they build is the thing that can lose money.
+            Assert(P1159Breaches(P1159Config(5, 1), "MNQ", 3),
+                "MNQ 3 breaches MAX_SIZE_BREACH when InstrumentLimits['MNQ'] is 1, "
+                + "even though the account default of 5 would permit it.");
+        }
+
+        private static void TestSize_P1159_AtExactlyTheInstrumentLimitIsNotABreach()
+        {
+            Console.WriteLine("\n[TEST] P1-159: quantity == the instrument cap is not a breach");
+
+            // The rule is strict `>` everywhere else and must stay so here. An off-by-one makes the
+            // ONE contract the operator is allowed to trade in MNQ the one the guard flattens.
+            Assert(!P1159Breaches(P1159Config(5, 1), "MNQ", 1),
+                "MNQ 1 does not breach when the instrument cap is 1 (strict >, not >=).");
+        }
+
+        private static void TestSize_P1159_AnUnlistedInstrumentKeepsTheAccountDefault()
+        {
+            Console.WriteLine("\n[TEST] P1-159: an unlisted instrument still uses the account default");
+
+            // THE NEGATIVE CONTROL. A fix that applies the tightest configured cap to everything
+            // passes every positive test above and caps ES at 1 because MNQ is 1.
+            // [[detector-needs-a-negative-test]].
+            Assert(!P1159Breaches(P1159Config(5, 1), "ES", 3),
+                "ES 3 does not breach: ES is absent from InstrumentLimits, so the account "
+                + "default of 5 applies and the MNQ cap is not contagious.");
+            Assert(P1159Breaches(P1159Config(5, 1), "ES", 6),
+                "ES 6 still breaches on the account default, which the fix must leave working.");
+        }
+
+        private static void TestSize_P1159_TheTighterOfTheTwoCapsWins()
+        {
+            Console.WriteLine("\n[TEST] P1-159: the tighter of the instrument cap and the profile cap wins");
+
+            // Direction A: the per-account profile is tighter. Already correct today, kept because
+            // the obvious implementation of the fix -- consult InstrumentLimits FIRST and return --
+            // breaks it, and nothing else would notice.
+            var profileTighter = P1159Config(5, 5);
+            profileTighter.Profiles.Add(new AccountRiskProfile
+            {
+                ProfileName         = "P1159",
+                AccountNamePattern  = "TestAcc",
+                DefaultMaxContracts = 5,
+                InstrumentProfiles  = new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "MNQ", new InstrumentProfile { MaxContracts = 1 } }
+                }
+            });
+            Assert(P1159Breaches(profileTighter, "MNQ", 3),
+                "MNQ 3 breaches when the per-account profile says 1 and InstrumentLimits says 5.");
+
+            // Direction B: the global instrument limit is tighter. This is the one that is wrong
+            // today -- the profile lookup returns 5 and returns immediately.
+            var globalTighter = P1159Config(5, 1);
+            globalTighter.Profiles.Add(new AccountRiskProfile
+            {
+                ProfileName         = "P1159",
+                AccountNamePattern  = "TestAcc",
+                DefaultMaxContracts = 5,
+                InstrumentProfiles  = new Dictionary<string, InstrumentProfile>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "MNQ", new InstrumentProfile { MaxContracts = 5 } }
+                }
+            });
+            Assert(P1159Breaches(globalTighter, "MNQ", 3),
+                "MNQ 3 breaches when InstrumentLimits says 1 and the per-account profile says 5 -- "
+                + "the tighter cap binds regardless of which surface it came from.");
+        }
+
+        private static void TestSize_P1159_TheInstrumentLookupStaysCaseInsensitive()
+        {
+            Console.WriteLine("\n[TEST] P1-159: the instrument cap lookup stays case-insensitive");
+
+            // A LANDMINE THE MODELS FILE ALREADY NAMES. `InstrumentLimits` is constructed with
+            // StringComparer.OrdinalIgnoreCase on purpose, and `CreateDynamicProfile` builds its
+            // `InstrumentProfiles` fallback as a bare `new Dictionary<string, InstrumentProfile>()`
+            // with NO comparer. A fix that merges the two through that path quietly makes the whole
+            // lookup case-sensitive, and `mnq` in a hand-edited config would stop capping anything.
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            config.InstrumentLimits["mnq"] = new PerInstrumentRiskConfig { MaxContracts = 1 };
+
+            Assert(P1159Breaches(config, "MNQ", 3),
+                "MNQ 3 breaches when the cap was configured under the lowercase key 'mnq'.");
+        }
+
+        private static void TestSize_P1159_ThePreTradeGateAgreesWithTheSweep()
+        {
+            Console.WriteLine("\n[TEST] P1-159: EffectiveMaxContracts reports the cap the sweep enforces");
+
+            // `EffectiveMaxContracts` is the answer the MCP bridge gives a caller BEFORE it places
+            // an order. P1-149 extracted `ResolveMaxContracts` precisely so the pre-trade answer and
+            // the reactive rule could not drift. If the fix teaches only the sweep, that extraction
+            // is undone: the bridge would report 5, permit the order, and the sweep would then
+            // flatten it -- which reads to an operator as the guard flattening a legal trade.
+            var account = new Account { Name = "TestAcc" };
+            var addon   = new RiskGuardAddOn();
+            addon.SetConfigForTest(P1159Config(5, 1));
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            Assert(addon.EffectiveMaxContracts(account, "MNQ") == 1,
+                "EffectiveMaxContracts reports 1 for MNQ, the same cap MAX_SIZE_BREACH enforces.");
+            Assert(addon.EffectiveMaxContracts(account, "ES") == 5,
+                "EffectiveMaxContracts still reports the account default of 5 for an unlisted instrument.");
+        }
+
+        private static void TestSize_P1159_TheCapAppliesToTheROOT_NotTheContractMonth()
+        {
+            Console.WriteLine("\n[TEST] P1-159: the cap matches the instrument ROOT, not the full contract name");
+
+            // A live position is `MNQ 09-26`, never `MNQ`. The per-ORDER check already splits on
+            // the space; the position path must resolve to the same key or the cap applies to
+            // nothing that actually trades.
+            //
+            // The stub sets MasterInstrument.Name to the whole string, where NT8 sets it to the
+            // root. Set explicitly here so the test models the platform rather than the double.
+            // [[test-doubles-are-not-evidence]].
+            var account = new Account { Name = "TestAcc" };
+            var addon   = new RiskGuardAddOn();
+            var config  = P1159Config(5, 1);
+            addon.SetConfigForTest(config);
+
+            var instrument = new Instrument("MNQ 09-26");
+            instrument.MasterInstrument.Name = "MNQ";
+
+            var state = new AccountState("TestAcc");
+            state.UpdatePosition(account, instrument, MarketPosition.Long, 3, 18000, 0, config);
+
+            Assert(addon.EvaluateRules(account, state).Any(a => a.RuleId == "MAX_SIZE_BREACH"),
+                "MNQ 09-26 at 3 lots breaches the MNQ cap of 1 -- the cap keys on the root.");
         }
 
         private static void TestMaxSizeAtExactlyLimit()
