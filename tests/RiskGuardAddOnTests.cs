@@ -228,6 +228,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestDup_P1160_AGapOfExactlyTheWindowIsNotADuplicate);
             Run(TestDup_P1160_TheRuleStillWorksOnTheSecondTradeOfTheSession);
             Run(TestDup_P1160_ARetryAfterARejectionIsNotADuplicate);
+            Run(TestP0171_AReplayedOrderIsNotRefusedAsADuplicate);
+            Run(TestP0171_OneOrderDrawsExactlyOneRefusal);
+            Run(TestP0171_AGenuineDuplicateIsStillRefused);
+            Run(TestP0171_AnOrderSeenOnlyAsFilledIsStillEvaluated);
+            Run(TestP0171_AReducingOrderIsNeverRefused);
+            Run(TestP0171_TheReplaySuppressionExpiresOnItsOwn);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -19695,6 +19701,313 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(P1160SawDuplicate(h3),
                 "a duplicate following a FILLED entry is still refused -- only a DEAD anchor is "
                 + "dropped, and a fill is not death.");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P0-171 / P1-167. Two defects that share one fix, both MEASURED on the funded
+        // account TAKEPROFITPRO524207503 on 2026-08-19 with no trading taking place.
+        //
+        // (1) A broker reconnect makes NinjaTrader REPLAY the session. One genuine
+        //     Disconnected->Connected cycle (16:44:40 -> 16:44:44) re-sent 118 distinct
+        //     orders inside a single second, every one already in state Filled, and all
+        //     59 executions inside two. The duplicate rule raised 45 refusals against
+        //     four much older anchors, every reported gap between 135ms and 190ms:
+        //
+        //       DUPLICATE ENTRY CANCELLED: order 36129 on MES Sell duplicated anchor
+        //       order 36040 (152ms within 1000ms window).
+        //
+        //     The rule measures the interval between the moments the GUARD FIRST
+        //     OBSERVED two orders -- stateModel.UtcNow() as the event arrives -- not the
+        //     interval between the moments they were PLACED. On a replay that interval
+        //     is an artefact of how fast the platform re-sends history, so it is inside
+        //     ANY window. That one cycle out of 36 connection events produced 45 of the
+        //     day's 54 duplicate events.
+        //
+        // (2) One order draws one refusal PER STATE TRANSITION. Order 35996 produced
+        //     three DUPLICATE_ENTRY lines with three different gaps (881ms, 884ms,
+        //     917ms) because ExecuteOrderUpdate runs once per order event and no rule
+        //     records that it has already refused a given order. SHADOW_PENDING_CANCEL
+        //     consequently reported 96 withheld cancels against far fewer offending
+        //     orders -- and that count is the one number an operator reads to judge how
+        //     often the guard actually intervened.
+        //
+        // TWO MECHANISMS ARE NEEDED, and neither covers the other's case. A recompile
+        // wipes every in-memory set, so an already-evaluated set can be EMPTY exactly
+        // when a replay arrives; and the reconnect stamp says nothing about repeated
+        // transitions of one genuine duplicate hours later.
+        //
+        // The fix must NOT be keyed on Order.Time or any other broker-owned value:
+        // Order.Time exists on the test stub and is read by no production code anywhere
+        // in this repo, so its semantics on this account's provider are unmeasured, and
+        // a test that set the stub's Time would be testing the stub. Nor may the
+        // observable-state gate be narrowed -- 17 of that day's 99 orders arrived ONLY
+        // as Filled, because a market order that fills instantly is reported once,
+        // already terminal.
+        // ---------------------------------------------------------------------------
+
+        // The mutable clock behind AccountState.UtcNow. One static is safe here: the
+        // suite is single-threaded and every test installs its own value at setup.
+        private static DateTime _p0171Now;
+
+        private static P1160Harness P0171Setup(string mode, DateTime start)
+        {
+            var h = P1160Setup(new RiskConfig(), mode);
+            _p0171Now = start;
+            h.State.UtcNow = () => _p0171Now;
+            return h;
+        }
+
+        /// <summary>
+        /// Drives the REAL production connection handler, not a stand-in for it. The
+        /// suppression has to be armed by the code path a reconnect actually takes, or
+        /// the test proves only that a field can be assigned -- which is the shape
+        /// [[an-alarm-wired-to-a-dead-output]] and [[dead-safety-machinery-gate]] exist
+        /// to catch.
+        /// </summary>
+        private static void P0171Connect(P1160Harness h)
+        {
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                h.Events.Add(evt);
+                h.Messages.Add(evt + ": " + msg);
+            };
+            try
+            {
+                h.Addon.OnConnectionStatusUpdate(null,
+                    new ConnectionStatusEventArgs { Status = ConnectionStatus.Connected });
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        /// <summary>
+        /// Counts refusals naming <paramref name="orderId"/> as the REFUSED order. The
+        /// message names two ids and the anchor's is prefixed "anchor order", so this
+        /// matches on "order {id} on " -- asserting the bare id would be satisfied by
+        /// the anchor in the same sentence, which is
+        /// [[a-substring-assertion-catches-the-identifier]].
+        /// </summary>
+        private static int P0171Refusals(P1160Harness h, string orderId)
+        {
+            return h.Messages.Count(m => m.StartsWith("DUPLICATE_ENTRY:")
+                                      && m.Contains("order " + orderId + " on "));
+        }
+
+        private static string P0171LastRefusal(P1160Harness h, string orderId)
+        {
+            return h.Messages.LastOrDefault(m => m.StartsWith("DUPLICATE_ENTRY:")
+                                              && m.Contains("order " + orderId + " on "));
+        }
+
+        private static void TestP0171_AReplayedOrderIsNotRefusedAsADuplicate()
+        {
+            Console.WriteLine("\n[TEST] P0-171: a reconnect replay is not a burst of duplicates");
+
+            // The measured event, reduced to its two load-bearing orders: a reconnect,
+            // then two DISTINCT historical orders re-sent 100ms apart.
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            P0171Connect(h);
+
+            _p0171Now = start.AddMilliseconds(100);
+            var replayedA = P1160Order("36040", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            replayedA.OrderState = OrderState.Filled;
+            P1160Send(h, replayedA);
+
+            _p0171Now = start.AddMilliseconds(200);
+            var replayedB = P1160Order("36129", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            replayedB.OrderState = OrderState.Filled;
+            P1160Send(h, replayedB);
+
+            Assert(P0171Refusals(h, "36129") == 0,
+                "a replayed order is not refused as a duplicate");
+            Assert(replayedB.OrderState != OrderState.Cancelled,
+                "and a replayed order is not cancelled -- it is history, and cancelling history "
+                + "in live mode sends a cancel for an order that already filled.");
+
+            // AND it must not have become an ANCHOR. A replayed order that anchors moves
+            // the false positive from the replay to the next genuine entry, which is worse:
+            // the operator is trading by then.
+            _p0171Now = start.AddMilliseconds(1050);
+            var genuine = P1160Order("37000", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            P1160Send(h, genuine);
+
+            Assert(P0171Refusals(h, "37000") == 0,
+                "a replayed order does not become an anchor that refuses the next genuine entry");
+        }
+
+        private static void TestP0171_OneOrderDrawsExactlyOneRefusal()
+        {
+            Console.WriteLine("\n[TEST] P0-171: one order draws one refusal, not one per transition");
+
+            var start = new DateTime(2026, 8, 19, 6, 19, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            P1160Send(h, P1160Order("35995", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            // The measured case: ONE duplicate order reported through three transitions,
+            // at the three gaps the log recorded.
+            var duplicate = P1160Order("35996", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+
+            _p0171Now = start.AddMilliseconds(881);
+            P1160Send(h, duplicate);
+
+            duplicate.OrderState = OrderState.Accepted;
+            _p0171Now = start.AddMilliseconds(884);
+            P1160Send(h, duplicate);
+
+            duplicate.OrderState = OrderState.Filled;
+            _p0171Now = start.AddMilliseconds(917);
+            P1160Send(h, duplicate);
+
+            Assert(P0171Refusals(h, "35996") == 1,
+                "one order draws exactly one refusal");
+        }
+
+        private static void TestP0171_AGenuineDuplicateIsStillRefused()
+        {
+            Console.WriteLine("\n[TEST] P0-171: a genuine duplicate is still refused, once");
+
+            // THE NEGATIVE CONTROL FOR THE WHOLE TICKET. Every other assertion here is
+            // that the rule does NOT fire; suppress it permanently and they all pass.
+            var start = new DateTime(2026, 8, 19, 10, 0, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            P1160Send(h, P1160Order("40000", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+            var duplicate = P1160Order("40001", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            _p0171Now = start.AddMilliseconds(100);
+            P1160Send(h, duplicate);
+
+            Assert(P0171Refusals(h, "40001") == 1,
+                "a genuine duplicate is still refused");
+
+            var msg = P0171LastRefusal(h, "40001");
+            Assert(msg != null && msg.Contains("anchor order 40000"),
+                "and the refusal still names the anchor order");
+            Assert(msg != null && msg.Contains("100ms within 1000ms window"),
+                "and still reports the measured gap and the window it was measured against");
+
+            // A later transition of that SAME refused order adds nothing.
+            duplicate.OrderState = OrderState.Filled;
+            _p0171Now = start.AddMilliseconds(200);
+            P1160Send(h, duplicate);
+
+            Assert(P0171Refusals(h, "40001") == 1,
+                "a refused order is not refused again when the platform reports it filled");
+        }
+
+        private static void TestP0171_AnOrderSeenOnlyAsFilledIsStillEvaluated()
+        {
+            Console.WriteLine("\n[TEST] P0-171: suppressing a replay does not stop evaluating Filled orders");
+
+            // 17 of the day's 99 orders arrived ONLY as Filled. The cheap fix for
+            // defect (1) -- ignore Filled -- would blind the rule to a sixth of the
+            // orders it exists to see, and nothing in the log would say so.
+            var start = new DateTime(2026, 8, 19, 12, 0, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            var firstFill = P1160Order("50000", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            firstFill.OrderState = OrderState.Filled;
+            P1160Send(h, firstFill);
+
+            _p0171Now = start.AddMilliseconds(100);
+            var secondFill = P1160Order("50001", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            secondFill.OrderState = OrderState.Filled;
+            P1160Send(h, secondFill);
+
+            Assert(P0171Refusals(h, "50001") == 1,
+                "an order seen only as Filled is still evaluated");
+
+            // And during a replay a Filled order must not anchor: 50010 arrives inside
+            // the suppression, 50011 arrives 950ms later -- inside the window of 50010,
+            // outside the suppression. It may only be refused if 50010 anchored.
+            _p0171Now = start.AddSeconds(10);
+            P0171Connect(h);
+
+            _p0171Now = start.AddSeconds(10).AddMilliseconds(100);
+            var replayedFill = P1160Order("50010", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            replayedFill.OrderState = OrderState.Filled;
+            P1160Send(h, replayedFill);
+
+            _p0171Now = start.AddSeconds(10).AddMilliseconds(1050);
+            var afterFill = P1160Order("50011", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            afterFill.OrderState = OrderState.Filled;
+            P1160Send(h, afterFill);
+
+            Assert(P0171Refusals(h, "50011") == 0,
+                "a Filled order replayed inside the suppression does not anchor the next one");
+        }
+
+        private static void TestP0171_AReducingOrderIsNeverRefused()
+        {
+            Console.WriteLine("\n[TEST] P0-171: a reducing order is never refused, replay or not");
+
+            // THE SAFETY ASSERTION. This one is green before the fix and must stay
+            // green after it: whatever suppression is added must not become a path on
+            // which an order that CLOSES a position can be cancelled.
+            // [[a-lockout-must-not-trap-you]] is the same shape one rule over.
+            var start = new DateTime(2026, 8, 19, 8, 0, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+            h.State.UpdatePosition(h.Account, new Instrument("MES"), MarketPosition.Long, 2,
+                                   5900, 0, new RiskConfig());
+
+            P0171Connect(h);
+
+            _p0171Now = start.AddMilliseconds(100);
+            var reduceA = P1160Order("60000", OrderAction.Sell, OrderType.Market, "MES", 1, null);
+            P1160Send(h, reduceA);
+
+            _p0171Now = start.AddMilliseconds(200);
+            var reduceB = P1160Order("60001", OrderAction.Sell, OrderType.Market, "MES", 1, null);
+            P1160Send(h, reduceB);
+
+            _p0171Now = start.AddMilliseconds(1500);
+            var reduceC = P1160Order("60002", OrderAction.Sell, OrderType.Market, "MES", 1, null);
+            P1160Send(h, reduceC);
+
+            Assert(!P1160SawDuplicate(h),
+                "a reducing order is never refused");
+            Assert(reduceB.OrderState != OrderState.Cancelled
+                && reduceC.OrderState != OrderState.Cancelled,
+                "and no order that reduces a live position is cancelled");
+        }
+
+        private static void TestP0171_TheReplaySuppressionExpiresOnItsOwn()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the replay suppression expires on its own");
+
+            // Constraint C. A suppression that can be left on is a rule that protects
+            // nothing while every other test in this block still passes -- exactly
+            // [[a-green-that-can-never-be-red]]. So: it must be bounded by the window,
+            // and the rule must demonstrably come back.
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            P0171Connect(h);
+
+            _p0171Now = start.AddMilliseconds(100);
+            P1160Send(h, P1160Order("70000", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(1050);
+            P1160Send(h, P1160Order("70001", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            Assert(P0171Refusals(h, "70001") == 0,
+                "the replay suppression expires on its own");
+
+            // Two genuine entries, well clear of the suppression and of each other, so
+            // the only thing the refusal below can be measuring is the live rule.
+            _p0171Now = start.AddMilliseconds(2500);
+            P1160Send(h, P1160Order("70002", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            _p0171Now = start.AddMilliseconds(2600);
+            var lateDuplicate = P1160Order("70003", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, lateDuplicate);
+
+            Assert(P0171Refusals(h, "70002") == 0,
+                "an entry well outside the window is not a duplicate of the suppressed replay");
+            Assert(P0171Refusals(h, "70003") == 1,
+                "and the rule refuses a genuine duplicate again once the suppression has lapsed");
         }
 
         private static void TestMaxSizeAtExactlyLimit()

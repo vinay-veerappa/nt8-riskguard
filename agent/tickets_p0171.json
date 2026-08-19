@@ -1,0 +1,36 @@
+[
+  {
+    "id": "P0171",
+    "title": "A reconnect replay must not be refused as duplicates, and one order draws one refusal",
+    "defect": "Two defects sharing one fix, both measured live on the funded account TAKEPROFITPRO524207503 on 2026-08-19. (1) A broker reconnect (Disconnected 16:44:40 -> Connected 16:44:44) makes NinjaTrader replay the session: 118 distinct orders arrived inside one second, all already in state Filled, and all 59 executions inside two seconds. The duplicate-entry rule in ExecuteOrderUpdate then raised 45 DUPLICATE_ENTRY refusals, every reported gap between 135ms and 190ms, against only four much older anchor orders. The rule measures the interval between the moments the guard FIRST OBSERVED two orders (stateModel.UtcNow() when the event arrives), not the interval between the moments the orders were PLACED. On a replay that interval is an artefact of how fast the platform re-sends history, so it is always inside any window. There was exactly ONE genuine Disconnected->Connected cycle that day out of 36 connection events, and it produced 45 of the day's 54 duplicate events. (2) One order draws one refusal per state transition: order 35996 produced three DUPLICATE_ENTRY lines with three different gaps, because ExecuteOrderUpdate runs once per order event and no rule records that it has already refused a given order. SHADOW_PENDING_CANCEL consequently reported 96 withheld cancels against far fewer offending orders.",
+    "spec": "Add two RUNTIME-ONLY fields to AccountState in RiskGuardModels.cs: a DateTime ReplaySuppressionUntilUtc (default DateTime.MinValue) and a HashSet<string> DuplicateEntryEvaluatedOrderIds (default empty). Do NOT add either to AccountPersistedData and do NOT add them to the two persistence copy sites: they are deliberately in-memory, so a recompile resets them, and the reconnect stamp is the second mechanism that covers the post-recompile replay case.\n\nIn OnConnectionStatusUpdate in RiskGuardAddOn.cs, when e.Status.ToString() == \"Connected\", set ReplaySuppressionUntilUtc on every account state to that account's UtcNow() plus DuplicateEntryWindowMs milliseconds. The suppression MUST be bounded by that window and must never be set further ahead, so a stuck suppression cannot silently disable the rule forever.\n\nIn the duplicate-entry rule block in ExecuteOrderUpdate (the `if (dupWindowMs > 0 && dupObservable)` block), before any anchor comparison: if dupNow is at or before stateModel.ReplaySuppressionUntilUtc, skip the rule entirely -- do not refuse, do not create or refresh an anchor, and do not record the order as evaluated. Otherwise, if the order's Id is already in DuplicateEntryEvaluatedOrderIds, skip the rule. Otherwise evaluate exactly as now, and before leaving the rule record the order's Id in DuplicateEntryEvaluatedOrderIds whether it was refused or became the anchor, so later transitions of the same order are ignored.\n\nDo not narrow the order-state gate: it must keep including Filled, because 17 of 99 orders that day arrived only as Filled and never as Submitted, Accepted or Working. Keep IsPositionReducingOrder and the CopierOrderNames.Follow exclusion, and keep the refusal message naming both order ids and the measured gap. Live and shadow must take the same decision path; only whether the cancel is actually sent may differ.\n\nDo NOT key any part of this on Order.Time or any other broker-owned timestamp: Order.Time exists on the test stub but is read by no production code, so its semantics on this account's provider are unmeasured.",
+    "regions": [
+      {
+        "id": "R1",
+        "file": "addons/RiskGuardAddOn.cs",
+        "anchor": "internal void OnConnectionStatusUpdate"
+      },
+      {
+        "id": "R2",
+        "file": "addons/RiskGuardAddOn.cs",
+        "anchor": "if (dupWindowMs > 0 && dupObservable)"
+      },
+      {
+        "id": "R3",
+        "file": "addons/RiskGuardModels.cs",
+        "anchor": "public class AccountState"
+      }
+    ],
+    "expect_green": [
+      "a replayed order is not refused as a duplicate",
+      "a replayed order does not become an anchor that refuses the next genuine entry",
+      "one order draws exactly one refusal",
+      "a refused order is not refused again when the platform reports it filled",
+      "a Filled order replayed inside the suppression does not anchor the next one",
+      "the replay suppression expires on its own"
+    ],
+    "tests": [
+      "tests/RiskGuardAddOnTests.cs"
+    ]
+  }
+]

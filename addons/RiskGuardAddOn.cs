@@ -1438,7 +1438,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // EVENT HANDLERS
         // -
 
-        private void OnConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
+        // `internal`, not private, for the same reason `ExecuteOrderUpdate` is: the
+        // replay suppression has to be armed by the path a real reconnect takes, and a
+        // test that called a stand-in would prove only that a field can be assigned.
+        internal void OnConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
         {
             LogEvent("SYSTEM", "CONNECTION_CHANGE", $"Connection status: {e.Status}, Connection: {e.Connection?.Options?.Name}");
             

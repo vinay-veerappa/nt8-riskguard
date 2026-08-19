@@ -1,0 +1,381 @@
+#if TESTING
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using NinjaTrader.Cbi;
+using NinjaTrader.Core;
+
+namespace NinjaTrader.NinjaScript.AddOns
+{
+    // --- P0171 ACCEPTANCE TESTS ---
+    // Stand-alone runner for the reconnect-replay / duplicate-entry rule fix.
+    public class Program
+    {
+        private static int _testsPassed = 0;
+        private static int _testsFailed = 0;
+
+        private static void Run(Action test)
+        {
+            RunNamed(test, null);
+        }
+
+        private static void RunNamed(Action test, string name)
+        {
+            if (test == null)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("  [FAIL] a null test delegate reached Run -- the runner lost a test");
+                Console.ResetColor();
+                _testsFailed++;
+                return;
+            }
+
+            try
+            {
+                test();
+                Console.WriteLine("  [PASS] " + (name ?? test.Method.Name));
+                _testsPassed++;
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("  [FAIL] " + (name ?? test.Method.Name) + " THREW "
+                                  + ex.GetType().Name + ": " + (ex.Message ?? "(no message)"));
+                Console.ResetColor();
+                _testsFailed++;
+            }
+        }
+
+        private static void Assert(bool condition, string message, [CallerMemberName] string caller = null)
+        {
+            if (!condition)
+                throw new InvalidOperationException(message);
+        }
+
+        private static void AssertEqual<T>(T expected, T actual, string message, [CallerMemberName] string caller = null)
+        {
+            if (!EqualityComparer<T>.Default.Equals(expected, actual))
+                throw new InvalidOperationException($"{message}: expected [{expected}], got [{actual}]");
+        }
+
+        // ------------------------------------------------------------------
+        // TESTS
+        // ------------------------------------------------------------------
+
+        private static void TestReplayedOrderNotRefusedAsDuplicate()
+        {
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MES";
+
+            // Reconnect -> replay suppression must start.
+            harness.SetConnected();
+
+            // Two distinct historical orders replayed inside the suppression window.
+            harness.Clock = start.AddMilliseconds(100);
+            harness.SendOrder(MakeOrder("36040", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+            harness.Clock = start.AddMilliseconds(200);
+            harness.SendOrder(MakeOrder("36129", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            Assert(DuplicateRefusalCount(harness, "36040") == 0
+                && DuplicateRefusalCount(harness, "36129") == 0,
+                "a replayed order is not refused as a duplicate");
+
+            // After suppression expires, a genuine entry must not be compared against replayed anchors.
+            harness.Clock = start.AddMilliseconds(1050);
+            harness.SendOrder(MakeOrder("37000", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            Assert(DuplicateRefusalCount(harness, "37000") == 0,
+                "a replayed order is not refused as a duplicate");
+        }
+
+        private static void TestOneOrderDrawsExactlyOneRefusal()
+        {
+            var start = new DateTime(2026, 8, 19, 6, 19, 0, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MNQ";
+
+            // Anchor order.
+            harness.SendOrder(MakeOrder("35995", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            // The same duplicate order reported through three platform transitions.
+            var duplicate = MakeOrder("35996", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT");
+            harness.Clock = start.AddMilliseconds(881);
+            harness.SendOrder(duplicate);
+
+            duplicate.OrderState = OrderState.Accepted;
+            harness.Clock = start.AddMilliseconds(884);
+            harness.SendOrder(duplicate);
+
+            duplicate.OrderState = OrderState.Filled;
+            harness.Clock = start.AddMilliseconds(917);
+            harness.SendOrder(duplicate);
+
+            AssertEqual(1, DuplicateRefusalCount(harness, "35996"), "one order draws exactly one refusal");
+        }
+
+        private static void TestGenuineDuplicateStillRefused()
+        {
+            var start = new DateTime(2026, 8, 19, 10, 0, 0, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MES";
+
+            harness.SendOrder(MakeOrder("40000", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            var duplicate = MakeOrder("40001", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT");
+            harness.Clock = start.AddMilliseconds(100);
+            harness.SendOrder(duplicate);
+
+            Assert(DuplicateRefusalCount(harness, "40001") == 1,
+                "a genuine duplicate is still refused");
+
+            var msg = LastDuplicateMessage(harness, "40001");
+            Assert(msg.Contains("40000"), "a genuine duplicate is still refused");
+            Assert(msg.Contains("100ms"), "a genuine duplicate is still refused");
+
+            // A second transition of the same duplicate order must not produce another refusal.
+            duplicate.OrderState = OrderState.Filled;
+            harness.Clock = start.AddMilliseconds(200);
+            harness.SendOrder(duplicate);
+
+            AssertEqual(1, DuplicateRefusalCount(harness, "40001"), "a genuine duplicate is still refused");
+        }
+
+        private static void TestOrderSeenOnlyAsFilledIsStillEvaluated()
+        {
+            var start = new DateTime(2026, 8, 19, 12, 0, 0, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MES";
+
+            // Outside suppression: a Filled-only order must still be evaluated and can anchor a duplicate.
+            harness.SendOrder(MakeOrder("50000", OrderAction.Buy, root, 1, "Entry", OrderState.Filled, "TPT"));
+            harness.Clock = start.AddMilliseconds(100);
+            harness.SendOrder(MakeOrder("50001", OrderAction.Buy, root, 1, "Entry", OrderState.Filled, "TPT"));
+
+            Assert(DuplicateRefusalCount(harness, "50001") == 1,
+                "an order seen only as Filled is still evaluated");
+
+            // During a replay, a Filled order must not become an anchor.
+            harness.Clock = start.AddSeconds(10);
+            harness.SetConnected();
+
+            harness.Clock = start.AddSeconds(10).AddMilliseconds(100);
+            harness.SendOrder(MakeOrder("50010", OrderAction.Buy, root, 1, "Entry", OrderState.Filled, "TPT"));
+
+            // Just after suppression expires, but still inside the window of the replayed Filled order,
+            // a genuine Filled order must not be refused because the replayed order did not anchor.
+            harness.Clock = start.AddSeconds(10).AddMilliseconds(1050);
+            harness.SendOrder(MakeOrder("50011", OrderAction.Buy, root, 1, "Entry", OrderState.Filled, "TPT"));
+
+            Assert(DuplicateRefusalCount(harness, "50011") == 0,
+                "an order seen only as Filled is still evaluated");
+        }
+
+        private static void TestReducingOrderNeverRefused()
+        {
+            var start = new DateTime(2026, 8, 19, 8, 0, 0, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MES";
+
+            // Hold a long position so every Sell is position-reducing.
+            harness.State.Positions[root] = new Position { Quantity = 1 };
+
+            // Reconnect replay.
+            harness.SetConnected();
+            harness.Clock = start.AddMilliseconds(100);
+            harness.SendOrder(MakeOrder("60000", OrderAction.Sell, root, 1, "Reduce", OrderState.Submitted, "TPT"));
+            harness.Clock = start.AddMilliseconds(200);
+            harness.SendOrder(MakeOrder("60001", OrderAction.Sell, root, 1, "Reduce", OrderState.Submitted, "TPT"));
+
+            // After suppression expires, another reducing Sell.
+            harness.Clock = start.AddMilliseconds(1500);
+            harness.SendOrder(MakeOrder("60002", OrderAction.Sell, root, 1, "Reduce", OrderState.Submitted, "TPT"));
+
+            int total = harness.Events.Count(e => e == "DUPLICATE_ENTRY");
+            AssertEqual(0, total, "a reducing order is never refused");
+        }
+
+        private static void TestReplaySuppressionExpiresOnItsOwn()
+        {
+            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var harness = new P0171Harness(MakeConfig(), "TPT", start);
+            const string root = "MNQ";
+
+            harness.SetConnected();
+            harness.Clock = start.AddMilliseconds(100);
+            harness.SendOrder(MakeOrder("70000", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            // Just after the suppression window ends, but still inside the window of the replayed order,
+            // a genuine entry must be evaluated against no replay anchor.
+            harness.Clock = start.AddMilliseconds(1050);
+            harness.SendOrder(MakeOrder("70001", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            Assert(DuplicateRefusalCount(harness, "70001") == 0,
+                "the replay suppression expires on its own");
+
+            // Well after expiration, normal duplicate detection resumes.
+            harness.Clock = start.AddMilliseconds(1500);
+            harness.SendOrder(MakeOrder("70002", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+            harness.Clock = start.AddMilliseconds(1600);
+            harness.SendOrder(MakeOrder("70003", OrderAction.Buy, root, 1, "Entry", OrderState.Submitted, "TPT"));
+
+            AssertEqual(1, DuplicateRefusalCount(harness, "70003"), "the replay suppression expires on its own");
+        }
+
+        // ------------------------------------------------------------------
+        // HARNESS AND HELPERS
+        // ------------------------------------------------------------------
+
+        private class P0171Harness
+        {
+            public readonly TestableAddOn AddOn;
+            public readonly AccountState State;
+            public readonly List<string> Events = new List<string>();
+            public readonly List<string> Messages = new List<string>();
+            public DateTime Clock;
+
+            public P0171Harness(RiskConfig config, string accountName, DateTime startClock)
+            {
+                Clock = startClock;
+                State = new AccountState
+                {
+                    AccountName = accountName,
+                    UtcNow = () => Clock,
+                    Positions = new Dictionary<string, Position>(),
+                    RecentEntryAnchors = new Dictionary<string, RecentEntryAnchor>(),
+                    Orders = new Dictionary<string, Order>()
+                };
+
+                var states = new Dictionary<string, AccountState> { [accountName] = State };
+                AddOn = new TestableAddOn(config, states, Events, Messages);
+            }
+
+            public void SetConnected()
+            {
+                AddOn.OnConnectionStatusUpdate(this, new ConnectionStatusEventArgs(ConnectionStatus.Connected));
+            }
+
+            public void SendOrder(Order order)
+            {
+                AddOn.ExecuteOrderUpdate(this, new OrderEventArgs(order));
+            }
+        }
+
+        private class TestableAddOn : RiskGuardAddOn
+        {
+            private readonly List<string> _events;
+            private readonly List<string> _messages;
+
+            public TestableAddOn(RiskConfig config, Dictionary<string, AccountState> states, List<string> events, List<string> messages)
+            {
+                _events = events;
+                _messages = messages;
+                SetField(this, "_config", config);
+                SetField(this, "_accountStates", states);
+            }
+
+            protected override void LogEvent(string accountName, string eventCode, string message)
+            {
+                _events.Add(eventCode);
+                _messages.Add(message);
+                // Intentionally do not call base to avoid NinjaTrader log side effects in tests.
+            }
+        }
+
+        private static RiskConfig MakeConfig(int windowMs = 1000)
+        {
+            return new RiskConfig
+            {
+                Overtrading = new OvertradingConfig
+                {
+                    DuplicateEntryWindowMs = windowMs
+                }
+            };
+        }
+
+        private static Order MakeOrder(string id, OrderAction action, string root, int quantity,
+            string name, OrderState state, string accountName)
+        {
+            return new Order
+            {
+                Id = id,
+                Account = new Account { Name = accountName },
+                Instrument = MakeInstrument(root),
+                OrderAction = action,
+                OrderType = OrderType.Market,
+                Quantity = quantity,
+                Name = name,
+                OrderState = state
+            };
+        }
+
+        private static Instrument MakeInstrument(string root)
+        {
+            var instrument = new Instrument { Name = root };
+            if (instrument.MasterInstrument == null)
+                instrument.MasterInstrument = new MasterInstrument();
+            instrument.MasterInstrument.Name = root;
+            return instrument;
+        }
+
+        private static int DuplicateRefusalCount(P0171Harness harness, string orderId)
+        {
+            int count = 0;
+            for (int i = 0; i < harness.Events.Count; i++)
+            {
+                if (harness.Events[i] == "DUPLICATE_ENTRY" && harness.Messages[i].Contains(orderId))
+                    count++;
+            }
+            return count;
+        }
+
+        private static string LastDuplicateMessage(P0171Harness harness, string orderId)
+        {
+            for (int i = harness.Events.Count - 1; i >= 0; i--)
+            {
+                if (harness.Events[i] == "DUPLICATE_ENTRY" && harness.Messages[i].Contains(orderId))
+                    return harness.Messages[i];
+            }
+            return null;
+        }
+
+        private static void SetField(object target, string name, object value)
+        {
+            Type type = target.GetType();
+            while (type != null)
+            {
+                FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                if (field != null)
+                {
+                    field.SetValue(target, value);
+                    return;
+                }
+                type = type.BaseType;
+            }
+            throw new InvalidOperationException($"Field {name} not found on {target.GetType().Name}");
+        }
+
+        public static void Main(string[] args)
+        {
+            Console.WriteLine("====================================================");
+            Console.WriteLine("- RUNNING P0171 DUPLICATE-ENTRY ACCEPTANCE TESTS");
+            Console.WriteLine("====================================================");
+
+            Run(TestReplayedOrderNotRefusedAsDuplicate);
+            Run(TestOneOrderDrawsExactlyOneRefusal);
+            Run(TestGenuineDuplicateStillRefused);
+            Run(TestOrderSeenOnlyAsFilledIsStillEvaluated);
+            Run(TestReducingOrderNeverRefused);
+            Run(TestReplaySuppressionExpiresOnItsOwn);
+
+            Console.WriteLine("====================================================");
+            Console.WriteLine($"RESULTS: Passed = {_testsPassed}, Failed = {_testsFailed}");
+            Console.WriteLine("====================================================");
+
+            Environment.ExitCode = _testsFailed == 0 ? 0 : 1;
+        }
+    }
+}
+#endif
