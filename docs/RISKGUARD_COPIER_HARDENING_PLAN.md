@@ -9348,6 +9348,24 @@ inventory row -- the surface that answers *"is the guard actually protecting me"
 case: peak survives, current does not. Check what that combination reports before assuming it is
 merely blind rather than wrong in the dangerous direction.
 
+⚠️⚠️ **MEASURED WORSE, same day: it does not merely under-report, it FABRICATES A LOSS.** After the
+`v1.51.0` recompile left `RealizedPnL` at `0.0`, the next `AccountItemUpdate` computed
+`newRealizedPnL - RealizedPnL` = `-346.25 - 0` and handed that to `RecordRealizedDelta` as **one
+losing trade**. Observed on the funded account across the 16:44 reconnect:
+
+| field | before | after | note |
+|---|---|---|---|
+| `ConsecutiveLosses` | 16 | **17** | a loss that never happened |
+| `TradesToday` | 16 | 16 | unchanged, which is what exposes it |
+
+A trade counter and a loss counter that disagree is the symptom; the phantom delta is the cause. **The
+divergence is the only reason this was visible at all.**
+
+⚠️ **This corrupts the exact counter `P2-161`'s escalating ladder will be built on**, and `P2-164` is
+open on what should even count as a loss. Calibrating a ladder against a counter that gains a phantom
+entry on every recompile would bake the artefact into the rail. **Fix this before `P2-161`, not after.**
+[[a-fix-can-commit-its-own-defect]] is the risk if the ladder is built first.
+
 **Fix**: reconstruct `RealizedPnL` in the restore path from the two persisted fields, and add the
 field to `AccountPersistedData` so a future reader is not required to know the identity. ⚠️ A test must
 drive the RESTORE, not just the arithmetic -- `P0-166` found that the session-reset path had zero tests
@@ -9360,6 +9378,63 @@ correct readings of real state left by the probe session, not defects -- but the
 before the 22:00Z session reset would lock the account out immediately on two rails**, and the daily
 rail would join them on the first fill. That is an operational note for whoever arms it, not a code
 change.
+
+### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — OPEN, filed 2026-08-19 (session 61)
+
+⚠️ **BLOCKS ARMING `live`.** Measured on `TAKEPROFITPRO524207503` within half an hour of `v1.51.0`
+deploying, with no trading taking place at all:
+
+```
+16:44:39  CONNECTION_CHANGE  Connection status: Disconnecting, Connection: TPT
+16:44:40  CONNECTION_CHANGE  Connection status: Disconnected,  Connection: TPT
+16:44:42  CONNECTION_CHANGE  Connection status: Connecting,    Connection: TPT
+16:44:44  CONNECTION_CHANGE  Connection status: Connected,     Connection: TPT
+```
+
+On reconnect NT8 **replays the session's order history**. 118 distinct orders arrived in that one
+second, every one already in state `Filled`, and all 59 executions landed inside **two** seconds
+(38 at `16:44:43`, 21 at `16:44:44`). Nothing was placed; nothing was traded.
+
+The duplicate-entry rule then produced **45 `DUPLICATE_ENTRY` refusals**:
+
+```
+16:44:44 DUPLICATE ENTRY CANCELLED: order 36129 on MES Sell duplicated anchor order 36040 (152ms within 1000ms window).
+16:44:44 DUPLICATE ENTRY CANCELLED: order 36135 on MNQ Buy  duplicated anchor order 36047 (140ms within 1000ms window).
+16:44:44 DUPLICATE ENTRY CANCELLED: order 36139 on MES Sell duplicated anchor order 36040 (172ms within 1000ms window).
+...
+```
+
+Every gap is 135-190ms, and every anchor is one of just four much older orders. **The rule measures
+the interval between when the GUARD FIRST SAW two orders, not the interval between when they were
+PLACED.** On a replay that interval is an artefact of the replay's own speed, and it is always inside
+any sane window.
+
+⚠️ **In `live` this queues 45 cancels off one reconnect.** The replayed orders are `Filled`, so
+`DrainPendingCancels` drops them and the likely outcome is 45 no-ops -- but "likely" is load-bearing
+and unmeasured against `Provider31`, and **any replayed order that is still `Working` would receive a
+real cancel for an order the operator placed hours earlier**. [[the-simulator-re-ids-nothing]].
+
+⚠️ **It is not confined to this rule.** In the same second `PER_INSTRUMENT_CAP_CANCEL` fired **32**
+times on `TAKEPROFIT469067500` with 32 withheld cancels and 5 `SHADOW_LOCKOUT`s, all from the same
+replay. Every rule inside `ExecuteOrderUpdate` treats a replayed order as a new one, so this is
+`ExecuteOrderUpdate`'s shape and not one rule's -- the same finding as `P1-167`, reached from a
+different direction, and it argues for fixing them together.
+
+**Fix direction.** The rule needs an age, not an arrival order:
+
+* Prefer the order's OWN timestamp (`Order.Time`) over `stateModel.UtcNow()` when computing the gap,
+  so a replayed fill from 03:31 is 13 hours old and cannot be a duplicate of anything.
+  ⚠️ MEASURE what `Order.Time` actually holds on `Provider31` before relying on it -- it may be the
+  fill time, the submit time, or unset. Evidence must name its provider.
+* AND suppress rule evaluation during a replay window, keyed off `CONNECTION_CHANGE`, because the
+  timestamp fix cannot help a rule whose input genuinely is "how many orders in one second"
+  (`ORDER_FLOOD_LOCKOUT` would still see 118).
+* ⚠️ Do NOT fix it by narrowing the state gate back to `Submitted || Accepted`: `P1-160` measured 2 of
+  3 real duplicates arriving only as `Filled`, and 17 of 99 orders that day were `Filled`-only.
+
+⚠️ **A `try/finally`-style suppression is not enough on its own**: whatever gates the replay must FAIL
+LOUD if it is ever left on, or the duplicate rule silently stops protecting anything. Pair it with the
+`DISARM_PERSISTED` pattern -- a line that says so on every evaluation while suppressed.
 
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
