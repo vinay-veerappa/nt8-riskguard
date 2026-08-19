@@ -8594,6 +8594,187 @@ go red is worse than none, and four mutants have already beaten source checks in
 under the lock is correct and required, because it only schedules a callback and makes no broker
 call. Reviewers raise it every round; the ported gate must not.
 
+### P1-159. A per-instrument cap is checked PER ORDER, so N orders of 1 build a position of N -- the cap does not mean what its name says — OPEN, measured on the funded account 2026-08-18 (session 59)
+
+`InstrumentLimits["MNQ"].MaxContracts = 1` refuses a single 2-lot order and permits **two 1-lot
+orders**, leaving a position of 2. MEASURED three times in one evening on
+`TAKEPROFITPRO524207503`: a duplicate submission produced two 1-lot fills 99ms / 150ms / 26ms
+apart, and on one of them the operator's hand-drawn stop covered 1 of 2 -- the FSM read `Protected`
+while half the position was naked (`gap=1 (partially uncovered)`).
+
+```csharp
+if (e.Order.Quantity > perInstCap.MaxContracts)   // ONE order's quantity, not the position
+```
+
+⚠️ **THERE ARE TWO CAP MECHANISMS AND THEY READ DIFFERENT CONFIG.** The per-ORDER check reads
+`InstrumentLimits` (config root). The per-POSITION check, `MAX_SIZE_BREACH` in the audit, reads
+`profile.InstrumentProfiles` via `ResolveMaxContracts` -- and `Profiles` is **empty on the live
+box**, so every instrument falls back to `Sizing.MaxContractsPerAccount`. Setting `InstrumentLimits`
+therefore caps the ORDER and not the POSITION, which is the opposite of what the operator intends.
+
+**Fix the class, not the config**: `ResolveMaxContracts` should consult `InstrumentLimits[root]`
+before falling back to `DefaultMaxContracts`, so ONE config location drives BOTH enforcement points.
+The alternative -- asking the operator to maintain the same numbers in two places -- is how they
+come to disagree. [[a-second-reader-of-the-same-state]].
+
+⚠️ Do NOT let the position check become the only one: refusing the oversized ORDER costs nothing,
+while `MAX_SIZE_BREACH` FLATTENS, which is a fill and a commission to undo a mistake.
+
+### P1-160. A duplicate entry doubles position size with no rule against it, and the second fill is invisible to the operator — OPEN, measured 2026-08-18 (session 59)
+
+MEASURED **three times in six attempts** on the funded account, across two platforms:
+
+| time | gap | result |
+|---|---|---|
+| 03:31:01 | 99ms | two Sell 1 -> position 2 |
+| 03:33:27 | 26ms | two ATM entries -> two brackets, position 2 |
+| 03:50:57 | 150ms | two Sell 1 -> position 2, stop covered 1 of 2 |
+
+Tradovate's own order list shows two SEPARATE orders, so the duplication happens upstream of NT8 and
+neither the bridge nor the guard causes it. The cause does not matter for the fix: **a second entry
+for the same account, instrument and direction within a few hundred milliseconds is never
+intentional**, and the guard is the only component positioned to refuse it.
+
+⚠️ **THE HARM IS NOT THE SIZE, IT IS THE SILENT HALF-COVERAGE.** The operator sizes their stop for
+the position they believe they have. On 03:50:57 the stop covered 1 of 2 and the FSM reported
+`Protected` -- a naked half that looks protected on the chart and in the state. A fully naked
+position at least announces itself.
+
+**Where**: the order path beside the existing `MaxOrdersPerSecond` flood check, which is the same
+shape but a different question -- that one counts orders per second across everything, this one asks
+whether THIS entry repeats the previous one. Refuse the duplicate (cancel), do not flatten.
+
+⚠️ Must not fire on legitimate scale-ins the operator intends, nor on a bracket's own legs, which
+arrive 3-11ms after the entry fill and are the OPPOSITE side. Keyed on same-direction ENTRY orders.
+
+### P2-161. The loss cooldown fires only at the consecutive-loss LIMIT, so losses 1..N-1 cost nothing and it is redundant with the lockout it coincides with — OPEN, 2026-08-18 (session 59)
+
+```csharp
+if (state.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses
+    && _config.Overtrading.CooldownMinutes > 0)
+    state.CooldownUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.CooldownMinutes);
+```
+
+With `MaxConsecutiveLosses: 3` that is: loss 1 nothing, loss 2 nothing, loss 3 a 5-minute cooldown --
+*and* the 60-minute `CONSECUTIVE_LOSS_BREACH` lockout fires on the same tick, so the cooldown is
+almost entirely subsumed by it. The ladder today is **nothing, nothing, 60 minutes**.
+
+**The operator's stated requirement** (2026-08-18): *"any loss triggers me. consecutive losses more
+so. so a tightening/increasing of the cooldown for every loss makes sense"*. Every loss gets a
+cooldown; the duration escalates with the consecutive count; a win resets the ladder.
+
+Agreed shape -- `MaxConsecutiveLosses: 4`, base 2, doubling:
+
+| consecutive loss | pause |
+|---|---|
+| 1 | 2 min |
+| 2 | 4 min |
+| 3 | 8 min |
+| 4 | hard lockout (60 min) |
+
+⚠️ **A win must reset the ESCALATION, not merely the counter** -- they are the same field today but
+need not stay so, and an off-by-one giving loss 3 the loss-2 pause is invisible to any test that
+only checks "a cooldown was set".
+
+⚠️ **What counts as a loss is NOT settled and is owned by `P2-164`.** Any negative realized
+delta, however small? The three losses that locked the account out on 2026-08-18 were scratches of a
+few dollars. Build the ladder with the definition behind a config key defaulting to today's semantics
+(every negative counts), so `P2-164` resolves into a number rather than a rebuild.
+
+### P2-162. The cooldown FLATTENS a filled position instead of refusing the entry, so a pause costs a fill, a commission and slippage — OPEN, 2026-08-18 (session 59)
+
+`COOLDOWN_BREACH` emits `FlattenPosition` when a position is open during the cooldown window. So
+entering during a cooldown gets you filled and then closed, rather than simply refused.
+
+The lockout path next door already does it correctly: `ENTRY_CANCEL` cancels the entry order before
+it fills, and is careful to exempt position-reducing orders (`P1-44`) so it can never strip a live
+position of its protection. The cooldown should use the same mechanism.
+
+⚠️ **Keep the flatten as a BACKSTOP, not the primary.** If a position somehow exists during a
+cooldown -- a fill that beat the cancel, or a position opened before the cooldown began -- refusing
+future entries does nothing about it. The two are not alternatives.
+
+### P2-163. `AllowedInstruments` is read by one unit test and no production code, and its default PERMITS the minis — OPEN, 2026-08-18 (session 59)
+
+```csharp
+public List<string> AllowedInstruments { get; set; } =
+    new List<string> { "NQ", "MNQ", "ES", "MES", "YM", "MYM", "CL", "MCL", "GC", "MGC", "RTY", "M2K" };
+```
+
+`PropFirmProtectionSuite.cs:26`. The only reader anywhere is
+`TestPropFirmProfile_AllowedInstruments`. **Nothing in production consults it.** A reader of the
+config would reasonably conclude instruments are governed by an allow-list; they are not, and the
+default explicitly includes every full-size contract. [[dead-safety-machinery-gate]].
+
+The live mechanism is `BlockedInstruments`, which is **default-ALLOW**: anything not enumerated is
+permitted, including `SI`, `NG`, `HG`, `6E`, `ZB` and every future product.
+
+⚠️ **Why this matters at the operator's settings**: with `DailyLossLimit: 250`, ONE full-size
+contract at the guard's own catastrophe-stop distance is $200 -- 80% of the day in a single trade
+(ES 16 ticks x $12.50; NQ 40 ticks x $5.00). The instrument restriction is not a preference, it is
+what makes the daily limit coherent.
+
+**Fix**: make the allow-list enforce, defaulting to the micros actually traded, with
+`BlockedInstruments` retained as the day-by-day override (the operator asked to sometimes exclude
+MNQ). Default-deny is the correct shape for a rule set that defines how one MUST trade.
+
+### P2-164. DECISION PENDING — what counts as "a loss" for the escalating cooldown ladder, to be settled by measurement rather than preference — OPEN, filed 2026-08-18 (session 59)
+
+**Not an implementation entry.** `P2-161` builds the ladder; this entry owns the one input it
+cannot pick for itself. Filed at the operator's request: *"The three small losses locking me out
+might be an issue. Log it as something to work out later since I have two differing view points on
+that but I want to do what is right and not what I think."*
+
+#### The two viewpoints, both defensible
+
+1. **Any negative realized delta counts.** The operator's own account of themselves — *"any loss
+   triggers me"* — and the discipline contract is PRESCRIPTIVE, not fitted to observed behaviour
+   (their correction, same session). Under this reading a scratch is a loss because the tilt it
+   produces is not proportional to its size.
+2. **A loss must clear a magnitude floor.** On 2026-08-18 three scratches of a few dollars each
+   drove `ConsecutiveLosses` to 3 and took a 60-minute lockout on the funded account. Under the
+   `P2-161` ladder those same three trades cost 2 + 4 + 8 minutes before the lockout. ⚠️ **A rail
+   that charges eight minutes for a one-tick scratch is a rail that gets switched off** — and a
+   disarmed guard protects nothing, which is a strictly worse outcome than a slightly loose one.
+
+#### ⚠️ Why this must NOT be settled by asking the operator again
+
+Both viewpoints are the operator's, held simultaneously, and they have said explicitly they want
+the right answer rather than the one they currently favour. Re-asking returns whichever one is
+uppermost that day. **The question is empirical and there is data.**
+
+#### The measurement that decides it
+
+The ladder's entire justification is that a trade taken shortly after a loss is worse than a
+baseline trade. That is a testable claim about this account, not a general one:
+
+* **Source**: `interventions.jsonl` (realized P&L per closed trade, with timestamps) cross-checked
+  against `nt_extract_trades` / the NT8 trade journal. Prefer whichever has *entry* timestamps —
+  the interval that matters is loss-close → next-entry, not close → close.
+* **Measure**: expectancy of the next trade, bucketed by (a) the size of the preceding loss and
+  (b) the elapsed gap. If post-scratch expectancy tracks baseline while post-real-loss expectancy
+  drops, the floor is measured and its value falls out of the buckets. If both drop equally,
+  viewpoint 1 is correct on this account's own evidence and the scratches count.
+* **Also measure the COST**: total minutes each definition would have paused, over the same
+  history. A definition that pauses a third of the session is not enforceable regardless of what
+  the expectancy says.
+* ⚠️ **Report the sample size and refuse a conclusion below it.** A handful of post-loss trades
+  cannot separate these hypotheses, and a fitted floor from six observations is a preference
+  wearing a number. If the data cannot decide, say so and take viewpoint 1 — the stricter rail —
+  because an unjustified pause costs minutes and an unjustified permission costs the account.
+* ⚠️ **The experiments of 2026-08-18 are not evidence about how the operator trades.** They were
+  deliberate probes of the guard. Exclude that session from any bucket.
+
+#### Interim, so `P2-161` is not blocked
+
+Ship the ladder with the loss definition behind a config key (a minimum-magnitude threshold,
+default `0` = every negative counts, matching today's `ConsecutiveLosses` semantics). Then this
+decision changes a number in `config.json` rather than a build, and the measurement above can run
+against real sessions while the ladder is already live. **`All configuration is persistent`** —
+the key must round-trip the recompile like everything else.
+
+Related: `P2-161` (the ladder), `P2-162` (refuse the entry rather than flatten the fill).
+
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 
 Found by `P2-148`, which was written for exactly this and found it on its first CI run. Not by
