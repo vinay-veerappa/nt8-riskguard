@@ -868,10 +868,10 @@ jobs:
           # order does not become an ANCHOR, which is the half of the fix that can be half-done
           # while the burst itself looks cured.
           #
-          # WARNING: ~420s ESTIMATED (15 mutants). Every estimate in this file so far has been
+          # WARNING: ~505s ESTIMATED (18 mutants). Every estimate in this file so far has been
           # wrong in one direction or the other -- replace this with CI's own BATTERY_SECONDS on
           # the first green run.
-          - { label: "P0-171", batteries: "mutate_p0171.py" }   # ~420s ESTIMATED (15 mutants)
+          - { label: "P0-171", batteries: "mutate_p0171.py" }   # ~505s ESTIMATED (18 mutants)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

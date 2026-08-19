@@ -35,6 +35,10 @@ THE GROUPS BELOW:
   5. ONE ORDER, ONE REFUSAL. The set is both written and read, and keyed on the order.
   6. NEITHER MECHANISM MAY DISABLE THE RULE. The negative controls. Every assertion in groups 1-5
      is satisfied by a rule that never fires at all.
+  7. IDENTITY IS THE ORDER, NOT THE STRING THE BROKER PUT ON IT, and the set is bounded by the
+     SESSION rather than by the process lifetime. The ticket said to key on Order.Id; the funded
+     account's provider REPLACES Order.Id on accept while Sim101 never does, so the id-keyed
+     version passes every test here and leaves P1-167 open on the live account.
 
 EXPECTED SURVIVOR: none declared.
 """
@@ -47,6 +51,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
+MODELS = os.path.join(REPO, 'addons', 'RiskGuardModels.cs')
 
 MUTANTS = [
     # ---- group 1: armed, by the reconnect, on the guard's own clock -------------------------
@@ -123,19 +128,20 @@ MUTANTS = [
     (GUARD, 'group 5: the evaluated-order set is read but never written. P1-167 is restored in '
             'full: one duplicate order draws one refusal per state transition, and '
             'SHADOW_PENDING_CANCEL over-reports again',
-     '                                    stateModel.DuplicateEntryEvaluatedOrderIds.Add(e.Order.Id);',
-     '                                    _ = stateModel.DuplicateEntryEvaluatedOrderIds.Count;'),
+     '                                    stateModel.DuplicateEntryEvaluatedOrders.Add(e.Order);',
+     '                                    _ = stateModel.DuplicateEntryEvaluatedOrders.Count;'),
 
     (GUARD, 'group 5: the set is written but never read -- the mirror image, and the shape of '
             '[[dead-safety-machinery-gate]]: a collection that fills up all session and decides '
             'nothing',
-     '                            bool alreadyEvaluated = stateModel.DuplicateEntryEvaluatedOrderIds.Contains(e.Order.Id);',
+     '                            bool alreadyEvaluated = stateModel.DuplicateEntryEvaluatedOrders.Contains(e.Order);',
      '                            bool alreadyEvaluated = false;'),
 
     (GUARD, 'group 5: the set is keyed on the order id PLUS the observation time, so no two events '
             'for one order ever match. Written, read, and unable to answer yes',
-     '                                    stateModel.DuplicateEntryEvaluatedOrderIds.Add(e.Order.Id);',
-     '                                    stateModel.DuplicateEntryEvaluatedOrderIds.Add(e.Order.Id + dupNow.Ticks);'),
+     '                                    stateModel.DuplicateEntryEvaluatedOrders.Add(e.Order);',
+     '                                    stateModel.DuplicateEntryEvaluatedOrders.Add(\n'
+     '                                        new Order { Id = e.Order.Id, OrderState = e.Order.OrderState });'),
 
     # ---- group 6: neither mechanism may disable the rule ------------------------------------
     (GUARD, 'group 6: the whole rule is switched off at the choke point. Every assertion about '
@@ -148,6 +154,47 @@ MUTANTS = [
             'second event. Nothing is ever refused on first sight',
      '                            if (isEntry && !replaySuppressed && !alreadyEvaluated)',
      '                            if (isEntry && !replaySuppressed && alreadyEvaluated)'),
+
+    # ---- group 7: identity is the ORDER, not the string the broker put on it ----------------
+    (MODELS, 'group 7: the evaluated-order set is keyed on Order.Id instead of object reference. '
+             'This is the ticket\'s own instruction and it is wrong: the funded account\'s provider '
+             'REPLACES Order.Id on accept, so the set is written under the submission id and read '
+             'under the accepted one and never matches -- P1-167 stays open on the live account '
+             'while Sim101, which re-ids nothing, passes every test. '
+             '[[the-simulator-re-ids-nothing]]',
+     '        public bool Equals(Order a, Order b)\n'
+     '        {\n'
+     '            return ReferenceEquals(a, b);\n'
+     '        }\n'
+     '\n'
+     '        public int GetHashCode(Order o)\n'
+     '        {\n'
+     '            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o);\n'
+     '        }',
+     '        public bool Equals(Order a, Order b)\n'
+     '        {\n'
+     '            return a != null && b != null && a.Id == b.Id;\n'
+     '        }\n'
+     '\n'
+     '        public int GetHashCode(Order o)\n'
+     '        {\n'
+     '            return o != null && o.Id != null ? o.Id.GetHashCode() : 0;\n'
+     '        }'),
+
+    (GUARD, 'group 7: the session reset stops clearing the evaluated-order set. Runtime-only means '
+            'nothing on DISK grows; this guard runs for weeks between restarts, so the set '
+            'accumulates every order object of every session for the life of the process and pins '
+            'each one against collection',
+     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();\n'
+     '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;',
+     '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;'),
+
+    (GUARD, 'group 7: the session reset stops clearing the suppression deadline, so a stamp set at '
+            '23:59 is carried into the next session -- a suppression nothing can account for, on a '
+            'rule whose entire safety argument is that its suppression is bounded',
+     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();\n'
+     '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;',
+     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();'),
 
     (GUARD, 'group 6: the reducing-position exclusion is dropped from the entry test. An order that '
             'CLOSES a position becomes refusable, which is the one failure direction this rule may '

@@ -2273,7 +2273,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // 881ms, 884ms and 917ms. SHADOW_PENDING_CANCEL then reported 96 withheld
                             // cancels against far fewer offending orders, and that count is the one
                             // number an operator reads to judge how often the guard intervened.
-                            bool alreadyEvaluated = stateModel.DuplicateEntryEvaluatedOrderIds.Contains(e.Order.Id);
+                            bool alreadyEvaluated = stateModel.DuplicateEntryEvaluatedOrders.Contains(e.Order);
 
                             bool isEntry = e.Order.OrderType == OrderType.Market
                                 && !IsPositionReducingOrder(e.Order, stateModel)
@@ -2354,7 +2354,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // recorded when the rule was suppressed above: a replayed order
                                     // was never evaluated, so a genuine later event for it must
                                     // still be able to be.
-                                    stateModel.DuplicateEntryEvaluatedOrderIds.Add(e.Order.Id);
+                                    stateModel.DuplicateEntryEvaluatedOrders.Add(e.Order);
                                 }
                             }
                         }
@@ -5107,6 +5107,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             stateModel.LastSessionDate = currentSessionDate;
             stateModel.TradesToday = 0;
             stateModel.ConsecutiveLosses = 0;
+            // P0-171. Runtime-only, so nothing on disk grows -- but the guard runs for WEEKS
+            // between restarts, and without this the set accumulates every order object of every
+            // session for the life of the process, pinning them all against collection.
+            stateModel.DuplicateEntryEvaluatedOrders.Clear();
+            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;
             stateModel.PeakEquity = 0.0;
             stateModel.PeakOpenGain = 0.0;
             stateModel.PeakGivebackTriggered = false;

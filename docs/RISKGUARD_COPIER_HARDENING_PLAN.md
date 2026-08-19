@@ -9504,6 +9504,40 @@ ticket (45 refusals, 118 orders, 59 executions, four connection events with time
 deterministically in the suite from those numbers, plus the battery. The next genuine reconnect is
 the test; `DUPLICATE_ENTRY` count for that minute is the reading to take.
 
+⚠️ **THE TICKET ALSO SAID TO KEY THE EVALUATED-ORDER SET ON `Order.Id`, AND THAT IS THE WRONG
+KEY ON THIS OPERATOR'S PROVIDER.** The rule being edited says so 25 lines below the change --
+*"Key by object reference, not `Order.Id`: NT8's OrderId is neither unique nor stable"* -- and it
+was read past. Provider31 issues `Order.Id` as a submission GUID and **replaces it on accept**;
+`Sim101` never does. Keyed on the id the set is written under the submission id and read under the
+accepted one, so it never matches: `P1-167` would have stayed OPEN on the funded account while every
+test passed, because the test provider re-ids nothing. [[the-simulator-re-ids-nothing]] -- never key
+on a value the broker owns. The other direction fails OPEN: ids are not unique either, so two
+genuinely different orders sharing one would see the second silently skipped.
+
+Now a `HashSet<Order>` with an explicit `OrderReferenceComparer`. Explicit because
+`EqualityComparer<Order>.Default` is whatever NinjaTrader's assembly decides `Equals` means -- a
+decision made outside this codebase and free to move under a platform update.
+
+⚠️ **AND NOTHING CLEARED THE SET ON SESSION RESET.** Runtime-only means nothing on DISK grows; this
+guard runs for weeks between restarts, so it would have accumulated every order object of every
+session for the life of the process, pinning each against collection. Cleared now, with the
+suppression stamp beside it.
+
+⚠️ **BOTH DEFECTS WERE FOUND BY CI, VIA THE NEIGHBOURING BATTERY, NOT BY THE ONE WRITTEN FOR THIS
+FIX.** `mutate_p0171.py` was 15/15 green while both were live. What went red was `mutate_p1160.py`,
+with two survivors -- and they had **opposite causes that looked identical in the output**:
+
+| survivor | cause | resolution |
+|---|---|---|
+| the state gate is removed entirely | **a missing test** | an order whose FIRST observation is already `Rejected` is unreachable by the evaluated set, so nothing skipped it and it anchored. Test added; mutant killed again. |
+| the same Order object on a later transition | **genuinely equivalent** | the evaluated set now skips the second event before `ReferenceEquals` is reached. Declared as an EXPECTED SURVIVOR with the condition that ends the equivalence. |
+
+**The general shape, and it will recur: a fix that adds a second mechanism makes the first
+mechanism's mutants survive, and "equivalent now" is indistinguishable from "test missing" in the
+battery output.** Reasoning about it got one of the two right; only writing the test for each
+showed which was which. ⚠️ Do NOT delete a guard because its mutant started surviving -- that
+inverts the finding. The battery grew 15 -> 18 with group 7 covering the key and the bound.
+
 ⚠️ **THE TICKET'S STATED REASON FOR NEEDING BOTH MECHANISMS IS WRONG, AND THE FIX IS UNAFFECTED.**
 Constraint D said a recompile empties the evaluated-order set exactly when NT8 replays the session,
 so the reconnect stamp was needed to cover the post-recompile case. Measured on this box the same

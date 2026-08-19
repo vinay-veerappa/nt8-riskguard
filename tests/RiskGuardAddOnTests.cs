@@ -237,6 +237,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP0171_TheSuppressionEndsAtExactlyTheWindow);
             Run(TestP0171_ADisconnectDoesNotArmTheSuppression);
             Run(TestP0171_TheSuppressionLengthFollowsTheConfiguredWindow);
+            Run(TestP0171_AnOrderWhoseIdChangesStillDrawsOneRefusal);
+            Run(TestP0171_TwoOrdersSharingAnIdAreBothEvaluated);
+            Run(TestP0171_TheSessionResetClearsTheEvaluatedSet);
+            Run(TestP1160_AnOrderFirstSeenAsRejectedNeverAnchors);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -20129,6 +20133,123 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(P0171Refusals(h, "82002") == 1,
                 "and the suppression has lapsed by 300ms, so the pair at 300ms and 400ms is a "
                 + "duplicate -- a suppression hard-coded to the 1000ms default would swallow both");
+        }
+
+        private static void TestP0171_AnOrderWhoseIdChangesStillDrawsOneRefusal()
+        {
+            Console.WriteLine("\n[TEST] P0-171: one refusal survives the broker RE-IDING the order");
+
+            // ⚠️ THE FUNDED ACCOUNT'S PROVIDER REPLACES Order.Id ON ACCEPT. Provider31 issues a
+            // submission GUID and swaps it when the order is accepted; Sim101 never does. Keyed on
+            // the id, the evaluated-set is WRITTEN under the submission id and READ under the
+            // accepted one, so it never matches: P1-167 stays open on the live account while every
+            // test passes, because the test provider re-ids nothing.
+            // [[the-simulator-re-ids-nothing]] -- never key on a value the broker owns.
+            var start = new DateTime(2026, 8, 19, 6, 19, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            P1160Send(h, P1160Order("35995", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
+
+            var duplicate = P1160Order("submission-guid", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            _p0171Now = start.AddMilliseconds(881);
+            P1160Send(h, duplicate);
+
+            // The broker accepts it and hands back a different id for the SAME order object.
+            duplicate.Id = "35996";
+            duplicate.OrderState = OrderState.Accepted;
+            _p0171Now = start.AddMilliseconds(884);
+            P1160Send(h, duplicate);
+
+            duplicate.OrderState = OrderState.Filled;
+            _p0171Now = start.AddMilliseconds(917);
+            P1160Send(h, duplicate);
+
+            int total = h.Events.Count(e => e == "DUPLICATE_ENTRY");
+            Assert(total == 1,
+                "one order draws one refusal even when the broker replaces its Id mid-lifecycle -- "
+                + "got " + total);
+        }
+
+        private static void TestP0171_TwoOrdersSharingAnIdAreBothEvaluated()
+        {
+            Console.WriteLine("\n[TEST] P0-171: two DIFFERENT orders that share an Id are both evaluated");
+
+            // The other direction, and the one that fails OPEN. NT8's ids are not unique -- the
+            // duplicate rule's own anchor comment says so, which is why the anchor is keyed by
+            // object reference. Keyed on the id, the second of two genuinely different orders is
+            // silently skipped: a refusal the rule should have made and did not.
+            var start = new DateTime(2026, 8, 19, 10, 0, 0, DateTimeKind.Utc);
+            var h = P0171Setup("live", start);
+
+            var first  = P1160Order("SAME-ID", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+            var second = P1160Order("SAME-ID", OrderAction.Buy, OrderType.Market, "MES", 1, null);
+
+            P1160Send(h, first);
+            _p0171Now = start.AddMilliseconds(100);
+            P1160Send(h, second);
+
+            Assert(P1160SawDuplicate(h),
+                "a second order sharing the first's Id is still refused -- identity is the ORDER, "
+                + "not the string the broker put on it");
+            Assert(second.OrderState == OrderState.Cancelled,
+                "and it is the SECOND order that is cancelled, not the first");
+        }
+
+        private static void TestP0171_TheSessionResetClearsTheEvaluatedSet()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the session reset clears the replay state");
+
+            // Runtime-only means nothing on disk grows -- it does NOT mean nothing grows. This
+            // guard runs for weeks between restarts, so without a clear the set accumulates every
+            // order object of every session for the life of the PROCESS, pinning each one against
+            // collection. The suppression stamp is cleared with it for the same reason: a deadline
+            // carried across a session boundary is a suppression nothing can account for.
+            var h = P0171Setup("live", new DateTime(2026, 8, 19, 10, 0, 0, DateTimeKind.Utc));
+
+            P1160Send(h, P1160Order("90000", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+            h.State.ReplaySuppressionUntilUtc = _p0171Now.AddMilliseconds(500);
+
+            Assert(h.State.DuplicateEntryEvaluatedOrders.Count > 0,
+                "the evaluated-order set is populated by an ordinary entry");
+
+            h.Addon.ResetAccountForNewSession(h.State, h.Account, "TestAcc",
+                                              new DateTime(2026, 8, 20));
+
+            Assert(h.State.DuplicateEntryEvaluatedOrders.Count == 0,
+                "and the session reset empties it, so it is bounded by the SESSION rather than by "
+                + "the process lifetime");
+            Assert(h.State.ReplaySuppressionUntilUtc == DateTime.MinValue,
+                "and the suppression deadline does not survive into the new session");
+        }
+
+        private static void TestP1160_AnOrderFirstSeenAsRejectedNeverAnchors()
+        {
+            Console.WriteLine("\n[TEST] P1-160: an order first observed as Rejected does not become an anchor");
+
+            // ⚠️ THIS TEST EXISTS BECAUSE P0-171 MADE ITS MUTANT SURVIVE. The state gate excludes
+            // Rejected and Cancelled, and the mutant that removes the gate entirely used to die on
+            // an order seen Submitted-then-Rejected -- P0-171's evaluated-order set now skips that
+            // second event, so the mutant stopped being detectable by that route and the battery
+            // scored a survivor.
+            //
+            // The uncovered case is the one the set cannot reach: an order whose FIRST observation
+            // is already terminal. Nothing has evaluated it, so nothing skips it, and without the
+            // state gate it would anchor -- and a dead order's anchor then shadows the genuine
+            // entry that follows it, which is the P1-160 false positive in its worst form.
+            var h = P1160Setup(new RiskConfig(), "live");
+
+            var deadOnArrival = P1160Order("910", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            deadOnArrival.OrderState = OrderState.Rejected;
+            P1160Send(h, deadOnArrival);
+
+            var genuine = P1160Order("911", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
+            P1160Send(h, genuine);
+
+            Assert(!P1160SawDuplicate(h),
+                "an order first seen already Rejected never anchored, so the entry that follows it "
+                + "is not a duplicate of a trade that never existed");
+            Assert(genuine.OrderState != OrderState.Cancelled,
+                "and the genuine entry is not cancelled");
         }
 
         private static void TestMaxSizeAtExactlyLimit()

@@ -164,7 +164,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is unbounded in principle -- it is bounded in practice only by a session's order
         // count, which a session reset clears along with everything else.
         public DateTime ReplaySuppressionUntilUtc { get; set; } = DateTime.MinValue;
-        public HashSet<string> DuplicateEntryEvaluatedOrderIds { get; set; } = new HashSet<string>();
+
+        // ⚠️ KEYED BY OBJECT REFERENCE, NOT Order.Id, AND THE RULE 150 LINES AWAY SAYS SO IN AS
+        // MANY WORDS: "Key by object reference, not Order.Id: NT8's OrderId is neither unique nor
+        // stable." The P0-171 spec said to use the id; the id is the wrong key, and on THIS
+        // operator's provider it is measurably the wrong key.
+        //
+        // Provider31 issues Order.Id as a submission GUID and REPLACES IT ON ACCEPT, while the
+        // Simulator never does. Keyed on the id, the set is written under the submission id and
+        // read under the accepted one: it never matches, P1-167 stays open on the live account,
+        // and every test passes because Sim101 re-ids nothing. That is the whole of
+        // [[the-simulator-re-ids-nothing]] -- never key on a value the broker owns.
+        //
+        // The other direction is worse. NT8's ids are not unique either, so two GENUINELY
+        // different orders can share one, and the second would be silently skipped -- a refusal
+        // the rule should have made and did not, which is the fail-OPEN direction.
+        public HashSet<Order> DuplicateEntryEvaluatedOrders { get; set; }
+            = new HashSet<Order>(OrderReferenceComparer.Instance);
 
         // Lockout phase: PendingCancel -> PendingFlatten -> Confirmed.
         // Only Confirmed stops emitting actions. This prevents the infinite
@@ -414,6 +430,27 @@ namespace NinjaTrader.NinjaScript.AddOns
     }
 
     // P1-160: anchor record for the duplicate-entry rule. Stored by Order reference, not Id.
+    /// <summary>
+    /// Reference identity for Order, explicitly. HashSet&lt;Order&gt; would fall back to
+    /// EqualityComparer&lt;Order&gt;.Default, which is whatever the PLATFORM's Order type decides
+    /// Equals means -- a decision made in NinjaTrader's assembly, not this one, and free to change
+    /// under a platform update. Stating it here makes the key a property of this code.
+    /// </summary>
+    internal sealed class OrderReferenceComparer : IEqualityComparer<Order>
+    {
+        internal static readonly OrderReferenceComparer Instance = new OrderReferenceComparer();
+
+        public bool Equals(Order a, Order b)
+        {
+            return ReferenceEquals(a, b);
+        }
+
+        public int GetHashCode(Order o)
+        {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o);
+        }
+    }
+
     public class RecentEntryAnchor
     {
         public Order Order;

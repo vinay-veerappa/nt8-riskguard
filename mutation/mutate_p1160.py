@@ -70,11 +70,23 @@ MUTANTS = [
      '                                            LogEvent(accountName, "DUPLICATE_ENTRY",',
      '                                            LogEvent(accountName, "DUPLICATE_ENTRY",'),
 
-    (GUARD, 'group 1: the same Order object on a LATER state transition is treated as a new order, '
-            'so every entry ever placed is its own duplicate and gets cancelled. One NT8-native '
-            'order now presents four times -- Submitted, Accepted, Working, Filled -- and the ATM '
-            'entry measured on 2026-08-18 logged `Initialized` twice on top of that. This is P2-46 '
-            'in the neighbouring rate governor, one rule over',
+    (GUARD, 'EXPECTED SURVIVOR: the same Order object on a LATER state transition is treated as a '
+            'new order, so every entry ever placed would be its own duplicate. EQUIVALENT SINCE '
+            'P0-171, and it was KILLED before that -- the change is recorded here rather than the '
+            'mutant being deleted, because what makes it equivalent is a SECOND mechanism and not '
+            'a proof. P0-171 added DuplicateEntryEvaluatedOrders, so an order that has been through '
+            'this rule once is skipped before the ReferenceEquals check is reached; the check is '
+            'now the inner of two guards against the same event. It stops being equivalent the day '
+            'the evaluated-order set is removed or narrowed, and on that day it is P2-46 again in '
+            'the neighbouring rate governor -- one NT8-native order presents four times (Submitted, '
+            'Accepted, Working, Filled) and the ATM entry measured 2026-08-18 logged `Initialized` '
+            'twice on top of that. ⚠️ Do NOT delete the ReferenceEquals check because this mutant '
+            'survives: that reasoning inverts the finding. Its partner in group 2b, the state gate, '
+            'was ALSO reported survived by the same P0-171 change and turned out to be a MISSING '
+            'TEST rather than equivalence -- an order whose first observation is already Rejected '
+            'is unreachable by the evaluated set. That test now exists and that mutant is killed '
+            'again. This one is equivalent; that one was not; the two looked identical in the '
+            'battery output',
      '                                        if (!ReferenceEquals(anchor.Order, e.Order) && gapMs < dupWindowMs)',
      '                                        if (gapMs < dupWindowMs)'),
 
