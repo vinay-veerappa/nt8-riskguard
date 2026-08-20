@@ -11517,7 +11517,8 @@ sessions after that stopped being true.
    `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared), and the instrument allow-list plus its
    position-level enforcement in `v1.51.0` (suite 3332/0, battery 17/17). Remaining, in order:
    **`P2-161`** + **`P2-162`** -- the escalating cooldown ladder, and refusing the entry rather than
-   flattening the fill. ⚠️ Both are gated on **`P2-164`**, which is a DECISION and not code.
+   flattening the fill. ⚠️ **Both are now UNGATED**: the decision they waited on is measured and
+   resolved (plan entry, not named here -- this block's gate reads any ID as work to do).
    ~~`P2-165`~~ — ✅ CLOSED, and it carried a finding worth keeping here rather than only in the
    plan: **the per-instrument cap refused the order that FLATTENS an oversized position.** Reachable
    rather than theoretical — the duplicate-entry defect measured on this account leaves a 2-lot MNQ
@@ -11530,11 +11531,23 @@ sessions after that stopped being true.
    filled order is meaningless. The broker-placed case is covered by the position-level
    cap that closed earlier in this block, and a test pins that division of labour. (Its ID lives in
    the plan and not here -- this block's gate reads any ID in it as work to do.)
-   ⚠️ **`P2-164` is a DECISION, not code, and it gates how the ladder is calibrated** --
-   what counts as "a loss". The operator holds two opposing views at once and asked for the right
-   answer rather than the one they favour, so **re-asking them is not how this closes**; it is
-   settled by measuring post-loss expectancy on this account. Build `P2-161` with the definition
-   behind a config key so the answer lands as a number, not a rebuild.
+   ⚠️ **WHAT COUNTS AS "A LOSS" IS MEASURED AND ANSWERED: any negative realized delta, behind
+   `Overtrading.LossFloorDollars` defaulting to 0.0.** `tools/measure_post_loss_expectancy.py`
+   reconstructs round trips from the ledger and is committed, so this is re-runnable rather than a
+   claim. The data DECLINED to justify a magnitude floor -- and the way it declined is the finding:
+   on the funded account post-scratch expectancy is BETTER than baseline and the worst trade is the
+   one after a WIN, while on the only large sample post-loss and post-win expectancy sit 25 CENTS
+   apart. Every bucket is n = 2-11 against a floor of 30.
+   ⚠️ **The large sample is the wrong sample, and this is the trap to remember.** 274 of the 432
+   reconstructed round trips are sim/copier-test/ORB-strategy accounts, most of them the AGENT's own
+   validation orders from these hardening sessions. Calibrating a rail about the operator's tilt
+   against those would be measuring the wrong thing precisely. **Do not raise n by pooling them.**
+   ⚠️ **AND THE OPERATOR'S OBJECTION IS ANSWERED BY THE LADDER, NOT BY A FLOOR.** Their concern was
+   three scratches costing a 60-MINUTE lockout, which the measurement reproduces (2 lockouts in 7
+   days under the strict definition). Under the ladder those same three cost 2+4+8 = 14 minutes. The
+   two viewpoints were never in conflict -- both were reactions to a penalty the ladder deletes.
+   Cost of the strict rail: 198 paused minutes over 7 days, about half an hour a day. Re-run the
+   tool at n ~ 100 discretionary round trips, which is roughly a month away.
 
 9. ~~`P2-145`~~ — ✅ CLOSED this session, `v1.44.0`, suite **3158/0**, battery **10/10**. Struck
    rather than deleted because its instruction was wrong in an instructive way: it said to drive the

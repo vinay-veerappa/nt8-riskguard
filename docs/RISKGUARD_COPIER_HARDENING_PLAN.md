@@ -9048,7 +9048,7 @@ entirely and "never cancel a protective order" is satisfied by never cancelling 
    **position**, which is what catches the broker-placed case. `TestCap_P2165_AFilledOrderIsNotCancelled`
    pins that division of labour so a later widening of the gate has to argue with it.
 
-### P2-164. DECISION PENDING — what counts as "a loss" for the escalating cooldown ladder, to be settled by measurement rather than preference — OPEN, filed 2026-08-18 (session 59)
+### P2-164. DECISION — what counts as "a loss" for the escalating cooldown ladder, settled by measurement rather than preference — ✅ RESOLVED 2026-08-20 (session 61), filed 2026-08-18 (session 59)
 
 **Not an implementation entry.** `P2-161` builds the ladder; this entry owns the one input it
 cannot pick for itself. Filed at the operator's request: *"The three small losses locking me out
@@ -9304,6 +9304,86 @@ chooses. [[measure-the-deployed-system]]
 ⚠️ **The sets are cleared at the session reset**, with the anchors and for the same reason: an order
 reference from last session can never come back, so keeping them is a leak on a process that runs
 for weeks. The whole dictionary is dropped, not just the sets a rule happens to have created.
+
+#### ✅ MEASURED AND RESOLVED 2026-08-20 (session 61) — take viewpoint 1, behind a config key. `tools/measure_post_loss_expectancy.py`
+
+Run against every `EXECUTION_UPDATE` in `interventions.jsonl` and its archive — 467,581 ledger
+lines, 6,269 usable executions, FIFO-reconstructed into round trips per (account, root). The tool
+is committed so this is re-runnable rather than a one-off assertion.
+
+##### The answer: the data cannot separate the hypotheses, so viewpoint 1 stands
+
+That was the pre-agreed outcome for exactly this case, and the entry was right to specify it in
+advance. But the measurement is more informative than "not enough data":
+
+**On the funded account (n=31, the only discretionary sample):**
+
+| preceding | next E[$] | n | vs baseline |
+|---|---|---|---|
+| scratch, ≤ $10 | −2.00 | 10 | **+15.90** |
+| $10–25 | +18.12 | 2 | +36.02 |
+| $25–50 | −43.33 | 3 | −25.44 |
+| > $50 | +1.75 | 5 | +19.65 |
+| **CONTROL: after a WIN** | **−50.19** | 9 | **−32.30** |
+
+⚠️ **The premise the ladder rests on is not supported here — it is inverted.** Post-scratch
+expectancy is *better* than baseline, and the worst trade on this account is **the one after a
+win**. Taken at face value these numbers argue for a cooldown after WINS. They are not taken at
+face value, because every bucket is n = 2–11 against a declared floor of 30.
+
+**On the largest sample (`Sim101`, n=125):** post-loss −21.57 vs baseline, post-win **−21.32** vs
+baseline. Within **25 cents of each other**. Whatever that measures, it is not tilt — it is
+outlier skew: 73% of those trades lose and expectancy is still +$10.71, so two or three trades
+carry the mean and every "vs baseline" figure is a statement about them.
+
+##### ⚠️ And the large sample is the wrong sample, which is the finding worth keeping
+
+`Sim101`, `SimCopy2`, `SimCopyTest1`, `Sim-ORB`, `Sim_All_Day_ORB`, `Playback101` — 274 of the 432
+reconstructed round trips — are sim accounts carrying **copier-validation orders placed during
+these hardening sessions** plus ORB-strategy traffic. Calibrating a discipline rail about the
+operator's psychology against the agent's own test orders would be measuring the wrong thing
+*precisely*, which is worse than measuring nothing. **Do not raise n by pooling them in.** The
+sample is small because the operator has taken 31 round trips through this guard.
+
+##### The cost side, which DOES give a usable answer
+
+| a loss is… | losses | paused | lockouts |
+|---|---|---|---|
+| any negative | 21 | **198 min** (~28 min/day over 7 days) | 2 |
+| \|loss\| > $10 | 10 | 36 min | 0 |
+| \|loss\| > $25 | 8 | 32 min | 0 |
+| \|loss\| > $50 | 5 | 18 min | 0 |
+
+So the strict definition costs about half an hour a day and is **not** the "pauses a third of the
+session" scenario that would make it unenforceable. The stricter rail is affordable.
+
+⚠️ **The percentage column is a floor, not a ceiling.** Its denominator is the sum of each day's
+first-entry-to-last-exit span, which came to 8,397 minutes over 7 days — 20 hours a day, because a
+day containing one early and one late trade counts the gap between them. The first version divided
+by wall clock across 11.6 days and reported 1.2%; both are too generous. **Read the minutes, not
+the percent.**
+
+##### ⚠️ The operator's objection is answered by the LADDER, not by the floor
+
+This is the part that dissolves the dilemma. Their concern was three scratches costing a
+**60-minute lockout** on 2026-08-18 — and the measurement reproduces it: "any negative" fires **2
+lockouts** in 7 days. But under `P2-161`'s ladder those same three scratches cost **2 + 4 + 8 = 14
+minutes**, not 60. The thing they objected to was the lockout, and the ladder already removes it.
+
+**They do not have to accept a looser definition of "a loss" to avoid the outcome they disliked.**
+Which means the two viewpoints were never actually in conflict — they were both responses to a
+60-minute penalty that `P2-161` deletes.
+
+##### What `P2-161` should therefore build
+
+* **Definition: any negative realized delta counts.** Stricter rail, chosen because the data
+  declined to justify a floor, and cheap enough to enforce.
+* ⚠️ **Behind a config key** (`Overtrading.LossFloorDollars`, default `0.0`) so the answer lands as
+  a number and not a rebuild — the entry's own instruction, and it stays right: the honest state of
+  this measurement is "n = 31, revisit at n = 100", and revisiting must not mean recompiling.
+* **Re-run this tool at n ≈ 100 discretionary round trips.** At the current rate that is roughly a
+  month. If post-real-loss expectancy then separates from post-scratch, the floor is measured and
+  its value falls out of the buckets — that is what the config key is for.
 
 ### P1-168. Every per-order rule shares a state gate that cannot see an instantly-filled market order, and `BLACKLIST_CANCEL` is the one with no position-level backstop — ✅ FIXED 2026-08-19 (session 61), v1.51.0 — suite 3332/0, battery 17/17, closed with `P2-163`
 
