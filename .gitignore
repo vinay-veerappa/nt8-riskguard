@@ -28,3 +28,7 @@ logs/agent_loop/*
 !logs/agent_loop/ledger.jsonl
 !logs/agent_loop/learning_feedback.jsonl
 *.log
+
+# tools/ci_local.py scratch: per-worker git worktrees and battery logs.
+.ci-local/
+.ci-local-logs/

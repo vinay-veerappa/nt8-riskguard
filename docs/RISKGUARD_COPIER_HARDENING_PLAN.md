@@ -9305,6 +9305,25 @@ chooses. [[measure-the-deployed-system]]
 reference from last session can never come back, so keeping them is a leak on a process that runs
 for weeks. The whole dictionary is dropped, not just the sets a rule happens to have created.
 
+##### ⚠️ QUANTIFIED LIVE ON THE DAY IT WAS FIXED, and NOT yet live-validated
+
+The ledger for 2026-08-20, split at the 15:43Z deploy of `v1.54.0`:
+
+```
+BEFORE: 228 refusal log lines for 74 distinct orders = 3.08 lines per order
+        distribution: {1: 1, 2: 22, 3: 44, 4: 2, 8: 2, 9: 3}
+AFTER : no refusals at all
+```
+
+**3.08 lines per order**, with 44 orders drawing exactly three — the entry's "one duplicate order,
+three refusals" reproduced at scale, hours before the fix shipped. Two orders drew **eight** and
+three drew **nine**.
+
+⚠️ **THE "AFTER" WINDOW PROVES NOTHING AND MUST NOT BE READ AS SUCCESS.** There were no qualifying
+orders after the deploy, so the absence of refusals is the absence of *input*, not evidence of
+de-duplication. Silence is not success. The fix is live-DEPLOYED and live-UNVALIDATED; the next
+over-cap or blocked order settles it, and the number to check is lines-per-order, not the count.
+
 #### ✅ MEASURED AND RESOLVED 2026-08-20 (session 61) — take viewpoint 1, behind a config key. `tools/measure_post_loss_expectancy.py`
 
 Run against every `EXECUTION_UPDATE` in `interventions.jsonl` and its archive — 467,581 ledger
@@ -9987,6 +10006,128 @@ rounds because it could not see `_config.Overtrading.DuplicateEntryWindowMs` and
 of reflection to look for it (`CF-31`). The two-mechanism structure and the field placement in the
 loop's patch were correct and were kept; the reflection was deleted and replaced with one property
 path.
+
+### P1-175. The suite has load-sensitive tests, and a flake during a mutant scores that mutant KILLED — OPEN, measured 2026-08-20 (session 61) while building the local CI runner
+
+**Measured, not inferred.** Six copies of the suite run concurrently in **six separate git
+worktrees**, all builds completed first so no build storm overlapped them:
+
+```
+wt0 3433/1   wt1 3425/3   wt2 3434/0   wt3 3426/2   wt4 3433/1   wt5 3428/2
+```
+
+Non-deterministic, never the same set twice. **Run alone, every one of those worktrees is
+3434/0.** So this is not an environment difference and not a worktree artefact — the worktree was
+eliminated as a variable deliberately, because `[[a-worktree-is-not-a-fresh-checkout]]` made it the
+obvious suspect and it was the wrong one.
+
+The names that recur: `CM2: the camelCase aliases and the flat legacy file still load`, `CM2: a
+saved relationship reloads with its sizing mode and ratio table intact`, `CM2: a relationship
+loaded from disk sizes a fill from its table`, and `HARNESS: every declared test method is invoked
+by the runner`. The `CM2` cluster is copier-config round-trip through
+`Globals.UserDataDir/RiskGuard/copier_config.json`.
+
+⚠️ **`Globals.UserDataDir` is NOT the live NinjaTrader directory and this is not a live hazard.**
+The stub roots it at `AppDomain.CurrentDomain.BaseDirectory/MockUserData`, i.e. inside each
+worktree's own build output. Checked, because "the test suite writes the guard's real config" would
+have been a far more serious finding than the one that is actually here.
+
+#### ⚠️ Why this is P1 and not a test-hygiene nit
+
+**A battery reads `Failed > 0` as a DETECTION.** Every one of them does — it is the scoring rule.
+So a flake occurring during a mutant run marks that mutant **KILLED** when nothing killed it, and
+the battery reports a better score than the suite earned. That failure is **silent**: it produces a
+green run, no survivor, and no line anywhere saying a test flaked. The mutation batteries are this
+repo's whole evidence standard, and this puts a non-deterministic inflation term on all of them.
+
+The other direction is merely wasteful: a flake at the baseline aborts the battery with `baseline
+is RED`, which is loud and costs one re-run.
+
+⚠️ **GitHub CI cannot see this**, which is why it has never shown up. CI runs one bin per hosted
+runner with nothing else on the box, so the suite is never under contention there. The local runner
+is what exposed it, and the exposure is the reason to keep the local runner even though CI is green.
+
+#### What to do
+
+1. **Find the shared or timing-sensitive state.** The `CM2` cluster is the lead: a config
+   write-then-read that loses a race under IO load, or a fixed filename within `MockUserData`
+   colliding between the tests themselves rather than between processes.
+2. ⚠️ **Then give the batteries a defence that does not depend on having found it.** The scoring
+   rule `Failed > 0 == KILLED` cannot distinguish a detection from a flake, and a fix to three
+   named tests does not change that. Re-running a mutant that appears killed, once, and requiring
+   the same verdict twice would — at the cost of doubling only the killed cases.
+3. `tools/ci_local.py` already retries a red baseline once and defaults `--jobs` well below the
+   core count. Both are mitigations, not the fix, and both are commented as such.
+
+### P2-176. CI ran only on GitHub while 24 local cores sat idle, and a self-hosted runner is the wrong answer on a PUBLIC repo — ✅ CLOSED 2026-08-20 (session 61), `tools/ci_local.py`
+
+**The measurement that motivated it**: one rebuild-and-run of the ~3400-test suite takes **8.07s on
+this box against ~19.6s on a hosted runner — 2.4x**. Total CI compute for a full run is **17,144s
+across 20 jobs**, so the hardware difference is worth having.
+
+⚠️ **A SELF-HOSTED GITHUB RUNNER WAS CONSIDERED AND REJECTED, AND THE REASON IS THE POINT.** Both
+repos are **PUBLIC** and `ci.yml` triggers on `pull_request`. A self-hosted runner would let any
+fork's pull request execute arbitrary code **on the machine running NinjaTrader against a funded
+50K account**, which is the single worst place on this network to offer that. GitHub's own
+documentation advises against precisely this pairing. The operator was offered going private as the
+alternative and chose the local script instead. `gh api .../actions/runners` returns
+`total_count: 0` and should stay there.
+
+#### What it does
+
+`python tools/ci_local.py` runs all 13 gates plus `check_anchors.py` (6 seconds; CI's `checks` job
+takes 110), then build + suite, then **all 60 batteries across parallel git worktrees** pulled from
+a shared queue longest-first — self-balancing, so it needs no weights and sidesteps
+`pack_ci_matrix.py`'s refusal to guess them.
+
+⚠️ **Each worker gets its OWN worktree, and that is the load-bearing part.** A battery owns its
+source tree for the length of its run; two in one tree interleave and one writes the other's mutant
+back as its "original". That has happened twice here. Per-worktree isolation makes it structurally
+impossible, and a worker killed mid-mutant leaves the damage in a directory the script deletes.
+
+⚠️ **It also makes gates safe to run BESIDE the batteries**, which is otherwise forbidden — a gate
+reading source with a mutant applied reports a FALSE RED, and a false red is the one you act on.
+
+**First full run: 17.2 min against GitHub's 24m08s**, with 50 of 60 batteries green and the other
+10 traced to `P1-175`.
+
+⚠️ **THIS DOES NOT REPLACE GITHUB ACTIONS AND MUST NOT.** A local pass proves the tree you ran it
+on; only CI proves the commit you **pushed** was checked, and nothing local runs on a commit you
+forgot to run it on. The script prints that line at the end of every green run.
+
+### P3-177. `ci.yml`'s bin comments claim a 1119s critical path; it is 1358s, and every local estimate in the file has read 21-23% high — OPEN, measured 2026-08-20 (session 61)
+
+The workflow's packing comments were written against a critical path of **1119s**. Measured on run
+`32385089590` it is **1358s** (`P2-136+P2-101+P2-142+P1-157`), so the numbers the packing decisions
+were justified against have drifted low by more than 20%.
+
+Three independent measurements now agree on the direction of the *other* error too: local estimates
+of battery weight came in **21%, 22% and 23% high** against CI for `P2-165`, `P1-167` and `P1-172`.
+That is consistent enough to correct for, and it is why `pack_ci_matrix.py` refuses a guessed
+weight rather than accepting one.
+
+⚠️ **Do not repack from the numbers in the comments.** Mine `BATTERY_SECONDS` from a green run
+first. And note the ceiling is a CONSTRAINT, not a target: 19 bins + `checks` = 20 jobs = the whole
+account-wide concurrency limit, shared with the sibling repo.
+
+### P2-178. `nt_extract_trades` returns EASTERN timestamps with a `Z` suffix, so every consumer reads them as UTC — OPEN, found 2026-08-20 (session 61)
+
+Found while measuring `P2-164`, by a discrepancy that had no other explanation. The tool reported
+executions on the funded account at `2026-08-20T09:57:51.985Z`; `interventions.jsonl` had the same
+orders at `13:57:52Z`. Four hours apart, which is ET→UTC on this date.
+
+**`Z` means UTC. It is not a decoration.** A consumer that trusts it — and every consumer should —
+places the operator's morning session in the middle of the night, and any analysis that joins this
+tool's output to the ledger, to bar data, or to session windows silently mis-buckets everything by
+four hours. It cost one wrong statement to the operator in the session that found it, corrected
+only because the ledger disagreed.
+
+⚠️ **The failure is quiet and self-consistent**, which is the bad kind: every timestamp is wrong by
+the same offset, so nothing inside the output looks odd. It is visible only by joining to another
+source, and `[[measure-the-deployed-system]]` is what made the join happen at all.
+
+Fix in `nt8-mcp-bridge`: emit real UTC, or drop the `Z` and name the zone. ⚠️ Do not "fix" it by
+subtracting four hours — the offset is a DST-dependent property of the date, not a constant.
 
 ### P1-174. A recompile while holding a WINNING position re-baselines the peak-giveback rail to the current price, and the code already marks that state dirty for a save that never stores it — ✅ FIXED 2026-08-20 (session 62), v1.52.6 — suite 3382/0, battery 6/6, and the battery caught an UNTESTED safeguard I had written and commented at length
 **CLOSED 2026-08-20 (session 62), `v1.52.6`.** Suite **3382 / 0**, `mutate_p1174.py` **6 / 6** no
