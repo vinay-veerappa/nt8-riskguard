@@ -11504,15 +11504,24 @@ sessions after that stopped being true.
    gate remains blind to orders that arrive already `Filled` (17 of 99 on this account). That is
    correct for cancel paths — you cannot cancel a filled order — and the coverage lives in the
    position-level rules. Do not "fix" it by widening a cancel gate.
-6b. **`P1-175`** -- ⚠️ **READ THIS BEFORE TRUSTING ANY BATTERY RESULT.** The suite has
-   load-sensitive tests: six copies run concurrently in six SEPARATE worktrees gave 0/1/1/2/2/3
-   failures out of 3434, never the same set, while each worktree ALONE is 3434/0. Every battery
-   scores `Failed > 0` as a DETECTION, so a flake during a mutant marks it KILLED when nothing
-   killed it -- silently, with no survivor and no line saying a test flaked. That puts a
-   non-deterministic inflation term on this repo's entire evidence standard. GitHub CI cannot see
-   it (one bin per runner, no contention), which is why it took the local runner to find.
-   ⚠️ The scoring rule is the deeper half: fixing the three named tests does not stop the NEXT
-   flake being read as a kill. Requiring a killed mutant to be killed TWICE would.
+6b. ~~`P1-175`~~ -- ✅ CAUSE FIXED this session, `v1.55.0`. Five FIXED filenames under `%TEMP%`,
+   which is machine-global, so each was one file shared by every suite process on the box. Six
+   concurrent suites went 0/1/1/2/2/3 failures of 3434 before; twelve went 3434/0 twice after.
+   ⚠️ **Both obvious suspects were wrong and eliminating them was the work.** It looked like
+   line endings, so a worktree was run ALONE first -- 3434/0, hypothesis dead. Then like the suite
+   writing the live NT8 config, which the stub roots inside each worktree's own build output. What
+   was left was machine-global state, and that is what it was.
+   ⚠️ **The gate for it CANNOT REPRODUCE what it prevents**, and is a source check for that reason:
+   CI runs one bin per runner with nothing else on the box, so contention never happens there. That
+   is why this survived every green run in the project's history until the suite ran in parallel.
+**`P1-179`** -- ⚠️ **THE PART THAT IS NOT FIXED, AND IT IS THE PART THAT MATTERED.** A battery
+   scores `Failed > 0` as a DETECTION, so ANY spurious red marks a mutant KILLED -- silently, no
+   survivor, no warning, a score the suite did not earn. The entry struck above removed the only
+   KNOWN trigger (its ID is not repeated -- this block reads any ID as work to do);
+   it did not make the rule able to tell a detection from an accident. The cheap fix is to require
+   a killed mutant to be killed TWICE, which costs only the killed path, and it must not be applied
+   to survivors. ⚠️ The rule is copied into all 60 batteries, so doing it properly means moving
+   scoring into `_battery.py` first -- a 60-file change that must not ride along with a defect fix.
 6c. **`P3-177`** + **`P2-178`** -- the CI critical path is 1358s while `ci.yml`'s packing comments
    still say 1119s and three local estimates read 21-23% high; and `nt_extract_trades` stamps
    EASTERN times with a `Z`, so every consumer mis-buckets by four hours. The second one already

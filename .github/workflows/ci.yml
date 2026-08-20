@@ -357,6 +357,23 @@ jobs:
       - name: Code the test build compiles away still parses
         run: python tools/check_window_parses.py
 
+      # P1-175. `Path.GetTempPath()` is MACHINE-GLOBAL, so a FIXED filename under it is one file
+      # shared by every suite process on the box. Five sites did that, and they were the whole
+      # cause of the flakiness measured 2026-08-20: six concurrent suites in six SEPARATE
+      # worktrees gave 0/1/1/2/2/3 failures out of 3434, never the same set, while each run alone
+      # was 3434/0. After the fix, twelve concurrent runs were 3434/0 twice over.
+      #
+      # ⚠️ THE STAKE IS NOT A FLAKY TEST. Every battery scores `Failed > 0` as a DETECTION, so a
+      # collision during a mutant run marks that mutant KILLED for free -- no survivor, no
+      # warning, a green battery, and a score the suite did not earn.
+      #
+      # ⚠️ THIS GATE CANNOT REPRODUCE THE DEFECT IT PREVENTS. CI runs one bin per hosted runner
+      # with nothing else on the box, so the suite is never under contention here and the failure
+      # is unreachable in this environment. The gate is a SOURCE check for exactly that reason:
+      # the condition is invisible to CI, so it has to be asserted rather than observed.
+      - name: Tests use unique temp paths
+        run: python tools/check_tests_use_unique_temp_paths.py
+
       # The ordering blocks a session reads before choosing what to work on had been
       # carrying SIX closed IDs -- P2-95, P2-93 and P2-94 (all closed in session 34) and
       # the three P?- UI write items -- because each session wrote its list by copying the

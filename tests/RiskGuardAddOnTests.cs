@@ -28721,7 +28721,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Console.WriteLine("\n[TEST] TestCopierGroup_GroupPersistence");
             var engine = TradeCopierEngine.Instance;
-            string testFile = Path.Combine(Path.GetTempPath(), "test_copier_group_config.json");
+            string testFile = TempFileForTest("copier_group_config");
 
             var group = new CopierGroup
             {
@@ -30770,9 +30770,35 @@ namespace NinjaTrader.NinjaScript.AddOns
         // partial and Assert is private to it (see the CM1 header).
         // ------------------------------------------------------------------
 
+        /// <summary>
+        /// P1-175. ⚠️ A FIXED FILENAME UNDER %TEMP% IS MACHINE-GLOBAL, so two suite processes
+        /// running at once write and read THE SAME FILE. Five sites did this and they are the whole
+        /// of the flakiness measured 2026-08-20: six concurrent suites in six separate worktrees
+        /// gave 0/1/1/2/2/3 failures out of 3434, never the same set, while each alone was 3434/0.
+        ///
+        /// ⚠️ WHY THAT MATTERED FAR MORE THAN A FLAKY TEST. Every mutation battery scores
+        /// `Failed > 0` as a DETECTION, so a collision during a mutant run marks that mutant KILLED
+        /// when nothing killed it -- silently, with no survivor and no line saying a test collided.
+        /// It put a non-deterministic inflation term on this repo's entire evidence standard, and
+        /// GitHub CI could never show it because CI runs one bin per runner with nothing else on the
+        /// box. It took running the suite in parallel to find.
+        ///
+        /// The tag is per-PROCESS and computed once, so a name is stable within a run -- callers
+        /// rely on asking twice and getting the same path -- and unique across concurrent runs.
+        /// `tools/check_tests_use_unique_temp_paths.py` stops a sixth site appearing.
+        /// </summary>
+        private static readonly string TestRunTag =
+            System.Diagnostics.Process.GetCurrentProcess().Id.ToString("D")
+            + "_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+
+        private static string TempFileForTest(string name)
+        {
+            return Path.Combine(Path.GetTempPath(), "rgtest_" + name + "_" + TestRunTag + ".json");
+        }
+
         private static string Cm2TempFile(string name)
         {
-            return Path.Combine(Path.GetTempPath(), "test_cm2_" + name + ".json");
+            return TempFileForTest("cm2_" + name);
         }
 
         private static CopierRelationship Cm2Relationship()
@@ -31192,7 +31218,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(engine.GetGroups().Count(g => g.GroupName == "Cm3Group") == 1,
                 "the merge upserted rather than appending a duplicate group");
 
-            string file = Path.Combine(Path.GetTempPath(), "test_cm3_group.json");
+            string file = TempFileForTest("cm3_group");
             engine.SaveToDisk(file);
             var reader = new TradeCopierEngine();
             reader.LoadFromDisk(file);
@@ -31490,7 +31516,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine();
             Console.WriteLine("[TEST] P1-76: a hand-edited file with an overlap LOADS INTACT and reports the conflict");
 
-            string file = Path.Combine(Path.GetTempPath(), "test_p1_76_overlap.json");
+            string file = TempFileForTest("p1_76_overlap");
             var writer = new TradeCopierEngine();
             writer.UpsertRelationship(new CopierRelationship
             {
@@ -31649,7 +31675,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Console.WriteLine();
             Console.WriteLine("[TEST] P1-75: LoadFromDisk DISARMS prop limits, so a read must never call it");
 
-            string file = Path.Combine(Path.GetTempPath(), "test_p1_75_prop_limits.json");
+            string file = TempFileForTest("p1_75_prop_limits");
             var suite = PropFirmProtectionSuite.Instance;
 
             try

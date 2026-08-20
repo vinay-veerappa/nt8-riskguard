@@ -10007,7 +10007,7 @@ of reflection to look for it (`CF-31`). The two-mechanism structure and the fiel
 loop's patch were correct and were kept; the reflection was deleted and replaced with one property
 path.
 
-### P1-175. The suite has load-sensitive tests, and a flake during a mutant scores that mutant KILLED — OPEN, measured 2026-08-20 (session 61) while building the local CI runner
+### P1-175. The suite has load-sensitive tests, and a flake during a mutant scores that mutant KILLED — ✅ FIXED 2026-08-20 (session 61) for its CAUSE, five machine-global temp filenames; the scoring rule it exploited is split out as `P1-179`
 
 **Measured, not inferred.** Six copies of the suite run concurrently in **six separate git
 worktrees**, all builds completed first so no build storm overlapped them:
@@ -10058,6 +10058,100 @@ is what exposed it, and the exposure is the reason to keep the local runner even
    the same verdict twice would — at the cost of doubling only the killed cases.
 3. `tools/ci_local.py` already retries a red baseline once and defaults `--jobs` well below the
    core count. Both are mitigations, not the fix, and both are commented as such.
+
+#### ✅ CAUSE FOUND AND FIXED 2026-08-20 (session 61) — `v1.55.0`. ⚠️ The SCORING RULE it exploited is untouched and is now `P1-179`.
+
+**The cause was five fixed filenames under `%TEMP%`**, and nothing subtler:
+
+```
+test_cm2_<name>.json      test_cm3_group.json       test_copier_group_config.json
+test_p1_76_overlap.json   test_p1_75_prop_limits.json
+```
+
+`Path.GetTempPath()` is **machine-global**, so each of those is ONE file shared by every suite
+process on the box. Two processes reach `File.WriteAllText` then `LoadFromDisk` on the same path and
+one reads the other's fixture. The `CM2` cluster in the original measurement was exactly this.
+
+⚠️ **Both obvious suspects were wrong, and eliminating them was the work.** The failure looked
+like `[[a-worktree-is-not-a-fresh-checkout]]` — LF here, CRLF in a checkout — so a worktree run was
+done ALONE first: **3434/0**, which killed that hypothesis. The second suspect was the suite writing
+the live NinjaTrader config; `Globals.UserDataDir` is stubbed to
+`AppDomain.CurrentDomain.BaseDirectory/MockUserData`, i.e. inside each worktree's own build output,
+so that was wrong too and it was worth checking because it would have been far more serious.
+Six concurrent runs in six **separate** worktrees with all builds finished first still failed, which
+left machine-global state as the only candidate.
+
+##### The fix, and the measurement either side of it
+
+One helper, `TempFileForTest(name)`, tagged with the **process id plus a per-run GUID computed
+once** — so a name is stable *within* a run, which callers rely on, and unique *across* concurrent
+runs. All five sites now route through it.
+
+| | 6 concurrent runs, separate worktrees |
+|---|---|
+| before | **0 / 1 / 1 / 2 / 2 / 3** failures of 3434, never the same set |
+| after | **3434/0 twelve times over**, across two rounds |
+
+`tools/check_tests_use_unique_temp_paths.py` is the 14th gate and stops a sixth site appearing. It
+carries a **negative control** — it asserts it still flags the shape it forbids — and refuses to
+pass if it finds zero `GetTempPath` sites, since a moved helper would otherwise make it report OK
+forever. [[a-source-gate-must-assert-the-condition]], [[state-the-region-a-gate-inspects]]
+
+⚠️ **THE GATE CANNOT REPRODUCE THE DEFECT IT PREVENTS, AND IS A SOURCE CHECK FOR THAT REASON.** CI
+runs one bin per hosted runner with nothing else on the box, so the suite is never under contention
+there and this failure is *unreachable* in CI. That is also why it survived this long: it was
+invisible to every green run in the project's history until the suite was run in parallel locally.
+
+##### ⚠️ What is NOT fixed, and why it gets its own ID
+
+The reason this was filed P1 was never the flaky test — it was that **a battery scores `Failed > 0`
+as a DETECTION**, so any spurious failure during a mutant run marks that mutant KILLED for free.
+Removing this cause removes the only *known* trigger. It does not make the scoring rule able to tell
+a detection from an accident, and the next source of non-determinism will be scored the same way.
+
+That residual is **`P1-179`**, filed rather than left inside this closed entry, because work hiding
+under a closed ID is invisible to every count.
+
+### P1-179. A mutation battery cannot distinguish a detection from an accident: `Failed > 0` is scored KILLED, whatever caused it — OPEN, split out of `P1-175` 2026-08-20 (session 61)
+
+Every one of the 60 batteries scores a mutant like this:
+
+```python
+killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) or (failed_count > 0)
+```
+
+`failed_count > 0` is the whole test. **Any** reason the suite went red reads as "the mutant was
+detected" — a real detection, a flaky test, a machine hiccup, an unrelated regression, a collision
+with something else on the box. The rule cannot see the difference and never could.
+
+⚠️ **THE FAILURE IS SILENT AND IT INFLATES.** A mis-scored kill produces a green battery, no
+survivor, and no line anywhere saying the verdict was accidental. It is the opposite of the failure
+mode this repo is built to catch: `check_anchors.py` exists because a broken anchor scores a
+SURVIVOR, which is loud. This scores a KILL, which is not.
+
+`P1-175` closed the only known trigger — five machine-global temp filenames — and its before/after
+is clean. That is a reason to believe the score today, not a reason the rule is sound.
+
+#### The fix, and why the cheap version is the right one
+
+**Re-run a mutant that appears KILLED, once, and require the same verdict twice.** A real detection
+is deterministic and will re-kill; an accident usually will not.
+
+* It costs runtime **only on the killed path**, which is the overwhelming majority — so it roughly
+  doubles a battery's cost. ⚠️ That is a real price and the reason to measure it before adopting it
+  everywhere: full CI compute is 17,144s today.
+* ⚠️ **It must NOT be applied to survivors.** A survivor is already the loud, investigated outcome,
+  and re-running it would only add cost to the case that already gets human attention.
+* The scoring rule is copied into all 60 batteries rather than shared, so this is either a
+  mechanical edit across 60 files or a move of `run()`/scoring into `mutation/_battery.py` first.
+  **The move is the better shape** and `_battery.py` already exists for exactly this kind of
+  shared decision — but it is a 60-file change and must not be bundled with a defect fix.
+
+⚠️ **Do not "fix" this by making the battery parse WHICH test failed and compare it to an expected
+set.** That was considered and rejected: it turns every battery into a second, silent copy of the
+suite's own pass/fail bookkeeping, and a mutant that legitimately breaks a different test than
+expected would then score as an accident — the fail-open direction, on the mechanism that decides
+whether this project's safety evidence is real.
 
 ### P2-176. CI ran only on GitHub while 24 local cores sat idle, and a self-hosted runner is the wrong answer on a PUBLIC repo — ✅ CLOSED 2026-08-20 (session 61), `tools/ci_local.py`
 

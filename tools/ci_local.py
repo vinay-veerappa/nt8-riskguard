@@ -190,10 +190,14 @@ def worker(wt, work, results, log_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--jobs', type=int, default=0,
-                    help='parallel worktrees; default is cores//4 capped at 6. ⚠️ Deliberately '
-                         'below the core count: the suite has load-sensitive tests, and a flake '
-                         'during a mutant scores it KILLED, which is silent. Raise it only if you '
-                         'are prepared to re-run a green result to believe it.')
+                    # argparse formats this string, so a literal percent must be doubled --
+                    # '%TEMP%' raises "badly formed help string" at import time, which is a
+                    # crash on --help rather than anything the tests would catch.
+                    help='parallel worktrees; default is cores//2 capped at 12. Raised back to '
+                         'this once P1-175 was fixed -- the fixed %%TEMP%% filenames that made '
+                         'the suite load-sensitive are gone, and 12 concurrent runs measured '
+                         '3434/0 twice over. The baseline retry is kept as cheap insurance, not '
+                         'because a known cause remains.')
     ap.add_argument('--include-uncommitted', action='store_true',
                     help='copy modified tracked files into each worktree instead of testing HEAD')
     ap.add_argument('--keep', action='store_true', help='leave the worktrees for inspection')
@@ -202,7 +206,7 @@ def main():
     args = ap.parse_args()
 
     phases = set(args.only or ['gates', 'suite', 'batteries'])
-    jobs = args.jobs or min(6, max(1, (os.cpu_count() or 4) // 4))
+    jobs = args.jobs or min(12, max(1, (os.cpu_count() or 4) // 2))
     t0 = time.time()
 
     dirty = dirty_files()
