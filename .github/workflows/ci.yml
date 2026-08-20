@@ -910,10 +910,12 @@ jobs:
           # P2-165 SHARES THIS BIN, and shares it here because this was the lightest bin in the
           # matrix. 19 bins is the declared ceiling and the 20-slot concurrency limit is
           # ACCOUNT-WIDE, so a 20th bin does not buy a runner -- it takes the slot the sibling repo
-          # needs. P1-170 measured 170s of battery (201s job less ~31s overhead); P2-165 is 14
-          # mutants and the nearest measured rate is P0-171's 19 mutants in 431s, so ~380s. Even at
-          # double that this bin stays under the 1119s critical path.
-          - { label: "P1-170+P2-165", batteries: "mutate_p1170.py mutate_p2165.py" }   # 170s MEASURED run 32320721779 (6 mutants) + P2-165 unmeasured (14 mutants)
+          # needs. P1-170 measured 170s of battery (201s job less ~31s overhead); P2-165 was
+          # ESTIMATED at ~380s from P0-171's per-mutant rate and MEASURED at 314s -- the estimate
+          # was 21% high, which is the direction every estimate in this file has been wrong in.
+          # The bin is now 515s of job against a 1320s critical path, and total CI did not move
+          # (23m55s, run 32329713472).
+          - { label: "P1-170+P2-165", batteries: "mutate_p1170.py mutate_p2165.py" }   # 515s job MEASURED run 32329713472 = P1-170 170s (6 mutants) + P2-165 314s (14 mutants) + ~31s overhead
           # P1-173: an active loss cooldown survives a recompile. Shares no bin for the same
           # reason as its neighbours -- the three above are already at the critical path.
           #
