@@ -879,7 +879,7 @@ jobs:
           # _battery.finish, so a green here means "every mutant died except the one declared
           # unreachable" -- and it fails if that declaration ever starts being KILLED, which is how
           # a stale exemption gets caught rather than rotting into a blanket.
-          - { label: "P2-163+P1-167", batteries: "mutate_p2163.py mutate_p1167.py" }   # 446s job MEASURED run 32329713472 + P1-167 unmeasured (11 mutants, ~290s local)
+          - { label: "P2-163+P1-167", batteries: "mutate_p2163.py mutate_p1167.py" }   # 703s job MEASURED run 32385089590 = P2-163 411s + P1-167 226s (11 mutants; est. ~290s local, 22% high) + overhead
           # P0-171 + P1-167: the reconnect replay suppression and one-refusal-per-order. Own bin,
           # same reason as the three above it.
           #
@@ -948,7 +948,7 @@ jobs:
           # case is already blocked by the other guard. The path that makes it non-equivalent is an
           # operator's TIMED lockout on a disarmed-bypass account, where IsLockedOut is false and
           # LockoutBinds is false while a real deadline is running.
-          - { label: "P1-173+P1-174+P1-172", batteries: "mutate_p1173.py mutate_p1174.py mutate_p1172.py" }   # 364s job MEASURED run 32329713472 + P1-172 unmeasured (14 mutants, ~370s local)
+          - { label: "P1-173+P1-174+P1-172", batteries: "mutate_p1173.py mutate_p1174.py mutate_p1172.py" }   # 668s job MEASURED run 32385089590 = P1-173 174s + P1-174 161s + P1-172 302s (14 mutants; est. ~370s local, 23% high) + overhead
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
