@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.52.4";
+        public const string Version = "1.52.5";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -1350,8 +1350,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             FirmDailyDate = state.FirmDailyDate,
                             FirmDailyStartRealized = state.FirmDailyStartRealized,
                             FirmStartingBalance = state.FirmStartingBalance,
-                            LockoutUntil = state.LockoutUntil,
-                            CooldownUntil = state.CooldownUntil,   // P1-173   // P1-54
+                            LockoutUntil = state.LockoutUntil,   // P1-54
+                            CooldownUntil = state.CooldownUntil,   // P1-173
                             LockoutWasShadowOnly = state.LockoutWasShadowOnly,
                             LockoutRuleId = state.LockoutRuleId   // P0-166
                         };
