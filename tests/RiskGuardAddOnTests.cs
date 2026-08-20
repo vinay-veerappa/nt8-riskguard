@@ -200,6 +200,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestInst_P1168_AnEntryOrderInARefusedInstrumentIsCancelled);
             Run(TestInst_P1168_TheRefusalNamesWhichListDeniedIt);
             Run(TestInst_P1168_ThePreTradeGateAgreesWithBothEnforcementPoints);
+            Run(TestCap_P2165_AnOrderOverTheCapIsCancelled);
+            Run(TestCap_P2165_AnOrderAtExactlyTheCapIsNotCancelled);
+            Run(TestCap_P2165_TheCapAppliesToTheRootNotTheContractMonth);
+            Run(TestCap_P2165_ACapOnOneInstrumentDoesNotTouchAnother);
+            Run(TestCap_P2165_TheFlattenOfAnOversizedPositionIsNotRefused);
+            Run(TestCap_P2165_AnOversizedFlipIsStillRefused);
+            Run(TestCap_P2165_AScaleInUnderTheOpenQuantityIsStillRefused);
+            Run(TestCap_P2165_AFilledOrderIsNotCancelled);
+            Run(TestFlood_P2165_MoreDistinctOrdersThanTheLimitLocksOut);
+            Run(TestFlood_P2165_ExactlyTheLimitDoesNotLockOut);
+            Run(TestFlood_P2165_TheSameOrderChangingStateCountsOnce);
+            Run(TestFlood_P2165_ABracketSharingAnOcoIdCountsAsOne);
+            Run(TestFlood_P2165_DistinctOcoGroupsStillCount);
+            Run(TestFlood_P2165_TheTrippingProtectiveOrderIsNotCancelled);
+            Run(TestFlood_P2165_TheTrippingEntryOrderIsCancelled);
+            Run(TestFlood_P2165_TheWindowForgetsOrdersOlderThanASecond);
+            Run(TestFlood_P2165_AZeroLimitFallsBackToTheDefault);
             Run(TestSize_P1159_InstrumentLimitCapsThePosition);
             Run(TestSize_P1159_AtExactlyTheInstrumentLimitIsNotABreach);
             Run(TestSize_P1159_AnUnlistedInstrumentKeepsTheAccountDefault);
@@ -18748,6 +18765,331 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "CanTrade refuses what the order path cancels and the position path flattens");
             Assert(addon.CanTrade("TestAcc", "MNQ SEP26"),
                 "and permits what they both permit");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P2-165. Two enforcement rules in `ExecuteOrderUpdate` had zero tests, in a
+        // method the suite could already drive. Written as CHARACTERISATION first --
+        // assert what the code does, then decide what is wrong -- per the entry.
+        //
+        // ⚠️ THE ENTRY'S OWN TABLE WAS STALE BY THE TIME IT WAS WORKED. It listed
+        // three rules; `BLACKLIST_CANCEL` had acquired four tests from `P1-168` in
+        // the interval, including the exit-is-never-refused guard the entry had
+        // hypothesised was missing. Counted before writing, not after.
+        // [[closures-do-not-propagate-backwards]]
+        //
+        // ⚠️ AND THE HYPOTHESIS WAS RIGHT ABOUT THE WRONG RULE. The entry warned that
+        // a cancel path with no `IsPositionReducingOrder` guard would strip a live
+        // position of its exit. `P1-168` had already fixed that on the blacklist.
+        // The per-instrument cap -- which the entry did not suspect -- still had
+        // none, and it is the one where the trap is REACHABLE: `P1-160` measured the
+        // platform turning two 1-lot MNQ orders into a position of 2, three times in
+        // six attempts, under a configured MNQ cap of 1. The flatten of that position
+        // is a 2-lot order against a cap of 1.
+        // ---------------------------------------------------------------------------
+
+        /// <summary>MNQ is permitted by default, so these configs exercise the cap alone.</summary>
+        private static RiskConfig P2165CapConfig(string root, int cap)
+        {
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 0;   // not the rule under test
+            config.InstrumentLimits[root] = new PerInstrumentRiskConfig { MaxContracts = cap };
+            return config;
+        }
+
+        private static void TestCap_P2165_AnOrderOverTheCapIsCancelled()
+        {
+            Console.WriteLine("\n[TEST] P2-165: an order over the per-instrument cap is cancelled");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "live");
+            var order = P1160Order("700", OrderAction.Buy, OrderType.Market, "MNQ", 2, "Entry");
+            P1160Send(h, order);
+
+            Assert(h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "the positive control. Without it every 'is not cancelled' assertion below is "
+                + "satisfied by a rule that does nothing at all");
+            Assert(order.OrderState == OrderState.Cancelled,
+                "and the order is actually cancelled, not merely logged about -- in an acting mode "
+                + "the log line and the broker call are two different claims "
+                + "[[report-the-outcome-not-the-call]]");
+        }
+
+        private static void TestCap_P2165_AnOrderAtExactlyTheCapIsNotCancelled()
+        {
+            Console.WriteLine("\n[TEST] P2-165: an order at exactly the cap is not cancelled");
+            var h = P1160Setup(P2165CapConfig("MNQ", 2), "live");
+            var order = P1160Order("701", OrderAction.Buy, OrderType.Market, "MNQ", 2, "Entry");
+            P1160Send(h, order);
+
+            Assert(!h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "the cap is the largest PERMITTED size, not the first refused one. Off by one here "
+                + "and the operator's configured maximum is a size they can never trade");
+        }
+
+        private static void TestCap_P2165_TheCapAppliesToTheRootNotTheContractMonth()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the cap applies to the root, not the contract month");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "live");
+            P1160Send(h, P1160Order("702", OrderAction.Buy, OrderType.Market, "MNQ SEP26", 3, "Entry"));
+
+            Assert(h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "every real order names a contract month. A cap keyed on the full name is a cap "
+                + "that expires at every roll, silently -- the same shape as P1-159's sweep half");
+        }
+
+        private static void TestCap_P2165_ACapOnOneInstrumentDoesNotTouchAnother()
+        {
+            Console.WriteLine("\n[TEST] P2-165: a cap on one instrument does not touch another");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "live");
+            P1160Send(h, P1160Order("703", OrderAction.Buy, OrderType.Market, "MES", 5, "Entry"));
+
+            Assert(!h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "the negative control for the root parse above. A root match that is too loose "
+                + "refuses orders the operator never capped [[a-filter-that-matches-too-much]]");
+        }
+
+        private static void TestCap_P2165_TheFlattenOfAnOversizedPositionIsNotRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the flatten of an oversized position is NOT refused");
+            var config = P2165CapConfig("MNQ", 1);
+            var h = P1160Setup(config, "live");
+
+            // Exactly the state P1-160 measured on the funded account: the platform duplicated a
+            // 1-lot entry and left a position of 2 under a cap of 1. The operator now has to get
+            // out, and the order that does it is a 2-lot -- over the cap by construction.
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 2, 100, 0, config);
+            var exit = P1160Order("704", OrderAction.Sell, OrderType.Market, "MNQ", 2, "Exit");
+            P1160Send(h, exit);
+
+            Assert(!h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "a size rail must never refuse the quantity that CLOSES the position. Refusing it "
+                + "leaves the operator holding the oversized position the rule exists to prevent, "
+                + "and the only way out is to fight the guard one lot at a time "
+                + "[[a-lockout-must-not-trap-you]]");
+            Assert(exit.OrderState != OrderState.Cancelled,
+                "and the exit actually reaches the broker");
+        }
+
+        private static void TestCap_P2165_AnOversizedFlipIsStillRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-165: an oversized FLIP is still refused");
+            var config = P2165CapConfig("MNQ", 1);
+            var h = P1160Setup(config, "live");
+
+            // The bound on the exemption above. `IsPositionReducingOrder` asks only about
+            // DIRECTION, not size -- a Sell 5 against a Long 1 satisfies it -- so exempting every
+            // reducing order would let one order both close a position and open an oversized one
+            // in the other direction. The exemption is the quantity that closes, and no more.
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 1, 100, 0, config);
+            var flip = P1160Order("705", OrderAction.Sell, OrderType.Market, "MNQ", 5, "Flip");
+            P1160Send(h, flip);
+
+            Assert(h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "closing 1 and opening 4 the other way is not an exit, and a direction-only "
+                + "exemption would have made the cap opt-out by holding one lot");
+        }
+
+        private static void TestCap_P2165_AScaleInUnderTheOpenQuantityIsStillRefused()
+        {
+            Console.WriteLine("\n[TEST] P2-165: a scale-in under the open quantity is still refused");
+            var config = P2165CapConfig("MNQ", 1);
+            var h = P1160Setup(config, "live");
+
+            // The second bound on the exemption, and the one the battery found missing. The clamp
+            // is `Quantity <= openQty` AND `reduces the position` -- drop the direction half and a
+            // Buy 2 against a Long 2 passes the size test, so the order that takes the operator
+            // from an oversized 2 to a further-oversized 4 is waved through by the guard written to
+            // let an EXIT out. Both halves of the conjunction need their own mutant and their own
+            // test; the size half had one and the direction half did not.
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 2, 100, 0, config);
+            var scaleIn = P1160Order("707", OrderAction.Buy, OrderType.Market, "MNQ", 2, "Add");
+            P1160Send(h, scaleIn);
+
+            Assert(h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "adding to a position is not exiting it, whatever the size comparison says");
+        }
+
+        private static void TestCap_P2165_AFilledOrderIsNotCancelled()
+        {
+            Console.WriteLine("\n[TEST] P2-165: an order seen only as Filled is not cancelled here");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "live");
+            var order = P1160Order("706", OrderAction.Buy, OrderType.Market, "MNQ", 4, "Entry");
+            order.OrderState = OrderState.Filled;
+            P1160Send(h, order);
+
+            Assert(!h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "CHARACTERISATION, not an endorsement. P1-160 measured that an order placed on the "
+                + "broker platform can reach the addon ONLY as Filled, and this rule is gated on "
+                + "Submitted/Accepted/Working -- so for a Tradovate-placed order the cancel half of "
+                + "this rule never runs. Cancelling a filled order is meaningless, so the gate is "
+                + "right and the coverage lives elsewhere: P1-159 put the same cap on the POSITION, "
+                + "which is what actually catches the broker-placed case. This test pins that "
+                + "division of labour so a later widening of the gate has to argue with it");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P2-165, the order rate governor. Driven exactly once before this, by a
+        // P0-166 test asserting only that the lockout carries a deadline. Its
+        // counting semantics -- which are the rule -- were proved by nothing, and
+        // both of the corrections in its own comments (P1-52's OCO keying, P2-46's
+        // distinct-key counting) were therefore unprotected.
+        // ---------------------------------------------------------------------------
+
+        private static RiskConfig P2165FloodConfig(int maxPerSecond)
+        {
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 0;   // not the rule under test
+            config.Overtrading.MaxOrdersPerSecond = maxPerSecond;
+            config.Overtrading.LockoutMinutes = 60;
+            return config;
+        }
+
+        private static void TestFlood_P2165_MoreDistinctOrdersThanTheLimitLocksOut()
+        {
+            Console.WriteLine("\n[TEST] P2-165: more distinct orders than the limit locks out");
+            var h = P1160Setup(P2165FloodConfig(3), "live");
+            for (int i = 0; i < 4; i++)
+                P1160Send(h, P1160Order("80" + i, OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+
+            Assert(h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "the positive control this rule never had");
+            Assert(h.State.LockoutRuleId == "ORDER_FLOOD_LOCKOUT",
+                "and it names itself as the locking rule -- P0-166 clears the counter of whichever "
+                + "rule locked, so an unattributed lockout forgives the wrong one");
+        }
+
+        private static void TestFlood_P2165_ExactlyTheLimitDoesNotLockOut()
+        {
+            Console.WriteLine("\n[TEST] P2-165: exactly the limit does not lock out");
+            var h = P1160Setup(P2165FloodConfig(3), "live");
+            for (int i = 0; i < 3; i++)
+                P1160Send(h, P1160Order("81" + i, OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+
+            Assert(!h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "the setting is a maximum that is allowed, not the first count refused. This is the "
+                + "boundary P2-46 already moved once, and nothing held it in place afterwards");
+        }
+
+        private static void TestFlood_P2165_TheSameOrderChangingStateCountsOnce()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the same order changing state counts once");
+            var h = P1160Setup(P2165FloodConfig(1), "live");
+            var order = P1160Order("820", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+
+            P1160Send(h, order);
+            order.OrderState = OrderState.Accepted;
+            P1160Send(h, order);
+
+            Assert(!h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "P2-46 EXACTLY: this counted Submitted and then Accepted as two orders, so a limit "
+                + "of 5 fired at about three real orders per second -- inside ordinary bracket "
+                + "submission. The live log's '29-32 orders/sec' were transition counts. One order "
+                + "is one order however many states the broker walks it through");
+        }
+
+        private static void TestFlood_P2165_ABracketSharingAnOcoIdCountsAsOne()
+        {
+            Console.WriteLine("\n[TEST] P2-165: a bracket sharing an OCO id counts as one");
+            var h = P1160Setup(P2165FloodConfig(1), "live");
+            foreach (var id in new[] { "830", "831", "832" })
+            {
+                var o = P1160Order(id, OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+                o.Oco = "BRACKET-1";
+                P1160Send(h, o);
+            }
+
+            Assert(!h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "P1-52: entry, stop and target arrive together and are ONE trading decision. "
+                + "Counting them as three makes every bracketed trade three quarters of the way to "
+                + "a flood before the operator has done anything twice");
+        }
+
+        private static void TestFlood_P2165_DistinctOcoGroupsStillCount()
+        {
+            Console.WriteLine("\n[TEST] P2-165: distinct OCO groups still count");
+            var h = P1160Setup(P2165FloodConfig(1), "live");
+            foreach (var id in new[] { "840", "841" })
+            {
+                var o = P1160Order(id, OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+                o.Oco = "BRACKET-" + id;
+                P1160Send(h, o);
+            }
+
+            Assert(h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "the negative control for the OCO collapse above -- without it, 'group by OCO' is "
+                + "satisfied by ignoring bracketed orders entirely, and a runaway strategy that "
+                + "brackets every entry becomes invisible to the rule written to catch it");
+        }
+
+        private static void TestFlood_P2165_TheTrippingProtectiveOrderIsNotCancelled()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the tripping PROTECTIVE order is not cancelled");
+            var config = P2165FloodConfig(1);
+            var h = P1160Setup(config, "live");
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 1, 100, 0, config);
+
+            P1160Send(h, P1160Order("850", OrderAction.Buy, OrderType.Limit, "MES", 1, "Entry"));
+            var stop = P1160Order("851", OrderAction.Sell, OrderType.StopMarket, "MNQ", 1, "Stop");
+            P1160Send(h, stop);
+
+            Assert(h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "the burst is still detected -- the guard below suppresses the cancel, not the rule");
+            Assert(stop.OrderState != OrderState.Cancelled,
+                "P1-44: a burst whose tripping order happens to be the stop once cancelled the "
+                + "protection AND locked the account out, leaving a live position naked. The rate "
+                + "limit is the least important thing on the screen at that moment");
+        }
+
+        private static void TestFlood_P2165_TheTrippingEntryOrderIsCancelled()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the tripping ENTRY order IS cancelled");
+            var h = P1160Setup(P2165FloodConfig(1), "live");
+            P1160Send(h, P1160Order("860", OrderAction.Buy, OrderType.Limit, "MES", 1, "Entry"));
+            var entry = P1160Order("861", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+            P1160Send(h, entry);
+
+            Assert(entry.OrderState == OrderState.Cancelled,
+                "the positive control for P1-44's guard. Without it, 'never cancel a protective "
+                + "order' is satisfied by never cancelling anything, and the rate governor becomes "
+                + "a lockout with no teeth [[a-detector-needs-a-negative-test]]");
+        }
+
+        private static void TestFlood_P2165_TheWindowForgetsOrdersOlderThanASecond()
+        {
+            Console.WriteLine("\n[TEST] P2-165: the window forgets orders older than a second");
+            var h = P1160Setup(P2165FloodConfig(3), "live");
+
+            // Seeded rather than slept: the rule reads DateTime.UtcNow directly, so a real elapsed
+            // second is the only alternative and it would cost the suite a second per assertion.
+            for (int i = 0; i < 9; i++)
+                h.State.RecentOrderIds["OLD-" + i] = DateTime.UtcNow.AddSeconds(-5);
+
+            P1160Send(h, P1160Order("870", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+
+            Assert(!h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "without eviction the window is not a window -- it is a lifetime counter, and every "
+                + "account locks out eventually on a slow drip of ordinary trading");
+            Assert(h.State.RecentOrderIds.Count == 1,
+                "and the stale keys are actually removed rather than merely ignored -- a dictionary "
+                + "that only grows is also a leak on a process that runs for weeks");
+        }
+
+        private static void TestFlood_P2165_AZeroLimitFallsBackToTheDefault()
+        {
+            Console.WriteLine("\n[TEST] P2-165: a zero limit falls back to the default of 5");
+            var h = P1160Setup(P2165FloodConfig(0), "live");
+            for (int i = 0; i < 5; i++)
+                P1160Send(h, P1160Order("88" + i, OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+
+            Assert(!h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "CHARACTERISATION: zero does NOT disable this rule, unlike DuplicateEntryWindowMs "
+                + "where zero is the documented off switch. It falls back to 5. Two settings in one "
+                + "config section reading zero two different ways is worth pinning, because the "
+                + "operator who sets it to zero to switch the rule off gets a rule at 5 instead");
+
+            P1160Send(h, P1160Order("889", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry"));
+            Assert(h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
+                "and the sixth order proves the fallback is 5 and not 'no limit at all' -- the "
+                + "assertion above passes either way on its own");
         }
 
         private sealed class P1160Harness

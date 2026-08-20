@@ -11491,8 +11491,12 @@ sessions after that stopped being true.
    state gate back down -- that restores the `Filled`-only blindness measured on this account, where
    2 of 3 live cases arrived as `Filled` and nothing else. The closed entries that named those
    findings are cited from the plan, not from here, because the gate reads any ID in this block as
-   work to do. Fold **`P2-165`** in while here: same method, and its three untested rules are the
-   other callers of the same missing seam.
+   work to do. ⚠️ **The neighbours now have tests and a battery**, so the seam can be built against
+   assertions rather than against a reading: seventeen tests cover the rate governor and the
+   per-instrument cap through the real `ExecuteOrderUpdate`, and `mutation/mutate_p2165.py` scores
+   them. Expect several of them to need updating when the de-duplication lands — that is the point
+   of having them, and a fix to this method that changes none of them has probably not changed
+   behaviour either.
 7. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
    the previous entry's "what opened those positions" turned it inside out: the detector was right
    every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
@@ -11507,13 +11511,18 @@ sessions after that stopped being true.
    position-level enforcement in `v1.51.0` (suite 3332/0, battery 17/17). Remaining, in order:
    **`P2-161`** + **`P2-162`** -- the escalating cooldown ladder, and refusing the entry rather than
    flattening the fill. ⚠️ Both are gated on **`P2-164`**, which is a DECISION and not code.
-   ⚠️ **`P2-165` should be folded into whichever ticket next touches `ExecuteOrderUpdate`.**
-   `ORDER_FLOOD_LOCKOUT`, `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` still have ZERO tests,
-   and the duplicate-entry work built the harness they need. **It also raised the stakes**: that
-   rule shipped gated on `Submitted || Accepted` and the live log then showed two of its three
-   measured cases arrive ONLY as `Filled`, because the operator places them on the broker platform.
-   All three untested rules share that gate, so whether they can see a Tradovate order at all is an
-   open question with the evidence pointing the wrong way.
+   ~~`P2-165`~~ — ✅ CLOSED, and it carried a finding worth keeping here rather than only in the
+   plan: **the per-instrument cap refused the order that FLATTENS an oversized position.** Reachable
+   rather than theoretical — the duplicate-entry defect measured on this account leaves a 2-lot MNQ
+   position under a configured cap of 1, and the flatten of it is a 2-lot order. Third instance of
+   [[a-lockout-must-not-trap-you]]. ⚠️ **The obvious one-line fix would have been worse than the
+   defect**: `IsPositionReducingOrder` asks about DIRECTION only, so exempting every reducing order
+   makes the cap opt-out by holding a single lot. The exemption is clamped to the open quantity.
+   ⚠️ **The entry's own open question is answered, and the answer is that the gate is right**: all
+   three rules skip an order seen only as `Filled`, but they are CANCEL paths and cancelling a
+   filled order is meaningless. The broker-placed case is covered by the position-level
+   cap that closed earlier in this block, and a test pins that division of labour. (Its ID lives in
+   the plan and not here -- this block's gate reads any ID in it as work to do.)
    ⚠️ **`P2-164` is a DECISION, not code, and it gates how the ladder is calibrated** --
    what counts as "a loss". The operator holds two opposing views at once and asked for the right
    answer rather than the one they favour, so **re-asking them is not how this closes**; it is

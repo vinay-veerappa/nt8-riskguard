@@ -8917,7 +8917,7 @@ permissive default survived for months while a gate reported every config leaf c
 instance of [[state-the-region-a-gate-inspects]]. `PropFirmProfile` now has one member (`Name`) and
 still no referrer; an orphan-config-type gate is the unfiled follow-up.
 
-### P2-165. Three enforcement rules live in a method the suite can already call, and not one of them has a test — OPEN, filed 2026-08-18 (session 60)
+### P2-165. Three enforcement rules live in a method the suite can already call, and not one of them has a test — ✅ CLOSED 2026-08-20 (session 61), filed 2026-08-18 (session 60)
 
 Found while closing `P1-159`. `ExecuteOrderUpdate` is `internal`, takes a plain
 `(object sender, OrderEventArgs e)`, drains its own pending cancels at the end, and both
@@ -8964,6 +8964,89 @@ synthesised the NT8-native event order. **All three rules here share that gate.*
 `BLACKLIST_CANCEL` and `PER_INSTRUMENT_CAP_CANCEL` can see an order the operator placed from
 Tradovate at all is now an open question with the evidence pointing the wrong way, and it is the
 first thing to measure rather than the last.
+
+#### ✅ CLOSED 2026-08-20 (session 61) — `v1.53.0`, suite **3404/0**, battery **14/14, no survivors**
+
+Written as characterisation, as the entry instructed. **Sixteen tests; fourteen passed on the first
+run.** The two that failed are the whole finding, and they were not the ones this entry predicted.
+
+##### ⚠️ The entry's own table was stale before it was worked
+
+It listed three rules with zero tests. By the time it came up, `BLACKLIST_CANCEL` had **four**,
+added by `P1-168` — including `TestInst_P1168_AnExitOrderIsNeverRefused`, which is precisely the
+guard this entry hypothesised was missing from it. Counted with `grep -c` before writing a line, not
+after. [[closures-do-not-propagate-backwards]] — an entry describes the repo on the day it was
+filed, and this one was two sessions old.
+
+##### ⚠️ The hypothesis was right about the wrong rule
+
+The entry warned that a cancel path with **no `IsPositionReducingOrder` guard** would strip a live
+position of its exit, and pointed at the blacklist. The blacklist had been fixed. The
+**per-instrument cap — which the entry did not suspect at all** — still had none, and it is the one
+where the trap is *reachable* rather than hypothetical:
+
+> `P1-160` measured the platform turning two 1-lot MNQ entries into a position of **2**, three times
+> in six attempts, under the operator's configured MNQ cap of **1**. The flatten of that position is
+> a **2-lot order against a cap of 1**.
+
+So the guard cancelled the operator's own exit and left them holding the oversized position the rule
+exists to prevent, with no way out but to fight it one lot at a time.
+[[a-lockout-must-not-trap-you]] — third instance, and the same lesson each time: **the refusal half
+is the easy half; the quantity clamp is the load-bearing one.**
+
+##### The fix, and why the clamp is not optional
+
+```csharp
+bool capExitWithinPosition = capOpenQty > 0
+    && IsPositionReducingOrder(e.Order, instState)
+    && e.Order.Quantity <= capOpenQty;
+```
+
+⚠️ **`IsPositionReducingOrder` asks about DIRECTION ONLY.** A `Sell 5` against a `Long 1` satisfies
+it. Exempting every reducing order — the obvious one-line fix, and the exact shape of the guard
+`P1-168` put next door — would let a single order close 1 and open an oversized 4 the other way,
+**making the cap opt-out by holding one lot.** The exemption is the size that flattens and no more.
+The blacklist needs no such clamp because a refusal has no size to clamp; that asymmetry is why
+copying the neighbouring guard verbatim would have shipped a worse rule than the defect.
+
+`mutation/mutate_p2165.py` group 1 mutant 2 is that mutant, kept because it is the one that reads as
+a simplification.
+
+##### What the other fourteen tests bought
+
+Nothing was wrong with the rate governor — and that is the point of pinning it. Both corrections
+recorded in its own comments were, until now, **proved by nothing**:
+
+| pinned | was protected by |
+|---|---|
+| `P1-52` — a bracket sharing an OCO id counts as ONE decision | a comment |
+| `P2-46` — distinct keys, not state transitions (the live log's "29–32 orders/sec" were transitions) | a comment |
+| `P1-44` — the tripping order is not cancelled when it is the stop covering a live position | a comment |
+| `P1-45` — the lockout carries a deadline | one `P0-166` test, asserting only this |
+| the 1s window actually **evicts** | nothing |
+| `> maxPerSecond`, not `>=` | nothing |
+| `LockoutRuleId` attribution (`P0-166` clears the counter of whichever rule locked) | nothing |
+
+Each has both directions: `ABracketSharingAnOcoIdCountsAsOne` is paired with
+`DistinctOcoGroupsStillCount`, and `TheTrippingProtectiveOrderIsNotCancelled` with
+`TheTrippingEntryOrderIsCancelled`, because "group by OCO" is satisfied by ignoring bracketed orders
+entirely and "never cancel a protective order" is satisfied by never cancelling anything.
+[[a-detector-needs-a-negative-test]]
+
+##### Two behaviours characterised rather than changed
+
+1. **`MaxOrdersPerSecond = 0` does not disable the rule; it falls back to 5.** In the same config
+   section, `DuplicateEntryWindowMs = 0` *is* the documented off switch. Two settings, two readings
+   of zero. Pinned by `TestFlood_P2165_AZeroLimitFallsBackToTheDefault` rather than reconciled —
+   changing it is an operator-facing decision, and the operator who sets it to zero to switch the
+   rule off currently gets a rule at 5.
+2. **The entry's open question about broker-placed orders is answered, and the answer is that the
+   gate is right.** All three rules are gated on `Submitted || Accepted || Working`, so an order
+   that reaches the addon only as `Filled` — which `P1-160` measured for orders placed on the broker
+   platform — is invisible to them. **Cancelling a filled order is meaningless**, so this is not the
+   defect the entry feared. The coverage lives elsewhere: `P1-159` put the same cap on the
+   **position**, which is what catches the broker-placed case. `TestCap_P2165_AFilledOrderIsNotCancelled`
+   pins that division of labour so a later widening of the gate has to argue with it.
 
 ### P2-164. DECISION PENDING — what counts as "a loss" for the escalating cooldown ladder, to be settled by measurement rather than preference — OPEN, filed 2026-08-18 (session 59)
 

@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.52.6";
+        public const string Version = "1.53.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -2482,7 +2482,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     if (_config.InstrumentLimits != null && _config.InstrumentLimits.TryGetValue(instRoot, out var perInstCap))
                     {
-                        if (e.Order.Quantity > perInstCap.MaxContracts)
+                        // ⚠️ P2-165: THE CAP MUST NEVER REFUSE THE QUANTITY THAT CLOSES THE POSITION.
+                        // This rule had no reducing-order exemption at all, and the trap it opened is
+                        // reachable rather than theoretical: P1-160 measured the platform turning two
+                        // 1-lot MNQ entries into a position of 2, three times in six attempts, under
+                        // the operator's configured MNQ cap of 1. The flatten of that position is a
+                        // 2-lot order against a cap of 1, so the guard cancelled the exit and left
+                        // them holding the oversized position this very rule exists to prevent, with
+                        // no way out but to fight it one lot at a time. [[a-lockout-must-not-trap-you]]
+                        // -- the quantity clamp is the load-bearing half, not the refusal.
+                        //
+                        // ⚠️ AND THE EXEMPTION IS CLAMPED TO THE OPEN QUANTITY, WHICH IS THE WHOLE
+                        // CARE HERE. `IsPositionReducingOrder` asks about DIRECTION ONLY -- a Sell 5
+                        // against a Long 1 satisfies it -- so exempting every reducing order would
+                        // let one order close 1 and open an oversized 4 the other way, making the cap
+                        // opt-out by holding a single lot. The exemption is the size that flattens
+                        // and no more. Mirrors the guard P1-168 added to BLACKLIST_CANCEL next door,
+                        // which is a refusal with no size to clamp and so needs no clamp.
+                        int capOpenQty = 0;
+                        PositionState capPos;
+                        if (instState != null && instState.Positions.TryGetValue(rawInst, out capPos)
+                            && capPos.MarketPosition != MarketPosition.Flat)
+                        {
+                            // Absolute: NT8 never reports a negative quantity, the side is
+                            // MarketPosition. [[nt8-position-quantity-is-absolute]]
+                            capOpenQty = capPos.Quantity;
+                        }
+
+                        bool capExitWithinPosition = capOpenQty > 0
+                            && IsPositionReducingOrder(e.Order, instState)
+                            && e.Order.Quantity <= capOpenQty;
+
+                        if (e.Order.Quantity > perInstCap.MaxContracts && !capExitWithinPosition)
                         {
                             if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                             {
