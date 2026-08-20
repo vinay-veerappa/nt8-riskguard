@@ -215,14 +215,23 @@ MUTANTS = [
     (GUARD, 'group 5: the FIRST order is cancelled instead of the duplicate. The same number of '
             'working orders and the opposite outcome -- and on the measured 03:50:57 case the '
             'first order is the one the stop was sized against',
-     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));',
-     '                                            _pendingCancels.Add(new PendingCancelEntry(account, anchor.Order, PendingCancelIntent.Intervention));'),
+     # Re-anchored 2026-08-20: P1-167 nested the ENTRY_CANCEL cancel one level deeper to add its
+     # de-duplication guard, which gave that line the SAME indentation as this one -- so a
+     # single-line anchor started matching twice. The LogEvent below is what tells the two apart,
+     # and this is why the count check exists rather than a bare `in`. [[mutation-anchors-go-stale]]
+     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));\n'
+     '                                            LogEvent(accountName, "DUPLICATE_ENTRY",',
+     '                                            _pendingCancels.Add(new PendingCancelEntry(account, anchor.Order, PendingCancelIntent.Intervention));\n'
+     '                                            LogEvent(accountName, "DUPLICATE_ENTRY",'),
 
     (GUARD, 'group 5: the cancel is marked Cleanup rather than Intervention, so it is sent in '
             'SHADOW too -- a mode whose whole contract is that it observes and does not act on the '
             'trader\'s orders. Shadow would start cancelling live orders with no announcement',
-     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));',
-     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Cleanup));'),
+     # Re-anchored 2026-08-20, same reason as the mutant above.
+     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));\n'
+     '                                            LogEvent(accountName, "DUPLICATE_ENTRY",',
+     '                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Cleanup));\n'
+     '                                            LogEvent(accountName, "DUPLICATE_ENTRY",'),
 
     # ---- group 6: the refusal is diagnosable ------------------------------------------------
     (GUARD, 'group 6: the refusal no longer names the FIRST order, so the pair cannot be found in '

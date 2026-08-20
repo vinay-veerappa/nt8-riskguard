@@ -56,6 +56,12 @@ RUNTIME_ONLY = {
     'RecentEntryAnchors':
         'P1-160. Holds live Order object references and is bounded by a duplicate-entry window of '
         'about a second.',
+    'RuleRefusedOrders':
+        'P1-167. Holds live Order object references keyed by rule id, so it cannot be serialised '
+        'and must not outlive the session that created them -- an order reference from last '
+        'session can never come back, and a restored one would suppress a refusal for an order '
+        'that no longer exists. Cleared on session reset with RecentEntryAnchors, for the same '
+        'reason and in the same place.',
 }
 
 # Derived from persisted fields on restore -- NOT persisted, deliberately, because a stored copy
@@ -110,17 +116,23 @@ SUSPECTED_DEFECT = {}
 # ⚠️ NOT REVIEWED. The state of the world when this gate was written. Do not read this list as a
 # set of decisions -- read it as a to-do. Moving an entry out of here requires deciding what it
 # actually is and writing the reason down.
-UNREVIEWED_BASELINE = {
-    # ⚠️ NO LONGER UNREVIEWED -- these three were read on 2026-08-20 and are P1-174, the third
-    # instance of P1-170's class. A recompile while holding a winning position re-baselines the
-    # peak-giveback rail to the current price, and BOTH branches of that rule already set
-    # _stateDirty = true for fields the writer does not carry. Left in this set rather than moved
-    # to a SUSPECTED_DEFECT list because the fix is queued, not designed away: they leave here by
-    # being added to AccountPersistedData, after which the name match picks them up.
-    'PeakOpenGain',
-    'PeakGivebackTriggered',
-    'PeakGivebackLastTriggerUnrealized',
-}
+#
+# ✅ IT IS EMPTY, and staying empty is the goal. The three that were here -- PeakOpenGain,
+# PeakGivebackTriggered and PeakGivebackLastTriggerUnrealized -- were P1-174, and they left by
+# being added to AccountPersistedData in v1.52.6, exactly as the note here predicted.
+#
+# ⚠️ THEY DID NOT LEAVE BY THEMSELVES, AND THAT WAS A HOLE IN THIS GATE. The name match DID
+# pick them up once persisted -- so for a session they were counted as persisted AND still printed
+# as unreviewed on every run. The stale check below could not see it, because it only asked whether
+# a declared name is still an AccountState property, and it was. A declaration and a persistence
+# are MUTUALLY EXCLUSIVE CLAIMS about one field; `contradicted` now says so.
+# [[closures-do-not-propagate-backwards]]
+#
+# ⚠️ `set()`, NOT `{}`. Emptying a set literal makes an empty DICT, and this gate unions it
+# with real sets -- so the obvious edit crashes with a TypeError instead of passing. Loud, and
+# therefore the good version of that failure; the quiet version is an `All` over an empty sequence
+# returning true. [[closing-the-last-instance-disarms-the-gate]]
+UNREVIEWED_BASELINE = set()
 
 
 def _class_body(text, name):
@@ -197,6 +209,18 @@ def main():
                     | set(PERSISTED_ELSEWHERE) | set(RESET_BY_DESIGN)
                     | set(SUSPECTED_DEFECT)) - known)
 
+    # ⚠️ THE SECOND STALENESS DIRECTION, and the one this gate was blind to. A field that is BOTH
+    # declared here and present in AccountPersistedData carries two contradictory claims: the
+    # declaration says "deliberately not persisted, here is why" and the DTO says "persisted". Only
+    # one can be true, and whichever it is, the other is a decision recorded about a world that no
+    # longer exists. P1-174's three fields sat in the unreviewed baseline for a session AFTER being
+    # persisted, printed as unreviewed on every run, because the check above only asked whether the
+    # name was still an AccountState property -- which it was. RUNTIME_ONLY is the dangerous one to
+    # leave: it reads as a considered reason not to persist a field that IS persisted.
+    contradicted = sorted((set(RUNTIME_ONLY) | set(DERIVED_ON_RESTORE) | UNREVIEWED_BASELINE
+                           | set(RESET_BY_DESIGN) | set(SUSPECTED_DEFECT))
+                          & set(persisted_props))
+
     print('  AccountState properties         %d' % len(state_props))
     print('  of those, in AccountPersistedData %d'
           % sum(1 for p in state_props if p in persisted_props))
@@ -231,9 +255,23 @@ def main():
         print('    A declaration about a field that is gone reads as a decision someone made.')
         return 1
 
+    if contradicted:
+        print()
+        print('FAIL: %d field(s) are BOTH declared here and persisted in AccountPersistedData:'
+              % len(contradicted))
+        for p in contradicted:
+            print('  * %s' % p)
+        print('    Those are contradictory claims about the same field. Delete the declaration --')
+        print('    the DTO membership is the live fact and the name match already classifies it.')
+        print('    P1-174 is what this catches: three fields kept printing as UNREVIEWED for a')
+        print('    session after they were persisted, because the check above only asked whether')
+        print('    the declared name was still an AccountState property, and it was.')
+        return 1
+
     print()
     print('OK: every AccountState field is persisted, declared runtime-only, declared derived,')
-    print('    or in the unreviewed baseline -- and every declaration still names a real field.')
+    print('    or in the unreviewed baseline -- every declaration still names a real field, and')
+    print('    no field is both declared and persisted.')
     return 0
 
 

@@ -11446,25 +11446,24 @@ sessions after that stopped being true.
    completeness gate cannot see it because it is reachable from neither root it walks. That is how a
    safety-shaped field with a permissive default survived for months behind a green gate. An
    orphan-config-type gate is unfiled.
-4. **`P1-172`** — ⚠️ read LIVE off the funded account's persisted state at 19:01:02Z:
-   `ConsecutiveLosses` **17** against `TradesToday` **16**. A streak cannot exceed the trades since
-   the last win, so at least one increment did not come from a trade.
-   `AccountState.RecordRealizedDelta`'s third case judges any negative realized delta arriving while
-   every tracked position reads `Flat` as a losing trade on its own; `TradesToday` is incremented by
-   a different event that IS debounced to the trade lifecycle. The partial-exit fix names that
-   residue and accepts it for a position the guard never saw -- which is not this case: the guard saw
-   the position and is being told about the same fill twice, because the reconnect replayed all 59
-   executions with the account flat. ⚠️ **The phantom increment is quieter than the phantom refusals
-   beside it** -- a refusal writes to `interventions.jsonl`, an increment writes nowhere. (Plan entry
-   names the related IDs; they are omitted here because this block's IDs are read as work to do.)
-   ⚠️ **What makes it P1 is the SECOND READER**: the per-order refusal fires on
-   `LockoutBinds(...) || ConsecutiveLosses >= Max`, so no lockout need be active and no deadline is
-   consulted. At 17 against a cap of 3 every entry is refused, and the counter's only reachable cure
-   today is the 22:00Z session reset -- a winning trade is unreachable while entries are refused, and
-   the `CONSECUTIVE_LOSS_BREACH` lapse that was taught to zero it cannot run because the account is
-   locked by EOD-scoped `DAILY_LOSS_BREACH`. Fix the reader before the counter.
-   ⚠️ `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and **nothing in 3352 tests
-   asserts it**, which is why an impossible value sat in persisted state unremarked.
+4. ~~`P1-172`~~ — ✅ CLOSED this session, `v1.54.0`, suite **3434/0**, battery **14/14**.
+   Kept as a struck entry because the SHAPE is what generalises, not the counter. It was read live
+   off the funded account's persisted state: `ConsecutiveLosses` **17** against `TradesToday`
+   **16** — arithmetically impossible, and it sat there unremarked because **nothing compared the
+   two counters and nothing logged an increment**. A refusal writes to `interventions.jsonl`; an
+   increment wrote nowhere. Both are now true: the replay window suppresses the phantom judgement,
+   and the invariant is REPORTED (not clamped — clamping hides the next mechanism).
+   ⚠️ **The half worth carrying forward: the reader that REFUSES must own a CURE.** The entry
+   refusal fired on the raw counter with nothing on that side of the `||` that could ever expire,
+   and all three cures were simultaneously unreachable — a winning trade needs the action the rule
+   blocks, so **the cure required the thing it forbids**. Fixed by making the refusing reader arm
+   the streak's own deadline, which adds a deadline and loosens nothing.
+   ⚠️ **And the guard that reads as redundant is not.** `!IsLockedOut` is NOT implied by
+   `!LockoutBinds`: a shadow-only lockout and a disarmed-bypass account are both `IsLockedOut` with
+   `LockoutBinds` false. Arming there re-attributes another rule's lockout, and the lapse cure
+   clears the counter the attribution NAMES — so the clobber forgives the wrong counter. The
+   battery's first run scored that mutant a survivor and it took finding the one reachable path
+   (an operator's TIMED lockout on a bypass account) to earn the test.
 5. **CI SLOT DISCIPLINE, not a defect ID.** ⚠️ **The 20-job concurrency limit is ACCOUNT-WIDE and
    shared with the sibling repo, and riskguard now runs 19 bins + `checks` = 20 jobs. It saturates
    the account on its own.** Measured 2026-08-20 on run `32320721779`: three overlapping riskguard
@@ -11485,18 +11484,26 @@ sessions after that stopped being true.
    checkouts, and a worktree is not a fresh checkout (`*.cs` is LF here, CRLF in a fresh clone,
    `core.autocrlf=true`, no `.gitattributes`). Pin `*.cs` in `.gitattributes` before attempting it.
    That is a project, not a quick fix, and it needs its own ID.
-6. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
-   rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
-   per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the
-   state gate back down -- that restores the `Filled`-only blindness measured on this account, where
-   2 of 3 live cases arrived as `Filled` and nothing else. The closed entries that named those
-   findings are cited from the plan, not from here, because the gate reads any ID in this block as
-   work to do. ⚠️ **The neighbours now have tests and a battery**, so the seam can be built against
-   assertions rather than against a reading: seventeen tests cover the rate governor and the
-   per-instrument cap through the real `ExecuteOrderUpdate`, and `mutation/mutate_p2165.py` scores
-   them. Expect several of them to need updating when the de-duplication lands — that is the point
-   of having them, and a fix to this method that changes none of them has probably not changed
-   behaviour either.
+6. ~~`P1-167`~~ — ✅ CLOSED this session, `v1.54.0`, suite **3434/0**, battery **10 killed + 1
+   declared**. One refusal per order per rule, via `AccountState.MarkRefusedOnce(ruleId, order)`,
+   applied to all four rules in the method rather than the one it was measured on — which is what
+   the entry asked for and what the previous partial fix did not do.
+   ⚠️ **Kept struck for the two things that generalise.** First: the key is (RULE, object
+   reference), and BOTH halves are load-bearing. Per rule, because two rules may each legitimately
+   refuse the same order once, and a shared set would let the first silence the second — the
+   operator fixes the instrument, resubmits, and hits an unexplained cap refusal that was never
+   reported. By reference, because Provider31 replaces `Order.Id` on accept and the Simulator never
+   does, so an id-keyed set is written under one key and read under another.
+   ⚠️ Second, and it is a lesson about the batteries rather than the code: **an
+   `IEqualityComparer` is only as keyed as its WEAKER half.** The mutant that changed `Equals`
+   alone SURVIVED, because `GetHashCode` still returned the reference hash and two objects sharing
+   an id land in different buckets, so `Equals` is never called to notice. Reading that as a
+   missing test would have been wrong — a half-mutation proves nothing, and a half-FIX would have
+   been just as invisible. Mutate both together.
+   ⚠️ **What it still does NOT fix**, and this is why the note stays: the shared per-order state
+   gate remains blind to orders that arrive already `Filled` (17 of 99 on this account). That is
+   correct for cancel paths — you cannot cancel a filled order — and the coverage lives in the
+   position-level rules. Do not "fix" it by widening a cancel gate.
 7. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
    the previous entry's "what opened those positions" turned it inside out: the detector was right
    every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at

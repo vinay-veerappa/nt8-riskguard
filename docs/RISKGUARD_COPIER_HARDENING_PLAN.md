@@ -9212,7 +9212,7 @@ exactly like a protection the operator has set. [[configured-evaluated-enforcing
 breached the moment it is evaluated. It will clear at the session boundary through the path this entry
 just made testable. Verify it did, rather than assuming.
 
-### P1-167. Every rule in `ExecuteOrderUpdate` refuses the same order once per state transition, so one order draws N cancels and N log lines — ⚠️ PARTIALLY FIXED 2026-08-19 (session 62), v1.52.0 — closed for the DUPLICATE_ENTRY rule only, with `P0-171`; the other rules in that method are untouched and this entry stays OPEN for them
+### P1-167. Every rule in `ExecuteOrderUpdate` refuses the same order once per state transition, so one order draws N cancels and N log lines — ✅ CLOSED 2026-08-20 (session 61), v1.54.0 — the DUPLICATE_ENTRY half closed 2026-08-19 with `P0-171`; the other four rules closed here
 
 Measured on the funded account the day `v1.49.0` went out. One duplicate order, three refusals:
 
@@ -9250,6 +9250,60 @@ a quantity no rule controls and the broker chooses. [[measure-the-deployed-syste
 already-refused order references, cleared where `RecentEntryAnchors` is. Do **not** fix it by
 narrowing the state gate back down -- that reintroduces the `Filled`-only blindness `P1-160`
 measured, where 2 of 3 live cases arrived as `Filled` and nothing else.
+
+#### ✅ CLOSED 2026-08-20 (session 61) — `v1.54.0`, suite **3434/0**, battery **10 killed + 1 declared EXPECTED SURVIVOR**
+
+The class, not another instance. `AccountState.MarkRefusedOnce(ruleId, order)` returns true the
+first time a rule refuses an order and false every time after; the caller queues its cancel and
+writes its log line only on a true. Applied to **all four** rules in the method —
+`PER_INSTRUMENT_CAP_CANCEL`, `BLACKLIST_CANCEL`, `ENTRY_CANCEL` and the rate governor's cancel.
+
+⚠️ **This entry had been "partially fixed" twice, both times for the rule it had just been measured
+on.** `P0-171` closed it for `DUPLICATE_ENTRY` and left the neighbours, which is why it stayed open
+under its own ID. The entry said in as many words that this is `ExecuteOrderUpdate`'s shape rather
+than one rule's. [[fix-the-class-not-the-instance]]
+
+##### Keyed by (rule, object reference), and both halves of that key are load-bearing
+
+**Per rule**, because two different rules may each legitimately refuse the same order once. A single
+shared set would let the first rule's refusal silence the second's — the operator fixes the
+instrument, resubmits, and hits an unexplained cap refusal that was never reported the first time.
+Fail-open, and it reads as a simplification. `TestP1167_EachRuleStillRefusesTheSameOrderOnceEach`
+and group 1 mutant 2. [[a-second-reader-of-the-same-state]]
+
+**By object reference**, for the reason already written above `DuplicateEntryEvaluatedOrders`:
+Provider31 issues `Order.Id` as a submission GUID and **replaces it on accept** while the Simulator
+never does, so an id-keyed set is written under one key and read under another — it never matches on
+this operator's own provider, and every test passes on `Sim101`. Both directions are tested: an
+order whose id *changes* mid-flight draws one refusal, and two genuinely different orders *sharing*
+an id draw two. [[the-simulator-re-ids-nothing]]
+
+##### ⚠️ Not a second copy of `DuplicateEntryEvaluatedOrders`
+
+That set records that an order was **evaluated** — it must not be judged twice even when the verdict
+was "not a duplicate", because a second evaluation against a moved anchor can reach the opposite
+verdict. This one records that an order was **refused**, per rule. Merging them would make one
+rule's refusal silence another's, which is the mutant above.
+
+##### The null-state branch fails OPEN, deliberately
+
+`instState` can be null in the blacklist and cap blocks (no known position, so no state to remember
+in). The refusal then goes out **un-deduplicated** rather than being dropped. On a path that cancels
+orders in a blocked or over-cap instrument, a silently dropped refusal is the direction that costs
+money — and `instState == null ||` reads like defensive noise until you ask which way it fails.
+`TestP1167_AnUntrackedAccountIsStillRefused` exists because that branch was unreachable from every
+other test, so the fail-closed mutant would have survived. [[a-filter-that-matches-too-much]]
+
+##### What this fixes for the operator
+
+`SHADOW_PENDING_CANCEL` reported **96 withheld cancels** in one session against far fewer offending
+orders. That number is the one an operator would use to judge how often the guard intervened, and it
+was inflated by the platform's state-transition count — a quantity no rule controls and the broker
+chooses. [[measure-the-deployed-system]]
+
+⚠️ **The sets are cleared at the session reset**, with the anchors and for the same reason: an order
+reference from last session can never come back, so keeping them is a leak on a process that runs
+for weeks. The whole dictionary is dropped, not just the sets a rule happens to have created.
 
 ### P1-168. Every per-order rule shares a state gate that cannot see an instantly-filled market order, and `BLACKLIST_CANCEL` is the one with no position-level backstop — ✅ FIXED 2026-08-19 (session 61), v1.51.0 — suite 3332/0, battery 17/17, closed with `P2-163`
 
@@ -10045,7 +10099,7 @@ working state and they may be the same defect again; they are listed as unreview
 classified because I did not measure them, and writing a justification I had not verified would have
 made the gate read as a review that never happened.
 
-### P1-172. `ConsecutiveLosses` reads **17** on an account that took **16** trades — a realized delta arriving while the guard sees no position counts as a losing trade, and the counter it inflates refuses every entry — OPEN, filed 2026-08-19 (session 62)
+### P1-172. `ConsecutiveLosses` reads **17** on an account that took **16** trades — a realized delta arriving while the guard sees no position counts as a losing trade, and the counter it inflates refuses every entry — ✅ CLOSED 2026-08-20 (session 61), filed 2026-08-19 (session 62)
 
 Read live off `TAKEPROFITPRO524207503` from `RiskGuard/state.json` at `2026-08-19T19:01:02Z`:
 
@@ -10143,6 +10197,84 @@ wrong count instead of a session-long trading ban.
 suite compares the two counters, which is why a value that cannot occur sat in persisted state
 unremarked. `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and is checkable at
 every settlement.
+
+#### ✅ CLOSED 2026-08-20 (session 61) — `v1.54.0`, suite **3434/0**, battery **14/14, no survivors**
+
+Both halves fixed, and the second one is the half that mattered.
+
+##### (a) The replay is no longer judged as a sequence of losing trades
+
+`RecordRealizedDelta`'s case 3 now returns without judging while
+`ReplaySuppressionUntilUtc` is live — the same guard-owned stamp `P0-171` already arms on every
+connection transition, so this needed no new state and no new lifecycle.
+
+⚠️ **Only the JUDGEMENT is suppressed. The money is still recorded.** The realized P&L being
+replayed is real, and `DAILY_LOSS_BREACH` reads it — suppressing the amount as well as the verdict
+would disarm the daily-loss rail for the length of every reconnect window. `mutate_p1172.py` group
+1 mutant 4 is that mistake.
+
+⚠️ **And the banked total is still cleared**, so a replayed amount cannot sit in
+`OpenTradeRealizedDelta` and land later as part of a genuine trade's judgement — which would turn a
+win into a loss and increment the very counter this fixes. That mutant (group 1, mutant 3) is the
+subtle one: it suppresses correctly and then leaks.
+
+This does **not** make the trade `P1-16` refused. `P1-16` declined to blind case 3 to untracked
+losses; this suppresses only inside the bounded window in which the guard *knows* it is being
+re-told. `TestP1172_ARealLossOutsideTheWindowStillCounts` is the control, and group 1 mutant 2
+inverts the window to prove it is load-bearing in both directions.
+
+##### (b) The refusal now owns a cure — and this is what made it a P1
+
+The reader refused on `ConsecutiveLosses >= Max` with **nothing on that side of the `||` that could
+ever expire**. All three cures were unreachable at once, which is why the account sat refusing every
+entry:
+
+| cure | why it could not run |
+|---|---|
+| a winning trade | needs the action this rule is blocking — **the cure requires the thing it forbids** |
+| the session reset | 22:00Z, hours away |
+| a `CONSECUTIVE_LOSS_BREACH` lockout lapsing | `EvaluateRules` claims its lockout only `if (!IsLockedOut)`, and `DAILY_LOSS_BREACH` already held an **EOD** lockout whose `LockoutUntil` is `MinValue` and by design never lapses |
+
+The fix makes **the reader that refuses responsible for the cure**: when the streak alone binds, it
+arms the streak's own deadline and attributes it to `CONSECUTIVE_LOSS_BREACH`, so `P0-166`'s
+existing cure can lapse it and zero the counter. That cure was already written; it was simply
+unreachable from here.
+
+⚠️ **This loosens nothing, and that was the constraint.** The refusal still fires on the same event
+and every event until the deadline lapses. It only *adds* a deadline where none existed.
+
+##### ⚠️ `!IsLockedOut` is not redundant with `!LockoutBinds`, and the difference is a live rail
+
+A lockout that does **not bind** still exists and still owns `LockoutRuleId` — a shadow-only lockout
+(`P1-100`) and a disarmed-bypass account are both `IsLockedOut` with `LockoutBinds` false. Arming
+there would **re-attribute another rule's lockout**, and `P0-166`'s cure clears the counter of
+whichever rule the attribution *names* — so the clobber would forgive the loss streak because the
+daily-loss lockout expired. Worse, it would convert an EOD lockout into a 60-minute one, handing
+back an account the prop firm's own rail has stopped for the session.
+
+Two tests hold that line (`AnExistingLockoutIsNotReattributed`, `AShadowOnlyLockoutIsNotReattributedEither`)
+and group 3 mutant 1 drops the guard, because it reads as redundant.
+
+⚠️ **The re-arm bound too.** Without `LockoutUntil <= UtcNow`, every refused entry re-arms the
+deadline, so the cure never lapses while the operator keeps trying and each attempt to trade extends
+the ban refusing it. [[a-retry-that-cannot-exit]], one reader over.
+
+##### The invariant is now reported — the increment used to write nowhere
+
+`ConsecutiveLosses <= TradesToday` is free, holds for every genuine sequence, and **nothing compared
+them**, which is exactly why an arithmetically impossible value sat in persisted state unremarked. A
+refusal writes to `interventions.jsonl`; an increment wrote nowhere.
+
+⚠️ **Reported, not clamped.** Clamping reads like the helpful fix and hides the next mechanism that
+inflates this counter — which is precisely what cost a session to find the first one. Group 4 mutant
+3 clamps, and the negative control (`AGenuineStreakIsNotReportedAsAViolation`) stops the alarm firing
+on every ordinary losing trade, because an alarm that always fires is the same as no alarm.
+
+##### One thing found while fixing it, not in the entry
+
+The raw-counter clause had **no `> 0` guard**, so an unset `MaxConsecutiveLosses` made `0 >= 0` true
+and refused every entry on the account. Same shape as the zero-reading asymmetry `P2-165`
+characterised in the neighbouring config section.
 
 ### P1-153. A test that THROWS kills the runner before `RESULTS:` prints, so every mutation battery scored a crash as a detection — ✅ FIXED 2026-08-18 (session 59), instance and class
 

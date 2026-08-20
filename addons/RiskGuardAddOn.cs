@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.53.0";
+        public const string Version = "1.54.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -1921,7 +1921,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (Math.Abs(newRealizedPnL - state.RealizedPnL) > 0.001)
                         {
                             double tradePnL = newRealizedPnL - state.RealizedPnL;
+                            int streakBefore = state.ConsecutiveLosses;
                             state.RecordRealizedDelta(tradePnL, _config);
+
+                            // ⚠️ P1-172. `ConsecutiveLosses <= TradesToday` HOLDS FOR EVERY GENUINE
+                            // SEQUENCE. A streak cannot exceed the trades in the session, and it
+                            // resets to 0 on any win, so it cannot exceed the trades since the last
+                            // win either. `TradesToday` is debounced to the trade lifecycle (P1-16)
+                            // and this counter is not, so when they disagree the disagreement is the
+                            // evidence -- and 17 against 16 sat in persisted state unremarked
+                            // because NOTHING COMPARED THEM and nothing logged an increment. A
+                            // refusal writes to interventions.jsonl; an increment wrote nowhere.
+                            //
+                            // Reported, NOT clamped. Clamping would hide the next mechanism that
+                            // inflates this counter, which is precisely what cost this one a
+                            // session to find. The reader is the operator's own audit record.
+                            // [[an-alarm-wired-to-a-dead-output]]
+                            if (state.ConsecutiveLosses > streakBefore
+                                && state.ConsecutiveLosses > state.TradesToday)
+                            {
+                                LogEvent(accountName, "COUNTER_INVARIANT_VIOLATED",
+                                    $"ConsecutiveLosses rose to {state.ConsecutiveLosses} on {state.TradesToday} "
+                                    + $"trade(s) this session, which cannot occur: a streak cannot exceed the "
+                                    + $"trades that produced it. The realized delta was {tradePnL:F2} and the "
+                                    + $"guard saw no open position, so this increment came from something "
+                                    + $"other than a trade closing.");
+                            }
 
                             state.LastRealizedPnL = rawRealized;
                             state.RealizedPnL = newRealizedPnL;
@@ -2229,7 +2254,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 // the stop-loss cancelled the protection AND locked the account
                                 // out, leaving an open position naked. The lockout-enforcement
                                 // block below has always had this guard; this path did not.
-                                if (!IsPositionReducingOrder(e.Order, stateModel))
+                                // P1-167: one cancel per order per rule. The rate governor re-fires
+                                // on every event while the window stays over its bound, so the
+                                // tripping order was queued once per state transition here too.
+                                if (!IsPositionReducingOrder(e.Order, stateModel)
+                                    && stateModel.MarkRefusedOnce("ORDER_FLOOD_LOCKOUT", e.Order))
                                 {
                                     // P1-43: queued, not sent -- this block runs under _stateLock.
                                     _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
@@ -2432,8 +2461,56 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // is locked out` into interventions.jsonl, which is the audit record, for an
                         // order that was never touched. A log line that asserts an action the mode
                         // does not perform is the same family as P2-101's retry.
-                        if (LockoutBinds(accountName, stateModel)
-                            || stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses)
+                        bool entryLockoutBinds = LockoutBinds(accountName, stateModel);
+                        bool streakAtCap = _config.Overtrading.MaxConsecutiveLosses > 0
+                            && stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses;
+
+                        // ⚠️ P1-172. THIS READER REFUSES ON THE RAW COUNTER WITH NO DEADLINE, AND
+                        // THAT IS WHAT MADE A WRONG COUNT A SESSION-LONG TRADING BAN. The condition
+                        // is an OR: no lockout need be active, no cooldown need be running, and
+                        // nothing is consulted that can ever expire. The counter has exactly three
+                        // cures -- a winning trade, the 22:00Z session reset, and a
+                        // CONSECUTIVE_LOSS_BREACH lockout LAPSING -- and on the account where this
+                        // was measured none of them could run. The first needs the action this rule
+                        // is blocking, so the cure requires the thing it forbids. The third never
+                        // fired because `EvaluateRules` claims its lockout only `if (!IsLockedOut)`,
+                        // and DAILY_LOSS_BREACH already held an EOD lockout with LockoutUntil at
+                        // MinValue, which by design never lapses. So the streak sat at 17 with no
+                        // deadline attached to it at all.
+                        //
+                        // The fix is to make the reader that refuses RESPONSIBLE FOR THE CURE: if
+                        // the streak alone is what binds, arm the streak's own cool-off deadline so
+                        // `EvaluateLockoutPhase` can lapse it and zero the counter (P0-166's cure,
+                        // already written, previously unreachable from here).
+                        //
+                        // ⚠️ THIS LOOSENS NOTHING. It only ADDS a deadline where there was none: the
+                        // refusal below still fires on this event and every event until the deadline
+                        // lapses, and when a lockout already binds -- including an EOD one -- this
+                        // block is skipped entirely and that lockout keeps its own scope. What it
+                        // removes is the case of an unbounded refusal owned by no rule.
+                        // [[a-lockout-must-not-trap-you]], [[a-second-reader-of-the-same-state]]
+                        // ⚠️ `!IsLockedOut` IS NOT REDUNDANT WITH `!entryLockoutBinds`. A lockout that
+                        // does not BIND still exists and still owns `LockoutRuleId` -- a shadow-only
+                        // lockout (P1-100) and a disarmed-bypass account (LockoutBypassWhileDisarmed)
+                        // are both `IsLockedOut` with `LockoutBinds` false. Arming here would clobber
+                        // the attribution of a lockout another rule set, and P0-166's cure clears the
+                        // counter of whichever rule the attribution names -- so the clobber would
+                        // forgive the wrong counter on lapse. Same guard `EvaluateRules` uses.
+                        if (streakAtCap && !entryLockoutBinds && !stateModel.IsLockedOut
+                            && stateModel.LockoutUntil <= DateTime.UtcNow
+                            && _config.Overtrading.LockoutMinutes > 0)
+                        {
+                            MarkRuleLockout(stateModel, "CONSECUTIVE_LOSS_BREACH",
+                                $"{stateModel.ConsecutiveLosses} consecutive losses against a "
+                                + $"{_config.Overtrading.MaxConsecutiveLosses} cap refused an entry "
+                                + $"with no deadline owning it; cooling off for "
+                                + $"{_config.Overtrading.LockoutMinutes} minute(s).");
+                            stateModel.LockoutUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.LockoutMinutes);
+                            _stateDirty = true;
+                            entryLockoutBinds = LockoutBinds(accountName, stateModel);
+                        }
+
+                        if (entryLockoutBinds || streakAtCap)
                         {
                             if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                             {
@@ -2441,9 +2518,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 {
                                     if (e.Order.OrderType == OrderType.Limit || e.Order.OrderType == OrderType.StopMarket || e.Order.OrderType == OrderType.StopLimit || e.Order.OrderType == OrderType.Market)
                                     {
-                                        // P1-43: queued, not sent -- this whole block runs under _stateLock.
-                                        _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
-                                        LogEvent(accountName, "ENTRY_CANCEL", $"Cancelled order {e.Order.Id} because account is locked out.");
+                                        // P1-167: one refusal per order per rule.
+                                        if (stateModel.MarkRefusedOnce("ENTRY_CANCEL", e.Order))
+                                        {
+                                            // P1-43: queued, not sent -- this whole block runs under _stateLock.
+                                            _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
+                                            LogEvent(accountName, "ENTRY_CANCEL", $"Cancelled order {e.Order.Id} because account is locked out.");
+                                        }
                                     }
                                 }
                             }
@@ -2470,7 +2551,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // an instrument stops being permitted while a position is open, refusing
                             // the exit would trap the operator in the very instrument the rule wants
                             // them out of. The position sweep flattens it; this must not fight that.
-                            if (!IsPositionReducingOrder(e.Order, instState))
+                            // P1-167: one refusal per order per rule. `instState` can be null here
+                            // (no known position), and a null state cannot remember anything -- so
+                            // the refusal still goes out, un-deduplicated, rather than being
+                            // silently dropped. Fail toward refusing.
+                            if (!IsPositionReducingOrder(e.Order, instState)
+                                && (instState == null || instState.MarkRefusedOnce("BLACKLIST_CANCEL", e.Order)))
                             {
                                 // P1-43: queued, not sent -- this whole block runs under _stateLock.
                                 _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
@@ -2517,9 +2603,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                         {
                             if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                             {
-                                // P1-43: queued, not sent -- this whole block runs under _stateLock.
-                                _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
-                                LogEvent(accountName, "PER_INSTRUMENT_CAP_CANCEL", $"Cancelled order {e.Order.Id} because quantity {e.Order.Quantity} exceeds {instRoot} cap ({perInstCap.MaxContracts}).");
+                                // P1-167: one refusal per order per rule. This is the rule the
+                                // over-count was MEASURED on -- one 3-lot MNQ order against a cap
+                                // of 1 drew three identical lines, 06:14:19 on the funded account.
+                                if (instState == null || instState.MarkRefusedOnce("PER_INSTRUMENT_CAP_CANCEL", e.Order))
+                                {
+                                    // P1-43: queued, not sent -- this whole block runs under _stateLock.
+                                    _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
+                                    LogEvent(accountName, "PER_INSTRUMENT_CAP_CANCEL", $"Cancelled order {e.Order.Id} because quantity {e.Order.Quantity} exceeds {instRoot} cap ({perInstCap.MaxContracts}).");
+                                }
                             }
                         }
                     }
@@ -5208,6 +5300,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // between restarts, and without this the set accumulates every order object of every
             // session for the life of the process, pinning them all against collection.
             stateModel.DuplicateEntryEvaluatedOrders.Clear();
+            // P1-167. Cleared with the anchors, and for the same reason: an order reference from
+            // last session can never come back, so keeping them is a leak on a process that runs
+            // for weeks. Every set is dropped, not just the ones a rule happens to have created.
+            stateModel.RuleRefusedOrders.Clear();
             stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;
             stateModel.PeakEquity = 0.0;
             stateModel.PeakOpenGain = 0.0;

@@ -132,22 +132,19 @@ MUTANTS = [
             'order is the stop covering a live position. The account is locked out AND the position '
             'is left naked, which is the asymmetric direction: the rate limit is the least '
             'important thing on the screen at that moment',
-     '                                if (!IsPositionReducingOrder(e.Order, stateModel))\n'
-     '                                {\n'
-     '                                    // P1-43: queued, not sent -- this block runs under _stateLock.',
-     '                                if (true)\n'
-     '                                {\n'
-     '                                    // P1-43: queued, not sent -- this block runs under _stateLock.'),
+     # Re-anchored 2026-08-20: P1-167 added the de-duplication clause to this condition.
+     '                                if (!IsPositionReducingOrder(e.Order, stateModel)\n'
+     '                                    && stateModel.MarkRefusedOnce(\"ORDER_FLOOD_LOCKOUT\", e.Order))',
+     '                                if (true)'),
 
     (GUARD, 'group 3: the guard is inverted, so ONLY protective orders are cancelled and the '
             'runaway entries sail through. The rate governor becomes a lockout with no teeth that '
             'also strips protection -- both failure directions at once',
-     '                                if (!IsPositionReducingOrder(e.Order, stateModel))\n'
-     '                                {\n'
-     '                                    // P1-43: queued, not sent -- this block runs under _stateLock.',
-     '                                if (IsPositionReducingOrder(e.Order, stateModel))\n'
-     '                                {\n'
-     '                                    // P1-43: queued, not sent -- this block runs under _stateLock.'),
+     # Re-anchored 2026-08-20: P1-167 added the de-duplication clause to this condition.
+     '                                if (!IsPositionReducingOrder(e.Order, stateModel)\n'
+     '                                    && stateModel.MarkRefusedOnce(\"ORDER_FLOOD_LOCKOUT\", e.Order))',
+     '                                if (IsPositionReducingOrder(e.Order, stateModel)\n'
+     '                                    && stateModel.MarkRefusedOnce(\"ORDER_FLOOD_LOCKOUT\", e.Order))'),
 ]
 
 ORIGINALS = {p: open(p, encoding='utf-8').read() for p in {m[0] for m in MUTANTS}}

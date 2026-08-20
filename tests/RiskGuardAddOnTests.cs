@@ -208,6 +208,30 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestCap_P2165_AnOversizedFlipIsStillRefused);
             Run(TestCap_P2165_AScaleInUnderTheOpenQuantityIsStillRefused);
             Run(TestCap_P2165_AFilledOrderIsNotCancelled);
+            Run(TestP1172_AReplayedRealizedLossIsNotAConsecutiveLoss);
+            Run(TestP1172_ARealLossOutsideTheWindowStillCounts);
+            Run(TestP1172_TheReplayedMoneyIsStillRecorded);
+            Run(TestP1172_TheReplayedAmountDoesNotLandOnTheNextTrade);
+            Run(TestP1172_APhantomIncrementIsLogged);
+            Run(TestP1172_AGenuineStreakIsNotReportedAsAViolation);
+            Run(TestP1172_AStreakRefusingAnEntryArmsItsOwnCure);
+            Run(TestP1172_TheEntryIsStillRefusedInTheSameEvent);
+            Run(TestP1172_AnExistingLockoutIsNotReattributed);
+            Run(TestP1172_AShadowOnlyLockoutIsNotReattributedEither);
+            Run(TestP1172_AnOperatorTimeoutIsNotExtendedOrReattributed);
+            Run(TestP1172_AnExitIsStillNeverRefusedByTheStreak);
+            Run(TestP1172_AZeroCapDoesNotRefuseEverything);
+            Run(TestP1167_OneOrderDrawsOneCapRefusalAcrossItsLifecycle);
+            Run(TestP1167_TwoDifferentOrdersEachDrawTheirOwn);
+            Run(TestP1167_ADifferentOrderSharingAnIdIsStillRefused);
+            Run(TestP1167_TheSameOrderWhoseIdChangesDrawsOneRefusal);
+            Run(TestP1167_ABlacklistRefusalIsAlsoDeduplicated);
+            Run(TestP1167_EachRuleStillRefusesTheSameOrderOnceEach);
+            Run(TestP1167_AnEntryCancelIsAlsoDeduplicated);
+            Run(TestP1167_AnUntrackedAccountIsStillRefused);
+            Run(TestP1167_ANullOrderNeverSuppressesARefusal);
+            Run(TestP1167_TheRateGovernorCancelsTheTrippingOrderOnce);
+            Run(TestP1167_TheSessionResetForgetsRefusedOrders);
             Run(TestFlood_P2165_MoreDistinctOrdersThanTheLimitLocksOut);
             Run(TestFlood_P2165_ExactlyTheLimitDoesNotLockOut);
             Run(TestFlood_P2165_TheSameOrderChangingStateCountsOnce);
@@ -19090,6 +19114,517 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(h.Events.Any(e => e == "ORDER_FLOOD_LOCKOUT"),
                 "and the sixth order proves the fallback is 5 and not 'no limit at all' -- the "
                 + "assertion above passes either way on its own");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P1-172. `ConsecutiveLosses` read 17 on an account that took 16 trades, which
+        // cannot occur: a streak cannot exceed the trades that produced it, and it
+        // resets to 0 on any win. Two independent defects, one counter.
+        //
+        //   (a) the RECONNECT REPLAY is judged as a sequence of losing trades. Case 3
+        //       of RecordRealizedDelta judges any negative delta arriving while every
+        //       position reads Flat as a loss on its own -- right for the standalone
+        //       adjustment P1-16 wrote it for, wrong for a replay, because the guard
+        //       DID see those positions and is being re-told about the same fills.
+        //   (b) the ENTRY REFUSAL reads the raw counter with NO DEADLINE, so a wrong
+        //       count became a session-long trading ban. This is the load-bearing
+        //       half: it is what turns a wrong count into a TEMPORARY wrong count.
+        //
+        // ⚠️ The counter had three cures and none could run on the account where this
+        // was measured. A winning trade needs the action the rule is blocking -- the
+        // cure requires the thing it forbids. The session reset is 22:00Z. And the
+        // lockout lapse never fired because EvaluateRules claims its lockout only
+        // `if (!IsLockedOut)`, while DAILY_LOSS_BREACH already held an EOD lockout
+        // whose LockoutUntil is MinValue and by design never lapses.
+        // ---------------------------------------------------------------------------
+
+        private static RiskConfig P1172Config()
+        {
+            var config = new RiskConfig();
+            config.Overtrading.DuplicateEntryWindowMs = 0;   // not the rule under test
+            config.Overtrading.MaxConsecutiveLosses = 3;
+            config.Overtrading.LockoutMinutes = 60;
+            config.Overtrading.CooldownMinutes = 0;          // isolate the lockout deadline
+            return config;
+        }
+
+        private sealed class P1172Harness
+        {
+            public RiskGuardAddOn Addon;
+            public Account Account;
+            public AccountState State;
+            public List<string> Events = new List<string>();
+            public List<string> Messages = new List<string>();
+        }
+
+        private static P1172Harness P1172Setup(RiskConfig config)
+        {
+            var h = new P1172Harness();
+            h.Account = new Account { Name = "TestAcc" };
+            h.Addon = new RiskGuardAddOn();
+            h.Addon.SetConfigForTest(config);
+            h.Addon.SetModeForTest("shadow");
+            h.State = new AccountState("TestAcc");
+            h.Addon.SetAccountStateForTest("TestAcc", h.State);
+            Account.All.Clear();
+            Account.All.Add(h.Account);
+            return h;
+        }
+
+        /// <summary>Drives the real realized-P&amp;L path, which is where the streak is judged.</summary>
+        private static void P1172Realized(P1172Harness h, double cumulativeRealized)
+        {
+            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            {
+                h.Events.Add(evt);
+                h.Messages.Add(evt + ": " + msg);
+            };
+            try
+            {
+                h.Addon.ExecuteAccountItemUpdate(h.Account, new AccountItemEventArgs
+                {
+                    AccountItem = AccountItem.RealizedProfitLoss,
+                    Value = cumulativeRealized
+                });
+            }
+            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+        }
+
+        private static void TestP1172_AReplayedRealizedLossIsNotAConsecutiveLoss()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a replayed realized loss is not a consecutive loss");
+            var h = P1172Setup(P1172Config());
+            h.State.ReplaySuppressionUntilUtc = DateTime.UtcNow.AddSeconds(5);
+
+            // The measured shape: one reconnect replayed all 59 executions inside two seconds with
+            // the account flat. Three negative steps is the same mechanism, smaller.
+            P1172Realized(h, -50);
+            P1172Realized(h, -120);
+            P1172Realized(h, -347.75);
+
+            Assert(h.State.ConsecutiveLosses == 0,
+                "the guard is being re-told about fills it already saw. Judging each replayed step "
+                + "as its own losing trade is how a 16-trade session produced a streak of 17");
+        }
+
+        private static void TestP1172_ARealLossOutsideTheWindowStillCounts()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a real loss outside the replay window still counts");
+            var h = P1172Setup(P1172Config());
+            // No suppression armed -- the ordinary case.
+            P1172Realized(h, -50);
+
+            Assert(h.State.ConsecutiveLosses == 1,
+                "the positive control, and the one that matters most here. P1-16 refused to blind "
+                + "case 3 to untracked losses and was right to; suppressing only inside the window "
+                + "the guard KNOWS it is being re-told must not become suppressing always");
+        }
+
+        private static void TestP1172_TheReplayedMoneyIsStillRecorded()
+        {
+            Console.WriteLine("\n[TEST] P1-172: the replayed money is still recorded");
+            var h = P1172Setup(P1172Config());
+            h.State.ReplaySuppressionUntilUtc = DateTime.UtcNow.AddSeconds(5);
+            P1172Realized(h, -347.75);
+
+            Assert(Math.Abs(h.State.RealizedPnL - (-347.75)) < 0.01,
+                "only the JUDGEMENT is suppressed. The realized P&L being replayed is real money and "
+                + "the daily-loss rail reads it -- suppressing the amount as well as the verdict "
+                + "would disarm DAILY_LOSS_BREACH for the length of the window");
+        }
+
+        private static void TestP1172_TheReplayedAmountDoesNotLandOnTheNextTrade()
+        {
+            Console.WriteLine("\n[TEST] P1-172: the replayed amount does not land on the next trade");
+            var config = P1172Config();
+            var h = P1172Setup(config);
+            h.State.ReplaySuppressionUntilUtc = DateTime.UtcNow.AddSeconds(5);
+            P1172Realized(h, -347.75);
+
+            // Window over; now a genuine WINNING trade.
+            h.State.ReplaySuppressionUntilUtc = DateTime.MinValue;
+            P1172Realized(h, -247.75);
+
+            Assert(h.State.ConsecutiveLosses == 0,
+                "the running total is cleared on suppression, so the replayed 347.75 cannot be "
+                + "banked and then judged as part of the next trade -- which would turn a +100 win "
+                + "into a -247 loss and increment the very counter this fixes");
+        }
+
+        private static void TestP1172_APhantomIncrementIsLogged()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a phantom increment is logged");
+            var h = P1172Setup(P1172Config());
+            // TradesToday is 0 -- no trade lifecycle has been observed -- so any increment at all
+            // violates ConsecutiveLosses <= TradesToday.
+            P1172Realized(h, -50);
+
+            Assert(h.Events.Any(e => e == "COUNTER_INVARIANT_VIOLATED"),
+                "a refusal writes to interventions.jsonl and an increment wrote NOWHERE, which is "
+                + "why an impossible value sat in persisted state unremarked. Reported, not clamped: "
+                + "clamping would hide the next mechanism that inflates this counter");
+        }
+
+        private static void TestP1172_AGenuineStreakIsNotReportedAsAViolation()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a genuine streak is not reported as a violation");
+            var h = P1172Setup(P1172Config());
+            h.State.TradesToday = 4;
+            P1172Realized(h, -50);
+
+            Assert(!h.Events.Any(e => e == "COUNTER_INVARIANT_VIOLATED"),
+                "the negative control. An alarm that fires on every increment is an alarm the "
+                + "operator learns to ignore, and it would fire on every ordinary losing trade "
+                + "[[a-detector-needs-a-negative-test]]");
+        }
+
+        private static void TestP1172_AStreakRefusingAnEntryArmsItsOwnCure()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a streak refusing an entry arms its own cure");
+            var config = P1172Config();
+            var h = P1160Setup(config, "shadow");
+            h.State.ConsecutiveLosses = 17;   // the measured value, on an account with no lockout
+            var before = DateTime.UtcNow;
+
+            P1160Send(h, P1160Order("600", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(h.State.LockoutUntil > before,
+                "the refusal now owns a DEADLINE. Without one the counter's only cure was the 22:00Z "
+                + "session reset, because a winning trade needs the action this rule blocks and the "
+                + "lockout lapse never fires when another rule holds an EOD lockout");
+            Assert(h.State.LockoutRuleId == "CONSECUTIVE_LOSS_BREACH",
+                "and it is attributed to THIS rule, because P0-166's cure clears the counter of "
+                + "whichever rule the attribution names -- a wrong name forgives the wrong counter");
+        }
+
+        private static void TestP1172_TheEntryIsStillRefusedInTheSameEvent()
+        {
+            Console.WriteLine("\n[TEST] P1-172: the entry is still refused in the same event");
+            var h = P1160Setup(P1172Config(), "shadow");
+            h.State.ConsecutiveLosses = 17;
+
+            P1160Send(h, P1160Order("601", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(h.Events.Any(e => e == "ENTRY_CANCEL"),
+                "arming the cure must not REPLACE the refusal. This fix adds a deadline; it does not "
+                + "loosen the rail, and a version that armed the lockout and then let the order "
+                + "through would be strictly worse than the defect");
+        }
+
+        private static void TestP1172_AnExistingLockoutIsNotReattributed()
+        {
+            Console.WriteLine("\n[TEST] P1-172: an existing lockout is not re-attributed");
+            var h = P1160Setup(P1172Config(), "shadow");
+            h.State.ConsecutiveLosses = 17;
+            // The measured state: DAILY_LOSS_BREACH holds an EOD lockout. MinValue means "no
+            // deadline", NOT "expired", and P0-166 made this rule session-scoped deliberately.
+            h.State.IsLockedOut = true;
+            h.State.LockoutUntil = DateTime.MinValue;
+            h.State.LockoutRuleId = "DAILY_LOSS_BREACH";
+
+            P1160Send(h, P1160Order("602", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(h.State.LockoutRuleId == "DAILY_LOSS_BREACH",
+                "the dangerous direction. Arming here would clobber the attribution of a lockout "
+                + "another rule set, and P0-166's cure clears the counter the attribution NAMES -- so "
+                + "the clobber would forgive the loss streak when the daily-loss lockout lapsed");
+            Assert(h.State.LockoutUntil == DateTime.MinValue,
+                "and an EOD lockout is not converted into a 60-minute one. That would hand back an "
+                + "account the prop firm's own daily-loss rail has stopped for the session");
+        }
+
+        private static void TestP1172_AShadowOnlyLockoutIsNotReattributedEither()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a shadow-only lockout is not re-attributed either");
+            var h = P1160Setup(P1172Config(), "shadow");
+            h.State.ConsecutiveLosses = 17;
+            // P1-100: a shadow-only lockout is IsLockedOut with LockoutBinds FALSE. So
+            // `!LockoutBinds` alone is not enough to prove no lockout exists -- which is exactly
+            // the kind of near-synonym that makes a guard read as redundant when it is not.
+            h.State.IsLockedOut = true;
+            h.State.LockoutWasShadowOnly = true;
+            h.State.LockoutUntil = DateTime.MinValue;
+            h.State.LockoutRuleId = "MAX_SIZE_BREACH";
+
+            P1160Send(h, P1160Order("603", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(h.State.LockoutRuleId == "MAX_SIZE_BREACH",
+                "`!IsLockedOut` is not redundant with `!LockoutBinds`. A lockout that does not bind "
+                + "still exists and still owns the attribution");
+        }
+
+        private static void TestP1172_AnOperatorTimeoutIsNotExtendedOrReattributed()
+        {
+            Console.WriteLine("\n[TEST] P1-172: an operator's own timeout is not extended or re-attributed");
+            var config = P1172Config();
+            // The one reachable state where `!IsLockedOut` is TRUE and a live lockout still exists,
+            // so the existing-deadline test is the only thing standing between the cure and the
+            // operator's own instruction. Found by the battery: the mutant that drops
+            // `LockoutUntil <= UtcNow` SURVIVED, and the reason it looked equivalent is that
+            // MarkRuleLockout sets IsLockedOut, so a repeat entry is already blocked by the other
+            // guard. This path is not.
+            //
+            //   * LockAccount(name, minutes) deliberately leaves IsLockedOut FALSE -- P2-94 pins
+            //     that flag to indefinite/EOD lockouts, and for a TIMED one the deadline is what
+            //     refuses trading.
+            //   * LockoutBypassWhileDisarmed makes LockoutBinds return false for this account while
+            //     the guard is disarmed, so `!entryLockoutBinds` is true as well.
+            //
+            // Both guards therefore say "no lockout here" while the operator has one running.
+            config.LockoutBypassWhileDisarmedAccounts.Add("TestAcc");
+            var h = P1160Setup(config, "shadow");
+            h.Addon.SetArmedForTest(false);
+            h.State.ConsecutiveLosses = 17;
+            h.Addon.LockAccount("TestAcc", 10);
+            var operatorDeadline = h.State.LockoutUntil;
+            h.State.LockoutRuleId = "OPERATOR_TIMEOUT";
+
+            P1160Send(h, P1160Order("606", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(h.State.LockoutUntil == operatorDeadline,
+                "a 10-minute timeout the operator set must not silently become 60. The cure arms "
+                + "only where NO deadline is running -- otherwise each refused entry extends the ban "
+                + "refusing it, and the exit condition is reset by the very action trying to reach "
+                + "it [[a-retry-that-cannot-exit]]");
+            Assert(h.State.LockoutRuleId == "OPERATOR_TIMEOUT",
+                "and it keeps the operator's attribution, because P0-166's cure clears the counter "
+                + "of whichever rule the attribution names");
+        }
+
+        private static void TestP1172_AnExitIsStillNeverRefusedByTheStreak()
+        {
+            Console.WriteLine("\n[TEST] P1-172: an exit is still never refused by the streak");
+            var config = P1172Config();
+            var h = P1160Setup(config, "shadow");
+            h.State.ConsecutiveLosses = 17;
+            h.State.UpdatePosition(h.Account, new Instrument("MNQ"), MarketPosition.Long, 1, 100, 0, config);
+
+            P1160Send(h, P1160Order("604", OrderAction.Sell, OrderType.Market, "MNQ", 1, "Exit"));
+
+            Assert(!h.Events.Any(e => e == "ENTRY_CANCEL"),
+                "this is why P1-172 was filed P1 and not P0: the refusal exempts reducing orders, so "
+                + "a phantom streak cannot trap the operator in a position. That exemption is load "
+                + "bearing and the cure must not disturb it [[a-lockout-must-not-trap-you]]");
+        }
+
+        private static void TestP1172_AZeroCapDoesNotRefuseEverything()
+        {
+            Console.WriteLine("\n[TEST] P1-172: a zero consecutive-loss cap does not refuse everything");
+            var config = P1172Config();
+            config.Overtrading.MaxConsecutiveLosses = 0;
+            var h = P1160Setup(config, "shadow");
+            h.State.ConsecutiveLosses = 0;
+
+            P1160Send(h, P1160Order("605", OrderAction.Buy, OrderType.Market, "MNQ", 1, "Entry"));
+
+            Assert(!h.Events.Any(e => e == "ENTRY_CANCEL"),
+                "`0 >= 0` is true, so an unset cap refused every entry on the account. The raw-counter "
+                + "clause had no `> 0` guard at all before this");
+        }
+
+        // ---------------------------------------------------------------------------
+        // P1-167, the remaining half. `ExecuteOrderUpdate` runs once per order EVENT,
+        // and no rule inside it recorded that it had already refused a given order --
+        // so the platform's state-transition count, which no rule controls and the
+        // broker chooses, multiplied every cancel and every log line. Measured on the
+        // funded account: one 3-lot MNQ order against a cap of 1 drew THREE identical
+        // refusals at 06:14:19, and SHADOW_PENDING_CANCEL reported 96 withheld cancels
+        // against far fewer offending orders.
+        // ---------------------------------------------------------------------------
+
+        private static void TestP1167_OneOrderDrawsOneCapRefusalAcrossItsLifecycle()
+        {
+            Console.WriteLine("\n[TEST] P1-167: one order draws one cap refusal across its lifecycle");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "shadow");
+            var order = P1160Order("500", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry");
+
+            foreach (var st in new[] { OrderState.Submitted, OrderState.Accepted, OrderState.Working })
+            {
+                order.OrderState = st;
+                P1160Send(h, order);
+            }
+
+            Assert(h.Events.Count(e => e == "PER_INSTRUMENT_CAP_CANCEL") == 1,
+                "exactly the measured defect: three identical lines for one order, with the count "
+                + "set by how many states the broker walks it through. The audit record is the one "
+                + "number an operator uses to judge how often the guard intervened "
+                + "[[measure-the-deployed-system]]");
+        }
+
+        private static void TestP1167_TwoDifferentOrdersEachDrawTheirOwn()
+        {
+            Console.WriteLine("\n[TEST] P1-167: two different orders each draw their own refusal");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "shadow");
+            P1160Send(h, P1160Order("501", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+            P1160Send(h, P1160Order("502", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+
+            Assert(h.Events.Count(e => e == "PER_INSTRUMENT_CAP_CANCEL") == 2,
+                "the negative control. De-duplicating by anything coarser than the order itself -- "
+                + "by instrument, or by rule alone -- would silence the refusal for every order "
+                + "after the first, which is the fail-OPEN direction");
+        }
+
+        private static void TestP1167_ADifferentOrderSharingAnIdIsStillRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-167: a different order sharing an Id is still refused");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "shadow");
+            // NT8's Order.Id is neither unique nor stable, and Provider31 REPLACES it on accept
+            // while the Simulator never does. Keyed on the id this set never matches on the
+            // operator's own provider, and two genuinely different orders sharing one would see the
+            // second silently skipped. [[the-simulator-re-ids-nothing]]
+            P1160Send(h, P1160Order("503", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+            P1160Send(h, P1160Order("503", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+
+            Assert(h.Events.Count(e => e == "PER_INSTRUMENT_CAP_CANCEL") == 2,
+                "keyed by object reference, not by a value the broker owns");
+        }
+
+        private static void TestP1167_TheSameOrderWhoseIdChangesDrawsOneRefusal()
+        {
+            Console.WriteLine("\n[TEST] P1-167: the same order whose Id changes draws one refusal");
+            var h = P1160Setup(P2165CapConfig("MNQ", 1), "shadow");
+            var order = P1160Order("504", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry");
+            P1160Send(h, order);
+            // Provider31 replaces the submission GUID on accept. The mirror of the test above, and
+            // the direction that actually bites on this operator's account.
+            order.Id = "REPLACED-BY-BROKER";
+            order.OrderState = OrderState.Accepted;
+            P1160Send(h, order);
+
+            Assert(h.Events.Count(e => e == "PER_INSTRUMENT_CAP_CANCEL") == 1,
+                "one order, one refusal, even when the broker re-ids it mid-flight");
+        }
+
+        private static void TestP1167_ABlacklistRefusalIsAlsoDeduplicated()
+        {
+            Console.WriteLine("\n[TEST] P1-167: a blacklist refusal is also de-duplicated");
+            var h = P1160Setup(P2163Config(), "shadow");
+            var order = P1160Order("505", OrderAction.Buy, OrderType.Limit, "ES", 1, "Entry");
+            foreach (var st in new[] { OrderState.Submitted, OrderState.Accepted, OrderState.Working })
+            {
+                order.OrderState = st;
+                P1160Send(h, order);
+            }
+
+            Assert(h.Events.Count(e => e == "BLACKLIST_CANCEL") == 1,
+                "the entry says this is the METHOD's shape, not one rule's. Fixing the rule it was "
+                + "measured on and leaving the neighbours is how P1-167 came to be partially fixed "
+                + "twice already [[fix-the-class-not-the-instance]]");
+        }
+
+        private static void TestP1167_EachRuleStillRefusesTheSameOrderOnceEach()
+        {
+            Console.WriteLine("\n[TEST] P1-167: each rule still refuses the same order once EACH");
+            var config = P2163Config();
+            config.InstrumentLimits["ES"] = new PerInstrumentRiskConfig { MaxContracts = 1 };
+            var h = P1160Setup(config, "shadow");
+            // ES is not permitted AND over its cap. Two rules, two distinct findings.
+            P1160Send(h, P1160Order("506", OrderAction.Buy, OrderType.Limit, "ES", 5, "Entry"));
+
+            Assert(h.Events.Count(e => e == "BLACKLIST_CANCEL") == 1
+                   && h.Events.Count(e => e == "PER_INSTRUMENT_CAP_CANCEL") == 1,
+                "the set is keyed by RULE as well as by order. A single shared set would make the "
+                + "first rule's refusal silence the second's, and the operator would fix the "
+                + "instrument, resubmit, and hit an unexplained cap refusal "
+                + "[[a-second-reader-of-the-same-state]]");
+        }
+
+        private static void TestP1167_AnEntryCancelIsAlsoDeduplicated()
+        {
+            Console.WriteLine("\n[TEST] P1-167: an ENTRY_CANCEL is also de-duplicated");
+            var h = P1160Setup(P1172Config(), "shadow");
+            h.State.IsLockedOut = true;
+            h.State.LockoutRuleId = "DAILY_LOSS_BREACH";
+            var order = P1160Order("507", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+            foreach (var st in new[] { OrderState.Submitted, OrderState.Accepted, OrderState.Working })
+            {
+                order.OrderState = st;
+                P1160Send(h, order);
+            }
+
+            Assert(h.Events.Count(e => e == "ENTRY_CANCEL") == 1,
+                "the lockout refusal is the third rule in the method and had the same shape");
+        }
+
+        private static void TestP1167_AnUntrackedAccountIsStillRefused()
+        {
+            Console.WriteLine("\n[TEST] P1-167: an untracked account is still refused");
+            // No AccountState registered, so there is nothing to remember the refusal IN. The
+            // de-duplication must then fail OPEN -- refuse un-deduplicated -- rather than fail
+            // closed and drop the refusal entirely. On a path that cancels orders in a blocked or
+            // over-cap instrument, a silently dropped refusal is the direction that costs money,
+            // and `instState == null ||` reads like defensive noise until you ask which way it
+            // fails. [[a-filter-that-matches-too-much]]
+            var h = new P1160Harness();
+            h.Account = new Account { Name = "Untracked" };
+            h.Addon = new RiskGuardAddOn();
+            h.Addon.SetConfigForTest(P2165CapConfig("MNQ", 1));
+            h.Addon.SetModeForTest("shadow");
+            Account.All.Clear();
+            Account.All.Add(h.Account);
+
+            P1160Send(h, P1160Order("509", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+
+            Assert(h.Events.Any(e => e == "PER_INSTRUMENT_CAP_CANCEL"),
+                "a rule that cannot remember must still enforce");
+        }
+
+        private static void TestP1167_ANullOrderNeverSuppressesARefusal()
+        {
+            Console.WriteLine("\n[TEST] P1-167: a null order never suppresses a refusal");
+            // Found by the battery: nothing drove `MarkRefusedOnce(rule, null)`, so the mutant that
+            // returns false there survived. The method is public on AccountState and its callers are
+            // cancel paths, so "nothing to remember" must resolve to ENFORCE, not to skip. Asserted
+            // on the method directly because ExecuteOrderUpdate dereferences e.Order long before
+            // this point -- the branch is unreachable through the rule and reachable through the API.
+            var state = new AccountState("TestAcc");
+
+            Assert(state.MarkRefusedOnce("ANY_RULE", null),
+                "the fail-OPEN direction is the safe one here: an un-deduplicated refusal is noise, "
+                + "a dropped refusal is an order the guard meant to cancel and did not");
+            Assert(state.MarkRefusedOnce("ANY_RULE", null),
+                "and it stays true on every call -- a null cannot be remembered, so it must never "
+                + "start reading as already-refused");
+        }
+
+        private static void TestP1167_TheRateGovernorCancelsTheTrippingOrderOnce()
+        {
+            Console.WriteLine("\n[TEST] P1-167: the rate governor cancels the tripping order once");
+            // Also found by the battery. In shadow the withheld-cancel line is the observable: it is
+            // emitted once per DRAIN that had something to drain, so counting it counts how many
+            // times the rule queued a cancel. The flood condition stays true across transitions, so
+            // without de-duplication the same order is queued again on every event.
+            var config = P2165FloodConfig(1);
+            var h = P1160Setup(config, "shadow");
+            P1160Send(h, P1160Order("510", OrderAction.Buy, OrderType.Limit, "MES", 1, "Entry"));
+            var tripping = P1160Order("511", OrderAction.Buy, OrderType.Limit, "MNQ", 1, "Entry");
+
+            foreach (var st in new[] { OrderState.Submitted, OrderState.Accepted })
+            {
+                tripping.OrderState = st;
+                P1160Send(h, tripping);
+            }
+
+            Assert(h.Events.Count(e => e == "SHADOW_PENDING_CANCEL") == 1,
+                "one order, one queued cancel. The rate governor was the fourth rule with this "
+                + "shape and the easiest to miss, because its own log line is about the LOCKOUT and "
+                + "says nothing about the cancel it queued alongside");
+        }
+
+        private static void TestP1167_TheSessionResetForgetsRefusedOrders()
+        {
+            Console.WriteLine("\n[TEST] P1-167: the session reset forgets refused orders");
+            var config = P2165CapConfig("MNQ", 1);
+            var h = P1160Setup(config, "shadow");
+            P1160Send(h, P1160Order("508", OrderAction.Buy, OrderType.Limit, "MNQ", 3, "Entry"));
+            Assert(h.State.RuleRefusedOrders.Count > 0, "the set is populated (control)");
+
+            h.Addon.ResetAccountForNewSession(h.State, h.Account, "TestAcc", DateTime.UtcNow.Date);
+
+            Assert(h.State.RuleRefusedOrders.Count == 0,
+                "an order reference from last session can never come back, so keeping them is a "
+                + "leak on a process that runs for weeks -- cleared with the anchors, for the same "
+                + "reason and in the same place");
         }
 
         private sealed class P1160Harness

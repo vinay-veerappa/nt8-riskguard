@@ -181,8 +181,13 @@ MUTANTS = [
             'instrument it has just decided is not permitted -- trapping the operator in the exact '
             'instrument the rule wants them out of, while the position sweep tries to flatten it. '
             '[[a-lockout-must-not-trap-you]]',
-     '                            if (!IsPositionReducingOrder(e.Order, instState))',
-     '                            if (true)'),
+     # Re-anchored 2026-08-20: P1-167 added the de-duplication clause to this condition, so it is
+     # no longer a single line. The mutant still drops ONLY the reducing-order exclusion and keeps
+     # the de-duplication, because dropping both would not isolate what this mutant is about.
+     # [[mutation-anchors-go-stale]]
+     '                            if (!IsPositionReducingOrder(e.Order, instState)\n'
+     '                                && (instState == null || instState.MarkRefusedOnce("BLACKLIST_CANCEL", e.Order)))',
+     '                            if (instState == null || instState.MarkRefusedOnce("BLACKLIST_CANCEL", e.Order))'),
 
     (GUARD, 'group 5: the account state is never fetched, so IsPositionReducingOrder is handed null, '
             'returns false for everything, and every exit reads as an entry. The same trap as above, '

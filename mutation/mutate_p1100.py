@@ -89,8 +89,11 @@ MUTANTS = [
     ("the entry-cancel block in OnOrderUpdate reads the raw flag again, writing\n"
      "     `ENTRY_CANCEL: Cancelled order N` into the audit record for an order shadow mode never\n"
      "     touched. The observable is the LOG, not the order state",
-     '                        if (LockoutBinds(accountName, stateModel)',
-     '                        if (stateModel.IsLockedOut'),
+     # Re-anchored 2026-08-20: P1-172 hoisted this call into a named local so the refusal could
+     # arm its own cure before re-reading it, so the condition is no longer spelled inline.
+     # [[mutation-anchors-go-stale]]
+     '                        bool entryLockoutBinds = LockoutBinds(accountName, stateModel);',
+     '                        bool entryLockoutBinds = stateModel.IsLockedOut;'),
 ]
 
 

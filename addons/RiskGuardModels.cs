@@ -182,6 +182,46 @@ namespace NinjaTrader.NinjaScript.AddOns
         public HashSet<Order> DuplicateEntryEvaluatedOrders { get; set; }
             = new HashSet<Order>(OrderReferenceComparer.Instance);
 
+        // P1-167, the remaining half. ONE REFUSAL PER ORDER PER RULE. `ExecuteOrderUpdate` runs
+        // once per order EVENT, and no rule inside it recorded that it had already refused a given
+        // order -- so the platform's state-transition count, a quantity no rule controls and the
+        // broker chooses, multiplied every cancel and every log line. Measured on the funded
+        // account: one 3-lot MNQ order against a cap of 1 drew THREE identical
+        // `PER_INSTRUMENT_CAP_CANCEL` lines, and `SHADOW_PENDING_CANCEL` reported 96 withheld
+        // cancels against far fewer offending orders -- inflating the one number an operator would
+        // use to judge how often the guard intervened. [[measure-the-deployed-system]]
+        //
+        // ⚠️ RUNTIME-ONLY, and keyed by OBJECT REFERENCE for exactly the reasons written above
+        // `DuplicateEntryEvaluatedOrders`: Provider31 replaces `Order.Id` on accept and NT8's ids
+        // are not unique, so keying on the id fails to match on this operator's provider while
+        // every test passes on the Simulator. [[the-simulator-re-ids-nothing]]
+        //
+        // ⚠️ THIS IS NOT A SECOND COPY OF `DuplicateEntryEvaluatedOrders`, and the difference is
+        // load-bearing. That set records that an order was EVALUATED -- it must not be judged
+        // twice even when the verdict was "not a duplicate", because a second evaluation against
+        // a moved anchor can reach the opposite verdict. This set records that an order was
+        // REFUSED, per rule, because two different rules may each legitimately refuse the same
+        // order once. Merging them would make one rule's refusal silence another's.
+        // [[a-second-reader-of-the-same-state]]
+        public Dictionary<string, HashSet<Order>> RuleRefusedOrders { get; set; }
+            = new Dictionary<string, HashSet<Order>>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// P1-167. True the FIRST time `ruleId` refuses `order`, false every time after. The
+        /// caller queues its cancel and writes its log line only on a true.
+        /// </summary>
+        public bool MarkRefusedOnce(string ruleId, Order order)
+        {
+            if (order == null) return true;   // nothing to remember; never suppress a refusal
+            HashSet<Order> seen;
+            if (!RuleRefusedOrders.TryGetValue(ruleId, out seen))
+            {
+                seen = new HashSet<Order>(OrderReferenceComparer.Instance);
+                RuleRefusedOrders[ruleId] = seen;
+            }
+            return seen.Add(order);
+        }
+
         // Lockout phase: PendingCancel -> PendingFlatten -> Confirmed.
         // Only Confirmed stops emitting actions. This prevents the infinite
         // flatten loop where account.Flatten() fails silently but the sweep
@@ -267,6 +307,32 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             if (!HasOpenPosition())
             {
+                // ⚠️ P1-172. THE RECONNECT REPLAY IS NOT A SEQUENCE OF LOSING TRADES. Case 3 judges
+                // any negative delta arriving while every tracked position reads Flat as a losing
+                // trade on its own -- correct for the standalone adjustment it was written for, and
+                // wrong for a replay, because the guard DID see those positions and is being told
+                // about the same fills again. `P0-171` measured one Disconnected->Connected cycle
+                // replaying 118 orders and all 59 executions inside two seconds with the account
+                // flat; every negative one took this branch and incremented the streak. That is how
+                // `ConsecutiveLosses` reached 17 on an account that took 16 trades -- a value that
+                // cannot occur, sitting in persisted state.
+                //
+                // ⚠️ THE MONEY IS STILL RECORDED. Only the JUDGEMENT is suppressed: the caller
+                // applies the delta to RealizedPnL either way, because the realized P&L being
+                // replayed is real. `P1-16` refused to blind case 3 to untracked losses and was
+                // right to; this does not. It suppresses the streak for the bounded window in
+                // which the guard KNOWS it is being re-told, and that window is the same
+                // guard-owned stamp the duplicate-entry rule already uses.
+                //
+                // The running total is still cleared, so a replayed amount cannot land later as
+                // part of a genuine trade's judgement.
+                if (UtcNow() <= ReplaySuppressionUntilUtc)
+                {
+                    OpenTradeRealizedDelta = 0.0;
+                    ConsecutiveLossesBeforeSettlement = ConsecutiveLosses;
+                    return;
+                }
+
                 ConsecutiveLossesBeforeSettlement = ConsecutiveLosses;
                 ApplyTradeJudgement(config);
                 OpenTradeRealizedDelta = 0.0;

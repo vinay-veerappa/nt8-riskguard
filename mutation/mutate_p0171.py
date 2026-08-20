@@ -197,16 +197,18 @@ MUTANTS = [
             'nothing on DISK grows; this guard runs for weeks between restarts, so the set '
             'accumulates every order object of every session for the life of the process and pins '
             'each one against collection',
-     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();\n'
-     '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;',
-     '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;'),
+     # Re-anchored 2026-08-20: P1-167 inserted RuleRefusedOrders.Clear() between these two lines,
+     # so the two-line span stopped matching. Each half now anchors on its OWN line, which is what
+     # it should have been -- a multi-line anchor is a claim about the lines BETWEEN the two it
+     # cares about. [[mutation-anchors-go-stale]]
+     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();',
+     '            _ = stateModel.DuplicateEntryEvaluatedOrders.Count;'),
 
     (GUARD, 'group 7: the session reset stops clearing the suppression deadline, so a stamp set at '
             '23:59 is carried into the next session -- a suppression nothing can account for, on a '
             'rule whose entire safety argument is that its suppression is bounded',
-     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();\n'
      '            stateModel.ReplaySuppressionUntilUtc = DateTime.MinValue;',
-     '            stateModel.DuplicateEntryEvaluatedOrders.Clear();'),
+     '            _ = stateModel.ReplaySuppressionUntilUtc;'),
 
     (GUARD, 'group 6: the reducing-position exclusion is dropped from the entry test. An order that '
             'CLOSES a position becomes refusable, which is the one failure direction this rule may '
