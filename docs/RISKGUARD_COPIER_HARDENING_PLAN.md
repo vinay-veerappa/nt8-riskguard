@@ -9477,7 +9477,7 @@ the suite from the funded account's own figures. The reading to take after the n
 `Daily loss limit` row's `currentValue` in `nt_riskguard_inventory` on an account with a non-zero
 session P&L.
 
-### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — ✅ FIXED 2026-08-19 (session 62), v1.52.0 — suite 3352/0, battery 15/15, closed together with `P1-167`
+### P0-171. A broker reconnect replays the day's fills, and the duplicate-entry rule times them by when the GUARD SAW them — 45 false refusals in one second — ⚠️ FIXED WRONG in v1.52.0, FALSIFIED LIVE, then ✅ FIXED 2026-08-20 (session 62) in v1.52.3 — suite 3370/0, battery 19/19, and the first fix is now a mutant. Read the correction below before the original closure record: the original is kept because the way it was wrong is the point
 
 ⚠️ **BLOCKS ARMING `live`.** Measured on `TAKEPROFITPRO524207503` within half an hour of `v1.51.0`
 deploying, with no trading taking place at all:
@@ -9548,6 +9548,70 @@ Connected" would fire on all 19 and suppress the rule during 18 occasions that n
 LOUD if it is ever left on, or the duplicate rule silently stops protecting anything. Pair it with the
 `DISARM_PERSISTED` pattern -- a line that says so on every evaluation while suppressed.
 
+
+
+⚠️⚠️ **THE FIRST FIX WAS WRONG, AND A LIVE TEST IS THE ONLY THING THAT FOUND IT. Read this before
+the closure record below, which describes a fix that suppressed nothing.**
+
+`v1.52.0` armed the suppression on `Connected`. On 2026-08-20T00:34 the reconnect was reproduced
+deliberately, through the MCP's new connect/disconnect, against the deployed `v1.52.2` — and it
+produced **17 false refusals**, with the fix in place. The reason, in the log both times:
+
+| event | 16:44 natural | 00:34 induced |
+|---|---|---|
+| `Connecting` | 42.444 | 43.519 |
+| **replay burst** | **44.275 → 44.471** (45 refusals) | **44.619 → 44.686** (17 refusals) |
+| `Connected` | 44.711 | 44.773 |
+
+**THE REPLAY ARRIVES BETWEEN `Connecting` AND `Connected`.** `Connected` lands 240ms and 87ms
+*after* the burst has finished, so a suppression armed there covers nothing at all. 53 order events
+arrived in 67ms on the induced run; every refusal preceded `Connected`.
+
+⚠️ **THE EVIDENCE WAS ALREADY IN THIS TICKET.** It quotes all four `CONNECTION_CHANGE` timestamps
+and the refusal timestamps. `16:44:44.275 < 16:44:44.711` settles it in one subtraction. It was
+argued about instead — the reasoning being that arming earlier would let a 1000ms window lapse
+before the replay, which is true of `Disconnected` and irrelevant to `Connecting`.
+
+⚠️⚠️ **AND THE TEST SUITE WAS DEFENDING THE DEFECT.** `TestP0171_ADisconnectDoesNotArmTheSuppression`
+asserted that `Disconnected`/`Connecting` must NOT arm the suppression — the exact opposite of the
+truth — and it PASSED. Worse, the battery's `group 1: armed on ANY connection status` mutant, which
+is the **correct behaviour**, was scored KILLED against it. A green suite and a green battery, both
+enforcing the bug. [[a-wrong-red-test-enforces-itself]], and the most expensive instance of it so
+far: 15/15 mutants and 3352 passing tests were consistent with a fix that did nothing.
+
+**THE CORRECTED FIX.** A new `OvertradingConfig.ReconnectReplayGraceMs`, default **5000ms**, armed
+and RE-ARMED on every connection transition. The arm that covers the burst is the latest one before
+it — `Connecting`.
+
+⚠️ **NOT derived from `DuplicateEntryWindowMs`, and deriving it from that is what failed.** They are
+unrelated quantities: one is how close two entries must be to count as duplicates, the other is how
+long a platform takes to re-send a session. Measured `Connecting` → end-of-replay: **2027ms**
+(natural) and **1167ms** (induced).
+
+⚠️ **THE DEFAULT IS NOT "JUST ABOVE THE WORST SAMPLE", AND THE ARITHMETIC SAYS WHY:**
+
+| grace | natural (2027ms gap) | induced (1167ms gap) |
+|---|---|---|
+| 1000ms — *what v1.52.0 used* | MISSES by 1027ms | MISSES by 167ms |
+| 2000ms | **MISSES by 27ms** | covers |
+| **5000ms** | covers, +2973ms margin | covers, +3833ms margin |
+
+A 2000ms grace passes the induced regression test and fails the natural one by 27 milliseconds. With
+only the induced sample it would have looked correct. Both reconnects are now regression tests at
+their measured offsets, and a mutant pinned at 2000ms exists so the tighter of the two is proved to
+bind.
+
+**On the second broker.** A LUCID reconnect was run for comparison: same four-event sequence, and
+**zero orders replayed, zero refusals**. LUCID is also Provider31, but its accounts had not traded
+that day, so there was nothing to re-send. That is a negative control — it confirms the replay is
+driven by the account's ORDER HISTORY rather than the connection event — and it is **not** a second
+provider datapoint. ⚠️ **The 5000ms default rests on two samples from ONE connection (TPT).** Say so
+rather than implying it is broader; [[the-simulator-re-ids-nothing]] is about exactly this.
+
+**Incidental, measured, and not a defect here:** account attribution MOVED between connection
+objects across the reconnect — TPT went `8 accounts / Simulator+Provider31` to `3 / Provider31`,
+LUCID `2` to `7`. The arming loop iterates `Account.All` and stamps every account state, so it is
+insensitive to this. Anything that keys on connection identity would not be.
 
 **CLOSED 2026-08-19 (session 62), `v1.52.0`.** Suite **3352 / 0**, battery `mutate_p0171.py`
 **15 / 15**, no survivors; 623 anchors / 0 broken; 12 gates green.

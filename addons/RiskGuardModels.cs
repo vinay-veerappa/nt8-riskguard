@@ -1069,6 +1069,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         // from the other side by what a human can do on purpose: nobody places two separate
         // entries a second apart and means both. A rule that ships at 0 is a rule nobody turns on.
         public int DuplicateEntryWindowMs { get; set; } = 1000;
+
+        /// <summary>
+        /// P0-171, SECOND ATTEMPT. How long after ANY connection transition the duplicate-entry
+        /// rule stays suppressed, because NT8 replays the session inside that window and the rule
+        /// times orders by when the guard first SAW them.
+        ///
+        /// ⚠️ THIS IS NOT THE DUPLICATE WINDOW, AND USING THE DUPLICATE WINDOW IS WHAT FAILED.
+        /// The first fix armed the suppression on `Connected` for one 1000ms window. Measured on
+        /// two real reconnects, that covers nothing, because THE REPLAY ARRIVES BEFORE
+        /// `Connected` DOES:
+        ///
+        ///     event            16:44 (natural)   00:34 (induced)
+        ///     Connecting       42.444            43.519
+        ///     replay burst     44.275 - 44.471   44.619 - 44.686
+        ///     Connected        44.711            44.773     <- 240ms / 87ms AFTER the burst
+        ///
+        /// So the value has to span `Connecting` -> end of replay, measured at 2027ms and 1167ms.
+        /// 1000ms misses both. 2000ms misses the natural one BY 27ms, which is why the default is
+        /// not "just above the worst sample": 5000ms leaves ~3s of margin on both.
+        ///
+        /// It is re-armed on EVERY transition (Disconnecting, Disconnected, Connecting, Connected),
+        /// so the arm that actually covers the burst is the latest one before it. Still bounded --
+        /// 5s from the last transition and then the rule is live again.
+        /// </summary>
+        public int ReconnectReplayGraceMs { get; set; } = 5000;
     }
 
     public class StopGuardConfig

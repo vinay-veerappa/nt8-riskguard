@@ -58,56 +58,68 @@ MUTANTS = [
     (GUARD, 'group 1: the suppression is never armed. The fields exist, the rule consults them, '
             'the reconnect handler runs -- and the value stays DateTime.MinValue, so the measured '
             'defect is restored in full with every field looking present',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            _ = replayState.UtcNow();'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        _ = replayState.UtcNow();'),
 
     (GUARD, 'group 1: armed off DateTime.UtcNow instead of the account\'s injectable clock, giving '
             'AccountState a SECOND clock -- the fake one for the rule and the real one for the '
             'suppression. [[a-second-reader-of-the-same-state]]',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            replayState.ReplaySuppressionUntilUtc = DateTime.UtcNow\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        replayState.ReplaySuppressionUntilUtc = DateTime.UtcNow\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);'),
 
-    (GUARD, 'group 1: armed on ANY connection status, not just Connected. The measured sequence '
-            'starts four seconds before the reconnect, so a 1000ms suppression armed at '
-            'Disconnected has already lapsed when the replay lands -- the guard carries a '
-            'suppression, logs nothing unusual, and refuses all 45 orders anyway',
-     '                    if (e.Status.ToString() == "Connected")\n                    {\n'
-     '                        // P0-171. A reconnect makes NT8 REPLAY the session',
-     '                    if (e.Status != null)\n                    {\n'
-     '                        // P0-171. A reconnect makes NT8 REPLAY the session'),
+    (GUARD, 'group 1: armed ONLY on Connected -- THE FIRST FIX, RESTORED. This mutant used to be '
+            'the inverse of itself: the battery asserted that arming on any status was the '
+            'DEFECT, and killed it against a test that asserted the same wrong thing. Two live '
+            'reconnects then showed the replay arrives BEFORE Connected -- burst 44.275-44.471 '
+            'against Connected at 44.711 on the natural event, and 44.619-44.686 against 44.773 '
+            'on the induced one -- so arming on Connected suppresses nothing. It produced 17 '
+            'false refusals on a live account WITH the first fix deployed. '
+            '[[a-wrong-red-test-enforces-itself]]',
+     '                    if (_config != null && _config.Overtrading != null\n'
+     '                        && _config.Overtrading.ReconnectReplayGraceMs > 0',
+     '                    if (e.Status.ToString() == \"Connected\"\n'
+     '                        && _config != null && _config.Overtrading != null\n'
+     '                        && _config.Overtrading.ReconnectReplayGraceMs > 0'),
 
     # ---- group 2: bounded by the CONFIGURED window ------------------------------------------
     (GUARD, 'group 2: the unit is minutes, not milliseconds. A 1000ms window becomes a 16-hour '
             'suppression -- the rule is off for the rest of the session and nothing says so',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMinutes(_config.Overtrading.DuplicateEntryWindowMs);'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMinutes(_config.Overtrading.ReconnectReplayGraceMs);'),
 
     (GUARD, 'group 2: the suppression runs ten windows, not one. Still bounded, still lapses, and '
             'still leaves nine windows in which a genuine duplicate is waved through',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs * 10);'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs * 10);'),
 
     (GUARD, 'group 2: the length is hard-coded to 1000ms, which is the DEFAULT window -- so every '
             'test that does not change the window passes, and an operator who narrows the window '
             'to 250ms silently gets four times the suppression they configured',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(1000);'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);'),
 
     (GUARD, 'group 2: the suppression never lapses. This is the mutant the ticket names as worse '
             'than the defect: the duplicate rule protects nothing from the first reconnect onward, '
             'and every other assertion in this battery still passes',
-     '                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
-     '                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);',
-     '                            replayState.ReplaySuppressionUntilUtc = DateTime.MaxValue;'),
+     '                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()\n'
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                        replayState.ReplaySuppressionUntilUtc = DateTime.MaxValue;'),
+
+    (GUARD, 'group 2: the grace is 2000ms -- above the INDUCED reconnect gap of 1167ms and '
+            '27ms BELOW the natural one of 2027ms. It passes the induced regression test and '
+            'fails the natural one, which is the entire reason the default is not set just '
+            'above the worst sample available. With one sample it would have been',
+     '                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);',
+     '                            .AddMilliseconds(2000);'),
 
     # ---- group 3: the boundary is where the spec says ---------------------------------------
     (GUARD, 'group 3: the boundary is exclusive, so an order arriving on the exact deadline is '

@@ -1479,26 +1479,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Account account in Account.All)
                 {
                     SubscribeToAccount(account);
+                    // P0-171. A reconnect makes NT8 REPLAY the session -- 118 orders inside one
+                    // second on the natural event, every one already Filled. The duplicate-entry
+                    // rule times orders by when the GUARD FIRST SAW them, so on a replay every
+                    // pair is inside any window: 45 false refusals from that one event, 17 from an
+                    // induced one.
+                    //
+                    // ⚠️ ARMED ON EVERY TRANSITION, NOT ON `Connected`. The first fix armed on
+                    // `Connected` and suppressed NOTHING, because the replay arrives BEFORE
+                    // `Connected` does. Both measured reconnects agree:
+                    //
+                    //     event            16:44 (natural)   00:34 (induced)
+                    //     Connecting       42.444            43.519
+                    //     replay burst     44.275 - 44.471   44.619 - 44.686
+                    //     Connected        44.711            44.773    <- AFTER the burst ended
+                    //
+                    // The evidence was in the log the whole time -- the ticket quoted all four
+                    // CONNECTION_CHANGE timestamps and all 45 refusal timestamps, and comparing
+                    // any two of them settles it. It was argued instead of subtracted.
+                    //
+                    // Re-arming on every transition is what makes it work: the arm that covers the
+                    // burst is the latest one before it, which is `Connecting`. Still bounded --
+                    // ReconnectReplayGraceMs from the last transition, then the rule is live again.
+                    if (_config != null && _config.Overtrading != null
+                        && _config.Overtrading.ReconnectReplayGraceMs > 0
+                        && _accountStates.TryGetValue(account.Name, out var replayState))
+                    {
+                        replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()
+                            .AddMilliseconds(_config.Overtrading.ReconnectReplayGraceMs);
+                    }
+
                     if (e.Status.ToString() == "Connected")
                     {
-                        // P0-171. A reconnect makes NT8 REPLAY the session -- measured here as 118
-                        // orders inside one second, every one already Filled, and all 59 executions
-                        // inside two. The duplicate-entry rule times orders by when the GUARD FIRST
-                        // SAW them, so on a replay every pair is inside any window and the rule
-                        // raised 45 false refusals from this one event.
-                        //
-                        // Suppress it for EXACTLY one window from now, and never further. The bound
-                        // is the whole safety argument: a suppression that could be extended, or set
-                        // from a value the operator controls independently, is a rule that can be
-                        // switched off silently while every test still passes.
-                        if (_config != null && _config.Overtrading != null
-                            && _config.Overtrading.DuplicateEntryWindowMs > 0
-                            && _accountStates.TryGetValue(account.Name, out var replayState))
-                        {
-                            replayState.ReplaySuppressionUntilUtc = replayState.UtcNow()
-                                .AddMilliseconds(_config.Overtrading.DuplicateEntryWindowMs);
-                        }
-
                         foreach (Position pos in account.Positions)
                         {
                             if (pos.MarketPosition != MarketPosition.Flat && pos.Instrument != null)

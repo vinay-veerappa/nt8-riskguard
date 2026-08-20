@@ -234,9 +234,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP0171_AnOrderSeenOnlyAsFilledIsStillEvaluated);
             Run(TestP0171_AReducingOrderIsNeverRefused);
             Run(TestP0171_TheReplaySuppressionExpiresOnItsOwn);
-            Run(TestP0171_TheSuppressionEndsAtExactlyTheWindow);
-            Run(TestP0171_ADisconnectDoesNotArmTheSuppression);
-            Run(TestP0171_TheSuppressionLengthFollowsTheConfiguredWindow);
+            Run(TestP0171_TheSuppressionEndsAtExactlyTheGrace);
+            Run(TestP0171_EveryConnectionTransitionArmsTheSuppression);
+            Run(TestP0171_TheReplayBeforeConnectedIsSuppressed);
+            Run(TestP0171_TheNaturalReconnectIsTheTighterCase);
+            Run(TestP0171_TheGraceIsItsOwnSettingNotTheDuplicateWindow);
             Run(TestP0171_AnOrderWhoseIdChangesStillDrawsOneRefusal);
             Run(TestP0171_TwoOrdersSharingAnIdAreBothEvaluated);
             Run(TestP0171_TheSessionResetClearsTheEvaluatedSet);
@@ -19988,137 +19990,250 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Console.WriteLine("\n[TEST] P0-171: the replay suppression expires on its own");
 
-            // Constraint C. A suppression that can be left on is a rule that protects
-            // nothing while every other test in this block still passes -- exactly
-            // [[a-green-that-can-never-be-red]]. So: it must be bounded by the window,
-            // and the rule must demonstrably come back.
-            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            // A suppression that can be left on is a rule that protects nothing while every
+            // other assertion here still passes -- [[a-green-that-can-never-be-red]]. So it
+            // must be bounded, and the rule must demonstrably come back.
+            var start = new DateTime(2026, 8, 20, 0, 34, 43, DateTimeKind.Utc);
             var h = P0171Setup("live", start);
 
-            P0171Connect(h);
+            P0171Connect(h);   // grace default 5000ms -> suppressed until start+5000
 
-            _p0171Now = start.AddMilliseconds(100);
+            _p0171Now = start.AddMilliseconds(1100);   // the MEASURED replay offset
             P1160Send(h, P1160Order("70000", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
-            _p0171Now = start.AddMilliseconds(1050);
+            _p0171Now = start.AddMilliseconds(5001);
             P1160Send(h, P1160Order("70001", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
             Assert(P0171Refusals(h, "70001") == 0,
                 "the replay suppression expires on its own");
 
-            // Two genuine entries, well clear of the suppression and of each other, so
-            // the only thing the refusal below can be measuring is the live rule.
-            _p0171Now = start.AddMilliseconds(2500);
+            // Two genuine entries, clear of the suppression and of each other, so the refusal
+            // below can only be measuring the live rule.
+            _p0171Now = start.AddMilliseconds(6500);
             P1160Send(h, P1160Order("70002", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
-            _p0171Now = start.AddMilliseconds(2600);
-            var lateDuplicate = P1160Order("70003", OrderAction.Buy, OrderType.Market, "MNQ", 1, null);
-            P1160Send(h, lateDuplicate);
+            _p0171Now = start.AddMilliseconds(6600);
+            P1160Send(h, P1160Order("70003", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
             Assert(P0171Refusals(h, "70002") == 0,
-                "an entry well outside the window is not a duplicate of the suppressed replay");
+                "an entry well outside the grace is not a duplicate of the suppressed replay");
             Assert(P0171Refusals(h, "70003") == 1,
                 "and the rule refuses a genuine duplicate again once the suppression has lapsed");
         }
 
-        private static P1160Harness P0171Setup(RiskConfig config, string mode, DateTime start)
+        private static void TestP0171_TheSuppressionEndsAtExactlyTheGrace()
         {
-            var h = P1160Setup(config, mode);
-            _p0171Now = start;
-            h.State.UtcNow = () => _p0171Now;
-            return h;
-        }
+            Console.WriteLine("\n[TEST] P0-171: the suppression boundary is the grace, to the millisecond");
 
-        private static void TestP0171_TheSuppressionEndsAtExactlyTheWindow()
-        {
-            Console.WriteLine("\n[TEST] P0-171: the suppression boundary is the window, to the millisecond");
-
-            // The spec says AT OR BEFORE the deadline is suppressed. An off-by-one here is
-            // invisible to every other test in this block, because they all place their
-            // orders hundreds of milliseconds clear of the boundary -- and a boundary that
-            // nothing measures is a boundary the next edit is free to move.
-            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            // At-or-before the deadline is suppressed. Every other test here places its orders
+            // well clear of the boundary, and a boundary nothing measures is one the next edit
+            // is free to move.
+            var start = new DateTime(2026, 8, 20, 0, 34, 43, DateTimeKind.Utc);
 
             var onTheDeadline = P0171Setup("live", start);
             P0171Connect(onTheDeadline);
 
-            _p0171Now = start.AddMilliseconds(1000);
+            _p0171Now = start.AddMilliseconds(5000);
             P1160Send(onTheDeadline, P1160Order("80000", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
-            _p0171Now = start.AddMilliseconds(1900);
+            _p0171Now = start.AddMilliseconds(5900);
             P1160Send(onTheDeadline, P1160Order("80001", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
             Assert(P0171Refusals(onTheDeadline, "80001") == 0,
-                "an order arriving at EXACTLY the suppression deadline is still suppressed, so it "
-                + "does not anchor the order 900ms behind it");
+                "an order arriving at EXACTLY the grace deadline is still suppressed, so it does "
+                + "not anchor the order 900ms behind it");
 
-            // One millisecond later the rule is live again, and the same pair IS a duplicate.
-            // Without this half the assertion above is satisfied by suppressing forever.
+            // One millisecond later the rule is live, and the same pair IS a duplicate. Without
+            // this half the assertion above is satisfied by suppressing forever.
             var oneMsLater = P0171Setup("live", start);
             P0171Connect(oneMsLater);
 
-            _p0171Now = start.AddMilliseconds(1001);
+            _p0171Now = start.AddMilliseconds(5001);
             P1160Send(oneMsLater, P1160Order("80010", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
-            _p0171Now = start.AddMilliseconds(1900);
+            _p0171Now = start.AddMilliseconds(5900);
             P1160Send(oneMsLater, P1160Order("80011", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
             Assert(P0171Refusals(oneMsLater, "80011") == 1,
                 "and one millisecond past the deadline the very same pair is a duplicate again");
         }
 
-        private static void TestP0171_ADisconnectDoesNotArmTheSuppression()
+        private static void TestP0171_EveryConnectionTransitionArmsTheSuppression()
         {
-            Console.WriteLine("\n[TEST] P0-171: only a RECONNECT arms the suppression, not any status change");
+            Console.WriteLine("\n[TEST] P0-171: EVERY connection transition arms the suppression, not just Connected");
 
-            // ⚠️ THE MEASURED SEQUENCE IS FOUR EVENTS, NOT ONE: Disconnecting 16:44:39,
-            // Disconnected 16:44:40, Connecting 16:44:42, Connected 16:44:44. Arming on
-            // any of the first three starts a 1000ms suppression FOUR SECONDS before the
-            // replay arrives, so it has already lapsed by the time it is needed -- the
-            // guard would carry a suppression, log nothing unusual, and refuse all 45
-            // orders exactly as it does today. The failure is silent and looks like the
-            // fix simply not working.
-            var start = new DateTime(2026, 8, 19, 16, 44, 40, DateTimeKind.Utc);
-            var h = P0171Setup("live", start);
+            // ⚠️ THIS TEST PREVIOUSLY ASSERTED THE EXACT OPPOSITE, PASSED, AND PINNED THE DEFECT
+            // IN PLACE. The first fix armed only on `Connected`, reasoning that arming earlier
+            // would let the window lapse before the replay. Then two real reconnects were
+            // measured -- one natural, one induced through the MCP -- and both say the replay
+            // arrives BEFORE `Connected` does:
+            //
+            //     event            16:44 (natural)   00:34 (induced)
+            //     Connecting       42.444            43.519
+            //     replay burst     44.275 - 44.471   44.619 - 44.686
+            //     Connected        44.711            44.773    <- 240ms / 87ms AFTER the burst
+            //
+            // 45 and 17 false refusals respectively, the second WITH the first fix deployed.
+            // Arming on `Connected` suppresses nothing, because by then the damage is logged.
+            //
+            // The old test asserted "a Disconnected or Connecting status does not arm the
+            // suppression", and the mutation battery's "armed on ANY connection status" mutant --
+            // which is the CORRECT behaviour -- was killed by it. The battery was defending the
+            // bug. [[a-wrong-red-test-enforces-itself]].
+            var start = new DateTime(2026, 8, 20, 0, 34, 35, DateTimeKind.Utc);
 
-            RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+            foreach (var status in new[] { ConnectionStatus.Disconnected, ConnectionStatus.Connecting })
             {
-                h.Events.Add(evt);
-                h.Messages.Add(evt + ": " + msg);
-            };
-            try
-            {
-                h.Addon.OnConnectionStatusUpdate(null,
-                    new ConnectionStatusEventArgs { Status = ConnectionStatus.Disconnected });
-                h.Addon.OnConnectionStatusUpdate(null,
-                    new ConnectionStatusEventArgs { Status = ConnectionStatus.Connecting });
+                var h = P0171Setup("live", start);
+
+                RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+                {
+                    h.Events.Add(evt);
+                    h.Messages.Add(evt + ": " + msg);
+                };
+                try
+                {
+                    h.Addon.OnConnectionStatusUpdate(null,
+                        new ConnectionStatusEventArgs { Status = status });
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+
+                // The replay lands ~1.1s later, which is what was measured.
+                _p0171Now = start.AddMilliseconds(1100);
+                P1160Send(h, P1160Order("81000", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+                _p0171Now = start.AddMilliseconds(1200);
+                P1160Send(h, P1160Order("81001", OrderAction.Buy, OrderType.Market, "MES", 1, null));
+
+                Assert(P0171Refusals(h, "81001") == 0,
+                    "a " + status + " transition arms the suppression, because the replay arrives "
+                    + "before Connected ever does");
             }
-            finally { RiskGuardAddOn.LogEventMessageObserver = null; }
-
-            _p0171Now = start.AddMilliseconds(100);
-            P1160Send(h, P1160Order("81000", OrderAction.Buy, OrderType.Market, "MES", 1, null));
-
-            _p0171Now = start.AddMilliseconds(200);
-            P1160Send(h, P1160Order("81001", OrderAction.Buy, OrderType.Market, "MES", 1, null));
-
-            Assert(P0171Refusals(h, "81001") == 1,
-                "a Disconnected or Connecting status does not arm the suppression -- only the "
-                + "reconnect that actually triggers the replay does");
         }
 
-        private static void TestP0171_TheSuppressionLengthFollowsTheConfiguredWindow()
+        private static void TestP0171_TheReplayBeforeConnectedIsSuppressed()
         {
-            Console.WriteLine("\n[TEST] P0-171: the suppression is one CONFIGURED window, not a constant");
+            Console.WriteLine("\n[TEST] P0-171: the measured sequence -- replay between Connecting and Connected");
 
-            // The default window is 1000ms, so every other test here would pass just as
-            // well against a hard-coded 1000. An operator who narrows the window to 250ms
-            // is asking for a narrower suppression too: the suppression exists to cover a
-            // replay burst, and its whole safety argument is that it is bounded BY THE
-            // WINDOW. A constant is not bounded by anything the operator can see.
+            // THE REGRESSION TEST FOR THE ACTUAL DEFECT, replaying the induced reconnect of
+            // 2026-08-20T00:34 event for event at its measured offsets. With the first fix this
+            // produces refusals; with the corrected one it produces none.
+            var t0 = new DateTime(2026, 8, 20, 0, 34, 35, 427, DateTimeKind.Utc);
+            var h = P0171Setup("live", t0);
+
+            Action<ConnectionStatus, int> transition = (status, offsetMs) =>
+            {
+                _p0171Now = t0.AddMilliseconds(offsetMs);
+                RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+                {
+                    h.Events.Add(evt);
+                    h.Messages.Add(evt + ": " + msg);
+                };
+                try
+                {
+                    h.Addon.OnConnectionStatusUpdate(null,
+                        new ConnectionStatusEventArgs { Status = status });
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            };
+
+            transition(ConnectionStatus.Disconnected, 0);        // 00:34:35.427
+            transition(ConnectionStatus.Disconnected, 1561);     // 00:34:36.988
+            transition(ConnectionStatus.Connecting, 8092);       // 00:34:43.519
+
+            // The replay: 53 order events in 67ms, all already Filled, same instrument and side
+            // as each other -- which is the shape that made 17 of them look like duplicates.
+            for (int i = 0; i < 12; i++)
+            {
+                _p0171Now = t0.AddMilliseconds(9192 + i * 6);    // 00:34:44.619 onward
+                var replayed = P1160Order("36" + (576 + i * 3), OrderAction.Buy,
+                                          OrderType.Market, "MNQ", 1, null);
+                replayed.OrderState = OrderState.Filled;
+                P1160Send(h, replayed);
+            }
+
+            transition(ConnectionStatus.Connected, 9346);        // 00:34:44.773, AFTER the burst
+
+            int refusals = h.Events.Count(e => e == "DUPLICATE_ENTRY");
+            Assert(refusals == 0,
+                "a replay arriving between Connecting and Connected draws no refusals -- got "
+                + refusals + ", and the live event produced 17 with the Connected-only fix");
+        }
+
+        private static void TestP0171_TheNaturalReconnectIsTheTighterCase()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the NATURAL reconnect, whose gap is what rules out a 2s grace");
+
+            // The 2026-08-19T16:44 event -- the one that produced the ticket -- at its measured
+            // offsets. It matters separately from the induced reconnect because its
+            // Connecting -> end-of-replay gap is the LARGER of the two, and it is what makes the
+            // default 5000ms rather than something tighter:
+            //
+            //     natural  Connecting 42.444, burst 44.275-44.471  -> gap 2027ms
+            //     induced  Connecting 43.519, burst 44.619-44.686  -> gap 1167ms
+            //
+            // ⚠️ A 2000ms grace passes the induced case and MISSES THIS ONE BY 27ms. That is the
+            // whole reason the default is not "just above the worst sample I had" -- with one
+            // sample it would have been, and it would have been wrong.
+            var t0 = new DateTime(2026, 8, 19, 16, 44, 39, 218, DateTimeKind.Utc);
+            var h = P0171Setup("live", t0);
+
+            Action<ConnectionStatus, int> transition = (status, offsetMs) =>
+            {
+                _p0171Now = t0.AddMilliseconds(offsetMs);
+                RiskGuardAddOn.LogEventMessageObserver = (a, evt, msg) =>
+                {
+                    h.Events.Add(evt);
+                    h.Messages.Add(evt + ": " + msg);
+                };
+                try
+                {
+                    h.Addon.OnConnectionStatusUpdate(null,
+                        new ConnectionStatusEventArgs { Status = status });
+                }
+                finally { RiskGuardAddOn.LogEventMessageObserver = null; }
+            };
+
+            transition(ConnectionStatus.Disconnected, 0);       // 16:44:39.218 Disconnecting
+            transition(ConnectionStatus.Disconnected, 1597);    // 16:44:40.815 Disconnected
+            transition(ConnectionStatus.Connecting, 3226);      // 16:44:42.444 Connecting
+
+            // The replay, spanning 5057..5253ms -- the far end is what a 2s grace fails to reach.
+            for (int i = 0; i < 10; i++)
+            {
+                _p0171Now = t0.AddMilliseconds(5057 + i * 22);  // ends at 5255
+                var replayed = P1160Order("36" + (40 + i * 3), OrderAction.Sell,
+                                          OrderType.Market, "MES", 1, null);
+                replayed.OrderState = OrderState.Filled;
+                P1160Send(h, replayed);
+            }
+
+            transition(ConnectionStatus.Connected, 5493);       // 16:44:44.711, after the burst
+
+            int refusals = h.Events.Count(e => e == "DUPLICATE_ENTRY");
+            Assert(refusals == 0,
+                "the natural reconnect's replay draws no refusals either -- got " + refusals
+                + ", and it produced 45 on the day it was measured");
+        }
+
+        private static void TestP0171_TheGraceIsItsOwnSettingNotTheDuplicateWindow()
+        {
+            Console.WriteLine("\n[TEST] P0-171: the grace is its OWN setting, not the duplicate window");
+
+            // ⚠️ DERIVING THE SUPPRESSION FROM DuplicateEntryWindowMs IS THE BUG THIS REPLACED.
+            // The measured Connecting -> end-of-replay gaps are 2027ms and 1167ms, so a
+            // suppression of one 1000ms duplicate window covers NEITHER. They are unrelated
+            // quantities: one is how close two entries must be to be duplicates, the other is how
+            // long a platform takes to re-send a session.
+            //
+            // Pinned by making them differ and disagree in direction: a 250ms grace with a
+            // 1000ms duplicate window. If the grace is still read from the duplicate window the
+            // pair at 300/400ms is swallowed and this fails.
             var config = new RiskConfig();
-            config.Overtrading.DuplicateEntryWindowMs = 250;
+            config.Overtrading.DuplicateEntryWindowMs = 1000;
+            config.Overtrading.ReconnectReplayGraceMs = 250;
 
-            var start = new DateTime(2026, 8, 19, 16, 44, 44, DateTimeKind.Utc);
+            var start = new DateTime(2026, 8, 20, 0, 34, 43, DateTimeKind.Utc);
             var h = P0171Setup(config, "live", start);
 
             P0171Connect(h);
@@ -20133,10 +20248,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             P1160Send(h, P1160Order("82002", OrderAction.Buy, OrderType.Market, "MNQ", 1, null));
 
             Assert(P0171Refusals(h, "82000") == 0,
-                "an order inside a 250ms suppression is not refused");
+                "an order inside a 250ms grace is not refused");
             Assert(P0171Refusals(h, "82002") == 1,
-                "and the suppression has lapsed by 300ms, so the pair at 300ms and 400ms is a "
-                + "duplicate -- a suppression hard-coded to the 1000ms default would swallow both");
+                "and the grace has lapsed by 300ms, so the pair at 300ms and 400ms is a duplicate "
+                + "-- a grace read from the 1000ms duplicate window would swallow both");
+        }
+
+        private static P1160Harness P0171Setup(RiskConfig config, string mode, DateTime start)
+        {
+            var h = P1160Setup(config, mode);
+            _p0171Now = start;
+            h.State.UtcNow = () => _p0171Now;
+            return h;
         }
 
         private static void TestP0171_AnOrderWhoseIdChangesStillDrawsOneRefusal()

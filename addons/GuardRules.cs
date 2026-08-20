@@ -688,6 +688,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             new GuardNonRule { ConfigPath = "ExcludedAccounts", Reason = "scoping, not a limit -- an excluded account reports EvaluatedNotEnforcing on every rule" },
             new GuardNonRule { ConfigPath = "LockoutBypassWhileDisarmedAccounts", Reason = "scoping for lockout persistence while disarmed" },
             new GuardNonRule { ConfigPath = "MinShadowSessions", Reason = "an arming PRECONDITION (FR-29), not a trading limit" },
+            // P0-171 second attempt. Not a limit: it is how long after a connection transition
+            // the duplicate-entry rule stays SUPPRESSED, because NT8 replays the session in that
+            // window. Listed here rather than as a rule because raising it does not tighten
+            // anything -- it widens a blind spot, and the reason it is not derived from
+            // DuplicateEntryWindowMs is that doing so is the bug this replaced: measured on two
+            // reconnects, the replay lands 1167ms and 2027ms after Connecting, so a 1000ms
+            // suppression covers neither.
+            new GuardNonRule { ConfigPath = "Overtrading.ReconnectReplayGraceMs", Reason = "how long the duplicate-entry rule is suppressed after a connection transition, because NT8 replays the session then; widening it widens a blind spot rather than tightening a limit" },
             // P0-166: this key now governs NOTHING. Both rules that read it -- DAILY_LOSS_BREACH
             // and TRAILING_DD_BREACH -- trigger on session-scoped counters that only SESSION_RESET
             // clears, so both lock to the session boundary instead. Saying so here is the point: a
