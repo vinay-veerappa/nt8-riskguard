@@ -823,6 +823,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         // converted a 60-minute lockout into one that lasts until the session reset.
         public DateTime LockoutUntil { get; set; }
         public bool LockoutWasShadowOnly { get; set; }
+        // P1-173, and it is P1-54 one field over: a DEADLINE has to persist, not just the fact
+        // that something was triggered. CooldownUntil is written on a consecutive-loss breach and
+        // read in EvaluateRules as the gate that raises COOLDOWN_BREACH -> FlattenPosition, and it
+        // was absent from this class entirely -- so a restart set it to MinValue and the rule could
+        // not fire for the remainder of a cooldown that was supposed to be running.
+        //
+        // ⚠️ THE ACTION THAT DEFEATED IT IS ONE THE OPERATOR ALREADY PERFORMS. The cooldown exists
+        // to interrupt revenge trading after a run of losses; NinjaScript's recompile button
+        // cleared it. Six recompiles happened on this box on the day it was found, none for that
+        // reason. [[a-successful-compile-wipes-static-state]].
+        //
+        // Found by tools/check_account_state_persisted.py on its first run. Nothing was wrong with
+        // any line of the cooldown code -- the defect was an OMISSION from this class, which has no
+        // source location for a reviewer to look at.
+        public DateTime CooldownUntil { get; set; }
     }
 
     // -

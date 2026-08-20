@@ -9771,7 +9771,90 @@ of reflection to look for it (`CF-31`). The two-mechanism structure and the fiel
 loop's patch were correct and were kept; the reflection was deleted and replaced with one property
 path.
 
-### P1-173. A recompile clears an active loss cooldown, and recompiling is something the operator does — OPEN, filed 2026-08-19 (session 62), found by the gate written for `P1-170`
+### P1-174. A recompile while holding a WINNING position re-baselines the peak-giveback rail to the current price, and the code already marks that state dirty for a save that never stores it — OPEN, filed 2026-08-20 (session 62), found by the same gate as `P1-173`
+
+The third instance of `P1-170`'s class, and the last three fields
+`tools/check_account_state_persisted.py` had in its UNREVIEWED baseline. They are now the only
+entries left there.
+
+**The three fields**, all on `AccountState`, none in `AccountPersistedData`:
+
+| field | meaning |
+|---|---|
+| `PeakOpenGain` | the high-water mark of `UnrealizedPnL` for the CURRENT open position |
+| `PeakGivebackTriggered` | the latch, re-armed whenever a new peak is set |
+| `PeakGivebackLastTriggerUnrealized` | `NaN` sentinel for the level the latch last fired at |
+
+**The mechanism**, from the rule itself:
+
+```csharp
+if (!accountIsFlat)
+{
+    if (stateModel.UnrealizedPnL > stateModel.PeakOpenGain)
+    {
+        // New peak = new episode. Re-arm the giveback latch.
+        stateModel.PeakOpenGain = stateModel.UnrealizedPnL;
+        stateModel.PeakGivebackTriggered = false;
+        stateModel.PeakGivebackLastTriggerUnrealized = double.NaN;
+        _stateDirty = true;
+    }
+}
+```
+
+A recompile sets `PeakOpenGain` to `0.0`. The very next evaluation finds `UnrealizedPnL > 0` and
+**re-baselines the peak to the CURRENT unrealized**, losing the true high. The giveback is then
+measured from a lower high, so the rail fires later than it should or not at all — for as long as
+that position stays open.
+
+⚠️⚠️ **THE CODE ALREADY BELIEVES THESE SHOULD BE DURABLE.** Both branches set `_stateDirty = true`,
+which is the flag that schedules a state write — for three fields the writer does not carry. That is
+a WRITE TO NOWHERE, and it is stronger evidence than any argument about whether persisting is
+"worth it": the author of this rule marked the state as needing to be saved, and the save silently
+did not include it. Same family as [[an-alarm-wired-to-a-dead-output]].
+
+**Why P1 and not P0.** The rail is weakened rather than disabled — the peak still climbs from the
+re-baselined level, so a giveback that develops *after* the recompile is still caught. The exposure
+is one open position, and it ends when that position closes. It also fails in the LENIENT direction
+(a winner is held longer), which costs money but cannot trap the operator.
+
+**Fix**: add all three to `AccountPersistedData` and to both copy sites, and restore them — the same
+three-line shape as `P1-173`. ⚠️ The test must drive the RESTORE, not the arithmetic; this path is
+reachable only through `LoadPersistedState`, which is what made `P0-166`, `P1-170` and `P1-173` all
+need the same reminder.
+
+⚠️ **ONE EDGE THAT NEEDS A TEST, AND IT IS THE ONLY WAY THIS FIX CAN HURT.** The persisted peak
+belongs to a specific position. If the guard is DOWN across a flat window — position closed, new one
+opened, all while the assembly is reloading — the restored peak is from the previous episode, and a
+stale high makes the giveback fire EARLIER than it should. The `accountIsFlat` branch zeroes all
+three on any evaluation while flat, so the window is exactly "down for the whole flat period", which
+is narrow but real. It fails toward over-protection rather than under-protection, so it is the
+acceptable direction; **assert it rather than assume it.**
+
+⚠️ `PeakEquity` — the account-level peak used by `TRAILING_DD_BREACH` — **is** persisted, and is a
+different field. Do not conflate them: this entry is about the per-position unrealized peak only.
+The asymmetry (account peak durable, position peak not) is what made this easy to miss.
+
+### P1-173. A recompile clears an active loss cooldown, and recompiling is something the operator does — ✅ FIXED 2026-08-20 (session 62), v1.52.4 — suite 3373/0, battery 5/5, and adding the field disarmed an unrelated battery (see below)
+**CLOSED 2026-08-20 (session 62), `v1.52.4`.** Suite **3373 / 0**, `mutate_p1173.py` **5 / 5** no
+survivors, 13 gates green, 638 anchors / 0 broken.
+
+Three lines: the field on `AccountPersistedData`, the save projection, the restore. Restored and
+NOT re-armed -- a deadline already in the past stays there, so an account that has served its
+cooldown is not flattened for it after a restart. Two of the five mutants exist for that direction
+alone, because it is the one that hurts the operator and the tests for the two directions look
+nearly identical.
+
+⚠️ **ADDING A FIELD TO THE DTO DISARMED AN UNRELATED BATTERY, AND IT WOULD HAVE SCORED A
+SURVIVOR.** `mutate_p292.py` anchored on `LockoutWasShadowOnly { get; set; }` followed by the class
+brace, using "last member before the closing brace" as the thing that told it apart from
+`AccountState`'s identically-named field. `CooldownUntil` displaced it and the anchor matched ZERO
+times. Re-anchored on the field plus a bare newline, which is unique because `AccountState`'s copy
+reads `= false;` -- and which depends on nothing's POSITION.
+
+This is [[mutation-anchors-go-stale]] with a trigger not seen before here: not a code MOVE, just an
+APPEND. Any anchor whose uniqueness comes from adjacency rather than content is one field away from
+silently passing. Worth grepping the other batteries for `}` in an anchor.
+
 
 Found by `tools/check_account_state_persisted.py` on its first run, which is the entire argument for
 that gate: this was not spotted by reading the cooldown code, it fell out of asking *which

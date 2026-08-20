@@ -147,8 +147,14 @@ MUTANTS = [
      "the persisted DTO field defaults to TRUE, inverting fail-closed for every state file that\n"
      "     predates it: absence would read as 'shadow only' and RELEASE the lockout. P1-54's lesson\n"
      "     in the other direction",
-     'public bool LockoutWasShadowOnly { get; set; }\n    }',
-     'public bool LockoutWasShadowOnly { get; set; } = true;\n    }'),
+     # ⚠️ RE-ANCHORED 2026-08-20. This used to end in "\n    }" to pin the DTO's copy of the
+     # field rather than AccountState's, by relying on it being the LAST member before the class
+     # brace. P1-173 added CooldownUntil after it and the anchor matched zero times -- a battery
+     # disarmed by an unrelated field being appended. The bare newline is enough on its own:
+     # AccountState's copy reads "{ get; set; } = false;" so it cannot match, and the anchor no
+     # longer depends on anything's POSITION. [[mutation-anchors-go-stale]].
+     'public bool LockoutWasShadowOnly { get; set; }\n',
+     'public bool LockoutWasShadowOnly { get; set; } = true;\n'),
 
     (GUARD,
      "LockAccount is gated on the mode too -- the cheapest way to satisfy a naive reading of\n"

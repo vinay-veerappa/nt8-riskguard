@@ -247,6 +247,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP1_170_ARestartDoesNotFabricateALoss);
             Run(TestP1_170_AFlatSessionRestoresToZero);
             Run(TestP1_170_AProfitableSessionRestoresAsProfit);
+            Run(TestP1_173_TheLossCooldownSurvivesARecompile);
+            Run(TestP1_173_AnExpiredCooldownDoesNotComeBackToLife);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -20600,6 +20602,142 @@ namespace NinjaTrader.NinjaScript.AddOns
             finally
             {
                 try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+            }
+        }
+
+        // ---------------------------------------------------------------------------
+        // P1-173. `CooldownUntil` is written on a consecutive-loss breach, read in
+        // EvaluateRules as an enforcement gate that raises COOLDOWN_BREACH ->
+        // FlattenPosition, cleared by the session reset -- and absent from
+        // AccountPersistedData entirely. So a restart, a recompile or a hot-swap sets
+        // it to DateTime.MinValue and the rule cannot fire for the remainder of a
+        // cooldown that was supposed to be running.
+        //
+        // ⚠️ THE ACTION THAT DEFEATS IT IS ONE THE OPERATOR ALREADY PERFORMS. The
+        // cooldown exists to interrupt revenge trading after a run of losses, and
+        // NinjaScript's recompile button clears it. Six recompiles happened on this
+        // box on 2026-08-19 alone, none of them for that reason.
+        //
+        // This is exactly `P1-54` one field over -- "the lockout DEADLINE must
+        // persist, not just the fact of the lockout" -- and `P1-170`'s class:
+        // [[a-successful-compile-wipes-static-state]]. Found by
+        // tools/check_account_state_persisted.py on its first run, which is the whole
+        // argument for that gate: nobody was reading the cooldown code.
+        // ---------------------------------------------------------------------------
+
+        private static void TestP1_173_TheLossCooldownSurvivesARecompile()
+        {
+            Console.WriteLine("\n[TEST] P1-173: a recompile does not clear an active loss cooldown");
+
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1173_a_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Account.All.Clear();
+                var account = new Account { Name = "P1173Acc", Provider = Provider.Simulator };
+                Account.All.Add(account);
+                var mnq = new Instrument("MNQ");
+
+                var cfg1 = new RiskConfig();
+                cfg1.Overtrading.MaxConsecutiveLosses = 3;
+                cfg1.Overtrading.CooldownMinutes = 15;
+
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(cfg1);
+                var s1 = new AccountState("P1173Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                // 15 minutes into a cooldown that has 15 to run.
+                s1.CooldownUntil = DateTime.UtcNow.AddMinutes(15);
+                s1.ConsecutiveLosses = 3;
+                first.SetAccountStateForTest("P1173Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var cfg2 = new RiskConfig();
+                cfg2.Overtrading.MaxConsecutiveLosses = 3;
+                cfg2.Overtrading.CooldownMinutes = 15;
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(cfg2);
+                second.SetAccountStateForTest("P1173Acc", new AccountState("P1173Acc"));
+                second.LoadPersistedStateForTest();
+                // LoadPersistedState deliberately clears _isArmed (FR-30/31), and EvaluateRules
+                // returns nothing while disarmed -- so without this the enforcement assertion
+                // below would pass against a guard evaluating no rules at all.
+                second.SetArmedForTest(true);
+
+                var restored = second.GetAccountStateForTest("P1173Acc");
+                Assert(restored != null && restored.CooldownUntil > DateTime.UtcNow.AddMinutes(10),
+                    "the cooldown deadline survives a recompile (got "
+                    + (restored == null ? "no state" : restored.CooldownUntil.ToString("o")) + ")");
+
+                // ⚠️ AND IT MUST STILL ENFORCE. The value being restored is not the same as the
+                // rail firing -- P1-170's inventory row read EvaluatedNotEnforcing while holding
+                // a breaching value. Put a position on and drive the real rule.
+                restored.UpdatePosition(account, mnq, MarketPosition.Long, 1, 18000, 0, cfg2);
+                var actions = second.EvaluateRules(account, restored);
+
+                Assert(actions.Any(a => a.RuleId == "COOLDOWN_BREACH"),
+                    "and the restored cooldown still ENFORCES -- a position opened during it is "
+                    + "flagged, which is what a recompile used to switch off");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+                Account.All.Clear();
+            }
+        }
+
+        private static void TestP1_173_AnExpiredCooldownDoesNotComeBackToLife()
+        {
+            Console.WriteLine("\n[TEST] P1-173: an EXPIRED cooldown is not resurrected by the restore");
+
+            // THE NEGATIVE CONTROL. Persisting a deadline is only correct if a deadline in the
+            // PAST stays in the past. The failure direction here is the one that hurts the
+            // operator: a cooldown that outlives its own expiry flattens positions on an account
+            // that has served its time, and [[a-lockout-must-not-trap-you]] is the same family.
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1173_b_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Account.All.Clear();
+                var account = new Account { Name = "P1173Acc", Provider = Provider.Simulator };
+                Account.All.Add(account);
+                var mnq = new Instrument("MNQ");
+
+                var cfg = new RiskConfig();
+                cfg.Overtrading.MaxConsecutiveLosses = 99;   // keep the streak rail out of this
+                cfg.Overtrading.CooldownMinutes = 15;
+
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(cfg);
+                var s1 = new AccountState("P1173Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.CooldownUntil = DateTime.UtcNow.AddMinutes(-5);   // already served
+                first.SetAccountStateForTest("P1173Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(cfg);
+                second.SetAccountStateForTest("P1173Acc", new AccountState("P1173Acc"));
+                second.LoadPersistedStateForTest();
+                second.SetArmedForTest(true);
+
+                var restored = second.GetAccountStateForTest("P1173Acc");
+                restored.UpdatePosition(account, mnq, MarketPosition.Long, 1, 18000, 0, cfg);
+                var actions = second.EvaluateRules(account, restored);
+
+                Assert(!actions.Any(a => a.RuleId == "COOLDOWN_BREACH"),
+                    "a cooldown that expired before the restart does not fire after it -- the "
+                    + "deadline is restored, not re-armed");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+                Account.All.Clear();
             }
         }
 

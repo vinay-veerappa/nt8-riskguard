@@ -101,18 +101,22 @@ RESET_BY_DESIGN = {
 }
 
 # ⚠️ SUSPECTED INSTANCES OF P1-170'S CLASS, each with a filed ID. Listed so the gate passes while
-# naming them, rather than burying them in a baseline.
-SUSPECTED_DEFECT = {
-    'CooldownUntil':
-        'P1-173. Written by the consecutive-loss rule, read as an enforcement gate in '
-        'EvaluateOvertradingRules, cleared on session reset -- and absent from '
-        'AccountPersistedData, so a recompile clears an active cooldown. Same class as P1-170.',
-}
+# naming them, rather than burying them in a baseline. Empty is the goal, not the norm: an entry
+# leaves here by being FIXED, and CooldownUntil left on 2026-08-20 by being added to
+# AccountPersistedData under P1-173 -- after which the name match picks it up and no declaration
+# is needed at all.
+SUSPECTED_DEFECT = {}
 
 # ⚠️ NOT REVIEWED. The state of the world when this gate was written. Do not read this list as a
 # set of decisions -- read it as a to-do. Moving an entry out of here requires deciding what it
 # actually is and writing the reason down.
 UNREVIEWED_BASELINE = {
+    # ⚠️ NO LONGER UNREVIEWED -- these three were read on 2026-08-20 and are P1-174, the third
+    # instance of P1-170's class. A recompile while holding a winning position re-baselines the
+    # peak-giveback rail to the current price, and BOTH branches of that rule already set
+    # _stateDirty = true for fields the writer does not carry. Left in this set rather than moved
+    # to a SUSPECTED_DEFECT list because the fix is queued, not designed away: they leave here by
+    # being added to AccountPersistedData, after which the name match picks them up.
     'PeakOpenGain',
     'PeakGivebackTriggered',
     'PeakGivebackLastTriggerUnrealized',

@@ -11465,22 +11465,23 @@ sessions after that stopped being true.
    locked by EOD-scoped `DAILY_LOSS_BREACH`. Fix the reader before the counter.
    ⚠️ `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and **nothing in 3352 tests
    asserts it**, which is why an impossible value sat in persisted state unremarked.
-5. **`P1-173`** — ⚠️ **a recompile clears an active loss cooldown, and recompiling is something
-   the operator does.** `CooldownUntil` is written on a consecutive-loss breach, read in
-   `EvaluateRules` at `RiskGuardAddOn.cs:4545` raising `COOLDOWN_BREACH` -> `FlattenPosition`,
-   cleared on the session reset — and absent from `AccountPersistedData` entirely, so a restart
-   sets it to `DateTime.MinValue` and the rule cannot fire for the rest of the cooldown it was
-   meant to be running. Six recompiles happened on this box on 2026-08-19 alone.
-   ⚠️ **Scope it honestly**: today the cooldown FLATTENS an open position rather than refusing an
-   entry, so what a recompile destroys is the flatten. If the entry-refusal rework lands first
-   this silently becomes more serious, because the thing cleared would then be the whole rail.
-   Do them together, or this one first.
-   ⚠️ The fix is a plain add — an absolute UTC deadline, nothing to derive — but the TEST must
-   drive the RESTORE, which is reachable only through `LoadPersistedState`.
-   ⚠️ Do NOT persist the lockout-phase cluster in the same pass; those are classified
-   `RESET_BY_DESIGN` because a new process SHOULD re-attempt a flatten rather than believe a dead
-   one already did it. Found by `tools/check_account_state_persisted.py` on its first run, which
-   is the whole argument for that gate. Three more fields sit in its UNREVIEWED baseline.
+5. **`P1-174`** — the THIRD instance of the recompile-wipes-state class, and the last three fields
+   the `AccountState` persistence gate had in its unreviewed baseline. `PeakOpenGain`,
+   `PeakGivebackTriggered` and `PeakGivebackLastTriggerUnrealized` are the peak-giveback rail's
+   per-position state and none is persisted, so a recompile while holding a WINNING position sets
+   the peak to 0 and the next evaluation re-baselines it to the CURRENT unrealized — the giveback
+   is then measured from a lower high and fires late or not at all, for as long as that position
+   stays open.
+   ⚠️ **The strongest evidence is that the code already agrees**: both branches of that rule set
+   `_stateDirty = true`, the flag that schedules a state write, for three fields the writer does
+   not carry. A write to nowhere.
+   ⚠️ P1, not P0, and the reasons are in the entry: the rail is weakened rather than disabled, the
+   exposure ends when the position closes, and it fails LENIENT (a winner held too long).
+   ⚠️ One edge to ASSERT rather than assume: if the guard is down across an entire flat window, the
+   restored peak belongs to the previous position and giveback fires EARLY. The flat branch zeroes
+   all three on any evaluation while flat, so the window is narrow — but it is real.
+   ⚠️ Do not conflate with `PeakEquity`, which IS persisted and is the ACCOUNT-level peak used by
+   the trailing-drawdown rail. That asymmetry is what made this easy to miss.
 6. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
    rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
    per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the

@@ -908,6 +908,17 @@ jobs:
           # WARNING: ~170s ESTIMATED (6 mutants). Replace with CI's own BATTERY_SECONDS on the
           # first green run; every estimate in this file so far has been wrong.
           - { label: "P1-170", batteries: "mutate_p1170.py" }   # ~170s ESTIMATED (6 mutants)
+          # P1-173: an active loss cooldown survives a recompile. Shares no bin for the same
+          # reason as its neighbours -- the three above are already at the critical path.
+          #
+          # WARNING: group 2 is the one that must never be dropped. A persisted DEADLINE has two
+          # failure directions and the tests for them look nearly identical: not restored is the
+          # defect, and RE-ARMED rather than restored flattens a position on an account that has
+          # already served its cooldown. Only the expired-cooldown control sees the second.
+          #
+          # WARNING: ~145s ESTIMATED (5 mutants). Replace with CI's own BATTERY_SECONDS on the
+          # first green run; every estimate in this file has been wrong so far.
+          - { label: "P1-173", batteries: "mutate_p1173.py" }   # ~145s ESTIMATED (5 mutants)
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.

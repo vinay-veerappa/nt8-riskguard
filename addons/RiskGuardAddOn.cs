@@ -1245,6 +1245,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // shorten a lockout that was meant to hold.
                                     state.LockoutUntil = kvp.Value.LockoutUntil;
                                     state.LockoutWasShadowOnly = kvp.Value.LockoutWasShadowOnly;
+                                    // P1-173. Restored, not re-armed: a deadline already in the
+                                    // past stays in the past, so an account that has served its
+                                    // cooldown is not flattened for it after a restart.
+                                    state.CooldownUntil = kvp.Value.CooldownUntil;
                                     state.LockoutRuleId = kvp.Value.LockoutRuleId;   // P0-166
                                     state.LastSessionDate = kvp.Value.LastSessionDate;
                                     state.TradesToday = kvp.Value.TradesToday;
@@ -1346,7 +1350,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             FirmDailyDate = state.FirmDailyDate,
                             FirmDailyStartRealized = state.FirmDailyStartRealized,
                             FirmStartingBalance = state.FirmStartingBalance,
-                            LockoutUntil = state.LockoutUntil,   // P1-54
+                            LockoutUntil = state.LockoutUntil,
+                            CooldownUntil = state.CooldownUntil,   // P1-173   // P1-54
                             LockoutWasShadowOnly = state.LockoutWasShadowOnly,
                             LockoutRuleId = state.LockoutRuleId   // P0-166
                         };
