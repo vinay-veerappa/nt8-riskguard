@@ -11465,23 +11465,26 @@ sessions after that stopped being true.
    locked by EOD-scoped `DAILY_LOSS_BREACH`. Fix the reader before the counter.
    ⚠️ `ConsecutiveLosses <= TradesToday` holds for every genuine sequence and **nothing in 3352 tests
    asserts it**, which is why an impossible value sat in persisted state unremarked.
-5. **`P1-174`** — the THIRD instance of the recompile-wipes-state class, and the last three fields
-   the `AccountState` persistence gate had in its unreviewed baseline. `PeakOpenGain`,
-   `PeakGivebackTriggered` and `PeakGivebackLastTriggerUnrealized` are the peak-giveback rail's
-   per-position state and none is persisted, so a recompile while holding a WINNING position sets
-   the peak to 0 and the next evaluation re-baselines it to the CURRENT unrealized — the giveback
-   is then measured from a lower high and fires late or not at all, for as long as that position
-   stays open.
-   ⚠️ **The strongest evidence is that the code already agrees**: both branches of that rule set
-   `_stateDirty = true`, the flag that schedules a state write, for three fields the writer does
-   not carry. A write to nowhere.
-   ⚠️ P1, not P0, and the reasons are in the entry: the rail is weakened rather than disabled, the
-   exposure ends when the position closes, and it fails LENIENT (a winner held too long).
-   ⚠️ One edge to ASSERT rather than assume: if the guard is down across an entire flat window, the
-   restored peak belongs to the previous position and giveback fires EARLY. The flat branch zeroes
-   all three on any evaluation while flat, so the window is narrow — but it is real.
-   ⚠️ Do not conflate with `PeakEquity`, which IS persisted and is the ACCOUNT-level peak used by
-   the trailing-drawdown rail. That asymmetry is what made this easy to miss.
+5. **CI SLOT DISCIPLINE, not a defect ID.** ⚠️ **The 20-job concurrency limit is ACCOUNT-WIDE and
+   shared with the sibling repo, and riskguard now runs 19 bins + `checks` = 20 jobs. It saturates
+   the account on its own.** Measured 2026-08-20 on run `32320721779`: three overlapping riskguard
+   runs plus one bridge run put ~40 jobs against 20 slots, the last job waited **15.1 min**, and a
+   **17-min floor became a 34.5-min wall** (43m end to end). The batteries were not slower; they
+   were starved.
+   ⚠️ **The cheapest fix is behavioural: do not push three times in twelve minutes.** That alone
+   caused it. Batch the commits.
+   ⚠️ The structural fix is a repack to ~15 bins. `pack_ci_matrix.py` needs per-BATTERY job
+   timings and REFUSES a guessed weight -- correctly. `mutate_p1174.py` currently has no CI
+   measurement and provisionally shares the loss-cooldown battery's bin, so repack once CI has
+   printed `BATTERY_SECONDS` for it. 75 measured battery seconds were mined from the green run,
+   and the floor formula is in that tool's docstring:
+   `checks + total_battery_compute/slots + per_job_overhead`, with overhead 31s/job.
+   ⚠️ **A GPU does not help.** Asked and answered: the work is Roslyn compilation plus ~550 suite
+   runs, all CPU-bound. What WOULD help is the box's **24 cores** running batteries locally in N
+   git worktrees -- but batteries rewrite the SAME source files in place, so they need separate
+   checkouts, and a worktree is not a fresh checkout (`*.cs` is LF here, CRLF in a fresh clone,
+   `core.autocrlf=true`, no `.gitattributes`). Pin `*.cs` in `.gitattributes` before attempting it.
+   That is a project, not a quick fix, and it needs its own ID.
 6. **`P1-167`** — one order draws N cancels and N log lines, once per state transition, in every
    rule inside `ExecuteOrderUpdate`. The duplicate-entry rule only made it visible; the
    per-instrument cap does it too, so it is the method's shape. ⚠️ Do not fix it by narrowing the

@@ -9771,7 +9771,52 @@ of reflection to look for it (`CF-31`). The two-mechanism structure and the fiel
 loop's patch were correct and were kept; the reflection was deleted and replaced with one property
 path.
 
-### P1-174. A recompile while holding a WINNING position re-baselines the peak-giveback rail to the current price, and the code already marks that state dirty for a save that never stores it — OPEN, filed 2026-08-20 (session 62), found by the same gate as `P1-173`
+### P1-174. A recompile while holding a WINNING position re-baselines the peak-giveback rail to the current price, and the code already marks that state dirty for a save that never stores it — ✅ FIXED 2026-08-20 (session 62), v1.52.6 — suite 3382/0, battery 6/6, and the battery caught an UNTESTED safeguard I had written and commented at length
+**CLOSED 2026-08-20 (session 62), `v1.52.6`.** Suite **3382 / 0**, `mutate_p1174.py` **6 / 6** no
+survivors, 13 gates green, 644 anchors / 0 broken. This empties
+`tools/check_account_state_persisted.py`'s UNREVIEWED baseline: every `AccountState` field is now
+either persisted or classified with a reason.
+
+⚠️⚠️ **JSON HAS NO NaN LITERAL, AND THAT IS THE HALF THAT WOULD HAVE SHIPPED.**
+`PeakGivebackLastTriggerUnrealized` uses `NaN` for "has not triggered". Every state file on every
+box predates this field, so it deserializes as **`0.0`** -- and `0.0` is a LEGITIMATE trigger level,
+a giveback that fired exactly at breakeven. Restored raw, the guard comes up believing the giveback
+has ALREADY fired on every account it tracks, which suppresses the next real one. First load after
+the upgrade, silently, on all of them. The restore normalises `0.0 -> NaN`, because absent is the
+only thing a missing field can mean.
+
+Nothing in the ticket mentioned this. It surfaced from writing the restore.
+
+⚠️ **AND THE BATTERY CAUGHT THAT SAFEGUARD BEING UNTESTED.** The normalisation was written AND
+given a fifteen-line comment justifying it -- and covered by nothing, because every other P1-174
+test set the sentinel to a non-zero level so the `== 0.0` branch never executed. The mutant that
+strips the normalisation SURVIVED the first run. That is the argument for mutation testing in one
+example: **review cannot distinguish a well-commented defence from a tested one.** The missing test
+now exists and the mutant dies.
+
+⚠️ **A GREEN SUITE FROM A STALE BINARY, on the way.** Adding that test, `dotnet build` reported 38
+errors while `dotnet run --no-build` printed `Failed = 0` from the PREVIOUS assembly -- a heredoc
+had turned `
+` into a real newline inside a C# string literal. Reading only the RESULTS line would
+have called a syntactically broken file green. Same shape as a broken NT8 assembly reading healthy:
+the artefact under test is not the artefact you just changed. It is why CI builds and tests in two
+independently-failing steps.
+
+**The fix itself** is three fields on `AccountPersistedData`, both copy sites, and the restore. The
+stale-peak bound claimed when this was filed HOLDS and is now asserted: the rule's flat branch
+discards all three on any evaluation while the account reads flat, so a peak belonging to a position
+that closed while the guard was down cannot make the giveback fire early on the next one. ⚠️ That
+branch lives in `EvaluatePnLRules`, not `EvaluateRules` -- calling the wrong one made a correct fix
+look broken for one cycle, and a test driving the wrong entry point is indistinguishable from a
+failing fix.
+
+⚠️ **EVERY ANCHOR IN THIS PATCH ENDS AT A LINE BOUNDARY**, because
+`public DateTime CooldownUntil { get; set; }` matches BOTH the DTO and `AccountState`'s copy -- the
+latter reads `... = DateTime.MinValue;` and the shorter string is a PREFIX of it. The same shape
+displaced `P1-54`'s comment an hour earlier and reached a green suite. Anchor on the whole line,
+trailing comment included.
+
+
 
 The third instance of `P1-170`'s class, and the last three fields
 `tools/check_account_state_persisted.py` had in its UNREVIEWED baseline. They are now the only

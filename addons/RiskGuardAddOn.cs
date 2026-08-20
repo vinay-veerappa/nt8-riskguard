@@ -1249,6 +1249,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // past stays in the past, so an account that has served its
                                     // cooldown is not flattened for it after a restart.
                                     state.CooldownUntil = kvp.Value.CooldownUntil;
+                                    // P1-174. The rule's flat branch discards all three on any
+                                    // evaluation while the account reads flat, which is what bounds
+                                    // the one way this can hurt: a peak belonging to a position that
+                                    // closed while the guard was down would otherwise make the
+                                    // giveback fire EARLY on the next one.
+                                    state.PeakOpenGain = kvp.Value.PeakOpenGain;
+                                    state.PeakGivebackTriggered = kvp.Value.PeakGivebackTriggered;
+                                    // ⚠️ NORMALISED BACK TO NaN. The live field uses NaN for "has
+                                    // not triggered"; JSON has no NaN literal, so a state file
+                                    // written before this field existed -- or by any writer that
+                                    // omits it -- deserializes 0.0, and 0.0 is a LEGITIMATE trigger
+                                    // level. Restoring it raw would invent a trigger at breakeven on
+                                    // every upgrade. Zero here means absent, which is the only
+                                    // reading a missing field can carry.
+                                    state.PeakGivebackLastTriggerUnrealized =
+                                        kvp.Value.PeakGivebackLastTriggerUnrealized == 0.0
+                                            ? double.NaN
+                                            : kvp.Value.PeakGivebackLastTriggerUnrealized;
                                     state.LockoutRuleId = kvp.Value.LockoutRuleId;   // P0-166
                                     state.LastSessionDate = kvp.Value.LastSessionDate;
                                     state.TradesToday = kvp.Value.TradesToday;
@@ -1352,6 +1370,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                             FirmStartingBalance = state.FirmStartingBalance,
                             LockoutUntil = state.LockoutUntil,   // P1-54
                             CooldownUntil = state.CooldownUntil,   // P1-173
+                            PeakOpenGain = state.PeakOpenGain,   // P1-174
+                            PeakGivebackTriggered = state.PeakGivebackTriggered,   // P1-174
+                            PeakGivebackLastTriggerUnrealized = state.PeakGivebackLastTriggerUnrealized,   // P1-174
                             LockoutWasShadowOnly = state.LockoutWasShadowOnly,
                             LockoutRuleId = state.LockoutRuleId   // P0-166
                         };

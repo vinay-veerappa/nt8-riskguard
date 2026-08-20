@@ -838,6 +838,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         // any line of the cooldown code -- the defect was an OMISSION from this class, which has no
         // source location for a reviewer to look at.
         public DateTime CooldownUntil { get; set; }
+        // P1-174, the third instance of the recompile-wipes-state class. The peak-giveback
+        // rail's PER-POSITION state. A recompile set PeakOpenGain to 0.0, and the rule's next
+        // evaluation found UnrealizedPnL > 0 and RE-BASELINED the peak to the CURRENT unrealized
+        // -- so the giveback was measured from a lower high and fired late or not at all, for as
+        // long as that position stayed open.
+        //
+        // ⚠️ THE RULE ALREADY SET _stateDirty = true FOR THESE THREE, on both branches. That is
+        // the flag which schedules a state write, for fields the writer did not carry: a write to
+        // nowhere, and better evidence than any argument about whether persisting is worthwhile.
+        //
+        // ⚠️ NOT the same as PeakEquity, which is the ACCOUNT-level peak behind
+        // TRAILING_DD_BREACH and was always persisted. Account peak durable, position peak not,
+        // is exactly the asymmetry that hid this.
+        public double PeakOpenGain { get; set; }
+        public bool PeakGivebackTriggered { get; set; }
+        // Persisted as a plain double: JSON has no NaN literal, so a DTO that predates this field
+        // deserializes it as 0.0 rather than NaN. The restore normalises that -- see there.
+        public double PeakGivebackLastTriggerUnrealized { get; set; }
     }
 
     // -

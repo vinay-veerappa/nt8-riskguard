@@ -249,6 +249,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP1_170_AProfitableSessionRestoresAsProfit);
             Run(TestP1_173_TheLossCooldownSurvivesARecompile);
             Run(TestP1_173_AnExpiredCooldownDoesNotComeBackToLife);
+            Run(TestP1_174_ThePositionPeakSurvivesARecompile);
+            Run(TestP1_174_AFlatAccountZeroesTheRestoredPeak);
+            Run(TestP1_174_ALegacyStateFileDoesNotInventATriggerAtBreakeven);
             Run(TestMaxSizeAtExactlyLimit);
             Run(TestDailyLossAtExactlyLimit);
             Run(TestIsAccountLockedForUnknownAccount);
@@ -20733,6 +20736,191 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Assert(!actions.Any(a => a.RuleId == "COOLDOWN_BREACH"),
                     "a cooldown that expired before the restart does not fire after it -- the "
                     + "deadline is restored, not re-armed");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+                Account.All.Clear();
+            }
+        }
+
+        // ---------------------------------------------------------------------------
+        // P1-174. The peak-giveback rail's per-position state -- PeakOpenGain, the
+        // latch, and the last-trigger sentinel -- was not persisted. A recompile set
+        // the peak to 0.0, and the next evaluation found UnrealizedPnL > 0 and
+        // RE-BASELINED the peak to the CURRENT unrealized, losing the true high. The
+        // giveback was then measured from a lower high and fired late or not at all,
+        // for as long as that position stayed open.
+        //
+        // ⚠️ THE CODE ALREADY AGREED THESE SHOULD BE DURABLE. Both branches of that
+        // rule set `_stateDirty = true` -- the flag that schedules a state write --
+        // for three fields the writer did not carry. A write to nowhere, and stronger
+        // evidence than any argument about whether persisting is worth it.
+        //
+        // Third instance of P1-170's class, and the one that empties
+        // tools/check_account_state_persisted.py's unreviewed baseline.
+        // ⚠️ PeakEquity is a DIFFERENT field -- the ACCOUNT-level peak used by
+        // TRAILING_DD_BREACH -- and it was always persisted. That asymmetry, account
+        // peak durable and position peak not, is what made this easy to miss.
+        // ---------------------------------------------------------------------------
+
+        private static void TestP1_174_ThePositionPeakSurvivesARecompile()
+        {
+            Console.WriteLine("\n[TEST] P1-174: the peak-giveback high-water mark survives a recompile");
+
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1174_a_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1174Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                // Up $800 at the high, currently up $300 -- a $500 giveback in progress.
+                s1.PeakOpenGain = 800.0;
+                s1.UnrealizedPnL = 300.0;
+                s1.PeakGivebackTriggered = true;
+                s1.PeakGivebackLastTriggerUnrealized = 350.0;
+                first.SetAccountStateForTest("P1174Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(new RiskConfig());
+                second.SetAccountStateForTest("P1174Acc", new AccountState("P1174Acc"));
+                second.LoadPersistedStateForTest();
+
+                var r = second.GetAccountStateForTest("P1174Acc");
+                Assert(r != null && Math.Abs(r.PeakOpenGain - 800.0) < 0.01,
+                    "the position's high-water mark survives a recompile (got "
+                    + (r == null ? "no state" : r.PeakOpenGain.ToString("F2"))
+                    + ") -- losing it re-baselines the giveback to the CURRENT price");
+                Assert(r != null && r.PeakGivebackTriggered,
+                    "and the latch survives, so a giveback already acted on is not acted on twice");
+                Assert(r != null && Math.Abs(r.PeakGivebackLastTriggerUnrealized - 350.0) < 0.01,
+                    "and the level it last fired at survives with it");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+            }
+        }
+
+        private static void TestP1_174_ALegacyStateFileDoesNotInventATriggerAtBreakeven()
+        {
+            Console.WriteLine("\n[TEST] P1-174: a state file without the sentinel restores as NaN, not as a trigger at 0");
+
+            // ⚠️ THIS TEST EXISTS BECAUSE THE BATTERY CAUGHT ITS ABSENCE. The normalisation was
+            // written, commented at length, and covered by nothing: every other P1-174 test sets
+            // the sentinel to a non-zero level, so the `== 0.0` branch never executed and the
+            // mutant that strips it SURVIVED.
+            //
+            // JSON HAS NO NaN LITERAL. The live field uses NaN for "has not triggered", so any
+            // state file written before this field existed -- which is every state file on every
+            // box right now -- deserializes it as 0.0. And 0.0 is a LEGITIMATE trigger level:
+            // a giveback that fired exactly at breakeven. Restored raw, the guard comes up
+            // believing the giveback already fired on every account it tracks, which suppresses
+            // the next real one.
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1174_c_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(new RiskConfig());
+                var s1 = new AccountState("P1174Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.PeakOpenGain = 500.0;
+                s1.PeakGivebackTriggered = false;
+                // 0.0 is what a legacy file yields for a field it does not contain. Setting it
+                // explicitly is equivalent and does not depend on hand-writing JSON.
+                s1.PeakGivebackLastTriggerUnrealized = 0.0;
+                first.SetAccountStateForTest("P1174Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(new RiskConfig());
+                second.SetAccountStateForTest("P1174Acc", new AccountState("P1174Acc"));
+                second.LoadPersistedStateForTest();
+
+                var r = second.GetAccountStateForTest("P1174Acc");
+                Assert(r != null && double.IsNaN(r.PeakGivebackLastTriggerUnrealized),
+                    "a sentinel of 0.0 on disk means ABSENT and restores as NaN (got "
+                    + (r == null ? "no state" : r.PeakGivebackLastTriggerUnrealized.ToString())
+                    + ") -- restoring it raw invents a giveback trigger at breakeven on every "
+                    + "account, on the first load after upgrading");
+                Assert(r != null && Math.Abs(r.PeakOpenGain - 500.0) < 0.01,
+                    "and the peak beside it is still restored normally, so the normalisation is "
+                    + "scoped to the one field that needs it");
+            }
+            finally
+            {
+                try { if (File.Exists(statePath)) File.Delete(statePath); } catch { }
+            }
+        }
+
+        private static void TestP1_174_AFlatAccountZeroesTheRestoredPeak()
+        {
+            Console.WriteLine("\n[TEST] P1-174: a restored peak is discarded once the account reads flat");
+
+            // ⚠️ THE ONLY WAY THIS FIX CAN HURT, AND THEREFORE THE TEST THAT MATTERS MOST.
+            // The persisted peak belongs to a SPECIFIC position. If the guard is down across a
+            // flat window -- position closed, another opened, all while the assembly reloads --
+            // the restored peak is from the previous episode, and a stale HIGH makes the giveback
+            // fire EARLIER than it should.
+            //
+            // The rule's own flat branch is what bounds that: any evaluation while flat zeroes all
+            // three. So the exposure is exactly "down for the whole flat period", which is narrow
+            // and real. Assert the bound rather than trusting it.
+            string statePath = Path.Combine(
+                Path.GetTempPath(), "rg_p1174_b_" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                Account.All.Clear();
+                var account = new Account { Name = "P1174Acc", Provider = Provider.Simulator };
+                Account.All.Add(account);
+
+                var cfg = new RiskConfig();
+                var first = new RiskGuardAddOn();
+                first.SetStateFileForTest(statePath);
+                first.SetConfigForTest(cfg);
+                var s1 = new AccountState("P1174Acc");
+                s1.LastSessionDate = DateTime.UtcNow.Date;
+                s1.PeakOpenGain = 800.0;
+                s1.PeakGivebackTriggered = true;
+                s1.PeakGivebackLastTriggerUnrealized = 350.0;
+                first.SetAccountStateForTest("P1174Acc", s1);
+                first.SavePersistedStateForTest();
+
+                var second = new RiskGuardAddOn();
+                second.SetStateFileForTest(statePath);
+                second.SetConfigForTest(cfg);
+                second.SetAccountStateForTest("P1174Acc", new AccountState("P1174Acc"));
+                second.LoadPersistedStateForTest();
+                second.SetArmedForTest(true);
+
+                var r = second.GetAccountStateForTest("P1174Acc");
+                Assert(Math.Abs(r.PeakOpenGain - 800.0) < 0.01,
+                    "precondition: the stale peak was restored");
+
+                // No position anywhere -> the rule's flat branch must discard all three.
+                // ⚠️ EvaluatePnLRules, NOT EvaluateRules. The peak-giveback block lives in the
+                // former, beside TRAILING_DD_BREACH, and calling the wrong one made this
+                // assertion fail against a correct fix -- which is worth a comment, because a
+                // test that drives the wrong entry point looks exactly like a broken fix.
+                r.UnrealizedPnL = 0.0;
+                second.EvaluatePnLRules(account, r);
+
+                Assert(Math.Abs(r.PeakOpenGain) < 0.01,
+                    "a flat evaluation zeroes the restored peak, so a peak belonging to a CLOSED "
+                    + "position cannot make the giveback fire early on the next one (got "
+                    + r.PeakOpenGain.ToString("F2") + ")");
+                Assert(!r.PeakGivebackTriggered,
+                    "and the latch is re-armed with it");
+                Assert(double.IsNaN(r.PeakGivebackLastTriggerUnrealized),
+                    "and the sentinel goes back to NaN, which is what 'no trigger yet' means here");
             }
             finally
             {

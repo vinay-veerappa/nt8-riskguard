@@ -863,7 +863,7 @@ jobs:
           # CONSECUTIVE_LOSS_BREACH still uses a TIMEOUT, because making the fix uniform would decide
           # P2-164 -- what counts as a loss -- from inside a bug fix, and P2-164 is open precisely
           # because the operator asked for that to be measured rather than assumed.
-          - { label: "P0-166", batteries: "mutate_p0166.py" }   # ~530s ESTIMATED (19 mutants)
+          - { label: "P0-166", batteries: "mutate_p0166.py" }   # 441s MEASURED run 32320721779 (19 mutants)
           # P2-163 + P1-168: instrument permission. Own bin for the same reason as its two
           # neighbours -- every other bin is 770-1119s against a 1119s critical path.
           #
@@ -873,9 +873,9 @@ jobs:
           # proves the fix cannot refuse the order that CLOSES a position in an instrument it has
           # just decided is not permitted.
           #
-          # WARNING: ~475s ESTIMATED (17 mutants). The P1-160 estimate was 34% HIGH -- replace this
+          # WARNING: 411s MEASURED run 32320721779 (17 mutants). The P1-160 estimate was 34% HIGH -- replace this
           # with CI's own BATTERY_SECONDS on the first green run.
-          - { label: "P2-163", batteries: "mutate_p2163.py" }   # ~475s ESTIMATED (17 mutants)
+          - { label: "P2-163", batteries: "mutate_p2163.py" }   # 411s MEASURED run 32320721779 (17 mutants)
           # P0-171 + P1-167: the reconnect replay suppression and one-refusal-per-order. Own bin,
           # same reason as the three above it.
           #
@@ -887,10 +887,10 @@ jobs:
           # order does not become an ANCHOR, which is the half of the fix that can be half-done
           # while the burst itself looks cured.
           #
-          # WARNING: ~505s ESTIMATED (18 mutants). Every estimate in this file so far has been
+          # WARNING: 462s MEASURED run 32320721779 (19 mutants). Every estimate in this file so far has been
           # wrong in one direction or the other -- replace this with CI's own BATTERY_SECONDS on
           # the first green run.
-          - { label: "P0-171", batteries: "mutate_p0171.py" }   # ~505s ESTIMATED (18 mutants)
+          - { label: "P0-171", batteries: "mutate_p0171.py" }   # 462s MEASURED run 32320721779 (19 mutants)
           # P1-170: the daily-loss rail's input survives a recompile. Small battery, so it
           # shares no bin only because the three above it are already at the critical path.
           #
@@ -905,9 +905,9 @@ jobs:
           # object: reading the persisted record is what makes the line order-independent, and
           # the mutant is kept to record that choice rather than to score it.
           #
-          # WARNING: ~170s ESTIMATED (6 mutants). Replace with CI's own BATTERY_SECONDS on the
+          # WARNING: 205s MEASURED run 32320721779 (6 mutants). Replace with CI's own BATTERY_SECONDS on the
           # first green run; every estimate in this file so far has been wrong.
-          - { label: "P1-170", batteries: "mutate_p1170.py" }   # ~170s ESTIMATED (6 mutants)
+          - { label: "P1-170", batteries: "mutate_p1170.py" }   # 205s MEASURED run 32320721779 (6 mutants)
           # P1-173: an active loss cooldown survives a recompile. Shares no bin for the same
           # reason as its neighbours -- the three above are already at the critical path.
           #
@@ -916,9 +916,19 @@ jobs:
           # defect, and RE-ARMED rather than restored flattens a position on an account that has
           # already served its cooldown. Only the expired-cooldown control sees the second.
           #
-          # WARNING: ~145s ESTIMATED (5 mutants). Replace with CI's own BATTERY_SECONDS on the
+          # WARNING: 174s MEASURED run 32320721779 (5 mutants). Replace with CI's own BATTERY_SECONDS on the
           # first green run; every estimate in this file has been wrong so far.
-          - { label: "P1-173", batteries: "mutate_p1173.py" }   # ~145s ESTIMATED (5 mutants)
+          # P1-173 + P1-174 SHARE A BIN, and the sharing is the point: 19 bins is the ceiling,
+          # and the 20-slot concurrency limit is ACCOUNT-WIDE. A 20th bin here does not buy a
+          # runner, it takes the slot the sibling repo needs and both queue. Measured 2026-08-20:
+          # three overlapping riskguard runs plus one bridge run put ~40 jobs against 20 slots and
+          # the last job waited 15.1 min, turning a 17-min floor into a 34.5-min wall.
+          #
+          # P1-173 measured 174s. P1-174 has no CI measurement yet, so this pairing is provisional
+          # -- pack_ci_matrix.py REFUSES a guessed weight and it is right to. Repack once CI has
+          # printed BATTERY_SECONDS for mutate_p1174.py; the target is ~15 bins, which leaves real
+          # headroom rather than exactly none.
+          - { label: "P1-173+P1-174", batteries: "mutate_p1173.py mutate_p1174.py" }   # 174s MEASURED + unmeasured
     steps:
       # No fetch-depth here. Only check_version_matches_tag.py needs tags, and it runs in
       # the `checks` job; a shallow clone is what makes 24 checkouts cheap.
