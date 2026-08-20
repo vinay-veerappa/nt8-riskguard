@@ -9601,12 +9601,36 @@ only the induced sample it would have looked correct. Both reconnects are now re
 their measured offsets, and a mutant pinned at 2000ms exists so the tighter of the two is proved to
 bind.
 
-**On the second broker.** A LUCID reconnect was run for comparison: same four-event sequence, and
-**zero orders replayed, zero refusals**. LUCID is also Provider31, but its accounts had not traded
-that day, so there was nothing to re-send. That is a negative control — it confirms the replay is
-driven by the account's ORDER HISTORY rather than the connection event — and it is **not** a second
-provider datapoint. ⚠️ **The 5000ms default rests on two samples from ONE connection (TPT).** Say so
-rather than implying it is broader; [[the-simulator-re-ids-nothing]] is about exactly this.
+**LIVE-VALIDATED, FOUR SAMPLES, TWO CONNECTIONS.** `v1.52.3` was measured against induced
+reconnects rather than argued about:
+
+| sample | connection | `Connecting` -> burst end | `Connected` after burst | refusals |
+|---|---|---|---|---|
+| 16:44 natural | TPT | **2027ms** | +240ms | 45 (pre-fix) |
+| 00:34 induced | TPT | 1167ms | +87ms | 17 (v1.52.2 -- fix present and useless) |
+| 00:48 induced | TPT | 1172ms | +71ms | **0** |
+| 00:57 induced | LUCID | 1132ms | +57ms | **0** |
+
+The 00:48 run is the direct before/after: the SAME induced reconnect that produced 17 refusals on
+`v1.52.2` produced 0 on `v1.52.3`, with all 53 order events still arriving. The rule still SEES the
+replay; it just stops refusing it -- suppressed, not blinded.
+
+The 00:57 run is a second CONNECTION carrying real order history: four same-side 1-lot MNQ market
+entries, replayed inside 11ms, which is precisely the collision this rule exists to catch. Zero
+refusals; pre-fix that shape yields three guaranteed false cancels (the first anchors, the next
+three are each compared against it).
+
+⚠️ **WHAT IS STILL NOT ESTABLISHED.** LUCID and TPT are both `Provider31`, so this shows the
+ordering is connection-INDEPENDENT within one provider. It is **not** cross-provider evidence.
+Every sample is Provider31, and the natural 2027ms event remains the binding case for the 5000ms
+default. A `Simulator` account (`Sim101`) is the outstanding test;
+[[the-simulator-re-ids-nothing]] records that this platform's brokers diverge on exactly this kind
+of ordering, so "measured on Provider31" is the honest scope of the number.
+
+⚠️ An earlier LUCID run replayed NOTHING, because those accounts had not traded that day. Kept
+here because it is the control that pins the mechanism: **the replay is driven by the account's
+ORDER HISTORY, not by the connection event.** No history, no burst, no false refusals -- which is
+also why a quiet account cannot reproduce this defect no matter how often it reconnects.
 
 **Incidental, measured, and not a defect here:** account attribution MOVED between connection
 objects across the reconnect — TPT went `8 accounts / Simulator+Provider31` to `3 / Provider31`,
