@@ -38,6 +38,13 @@ Two standing constraints from the deployed system:
 
 ## Wave 1 — correctness bugs that mislead (cheap, high trust-value, contained)
 
+> **⏳ Status 2026-08-21 (session 63): all three FIX LANDED (code + tests + batteries + gates),
+> committed and pushed; DEPLOY + Sim re-validation deliberately deferred to the operator.** Not
+> yet closed — each entry in the plan stays OPEN until re-validated on Sim. A fourth, **`P2-181`**,
+> was found while fixing `P2-150`: the bridge's `PlaceOcoOrder` carried the identical dead
+> synchronous verdict ([[a-second-reader-of-the-same-state]] — count the sites), and was fixed the
+> same session. See the plan entries for evidence.
+
 These are wrong *answers*, not missing features. Each is small and each is currently lying to a consumer.
 
 | ID | Problem | Approach | Repo | Effort | Live-validatable? |

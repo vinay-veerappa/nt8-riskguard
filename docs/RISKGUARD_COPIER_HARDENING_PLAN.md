@@ -8448,6 +8448,17 @@ and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shad
 
 ### P2-154. `nt_place_atm_order` still accepts a breakeven pair the addon will refuse, so the operator learns at placement instead of at the schema — OPEN, split out of `P2-141` 2026-08-18 (session 59)
 
+**⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** New
+`mcp/lib/atm-breakeven.js` refuses an EXPLICIT `offset >= trigger` pair at the MCP tool boundary,
+before the round-trip, naming both values; wired into `nt_place_atm_order` in
+`mcp/nt-mcp-server.js`. The addon's `PlaceBracket` → `ValidateBreakevenPlacement` refusal is KEPT
+(the authority; the bridge is one of several callers). Fires only on an explicit pair (never
+assumes the addon's defaults), so it cannot forbid a pair the addon accepts — the P3-111
+false-refusal class the copier wrapper's mode-check comment warns about. 7 JS tests (node --test
+73/73), consistent with the house standard for JS wrapper modules (negative controls, no mutation
+battery). **Stays OPEN until deployed and re-validated on Sim** (a bad pair is refused before
+submit).
+
 `P2-141` closed the load-bearing half: `DynamicAtmManager.PlaceBracket` now refuses
 `BreakevenOffsetTicks >= BreakevenTriggerTicks` before anything is created, naming both values.
 
@@ -10283,6 +10294,15 @@ account-wide concurrency limit, shared with the sibling repo.
 
 ### P2-178. `nt_extract_trades` returns EASTERN timestamps with a `Z` suffix, so every consumer reads them as UTC — OPEN, found 2026-08-20 (session 61)
 
+**⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** New
+`addons/BridgeTradeTime.cs` converts the Eastern wall-clock to true UTC (DST-correct via
+`TimeZoneInfo`, NOT a fixed 4h subtraction), and BOTH call sites now route through it —
+`ExtractTrades` and `nt_capture_chart`'s `fillTime` (the second was the same false-`Z` on
+`targetExec.Time`, [[fix-the-class-not-the-instance]]). 6 executed tests + a source gate;
+`mutation/mutate_p2178.py` 8/8, incl. the "+4h constant" mutant the entry warns against, killed
+by the winter-DST case. **Stays OPEN until deployed and re-validated on Sim** (compare
+`nt_extract_trades` against `interventions.jsonl`).
+
 Found while measuring `P2-164`, by a discrepancy that had no other explanation. The tool reported
 executions on the funded account at `2026-08-20T09:57:51.985Z`; `interventions.jsonl` had the same
 orders at `13:57:52Z`. Four hours apart, which is ET→UTC on this date.
@@ -10880,6 +10900,17 @@ placed a real order zero times — on an account where a wrong stop price is rea
 
 ### P2-150. `PlaceBracket` reads its exit legs' `OrderState` in the same breath as `Submit()`, so `partial_submit` is a status that can never be set — OPEN, measured 2026-08-18 (session 59)
 
+**⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** `DynamicAtmManager`
+now reports `status: "pending_legs"` with the leg ids and drops the dead synchronous read (the bug
+was the TIMING; not widened). The misleading stub-only `partial_submit` test — which only passed
+because the stub rejects legs SYNCHRONOUSLY inside `Submit()`, a thing no real broker does
+([[test-doubles-are-not-evidence]]) — was rewritten into an honest one; 14 status assertions
+updated. Suite 3477/0, `mutation/mutate_p2150.py` 4/4 (the flagship re-introduces the synchronous
+verdict; only the P2-150 test catches it). ⚠️ **A SIBLING was found and fixed the same session:
+`P2-181`** — the bridge's `PlaceOcoOrder` carried the identical dead read
+([[a-second-reader-of-the-same-state]] — count the sites). **Stays OPEN until deployed and
+re-validated on Sim.**
+
 `DynamicAtmManager.cs:526-536`, immediately after `account.Submit(validOrders)`:
 
 ```csharp
@@ -10947,6 +10978,25 @@ up to half a tick permanently. `Stop_5c903ad3` shows the symptom — a `ChangeSu
 01:45:38.746 that resolved to the **same** `29897.5` it already had. A no-op modification, and
 [[nt8-order-change-semantics]] says a modification in flight is not free.
 
+
+### P2-181. The bridge's `PlaceOcoOrder` carries the SAME dead synchronous verdict as `P2-150` — OPEN, found and fixed 2026-08-21 (session 63)
+
+Found while fixing `P2-150`. `McpBridgeAddOn.cs`'s `PlaceOcoOrder` read `stopOrder`/`targetOrder`
+`OrderState` in the same breath as `account.Submit(...)` and set `status: "partial_submit"` from
+it — the identical defect to `P2-150`, in a second place, one repo over.
+[[a-second-reader-of-the-same-state]]: count the sites before closing the ticket. `Submit` is
+async, the legs are `Initialized`/`Submitted` at that instant, so the read could never catch a
+rejection and `partial_submit` was a status no live input could set —
+[[a-green-that-can-never-be-red]].
+
+**⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** The synchronous
+read is removed (not widened — the bug is the TIMING) and the OCO path reports `pending_legs` with
+the leg ids and an honest per-leg `state` SNAPSHOT (not a verdict). SOURCE GATE only —
+`McpBridgeAddOn.cs` is in no test build (`P2-27`), so `TestP2181_...` asserts the region no longer
+contains `partial_submit`/`rejectedOrders` and reports `pending_legs`; `mutation/mutate_p2181.py`
+3/3 proves the gate FAILS on the regression (the word or the read reappearing) rather than passing
+vacuously. **Stays OPEN until deployed and re-validated on Sim** (an OCO placement reports
+`pending_legs`).
 
 ### P1-140. The partial-profit order joins the stop and target's OWN OCO group, and both of those are for the FULL quantity — every outcome NT8 can pick is a defect — ⚠️ OPEN: slice 1 landed 2026-08-17 (session 56), so the hazard is gone and the feature is STATED unavailable, but native partials are the remaining slice and get their own ID
 
