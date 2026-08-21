@@ -8800,7 +8800,36 @@ Of the arbiter's two upheld findings, one was right for a reason it did not give
 above) and one did not hold: for a platform duplicate the two orders are identical, so which one is
 anchored has no observable consequence. Both are recorded at the site.
 
-### P2-161. The loss cooldown fires only at the consecutive-loss LIMIT, so losses 1..N-1 cost nothing and it is redundant with the lockout it coincides with — OPEN, 2026-08-18 (session 59)
+### P2-161. The loss cooldown fires only at the consecutive-loss LIMIT, so losses 1..N-1 cost nothing and it is redundant with the lockout it coincides with — ✅ CLOSED 2026-08-20 (session 61), v1.56.0 — suite 3455/0, battery 9/9 (shared with P2-162, P2-164)
+
+**The cool-off now escalates.** `ApplyTradeJudgement` (the single once-per-trade judgement point in
+`RiskGuardModels.cs`) arms `CooldownMinutes * 2^(n-1)` minutes for consecutive loss `n` while
+`1 <= n < MaxConsecutiveLosses`; the cap itself is the hard `CONSECUTIVE_LOSS_BREACH` lockout, so no
+cooldown is written there — two overlapping deadlines would only muddy which the audit shows. The
+redundant setter in `ExecuteAccountItemUpdate` (fired only at the limit, off a possibly-unjudged
+counter) is deleted; the cool-off has exactly one owner now.
+
+⚠️ **The off-by-one and the win-reset are the two failures a coarse test cannot see, and both have
+their own assertion.** `TestP2161_TheCooldownEscalatesWithTheStreak` checks the exact 2/4/8-minute
+DURATIONS, not merely "a cooldown was set" — an exponent that charges loss `n` the loss `n-1` pause
+fails it. `TestP2161_AWinResetsTheEscalationNotJustTheCounter` drives a win between losing streaks
+and asserts the next pause returns to the BASE rather than continuing the ladder; the escalation and
+the counter are the same field (`ConsecutiveLosses`) today, and that test is what would catch them
+being split.
+
+**The agreed 2/4/8/lockout table is config, not code.** The code default stays `CooldownMinutes 5`
+because a missing setting must fail toward a LONGER pause; the operator-agreed base 2 with
+`MaxConsecutiveLosses 4` is a `config.json` change to make at deploy. `CooldownMinutes` kept its name
+rather than being renamed to `CooldownBaseMinutes`: the WPF window and `GuardRules.cs` both bind it,
+and it still means "how long the cool-off is", now as the base rung.
+
+⚠️ **`P2-164`'s loss definition is now the config key `Overtrading.LossFloorDollars`** (default 0.0 =
+every negative counts, exactly today's semantics), classified as a `GuardNonRule` so
+`TestUi3_...` forces it to stay accounted for. `TestP2164_TheLossFloorDecidesWhatCounts` proves a
+sub-floor scratch is untouched at a $10 floor and — the negative control — that the default counts
+the same $5 loss it did before. The `P2-164` measurement now flips a number, not a build.
+
+**Original entry (the defect as filed):**
 
 ```csharp
 if (state.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses
@@ -8834,7 +8863,25 @@ delta, however small? The three losses that locked the account out on 2026-08-18
 few dollars. Build the ladder with the definition behind a config key defaulting to today's semantics
 (every negative counts), so `P2-164` resolves into a number rather than a rebuild.
 
-### P2-162. The cooldown FLATTENS a filled position instead of refusing the entry, so a pause costs a fill, a commission and slippage — OPEN, 2026-08-18 (session 59)
+### P2-162. The cooldown FLATTENS a filled position instead of refusing the entry, so a pause costs a fill, a commission and slippage — ✅ CLOSED 2026-08-20 (session 61), v1.56.0 — suite 3455/0, battery shared with P2-161
+
+**Refuse first, flatten only as backstop.** `ExecuteOrderUpdate` now cancels an entry submitted
+during a running cooldown, in the same block that refuses one under a lockout, exempting
+position-reducing orders (`P1-44`) so it can never strip a live position of its exit. The
+`COOLDOWN_BREACH` `FlattenPosition` in `EvaluateRules` STAYS as a backstop for a position that
+already exists — a fill that beat the cancel, or one opened before the cooldown began — because
+refusing future entries does nothing about a live one. The two are not alternatives.
+
+⚠️ **The refusal is logged as `COOLDOWN_CANCEL`, a distinct rule id from `ENTRY_CANCEL`.** The audit
+must name the cause, and the `P1-167` de-dup is keyed by `(rule, order)` — a shared id would let a
+lockout refusal and a cooldown refusal on the same order suppress each other.
+`TestP2162_AnEntryDuringCooldownIsRefusedNotFlattened` asserts the cancel, the `COOLDOWN_CANCEL`
+label via the log observer, the reducing-order exemption, and — the negative control — that with no
+cooldown running the same entry is untouched, so the refusal is keyed on the cooldown and not firing
+unconditionally. No self-cure was needed as there was for `P1-172`'s streak refusal: `CooldownUntil`
+is a deadline by construction and lapses on its own.
+
+**Original entry (the defect as filed):**
 
 `COOLDOWN_BREACH` emits `FlattenPosition` when a position is open during the cooldown window. So
 entering during a cooldown gets you filled and then closed, rather than simply refused.

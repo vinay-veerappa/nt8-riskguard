@@ -11537,10 +11537,15 @@ sessions after that stopped being true.
    IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
    per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in
    `v1.49.0` (suite 3263/0, battery 23 killed / 1 declared), and the instrument allow-list plus its
-   position-level enforcement in `v1.51.0` (suite 3332/0, battery 17/17). Remaining, in order:
-   **`P2-161`** + **`P2-162`** -- the escalating cooldown ladder, and refusing the entry rather than
-   flattening the fill. ⚠️ **Both are now UNGATED**: the decision they waited on is measured and
-   resolved (plan entry, not named here -- this block's gate reads any ID as work to do).
+   position-level enforcement in `v1.51.0` (suite 3332/0, battery 17/17).
+   ~~`P2-161`~~ + ~~`P2-162`~~ — ✅ CLOSED `v1.56.0` (suite 3455/0, battery 9/9): the loss cool-off
+   now ESCALATES (base * 2^(n-1) per loss, the cap is the hard lockout, a win resets the escalation
+   to the base), and an entry placed during a cooldown is REFUSED as `COOLDOWN_CANCEL` rather than
+   filled and flattened, the flatten kept only as a backstop for a position that already exists. The
+   agreed 2/4/8/lockout table is `config.json` (base 2, cap 4), not the code default (which stays a
+   longer 5 because a missing setting must fail toward more caution). The now-CLOSED ~~`P2-164`~~'s
+   loss definition is the config key `LossFloorDollars` (default 0 = every negative), so re-measuring flips a
+   number rather than a build. IDs struck, not named as work — the gate reads any live ID as to-do.
    ~~`P2-165`~~ — ✅ CLOSED, and it carried a finding worth keeping here rather than only in the
    plan: **the per-instrument cap refused the order that FLATTENS an oversized position.** Reachable
    rather than theoretical — the duplicate-entry defect measured on this account leaves a 2-lot MNQ

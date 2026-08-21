@@ -118,7 +118,8 @@ MUTANTS = [
     (GUARD, 'group 2: arming the cure REPLACES the refusal instead of accompanying it, so the order '
             'that tripped the streak is allowed through while the lockout is set. Strictly worse '
             'than the defect, and it reads as tidier control flow',
-     '                        if (entryLockoutBinds || streakAtCap)\n'
+     # Re-anchored 2026-08-20: P2-162 added `|| cooldownActive` to this refusal condition.
+     '                        if (entryLockoutBinds || streakAtCap || cooldownActive)\n'
      '                        {\n'
      '                            if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)\n'
      '                            {\n'

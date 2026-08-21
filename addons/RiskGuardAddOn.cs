@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.55.0";
+        public const string Version = "1.56.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -1951,11 +1951,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                             state.LastRealizedPnL = rawRealized;
                             state.RealizedPnL = newRealizedPnL;
 
-                            // Apply cooldown if consecutive loss limit breached
-                            if (state.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses && _config.Overtrading.CooldownMinutes > 0)
-                            {
-                                state.CooldownUntil = DateTime.UtcNow.AddMinutes(_config.Overtrading.CooldownMinutes);
-                            }
+                            // P2-161: the cool-off is owned entirely by ApplyTradeJudgement now --
+                            // the single once-per-trade judgement point, which sets the ESCALATING
+                            // deadline. The setter that stood here fired only at the limit (the
+                            // defect) and double-wrote CooldownUntil off a possibly-unjudged
+                            // counter, since RecordRealizedDelta may only BANK a delta on this event
+                            // (case 1) and judge it later at the flat transition.
                             _stateDirty = true;
                         }
 
@@ -2465,6 +2466,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                         bool streakAtCap = _config.Overtrading.MaxConsecutiveLosses > 0
                             && stateModel.ConsecutiveLosses >= _config.Overtrading.MaxConsecutiveLosses;
 
+                        // P2-162: a running loss-streak cooldown REFUSES the entry here, the same
+                        // way the lockout does, instead of letting it fill and flattening it in
+                        // EvaluateRules -- a pause must not cost a fill, a commission and slippage.
+                        // The flatten stays as a BACKSTOP for a position that already exists (a fill
+                        // that beat the cancel, or one opened before the cooldown began); the two
+                        // are not alternatives. No self-cure is needed as there was for the streak
+                        // (P1-172): CooldownUntil is a deadline by construction and lapses on its own.
+                        bool cooldownActive = DateTime.UtcNow < stateModel.CooldownUntil;
+
                         // ⚠️ P1-172. THIS READER REFUSES ON THE RAW COUNTER WITH NO DEADLINE, AND
                         // THAT IS WHAT MADE A WRONG COUNT A SESSION-LONG TRADING BAN. The condition
                         // is an OR: no lockout need be active, no cooldown need be running, and
@@ -2510,7 +2520,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             entryLockoutBinds = LockoutBinds(accountName, stateModel);
                         }
 
-                        if (entryLockoutBinds || streakAtCap)
+                        if (entryLockoutBinds || streakAtCap || cooldownActive)
                         {
                             if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                             {
@@ -2518,12 +2528,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 {
                                     if (e.Order.OrderType == OrderType.Limit || e.Order.OrderType == OrderType.StopMarket || e.Order.OrderType == OrderType.StopLimit || e.Order.OrderType == OrderType.Market)
                                     {
+                                        // The lockout binds harder than a cooldown, so it names the
+                                        // refusal when both hold; the rule id must differ so the two
+                                        // never de-duplicate each other and the audit names the cause.
+                                        string refuseRule = (entryLockoutBinds || streakAtCap)
+                                            ? "ENTRY_CANCEL" : "COOLDOWN_CANCEL";
+                                        string refuseWhy = (entryLockoutBinds || streakAtCap)
+                                            ? "because account is locked out."
+                                            : $"because a loss-streak cooldown is active until {stateModel.CooldownUntil:o}.";
                                         // P1-167: one refusal per order per rule.
-                                        if (stateModel.MarkRefusedOnce("ENTRY_CANCEL", e.Order))
+                                        if (stateModel.MarkRefusedOnce(refuseRule, e.Order))
                                         {
                                             // P1-43: queued, not sent -- this whole block runs under _stateLock.
                                             _pendingCancels.Add(new PendingCancelEntry(account, e.Order, PendingCancelIntent.Intervention));
-                                            LogEvent(accountName, "ENTRY_CANCEL", $"Cancelled order {e.Order.Id} because account is locked out.");
+                                            LogEvent(accountName, refuseRule, $"Cancelled order {e.Order.Id} {refuseWhy}");
                                         }
                                     }
                                 }

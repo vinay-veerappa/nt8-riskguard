@@ -356,17 +356,36 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ConsecutiveLosses = ConsecutiveLossesBeforeSettlement;
 
-            if (OpenTradeRealizedDelta < -0.01)
+            // P2-164: what counts as a loss. A net loss must clear the configured magnitude floor;
+            // below it the trade is a scratch and leaves the streak untouched. The 0.01 epsilon is
+            // kept as a floor under the floor so float noise is never a loss even at LossFloorDollars 0.
+            double lossFloor = (config != null && config.Overtrading != null)
+                ? config.Overtrading.LossFloorDollars : 0.0;
+            double lossThreshold = -(lossFloor > 0.01 ? lossFloor : 0.01);
+
+            if (OpenTradeRealizedDelta < lossThreshold)
                 ConsecutiveLosses++;
             else if (OpenTradeRealizedDelta > 0.01)
                 ConsecutiveLosses = 0;
 
+            // P2-161: the cool-off ESCALATES with the streak instead of firing once at the limit.
+            // Losses 1..N-1 each set a doubling pause (base * 2^(n-1)); loss N is the hard lockout,
+            // set by CONSECUTIVE_LOSS_BREACH in EvaluateRules, so no cooldown is written here for it
+            // -- a 60-minute lockout dominates a cooldown, and setting both would only muddy which
+            // deadline the audit shows. A win zeroes ConsecutiveLosses above, which drops the next
+            // pause back to the base: the escalation resets with the counter because they are, for
+            // now, the same field, and TestP2161_AWinResetsTheEscalationNotJustTheCounter guards it.
             if (config != null && config.Overtrading != null
                 && config.Overtrading.MaxConsecutiveLosses > 0
-                && ConsecutiveLosses >= config.Overtrading.MaxConsecutiveLosses
-                && config.Overtrading.CooldownMinutes > 0)
+                && config.Overtrading.CooldownMinutes > 0
+                && ConsecutiveLosses >= 1
+                && ConsecutiveLosses < config.Overtrading.MaxConsecutiveLosses)
             {
-                CooldownUntil = UtcNow().AddMinutes(config.Overtrading.CooldownMinutes);
+                // 1 << 20 caps the shift so a pathological cap cannot overflow the multiply; with a
+                // real MaxConsecutiveLosses of 3-4 the exponent is never above 2.
+                int exponent = Math.Min(ConsecutiveLosses - 1, 20);
+                long pause = (long)config.Overtrading.CooldownMinutes * (1L << exponent);
+                CooldownUntil = UtcNow().AddMinutes(pause);
             }
         }
 
@@ -1154,8 +1173,26 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class OvertradingConfig
     {
         public int MaxTradesPerSession { get; set; } = 8;
+
+        // P2-161: the BASE of the escalating loss-streak cool-off, not a flat cooldown. The pause
+        // after consecutive loss n (for 1 <= n < MaxConsecutiveLosses) is
+        // CooldownMinutes * 2^(n-1); at n == MaxConsecutiveLosses the CONSECUTIVE_LOSS_BREACH hard
+        // lockout (LockoutMinutes) takes over and no cooldown is set. The operator-agreed table
+        // (2026-08-18) is 2/4/8/lockout, realised in config.json by CooldownMinutes=2 and
+        // MaxConsecutiveLosses=4 -- the code default stays 5/... because a missing setting must
+        // fail toward a LONGER pause, never a shorter one. Kept its name rather than renamed:
+        // the WPF window (RiskGuardWindow.cs) and GuardRules.cs both bind this key, and it still
+        // means "how long the loss cool-off is", now as the base rung.
         public int CooldownMinutes { get; set; } = 5;
         public int MaxConsecutiveLosses { get; set; } = 3;
+
+        // P2-164 interim key. A trade counts toward the loss streak / cooldown only if its NET
+        // realized loss exceeds this magnitude in dollars; below it the trade is a scratch and
+        // leaves the streak untouched in either direction. Default 0.0 = every negative counts,
+        // which is exactly today's semantics (the 0.01 float-noise epsilon still applies as a
+        // floor), so the P2-164 measurement resolves this rail into a config number rather than a
+        // rebuild. [[configured-evaluated-enforcing]]
+        public double LossFloorDollars { get; set; } = 0.0;
         // P2-46: was hardcoded at 5 in the order-rate governor, unlike every other limit here.
         public int MaxOrdersPerSecond { get; set; } = 5;
         public int LockoutMinutes { get; set; } = 60;

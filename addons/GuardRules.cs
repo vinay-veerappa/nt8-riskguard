@@ -706,7 +706,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // ORDER_FLOOD_LOCKOUT still use it, because a cool-off and a rate burst are genuinely
             // cured by waiting.
             new GuardNonRule { ConfigPath = "Overtrading.LockoutMinutes", Reason = "the cool-off for CONSECUTIVE_LOSS_BREACH and ORDER_FLOOD_LOCKOUT only -- since P0-166 MAX_TRADES_BREACH locks to the session boundary instead" },
-            new GuardNonRule { ConfigPath = "Overtrading.CooldownMinutes", Reason = "the consequence of a loss streak" },
+            new GuardNonRule { ConfigPath = "Overtrading.CooldownMinutes", Reason = "the consequence of a loss streak -- since P2-161 the BASE of the escalating cool-off (base * 2^(n-1))" },
+            new GuardNonRule { ConfigPath = "Overtrading.LossFloorDollars", Reason = "P2-164: the magnitude a net loss must clear to count toward the streak/cooldown; an input to CONSECUTIVE_LOSS_BREACH, not a limit of its own. Default 0 = every negative counts" },
             new GuardNonRule { ConfigPath = "Sizing.ExpectedCopies", Reason = "a divisor used when sizing across copied accounts; not a cap" },
             new GuardNonRule { ConfigPath = "Override.ConfirmPhrase", Reason = "friction for escaping a lockout (FR-35/36)" },
             new GuardNonRule { ConfigPath = "Override.WaitSeconds", Reason = "friction for escaping a lockout; clamped to >= 30 at validation" },

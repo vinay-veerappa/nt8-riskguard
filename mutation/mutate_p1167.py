@@ -132,7 +132,9 @@ MUTANTS = [
 
     (GUARD, 'group 3: the lockout refusal loses its de-duplication -- the third rule with the same '
             'shape, and the one that fires most often because a lockout persists across events',
-     '                                        if (stateModel.MarkRefusedOnce("ENTRY_CANCEL", e.Order))',
+     # Re-anchored 2026-08-20: P2-162 routes this refusal through the `refuseRule` variable so a
+     # cooldown refusal can share the block with a distinct rule id.
+     '                                        if (stateModel.MarkRefusedOnce(refuseRule, e.Order))',
      '                                        if (true)'),
 
     (GUARD, 'group 3: the rate governor loses its de-duplication, so the tripping order is queued '

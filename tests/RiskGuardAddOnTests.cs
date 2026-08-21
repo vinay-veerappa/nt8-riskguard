@@ -419,6 +419,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP1_19_FlattenIsInstrumentScopedAndActionsCoalesce);
             Run(TestP1_18_ProfileTrailingDDYieldsOnlyToAnEffectiveFirmRule);
             Run(TestP1_16_ConsecutiveLossesCountTradesNotPartialExits);
+            Run(TestP2161_TheCooldownEscalatesWithTheStreak);
+            Run(TestP2161_AWinResetsTheEscalationNotJustTheCounter);
+            Run(TestP2164_TheLossFloorDecidesWhatCounts);
+            Run(TestP2162_AnEntryDuringCooldownIsRefusedNotFlattened);
             Run(TestP1_17_EvaluationTargetUsesCumulativeNotSessionPnL);
             Run(TestP1_37_ShadowSessionCounterSurvivesRestartWithoutRecounting);
             Run(TestP1_23_SymbolTranslationAndSizingModesDoNotLie);
@@ -22339,12 +22343,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 4. StopGuard OnMissing = "WarnOnly"
-        // 5. Cooldown auto-set in sweep when consecutive losses breach limit
+        // 5. Cooldown auto-set by AccountItemUpdate on a loss.
+        // ⚠️ P2-161 changed the rung this lands on. This used to set MaxConsecutiveLosses=1, so the
+        // FIRST loss was the limit and the old flat cooldown fired there. Under the escalating
+        // ladder the LIMIT is a hard lockout, not a cooldown -- the cooldowns are the rungs BELOW
+        // it -- so the test now uses Max=3 and drives ONE loss, which lands on the base rung and
+        // still proves the point: a loss auto-arms the cool-off through AccountItemUpdate.
         private static void TestSweepAutoSetsCooldownOnConsecutiveLosses()
         {
             Console.WriteLine("\n[TEST] Sweep Auto-Sets Cooldown On ConsecutiveLosses Breach");
             var config = new RiskConfig();
-            config.Overtrading.MaxConsecutiveLosses = 1;
+            config.Overtrading.MaxConsecutiveLosses = 3;
             config.Overtrading.CooldownMinutes = 30;
 
             var account = new Account { Name = "TestAcc" };
@@ -27568,6 +27577,218 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(scratch.ConsecutiveLosses == 2,
                 string.Format("a scratch trade leaves the streak untouched (got {0})",
                               scratch.ConsecutiveLosses));
+        }
+
+        // P2-161: the loss cool-off used to fire ONCE, at the consecutive-loss limit, so losses
+        // 1..N-1 cost nothing and the one it did set was almost entirely subsumed by the 60-minute
+        // CONSECUTIVE_LOSS_BREACH lockout that fired on the same tick. It now escalates: each loss
+        // below the cap sets base * 2^(n-1) minutes. These assertions check the exact DURATIONS,
+        // because "a cooldown was set" is satisfied by an off-by-one that charges loss n the loss
+        // (n-1) pause -- the failure the filed entry warned is invisible to a coarser test.
+        private static void TestP2161_TheCooldownEscalatesWithTheStreak()
+        {
+            Console.WriteLine("\n[TEST] P2-161: the loss cooldown escalates with the consecutive-loss count");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 4;
+            config.Overtrading.CooldownMinutes = 2;      // the ladder base
+            var mnq = new Instrument("MNQ");
+            var account = new Account { Name = "LadderAcc" };
+            var clock = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+            var state = new AccountState("LadderAcc");
+            state.UtcNow = () => clock;
+
+            Action<double> closeTrade = (pnl) =>
+            {
+                state.UpdatePosition(account, mnq, MarketPosition.Long, 1, 100.0, 0.0, config);
+                state.RecordRealizedDelta(pnl, config);
+                state.UpdatePosition(account, mnq, MarketPosition.Flat, 0, 0.0, 0.0, config);
+            };
+
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 1, "loss 1 -> streak 1");
+            Assert(state.CooldownUntil == clock.AddMinutes(2),
+                "loss 1 sets the 2-minute base pause, where the old rule set NOTHING before the limit");
+
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 2, "loss 2 -> streak 2");
+            Assert(state.CooldownUntil == clock.AddMinutes(4),
+                "loss 2 doubles to 4 minutes -- an off-by-one giving it the loss-1 pause fails HERE");
+
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 3, "loss 3 -> streak 3");
+            Assert(state.CooldownUntil == clock.AddMinutes(8),
+                "loss 3 doubles again to 8 minutes");
+
+            var pauseBeforeCap = state.CooldownUntil;
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 4, "loss 4 -> streak 4, at the cap");
+            Assert(state.CooldownUntil == pauseBeforeCap,
+                "AT the cap the ladder writes NO new cooldown -- CONSECUTIVE_LOSS_BREACH's 60-minute "
+                + "lockout owns loss N, and two overlapping deadlines only muddy which the audit shows");
+        }
+
+        // P2-161, the half a "was a cooldown set" test cannot see: a win must reset the ESCALATION,
+        // not merely the counter. They are the same field today (ConsecutiveLosses), but the pause
+        // after the first loss FOLLOWING a win must return to the base, not continue the ladder.
+        private static void TestP2161_AWinResetsTheEscalationNotJustTheCounter()
+        {
+            Console.WriteLine("\n[TEST] P2-161: a win resets the escalation, not just the counter");
+            var config = new RiskConfig();
+            config.Overtrading.MaxConsecutiveLosses = 4;
+            config.Overtrading.CooldownMinutes = 2;
+            var mnq = new Instrument("MNQ");
+            var account = new Account { Name = "ResetAcc" };
+            var clock = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+
+            var state = new AccountState("ResetAcc");
+            state.UtcNow = () => clock;
+
+            Action<double> closeTrade = (pnl) =>
+            {
+                state.UpdatePosition(account, mnq, MarketPosition.Long, 1, 100.0, 0.0, config);
+                state.RecordRealizedDelta(pnl, config);
+                state.UpdatePosition(account, mnq, MarketPosition.Flat, 0, 0.0, 0.0, config);
+            };
+
+            closeTrade(-25.0);
+            closeTrade(-25.0);
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 3 && state.CooldownUntil == clock.AddMinutes(8),
+                "three losses have climbed the ladder to an 8-minute pause");
+
+            closeTrade(50.0);
+            Assert(state.ConsecutiveLosses == 0, "a winning trade resets the streak to 0");
+
+            clock = clock.AddMinutes(30);   // past the old pause, so the next reading is unambiguous
+            closeTrade(-25.0);
+            Assert(state.ConsecutiveLosses == 1, "the streak restarts at 1 after the win");
+            Assert(state.CooldownUntil == clock.AddMinutes(2),
+                "the pause returns to the 2-minute BASE, not 16 -- the escalation reset with the win");
+        }
+
+        // P2-164 interim key. What counts as "a loss" is a config number: a net loss must clear
+        // LossFloorDollars to touch the streak, and default 0 counts every negative (today's
+        // semantics). The 2026-08-18 lockout was three scratches of a few dollars each.
+        private static void TestP2164_TheLossFloorDecidesWhatCounts()
+        {
+            Console.WriteLine("\n[TEST] P2-164: the loss floor decides what counts toward the streak");
+            var mnq = new Instrument("MNQ");
+            var account = new Account { Name = "FloorAcc" };
+
+            Action<AccountState, RiskConfig, double> closeTrade = (st, cfg, pnl) =>
+            {
+                st.UpdatePosition(account, mnq, MarketPosition.Long, 1, 100.0, 0.0, cfg);
+                st.RecordRealizedDelta(pnl, cfg);
+                st.UpdatePosition(account, mnq, MarketPosition.Flat, 0, 0.0, 0.0, cfg);
+            };
+
+            // Floor of $10: a -$5 trade is a scratch, a -$15 trade counts.
+            var floored = new RiskConfig();
+            floored.Overtrading.MaxConsecutiveLosses = 4;
+            floored.Overtrading.CooldownMinutes = 2;
+            floored.Overtrading.LossFloorDollars = 10.0;
+            var clock = new DateTime(2026, 8, 20, 12, 0, 0, DateTimeKind.Utc);
+            var s = new AccountState("FloorAcc");
+            s.UtcNow = () => clock;
+
+            closeTrade(s, floored, -5.0);
+            Assert(s.ConsecutiveLosses == 0, "a $5 loss below the $10 floor does not count");
+            Assert(s.CooldownUntil == DateTime.MinValue, "and sets no cooldown");
+
+            closeTrade(s, floored, -15.0);
+            Assert(s.ConsecutiveLosses == 1, "a $15 loss clears the $10 floor and counts");
+            Assert(s.CooldownUntil == clock.AddMinutes(2), "and arms the base pause");
+
+            // NEGATIVE CONTROL: the default floor of 0 must count any negative -- i.e. NOT change
+            // today's behaviour, so the P2-164 measurement can flip a number rather than a build.
+            var deflt = new RiskConfig();   // LossFloorDollars defaults to 0.0
+            deflt.Overtrading.MaxConsecutiveLosses = 4;
+            var d = new AccountState("FloorAcc");
+            closeTrade(d, deflt, -5.0);
+            Assert(d.ConsecutiveLosses == 1,
+                "at the default floor of 0, the same $5 loss DOES count -- unchanged from before P2-164");
+        }
+
+        // P2-162: an entry placed during a cooldown is REFUSED before it fills, the way a lockout
+        // refuses one, instead of being filled and then flattened at a commission and slippage. The
+        // FlattenPosition backstop for a position that already exists stays -- TestConsecutiveLosses-
+        // CooldownLockout covers it -- because refusing future entries does nothing about a live one.
+        private static void TestP2162_AnEntryDuringCooldownIsRefusedNotFlattened()
+        {
+            Console.WriteLine("\n[TEST] P2-162: an entry during a cooldown is refused, not flattened");
+            var config = new RiskConfig();
+            var account = new Account { Name = "CoolAcc" };
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            // The cancel is an intervention against the trader's order, so it needs an acting mode;
+            // shadow withholds it. Same correction as TestOrderCancelledWhenConsecLossesAtMaxNotLocked.
+            addon.SetModeForTest("live");
+
+            var mnq = new Instrument("MNQ");
+            var state = new AccountState("CoolAcc");
+            state.CooldownUntil = DateTime.UtcNow.AddMinutes(5);   // cooldown running, NOT locked out
+            state.IsLockedOut = false;
+            addon.SetAccountStateForTest("CoolAcc", state);
+
+            var entry = new Order
+            {
+                Id = Guid.NewGuid().ToString(),
+                OrderState = OrderState.Submitted,
+                OrderType = OrderType.Market,
+                OrderAction = OrderAction.Buy,
+                Instrument = mnq
+            };
+            account.Orders.Add(entry);
+            var events = new System.Collections.Generic.List<string>();
+            RiskGuardAddOn.LogEventObserver = (acct, evt) => events.Add(evt);
+            try { addon.ExecuteOrderUpdate(account, new OrderEventArgs { Order = entry }); }
+            finally { RiskGuardAddOn.LogEventObserver = null; }
+            Assert(entry.OrderState == OrderState.Cancelled,
+                "an entry submitted during a loss-streak cooldown is CANCELLED, not left to fill");
+            Assert(events.Contains("COOLDOWN_CANCEL") && !events.Contains("ENTRY_CANCEL"),
+                "the refusal is logged as COOLDOWN_CANCEL, not ENTRY_CANCEL -- the audit must name the "
+                + "cause, and a distinct rule id keeps the two refusals from de-duplicating each other");
+
+            // The exemption that keeps the cooldown from stripping a live position of its exit: a
+            // reducing order must pass even during a cooldown. Open a Long, then a Sell is reducing.
+            state.UpdatePosition(account, mnq, MarketPosition.Long, 2, 18000, 0, config);
+            var exit = new Order
+            {
+                Id = Guid.NewGuid().ToString(),
+                OrderState = OrderState.Working,
+                OrderType = OrderType.StopMarket,
+                OrderAction = OrderAction.Sell,
+                Quantity = 2,
+                Instrument = mnq
+            };
+            account.Orders.Add(exit);
+            addon.ExecuteOrderUpdate(account, new OrderEventArgs { Order = exit });
+            Assert(exit.OrderState == OrderState.Working,
+                "a position-reducing order is NOT cancelled during a cooldown -- refusing it would "
+                + "strip the live position of its protection [[a-filter-that-matches-too-much]]");
+
+            // NEGATIVE CONTROL: with no cooldown running the same entry must sail through, or the
+            // refusal is proving nothing about the cooldown.
+            var open = new RiskConfig();
+            var addon2 = new RiskGuardAddOn();
+            addon2.SetConfigForTest(open);
+            addon2.SetModeForTest("live");
+            var free = new AccountState("FreeAcc");   // CooldownUntil defaults to MinValue
+            addon2.SetAccountStateForTest("FreeAcc", free);
+            var acct2 = new Account { Name = "FreeAcc" };
+            var okEntry = new Order
+            {
+                Id = Guid.NewGuid().ToString(),
+                OrderState = OrderState.Submitted,
+                OrderType = OrderType.Market,
+                OrderAction = OrderAction.Buy,
+                Instrument = mnq
+            };
+            acct2.Orders.Add(okEntry);
+            addon2.ExecuteOrderUpdate(acct2, new OrderEventArgs { Order = okEntry });
+            Assert(okEntry.OrderState == OrderState.Submitted,
+                "with no cooldown running the entry is untouched -- the refusal is keyed on the cooldown");
         }
 
         private static void TestP1_17_EvaluationTargetUsesCumulativeNotSessionPnL()
