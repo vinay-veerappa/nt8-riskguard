@@ -78,7 +78,7 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 | ID | Problem | Approach | Repo | Effort | Live? |
 |---|---|---|---|---|---|
-| **P1-131** | The bridge hand-rolls its own order-liveness list, disagreeing with the core's shared classifier in BOTH directions — and that decides whether a disconnect would strand you. | One shared classifier; the bridge consumes it, deletes its own. Cross-repo → pin dance. | bridge+core | M | yes — measured live |
+| ~~**P1-131**~~ ✅ | The bridge hand-rolls its own order-liveness list, disagreeing with the core's shared classifier in BOTH directions — and that decides whether a disconnect would strand you. | **DONE**: `BridgeOrderLiveness` extracted + all 3 sites migrated + tests + `mutate_p1131.py` (shipped `30dcd4e`); source gate `check_single_order_liveness.py` added 2026-08-21. NOT a shared-classifier merge — it answers a DIFFERENT question than core `OccupiesSlot` (the plan entry records why). | bridge | M | tests + battery green locally |
 | **P2-147** | 12 funded-account executions were dropped by the copier because they carry no `Order`, so no direction could be read. | Derive direction from the execution/position delta when `Order` is null; test with the captured live shape. | core (copier) | M | yes — replay the capture |
 
 ---
