@@ -944,14 +944,13 @@ jobs:
           # WARNING: 462s MEASURED run 32320721779 (19 mutants). Every estimate in this file so far has been
           # wrong in one direction or the other -- replace this with CI's own BATTERY_SECONDS on
           # the first green run.
-          # P2-155 ADDED 2026-08-21 (session 63): the ATM monitor latch made singleton-safe (a
-          # superseded manager's timer must stop, not double-manage after a hot-swap). 6 mutants, local
-          # ~200s ESTIMATED. This was the lightest bin (P0-171 alone measured 479s on run 32499010481),
-          # so P1-149 (~250s est) and now P2-155 (~200s est) land here at ~930s, well under the
-          # MEASURED 1335s critical path (the P2-136+P2-101+P2-142+P1-157 bin, run 32499010481 -- the
-          # "~1119s" the older comments cite is stale). Re-measure BOTH new batteries from CI's own
-          # BATTERY_SECONDS on the first green run and re-pack (P3-177).
-          - { label: "P0-171+P1-149+P2-155", batteries: "mutate_p0171.py mutate_p1149gate.py mutate_p2155.py" }   # P0-171 479s MEASURED run 32499010481 + P1-149 ~250s + P2-155 ~200s ESTIMATED
+          # P1-149 (contract cap, mutate_p1149gate.py, 9 mutants) and P2-155 (ATM monitor latch made
+          # singleton-safe so a superseded manager's timer stops instead of double-managing after a
+          # hot-swap, mutate_p2155.py, 6 mutants) both landed here, the lightest bin. P0-171 alone was
+          # 479s; the two additions were ESTIMATED at ~250+~200s and MEASURED at ~366s combined -- ~19%
+          # high, the same direction every estimate in this file runs (P3-177). The bin now sits at
+          # 845s MEASURED, well under the 1367s critical path (the P2-136+P2-101+P2-142+P1-157 bin).
+          - { label: "P0-171+P1-149+P2-155", batteries: "mutate_p0171.py mutate_p1149gate.py mutate_p2155.py" }   # 845s MEASURED run 32507949369 (P0-171 + P1-149 + P2-155)
           # P1-170: the daily-loss rail's input survives a recompile. Small battery, so it
           # shares no bin only because the three above it are already at the critical path.
           #
