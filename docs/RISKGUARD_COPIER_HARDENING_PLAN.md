@@ -10789,7 +10789,34 @@ the totality check should be removed to make them killable again — that would 
 worse to keep a battery green. `_battery.finish` fails if a declared survivor is ever KILLED, which
 is the correct coupling: it means the totality check went away.
 
-### P1-151. `StopGuard.OnMissing: Flatten` at `StopAttachSeconds: 15` would flatten the operator's own manual trades — `P1-84` set that number by guess, and there is now a measurement — OPEN, measured 2026-08-18 (session 59)
+### P1-151. `StopGuard.OnMissing: Flatten` at `StopAttachSeconds: 15` would flatten the operator's own manual trades — `P1-84` set that number by guess, and there is now a measurement — ✅ RESOLVED 2026-08-20 (session 61), v1.57.0 — suite 3470/0, battery 9/9
+
+**Settled by the operator, not by fitting the measurement.** The 43-second hand-speed was the input;
+the operator's ruling was that it is behaviour NOT to be accommodated: *"15 seconds to attach a stop
+loss is too large. … the 43 seconds is a trade behaviour that should not be encouraged. What I want
+is an AutoStop roughly 5 basis points worth on any instrument. Worst case I will move it if I want it
+larger."* So the answer is a SHORTER window with a non-destructive penalty, not a longer one.
+
+**Implemented:**
+- `StopGuard.OnMissing` default `Flatten` → **`AutoStop`**. An attached stop is recoverable; being
+  flattened is not, and the operator moves the stop if they want it wider.
+- New `StopGuard.StopDistanceBps` (default **5.0**). The AutoStop distance is ~5 bps of the entry
+  price on ANY instrument — computed in `ComputeAutoStopOffsetTicks` (a pure static, so the pricing
+  is unit-tested and mutation-covered) as bps of `AveragePrice` → ticks, floored at 1 tick. The old
+  fixed-tick `Offsets` map (NQ 40 / ES 16 …) is retired to an OPTIONAL per-instrument override,
+  empty by default — a fixed tick count is ~5 bps at only one price and drifts with the market.
+- `StopAttachSeconds` default 15 → **5**. With AutoStop the P1-84 reasoning for a long deadline
+  inverts: the action is non-destructive, so a short window protects sooner at no cost.
+- ⚠️ **The shorter default opened a hole and preflight now closes it (c3):** a config that sets
+  `OnMissing: Flatten` but inherits the short 5s default would flatten a manual entry — the original
+  P1-84 danger. `RunPreflight` refuses `Flatten` with `StopAttachSeconds < 15` and names it
+  (`STOP_GUARD_FLATTEN_DEADLINE`); AutoStop carries no such floor. [[a-green-that-can-never-be-red]]
+
+⚠️ **This resolves the CODE. Arming `live` remains a separate, operator-gated step**, and the funded
+`config.json` still needs the ladder values (`P2-161`: base 2, cap 4) set alongside this before live.
+[[manual-entry-then-stop-43-seconds]]
+
+**Original entry (the defect as filed):**
 
 Split out of `P1-146` on closure: the detector there was correct and the workflow was the defect, but
 what the workflow implies for `live` is real work and needs an ID of its own.

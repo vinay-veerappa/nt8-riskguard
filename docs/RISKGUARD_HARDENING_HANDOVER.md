@@ -250,7 +250,7 @@ not. The command that checks it is in the last column.
 | **Do next** | ⚠️ **This row is a POINTER, not a list, because a list here goes stale silently.** Read the newest `### Order from here` — currently **§5.85 (session 58)** — which carries the reasons and was derived from the plan's statuses rather than copied forward. ⚠️ **The previous version of this row named the §4 fleet/inspector layout work as next for six sessions after it stopped being open** (its ID is deliberately not repeated here — naming a closed ID in this row is the very thing the gate rejects), which is the failure this pointer exists to stop. `check_next_list_ids.py` now fails on exactly that, in both this row and §5.6's | `python tools/check_next_list_ids.py`, then read the LAST `### Order from here` in this file |
 | **Branch** | **`main` only, level with `origin/main`, all three repos** — measured 2026-08-20 (session 61). `nt8-riskguard` **68 tags**, `v1.0.0`…**`v1.54.0`**. ⚠️ **`nt8-mcp-bridge` has NO tags** and is pinned into nothing; it is the consumer, not the consumed | `git status -sb` and `git describe --tags` in each repo |
 | **Deployed** | **`v1.54.0` core + bridge are live in NT8** — measured 2026-08-20 (session 61): `sync_nt8.py --verify` **18 files identical**. ⚠️ **`--verify` proves the FILES match, not that they COMPILE** — a broken NT8 Custom assembly is invisible because NT8 keeps running the last good one, so the only symptom is a deploy having no effect. ⚠️ **A drift report does not say which side is stale**: `NtDrawingCore.cs` once reported `content-differs` for days with the NT8 copy the NEWER one, and the obvious sync would have reverted a live fix. Read the diff and its DIRECTION | `python tools/sync_nt8.py --verify` here; `python tools/deploy.py --verify` in `nt8-mcp-bridge`; then `nt_compile` |
-| **Guard** | **`v1.54.0`, `mode: shadow`, `isArmed: true`, `guarding: true`** — measured 2026-08-20 (session 61) off the box via `nt_health` and `/api/riskguard/config`. ⚠️ **`shadow` means every rule reads `EvaluatedNotEnforcing` and the guard STOPS NOTHING.** Measured 2026-08-18 (session 59): **five** naked-position conditions on the funded account were reported and none acted on, four of them persisting past the 10-second re-check. The guard read every one correctly — they were the operator's own bare manual entries (`P1-146`, closed not-a-defect). ⚠️ **The corollary is `P1-151`: in `live` the same condition FLATTENS, and at `StopAttachSeconds: 15` against a measured 43-second hand speed it would have flattened the operator's own trades.** `shadow` is why that is still theory, and it is the thing to understand before reading any rule as protection — [[configured-evaluated-enforcing]] | `curl` `/api/riskguard/config` with the bearer token from `Documents/NinjaTrader 8/mcp_token.txt` |
+| **Guard** | **`v1.56.0` live, `mode: shadow`, `isArmed: true`, `guarding: true`** — deployed and measured 2026-08-20 (session 61) off the box via `nt_health` (`v1.57.0` pushed the same session, not yet deployed at time of writing). ⚠️ **`shadow` means every rule reads `EvaluatedNotEnforcing` and the guard STOPS NOTHING.** Measured 2026-08-18 (session 59): **five** naked-position conditions on the funded account were reported and none acted on, four persisting past the 10-second re-check. The guard read every one correctly — they were the operator's own bare manual entries (`P1-146`, closed not-a-defect). ⚠️ **The corollary was `P1-151` and is now RESOLVED (`v1.57.0`): in `live` a missing stop no longer FLATTENS — `OnMissing` defaults to `AutoStop` at ~5 bps of price, and a `Flatten` penalty with a sub-15s deadline is refused at preflight.** ⚠️ **But `AutoStop` has placed a real order ZERO times** — the path is suite-proven only, and `shadow` is why the whole question is still theory. Understand that before reading any rule as protection — [[configured-evaluated-enforcing]] | `curl` `/api/riskguard/config` with the bearer token from `Documents/NinjaTrader 8/mcp_token.txt` |
 | **Box** | bridge `1.5.2-chart-discovery`, `dev: true`, **101 accounts**, **feed connected** — measured 2026-08-20 (session 61). ⚠️ One of them, `TAKEPROFITPRO524207503`, is a **funded 50K TPT PRO account trading real money under real prop-firm rules** | `nt_health` |
 | **Mutation** | **73 batteries — 60 here + 13 in `nt8-mcp-bridge`**, every one wired into its own repo's CI and checked by a gate; **683 + 174 anchors, 0 broken** — measured 2026-08-20 (session 61). ⚠️ **An anchor that stops matching prints `[SKIP]` and scores a SURVIVOR**, so the anchor check is not optional. ⚠️ **A battery restores its mutant only on COMPLETION** — a stopped batch leaves a live mutant in the tree | `python mutation/check_anchors.py`; `python tools/check_ci_runs_every_battery.py` |
 | **Gates** | **13 here + 5 in `nt8-mcp-bridge`**, all green — measured 2026-08-20 (session 61). ⚠️ **NEW 2026-08-18**: until this session `check_ci_runs_every_battery.py` globbed `mutation/` only in BOTH repos, so **no gate script in either repo was required to be wired anywhere** — and `nt8-mcp-bridge/tools/check_bridge_parses.py`, the only automated reader of `McpBridgeAddOn.cs`, had never run in CI at all (`P2-144`). Both meta-gates now cover `check_*.py` too, matched on repo-relative path | run every `tools/check_*.py` and `mutation/check_anchors.py`; `check_ci_runs_every_battery.py` proves CI runs them |
@@ -11391,11 +11391,12 @@ work; all three were unreadable before `P2-127` slice 4.
   `!isProtected` arm fired on `ProtectedPending` — a state whose stops `ProvidesCoverage` already
   counts. Now `AssessCoverage`, with the removed arm rehomed as `FSM_COVERAGE_DISAGREES` rather than
   deleted.
-* **`P1-151`** — `OnMissing: Flatten` at `StopAttachSeconds: 15` versus a **measured** 43-second
-  hand speed on the funded account. Costs nothing in `shadow`, which is why it survived; it is a
-  blocker the moment the posture changes. Its predecessor asked what opened those unprotected
-  positions and the answer was the operator, placing bare orders — so the guard was accurate and the
-  work moved from the detector to the response.
+* ~~**`P1-151`**~~ — ✅ RESOLVED `v1.57.0`. The operator ruled the 43-second hand speed is behaviour
+  NOT to be accommodated, so the answer was a SHORTER window with a non-destructive penalty, not a
+  longer one: `OnMissing` now defaults to `AutoStop` at ~5 bps of price on any instrument
+  (`StopDistanceBps`, computed in `ComputeAutoStopOffsetTicks`), `StopAttachSeconds` dropped to 5,
+  and a `Flatten` penalty with a sub-15s deadline is refused at preflight (c3). Arming `live` is
+  still a separate operator-gated step. ID struck, not named as work.
 * **`P2-147`** — twelve executions dropped by the copier for having no `Order`, three sharing one
   timestamp to the tick. Dropping is the safe branch; an unreported divergence between leader and
   follower is not.
@@ -11526,13 +11527,17 @@ sessions after that stopped being true.
    still say 1119s and three local estimates read 21-23% high; and `nt_extract_trades` stamps
    EASTERN times with a `Z`, so every consumer mis-buckets by four hours. The second one already
    cost one wrong statement to the operator, caught only because the ledger disagreed.
-7. **`P1-151`** — the blocker on arming `live`, and the highest-consequence open item. Answering
-   the previous entry's "what opened those positions" turned it inside out: the detector was right
-   every time, the entries were the operator's own bare manual orders, and `OnMissing: Flatten` at
-   15s would therefore have flattened their own trades — one of them 28 seconds before their own
-   stop landed. ⚠️ Do not re-open the closed entry to find this; the measurement lives in `P1-151`.
-   ⚠️ `AutoStop` has placed a real order **zero** times, so the preferred direction is also the
-   unvalidated one.
+7. ~~**`P1-151`**~~ — ✅ RESOLVED `v1.57.0` (suite 3470/0, battery 9/9). The operator settled it:
+   the 43-second hand speed is behaviour NOT to be accommodated, so `OnMissing` now defaults to the
+   non-destructive `AutoStop` at ~5 bps of price on any instrument, `StopAttachSeconds` dropped to a
+   short 5, and preflight (c3) refuses a `Flatten` penalty with a sub-15s deadline. ID struck, not
+   named as work — the gate reads any live ID here as to-do.
+   ⚠️ **STILL UNVALIDATED LIVE, and this is the one to carry forward:** `AutoStop` has placed a real
+   order **zero** times — the whole path (bps→ticks pricing, the stop order actually resting on the
+   book, the FSM reaching `Protected`) is proven only by the suite and `mutate_p1151`. Arming `live`
+   remains a separate operator-gated step, and the funded `config.json` still needs the ladder values
+   from the now-closed `P2-161` (base 2, cap 4) set alongside. Watch the first real
+   `MISSING_STOP_ATTACH` on a MES trade.
 8. **The discipline rails the operator specified on 2026-08-18.** The two P1s are CLOSED and their
    IDs are not repeated as work, since the gate reads any ID in this block as work to do: the
    per-instrument cap in `v1.48.0` (suite 3209/0, battery 9/9) and the duplicate-entry rule in

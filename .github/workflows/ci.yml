@@ -880,7 +880,10 @@ jobs:
           # CONSECUTIVE_LOSS_BREACH still uses a TIMEOUT, because making the fix uniform would decide
           # P2-164 -- what counts as a loss -- from inside a bug fix, and P2-164 is open precisely
           # because the operator asked for that to be measured rather than assumed.
-          - { label: "P0-166", batteries: "mutate_p0166.py" }   # 441s MEASURED run 32320721779 (19 mutants)
+          # P1-151 ADDED 2026-08-20: the AutoStop-5bps decision. 9 mutants, local ~230s; at the CI
+          # factor ~ estimated 250s, joining the 441s P0-166 bin lands it near ~690s against the
+          # ~1119s critical path. ESTIMATED -- replace with CI's BATTERY_SECONDS on the first green run.
+          - { label: "P0-166+P1-151", batteries: "mutate_p0166.py mutate_p1151.py" }   # 441s MEASURED + P1-151 ~250s ESTIMATED (9 mutants)
           # P2-163 + P1-168: instrument permission. Own bin for the same reason as its two
           # neighbours -- every other bin is 770-1119s against a 1119s critical path.
           #

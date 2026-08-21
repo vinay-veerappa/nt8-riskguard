@@ -371,9 +371,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // built-in default, so the guard still places the stop. INERT would be the wrong
                 // reading -- it means "not protecting", and this always fires.
                 Evaluator = c => R(null, null, 1,
-                    "tick offsets used when the guard places a stop itself; "
+                    "OPTIONAL tick overrides used when the guard places a stop itself; "
                     + (c.Config.StopGuard.Offsets == null ? 0 : c.Config.StopGuard.Offsets.Count)
-                    + " configured, the rest fall back to the default")
+                    + " configured, the rest use the basis-point rule below")
+            },
+            new GuardRuleDefinition {
+                Name = "Auto-stop distance (bps)", ConfigPath = "StopGuard.StopDistanceBps",
+                Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerPosition,
+                // The distance the guard places its own stop at, in basis points of the entry
+                // price, for any instrument without an explicit Offsets override. Always fires
+                // when AutoStop attaches a stop, so evidence is 1, not INERT.
+                Evaluator = c => R(null, c.Config.StopGuard.StopDistanceBps, 1,
+                    "AutoStop distance: ~" + c.Config.StopGuard.StopDistanceBps
+                    + " bps of entry price on any instrument")
             },
 
             // -- instruments ------------------------------------------------------------

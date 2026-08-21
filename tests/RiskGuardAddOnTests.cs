@@ -913,8 +913,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
             Run(TestP182_TheDefaultSurvivesAConfigFileThatOmitsTheFlag);
             Run(TestP184_TheCopierCapIsNotLooserThanTheGuardCap);
-            Run(TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand);
-            Run(TestP184_TheDefaultActionOnAMissingStopIsToFlatten);
+            Run(TestP184_AFlattenPenaltyRequiresAHandSpeedSafeDeadline);
+            Run(TestP1151_AutoStopDistanceIsFiveBasisPointsOnAnyInstrument);
+            Run(TestP184_TheDefaultActionOnAMissingStopIsAutoStop);
             Run(TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault);
             Run(TestUi4_EveryAccountCarriesEveryRuleAndTheRegistryCannotBeEdited);
             Run(TestUi4_ANullConfigDegradesHonestlyInsteadOfThrowing);
@@ -3573,55 +3574,70 @@ namespace NinjaTrader.NinjaScript.AddOns
                 relCap, grpCap, guardCap));
         }
 
-        private static void TestP184_AFlattenDeadlineLeavesTimeToPlaceAStopByHand()
+        private static void TestP184_AFlattenPenaltyRequiresAHandSpeedSafeDeadline()
         {
-            Console.WriteLine("\n[TEST] P1-84: a stop-attach deadline whose penalty is Flatten leaves time to act");
+            Console.WriteLine("\n[TEST] P1-84: a Flatten penalty must carry a deadline past manual hand speed (preflight c3)");
 
-            // R5. A default that fires on a normal day trains you to disarm the system, and a
-            // guard that is off during the one session that mattered has provided nothing.
-            //
-            // `StopAttachSeconds` ships at 3 and `OnMissing` ships at "Flatten": three seconds
-            // from fill to a working stop, or you are flattened. Enter manually, reach for the
-            // mouse to place the stop, get flattened -- on a day when nothing was wrong.
-            //
-            // The condition is what makes this more than a constant. Three seconds is perfectly
-            // reasonable when the penalty is AutoStop, because an invented stop is recoverable
-            // and a missing one is not. It is only unreasonable when the penalty is being taken
-            // out of the trade. So the floor applies to the Flatten branch, and changing
-            // OnMissing legitimately releases it.
-            var cfg = new RiskConfig();
-            bool flattens = string.Equals(cfg.StopGuard.OnMissing, "Flatten", StringComparison.OrdinalIgnoreCase);
-            int seconds = cfg.StopGuard.StopAttachSeconds;
+            // R5, re-cut 2026-08-20. The old form asserted `!flattens || seconds >= 15` against the
+            // DEFAULT config -- which went vacuous the moment the default became AutoStop with a
+            // short window, exactly the kind of green-that-can-never-be-red this repo distrusts.
+            // And the default StopAttachSeconds dropping to 5 (right for AutoStop) opened a real
+            // hole: a config that sets OnMissing=Flatten but inherits that 5s default flattens a
+            // manual entry on a normal day -- the original P1-84 danger. RunPreflight (c3) now
+            // refuses that pairing, and this drives the enforcement rather than a constant.
+            // [[a-green-that-can-never-be-red]], [[manual-entry-then-stop-43-seconds]]
+            var prev = Account.All;
+            try
+            {
+                Account.All = new List<Account> { new Account { Name = "P184Pre" } };
 
-            Assert(!flattens || seconds >= 15, string.Format(
-                "OnMissing defaults to '{0}' and StopAttachSeconds to {1}s -- a deadline enforced "
-                + "by flattening has to be long enough to place a stop by hand",
-                cfg.StopGuard.OnMissing, seconds));
+                // The default (AutoStop + short window) passes: a non-destructive penalty has no floor.
+                var def = new RiskConfig(); def.MinShadowSessions = 0; def.FirmMirror.Enabled = false;
+                var a0 = new RiskGuardAddOn(); a0.SetConfigForTest(def); a0.SetModeForTest("shadow");
+                Assert(a0.RunPreflight().Passed,
+                    "the default AutoStop + short window passes preflight -- an invented stop is recoverable");
+
+                // Flatten inheriting that short default is REFUSED, and the refusal is named.
+                var bad = new RiskConfig(); bad.MinShadowSessions = 0; bad.FirmMirror.Enabled = false;
+                bad.StopGuard.OnMissing = "Flatten"; bad.StopGuard.StopAttachSeconds = 5;
+                var a1 = new RiskGuardAddOn(); a1.SetConfigForTest(bad); a1.SetModeForTest("shadow");
+                var r1 = a1.RunPreflight();
+                Assert(!r1.Passed && r1.FailureCode == "STOP_GUARD_FLATTEN_DEADLINE",
+                    "Flatten at the short default deadline is refused at preflight and named (got "
+                    + r1.FailureCode + " / " + r1.FailureMessage + ")");
+
+                // Flatten WITH a hand-speed-safe deadline passes -- the choice is allowed, the pairing is not.
+                var ok = new RiskConfig(); ok.MinShadowSessions = 0; ok.FirmMirror.Enabled = false;
+                ok.StopGuard.OnMissing = "Flatten"; ok.StopGuard.StopAttachSeconds = 15;
+                var a2 = new RiskGuardAddOn(); a2.SetConfigForTest(ok); a2.SetModeForTest("shadow");
+                Assert(a2.RunPreflight().Passed,
+                    "Flatten at 15s passes -- long enough to place a stop by hand");
+            }
+            finally { Account.All = prev; }
         }
 
-        private static void TestP184_TheDefaultActionOnAMissingStopIsToFlatten()
+        private static void TestP184_TheDefaultActionOnAMissingStopIsAutoStop()
         {
-            Console.WriteLine("\n[TEST] P1-84: the default action on a missing stop is Flatten, and it is a decision");
+            Console.WriteLine("\n[TEST] P1-84: the default action on a missing stop is AutoStop, and it is a decision");
 
             // MUTANT 3 SURVIVED THE FIRST BATTERY RUN, and finding out why was worth more than
-            // the mutant. Changing `OnMissing` from "Flatten" to "AutoStop" broke NOTHING in
-            // 1180 tests. Nothing in this suite pins the guard's most consequential default.
+            // the mutant. Changing `OnMissing` broke NOTHING in 1180 tests. Nothing in this suite
+            // pinned the guard's most consequential default, so this test exists to pin it -- the
+            // value it pins is a decision, and the point is that the decision cannot change
+            // silently, not which way it points.
             //
-            // That also made the R5 deadline test an escape hatch: it only requires 15 seconds
-            // WHEN the action is Flatten, so any future deadline could be justified by quietly
-            // changing what happens when it expires, and no test would object.
-            //
-            // This is a constant check and there is no more general invariant hiding behind it
-            // -- the three options are a choice, not an ordering. What makes it worth writing is
-            // that the choice has a reason, and the reason belongs somewhere it cannot be
-            // changed silently: AutoStop invents a stop at a GUESSED offset, and a stop in the
-            // wrong place can be worse than no stop, because it converts an open position into
-            // a realised loss at a price nobody chose. Flat is always a known quantity.
+            // DECIDED 2026-08-20 (operator): the default is AutoStop, NOT Flatten. The earlier
+            // reasoning for Flatten -- "an invented stop at a guessed offset can be worse than no
+            // stop" -- is answered by the offset no longer being a guess: it is ~5 bps of the entry
+            // price (StopDistanceBps), a defined, recoverable distance the operator moves if they
+            // want it wider. Being flattened is not recoverable; an attached stop is. The operator
+            // was explicit that flattening their own manual entry is the behaviour to avoid.
+            // [[manual-entry-then-stop-43-seconds]]
             var cfg = new RiskConfig();
 
-            Assert(cfg.StopGuard.OnMissing == "Flatten",
-                "the default action on a missing stop is Flatten -- flat is a known quantity, "
-                + "and the alternative invents a stop at a guessed offset");
+            Assert(cfg.StopGuard.OnMissing == "AutoStop",
+                "the default action on a missing stop is AutoStop -- it attaches a recoverable stop "
+                + "at ~5 bps rather than flattening the operator's own position");
 
             // ⚠️ AND IT MUST BE ONE OF THE RECOGNISED SPELLINGS. The action is compared against
             // two exact string literals, so ANY other value -- a lower-case "flatten", a typo,
@@ -3631,6 +3647,49 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(cfg.StopGuard.OnMissing == "AutoStop" || cfg.StopGuard.OnMissing == "Flatten",
                 "and it is spelled exactly as one of the two values the guard actually branches "
                 + "on, because anything else disables the stop guard without saying so (P1-87)");
+        }
+
+        // P1-151 / DECIDED 2026-08-20: the guard's auto-attached stop is ~5 bps of the entry price
+        // on ANY instrument, price-relative. These pin the exact arithmetic; a fixed tick count
+        // (the retired Offsets defaults) cannot give the same 5 bps across price regimes.
+        private static void TestP1151_AutoStopDistanceIsFiveBasisPointsOnAnyInstrument()
+        {
+            Console.WriteLine("\n[TEST] P1-151: the AutoStop distance is ~5 bps of price on any instrument");
+
+            var sg = new StopGuardConfig();   // StopDistanceBps defaults to 5, Offsets empty
+            Assert(sg.StopDistanceBps == 5.0, "the default AutoStop distance is 5 bps");
+            Assert(sg.Offsets.Count == 0, "and no fixed per-instrument tick offsets ship by default");
+
+            // 5 bps of 20000 at a 0.25 tick = 10 points = 40 ticks (NQ/MNQ regime).
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("MNQ", 20000.0, 0.25, sg) == 40,
+                "5 bps of 20000 at a 0.25 tick is 40 ticks");
+            // 5 bps of 5000 at a 0.25 tick = 2.5 points = 10 ticks (ES regime) -- the SAME 5 bps
+            // gives fewer ticks at a lower price, which a fixed tick offset cannot express.
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("ES", 5000.0, 0.25, sg) == 10,
+                "5 bps of 5000 at a 0.25 tick is 10 ticks");
+
+            // Floor: when 5 bps is less than one tick, the stop is ONE tick, never zero.
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("X", 10.0, 0.25, sg) == 1,
+                "a sub-tick bps distance floors to one tick -- a stop cannot sit at entry");
+
+            // Scales linearly with the bps setting.
+            var wide = new StopGuardConfig { StopDistanceBps = 10.0 };
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("MNQ", 20000.0, 0.25, wide) == 80,
+                "10 bps is twice the distance");
+
+            // A zero/negative bps falls back to 5 -- a missing setting must not disable the stop.
+            var zero = new StopGuardConfig { StopDistanceBps = 0.0 };
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("MNQ", 20000.0, 0.25, zero) == 40,
+                "a zero bps setting falls back to 5 bps, not a zero-distance stop");
+
+            // The Offsets map is an explicit per-instrument override in ticks; other instruments
+            // still use the bps rule.
+            var overridden = new StopGuardConfig();
+            overridden.Offsets["MNQ"] = 12;
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("MNQ", 20000.0, 0.25, overridden) == 12,
+                "an explicit Offsets entry overrides the bps rule for that instrument");
+            Assert(RiskGuardAddOn.ComputeAutoStopOffsetTicks("ES", 5000.0, 0.25, overridden) == 10,
+                "an instrument WITHOUT an override still uses the 5 bps rule");
         }
 
         private static void TestP184_TheLiveArmingPreconditionIsNotDisabledByDefault()
@@ -17909,6 +17968,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 var good = new RiskConfig();
                 good.StopGuard.OnMissing = "Flatten";
+                // c3 (added 2026-08-20): a Flatten penalty needs a hand-speed-safe deadline, since
+                // the default StopAttachSeconds is now short for AutoStop. Give it one so THIS test
+                // isolates the recognised-vs-unrecognised distinction, not the deadline rule (which
+                // TestP184_AFlattenPenaltyRequiresAHandSpeedSafeDeadline owns).
+                good.StopGuard.StopAttachSeconds = 15;
                 var okAddon = new RiskGuardAddOn();
                 okAddon.SetConfigForTest(good);
                 var okResult = okAddon.RunPreflight();

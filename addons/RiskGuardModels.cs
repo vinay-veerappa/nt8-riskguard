@@ -1234,34 +1234,38 @@ namespace NinjaTrader.NinjaScript.AddOns
 
     public class StopGuardConfig
     {
-        public string OnMissing { get; set; } = "Flatten"; // "AutoStop", "Flatten"
+        // DECIDED 2026-08-20 (operator): AutoStop, never Flatten. An invented stop is recoverable
+        // and being taken out of the trade is not, and the operator moves the stop if they want it
+        // wider. "Flatten" is still accepted (RunPreflight refuses any OTHER value), but it is no
+        // longer the default. [[manual-entry-then-stop-43-seconds]]
+        public string OnMissing { get; set; } = "AutoStop"; // "AutoStop", "Flatten"
 
-        // P1-84 / R5. Was 3, which is the single most likely reason this system gets switched
-        // off: three seconds from fill to a working stop, and OnMissing above is "Flatten", so
-        // entering manually and reaching for the mouse to place the stop gets you flattened on
-        // a day when nothing was wrong. A default that fires on a normal day is a default that
-        // disarms the guard, and a guard that is off during the one session that mattered has
-        // provided exactly nothing.
-        //
-        // WARNING: THE NUMBER IS ONLY RIGHT FOR "Flatten", and that pairing is deliberate. If OnMissing
-        // were "AutoStop" a much shorter deadline would be correct, because an invented stop is
-        // recoverable and being taken out of the trade is not. It stays a plain default rather
-        // than a value computed from OnMissing: a getter that recomputes would let a config
-        // reload move a deadline while a grace timer was already running, and would read
-        // OnMissing off one thread while another wrote it. The relationship is real; expressing
-        // it as a mechanism costs more than it is worth. The test that guards this is
-        // conditional on OnMissing for exactly the same reason.
-        public int StopAttachSeconds { get; set; } = 15;
+        // DECIDED 2026-08-20: SHORT, because OnMissing is AutoStop. This used to be 15 with a long
+        // comment explaining why 15 was right FOR FLATTEN -- a destructive action needs a deadline
+        // past the operator's own hand speed or it flattens a normal manual entry. With AutoStop
+        // that reasoning INVERTS: the action is non-destructive (a stop is attached, not the
+        // position closed), so a short window is strictly better -- protection arrives sooner and
+        // costs nothing. The operator was explicit that 15 is too large and that a slow manual
+        // stop-attach (measured ~43s) is behaviour NOT to be accommodated by lengthening this.
+        // Kept a plain default rather than one computed from OnMissing: a getter that recomputed
+        // would let a config reload move a deadline while a grace timer was already running.
+        public int StopAttachSeconds { get; set; } = 5;
 
         public int MaxAutoStopAttempts { get; set; } = 2;
-        public Dictionary<string, int> Offsets { get; set; } = new Dictionary<string, int>
-        {
-            { "NQ", 40 },
-            { "MNQ", 40 },
-            { "ES", 16 },
-            { "MES", 16 },
-            { "default", 30 }
-        };
+
+        // DECIDED 2026-08-20: the AutoStop distance is ~5 BASIS POINTS of price (0.05%), applied to
+        // ANY instrument, computed in RiskGuardAddOn.cs as bps of the position's AveragePrice
+        // rounded to the instrument's tick size (floor 1 tick). Price-relative so it holds across
+        // instruments and price regimes, which a fixed tick count does not: the retired Offsets map
+        // below said NQ 40 / ES 16, which is ~5 bps only at one price and drifts with the market.
+        public double StopDistanceBps { get; set; } = 5.0;
+
+        // OPTIONAL per-instrument OVERRIDE, in ticks, keyed by MasterInstrument name (e.g. "MNQ").
+        // Empty by default so StopDistanceBps governs every instrument. An entry here pins that one
+        // instrument to a fixed tick offset instead of the bps rule -- an escape hatch, not the
+        // policy. (Was NQ 40 / MNQ 40 / ES 16 / MES 16 / default 30; retired 2026-08-20 in favour
+        // of the universal bps rule.)
+        public Dictionary<string, int> Offsets { get; set; } = new Dictionary<string, int>();
     }
 
     public class PnLRulesConfig

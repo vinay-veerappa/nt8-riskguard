@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.56.0";
+        public const string Version = "1.57.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -720,6 +720,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             return !(string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase)
                   || string.Equals(mode, "pure", StringComparison.OrdinalIgnoreCase)
                   || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// The AutoStop distance in TICKS. DECIDED 2026-08-20: ~StopDistanceBps (default 5) basis
+        /// points of the entry price, for ANY instrument, so the distance holds across instruments
+        /// and price regimes where a fixed tick count is ~5 bps at only one price. The Offsets map
+        /// is an OPTIONAL per-instrument override in ticks (empty by default); an entry there, or a
+        /// "default" entry, pins a fixed tick offset instead of the bps rule. Floored at 1 tick
+        /// because a stop cannot sit zero ticks from entry. Pure and static so the pricing is unit-
+        /// testable and mutation-covered without the order-placement path.
+        /// [[manual-entry-then-stop-43-seconds]]
+        /// </summary>
+        internal static int ComputeAutoStopOffsetTicks(string symbolName, double avgPrice, double tickSize, StopGuardConfig sg)
+        {
+            int ticks;
+            if (sg != null && sg.Offsets != null && sg.Offsets.TryGetValue(symbolName, out ticks))
+                return ticks;
+            if (sg != null && sg.Offsets != null && sg.Offsets.TryGetValue("default", out ticks))
+                return ticks;
+
+            double bps = (sg != null && sg.StopDistanceBps > 0.0) ? sg.StopDistanceBps : 5.0;
+            if (tickSize <= 0.0) return 1;   // cannot size in ticks without a tick size
+            double distance = avgPrice * (bps / 10000.0);
+            int t = (int)Math.Round(distance / tickSize, MidpointRounding.AwayFromZero);
+            return t < 1 ? 1 : t;
         }
 
         // Applied once at initialise, after LoadConfig has resolved the mode. NOT applied on a
@@ -4844,6 +4869,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             string onMissing = _config.StopGuard?.OnMissing;
             if (onMissing != "AutoStop" && onMissing != "Flatten")
                 result.Fail("STOP_GUARD_ON_MISSING", $"Unrecognised StopGuard.OnMissing value '{onMissing}'");
+            // (c3) a FLATTEN penalty needs a deadline past the operator's own hand speed, or a
+            // normal manual entry gets flattened on a day nothing was wrong (P1-84). The default
+            // StopAttachSeconds is short (5) BECAUSE the default OnMissing is the non-destructive
+            // AutoStop; that short default is unsafe paired with Flatten, so refuse the pairing at
+            // arming rather than let a partial config inherit it silently. AutoStop carries no such
+            // floor -- an invented stop is recoverable. [[manual-entry-then-stop-43-seconds]]
+            if (onMissing == "Flatten" && _config.StopGuard != null && _config.StopGuard.StopAttachSeconds < 15)
+                result.Fail("STOP_GUARD_FLATTEN_DEADLINE",
+                    $"OnMissing=Flatten with StopAttachSeconds={_config.StopGuard.StopAttachSeconds}s "
+                    + "would flatten a manual entry before a stop can be placed by hand; a Flatten "
+                    + "penalty requires at least 15s (or use AutoStop, the default).");
             // (d) FR-29 soft gate: live enforcement modes require MinShadowSessions completed shadow sessions.
             // P2-93: only "live" is an acting mode (IsActingMode returns true only for "live"), so
             // pure and override_with_friction pass this gate and then ProcessAction answers
@@ -5964,17 +6000,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
 
                 string symbolName = instrument.MasterInstrument.Name;
-                int offsetTicks = 30; // default
-                if (_config.StopGuard.Offsets.TryGetValue(symbolName, out int ticks))
-                {
-                    offsetTicks = ticks;
-                }
-                else if (_config.StopGuard.Offsets.TryGetValue("default", out int defTicks))
-                {
-                    offsetTicks = defTicks;
-                }
-
                 double tickSize = instrument.MasterInstrument.TickSize;
+                int offsetTicks = ComputeAutoStopOffsetTicks(symbolName, position.AveragePrice, tickSize, _config.StopGuard);
                 double stopPrice = 0.0;
                 OrderAction orderAction = OrderAction.Buy;
 

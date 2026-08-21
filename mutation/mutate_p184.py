@@ -7,17 +7,13 @@ reads the addon source. Each of those is a way to be subtly wrong.
 
 What each group is defending:
 
-  * MUTANTS 1-2 put the stop-attach deadline back below what a human needs. 2 is
-    the interesting one: 14 seconds is a value nobody would notice in review and
-    it must still fail, or the test is pinning "not 3" rather than "long enough".
+  * The R5 stop-attach-deadline and OnMissing-default mutants MOVED to mutate_p1151.py
+    on 2026-08-20, when the operator reversed the decision they defended (OnMissing now
+    defaults to AutoStop, StopAttachSeconds to a short 5, and a Flatten penalty's
+    hand-speed floor is enforced at preflight, not by the default). See the note at the
+    head of MUTANTS. What remains here is R4 (the copier cap) and R2 (MinShadowSessions).
 
-  * MUTANT 3 changes OnMissing to "AutoStop" instead. The R5 test is CONDITIONAL
-    on the action, so it goes quiet -- deliberately, because 3 seconds is correct
-    for AutoStop. This mutant asks whether anything ELSE notices the action
-    changing. If it survives, the conditional is an escape hatch: any future
-    deadline can be justified by quietly changing what happens when it expires.
-
-  * MUTANTS 4-5 restore the copier's 100-contract cap, one DTO at a time. 5 is
+  * MUTANTS restore the copier's 100-contract cap, one DTO at a time. The second is
     here because the group carries its own copy, and the first version of the
     test only looked at the relationship -- a fix applied to one of two identical
     declarations is P1-69's and P1-75's shape and this repo keeps finding it.
@@ -64,25 +60,14 @@ COPIER = os.path.join(REPO, 'addons', 'TradeCopierEngine.cs')
 MODELS = os.path.join(REPO, 'addons', 'RiskGuardModels.cs')
 
 MUTANTS = [
-    # ---- R5: the deadline whose penalty is being taken out of the trade ----
-    (MODELS,
-     "the stop-attach deadline goes back to 3 seconds while OnMissing is still Flatten --\n"
-     "     enter by hand, reach for the mouse, get flattened on a day nothing was wrong",
-     'public int StopAttachSeconds { get; set; } = 15;',
-     'public int StopAttachSeconds { get; set; } = 3;'),
-
-    (MODELS,
-     "the deadline goes to 14 seconds. Nobody would query that in review, and it must still\n"
-     "     fail -- otherwise the test pins 'not 3' rather than 'long enough to place a stop'",
-     'public int StopAttachSeconds { get; set; } = 15;',
-     'public int StopAttachSeconds { get; set; } = 14;'),
-
-    (MODELS,
-     "OnMissing becomes AutoStop. The R5 test is CONDITIONAL on the action and goes quiet by\n"
-     "     design, so this asks whether anything else notices -- if it survives, the condition\n"
-     "     is an escape hatch and any deadline can be justified by changing the consequence",
-     'public string OnMissing { get; set; } = "Flatten";',
-     'public string OnMissing { get; set; } = "AutoStop";'),
+    # ---- R5 (the stop-attach deadline and OnMissing default) MOVED to mutate_p1151.py 2026-08-20.
+    # The operator reversed the decision the old R5 mutants defended: OnMissing now defaults to
+    # AutoStop and StopAttachSeconds to a short 5, and the deadline floor is enforced at PREFLIGHT
+    # (a Flatten penalty needs >= 15s, refused there) rather than by the shipped default. Those
+    # anchors -- `StopAttachSeconds = 15` and `OnMissing = "Flatten"` -- no longer exist, and the
+    # new defaults + c3 guard + bps pricing are mutation-covered by mutate_p1151.py. Removed here
+    # rather than re-anchored: mutating the new default seconds would score a SURVIVOR because
+    # nothing pins the exact value now (the floor moved to preflight). ----
 
     # ---- R4: two names for one concept ----
     (COPIER,
