@@ -165,6 +165,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // count, which a session reset clears along with everything else.
         public DateTime ReplaySuppressionUntilUtc { get; set; } = DateTime.MinValue;
 
+        // P2-147. The copier reads THIS window to tell a connect-time execution REPLAY (NT8 re-sends
+        // the session on reconnect -- every exec already Filled, carrying no Order) from a live fill.
+        // The same guard-owned stamp the duplicate-entry rule uses, so "we are being re-told" has ONE
+        // definition, not a second that drifts [[a-second-reader-of-the-same-state]]. Measured
+        // 2026-08-21: 537/537 null-Order copier executions fell inside this window.
+        public bool IsWithinReplayWindow() => UtcNow() <= ReplaySuppressionUntilUtc;
+
         // ⚠️ KEYED BY OBJECT REFERENCE, NOT Order.Id, AND THE RULE 150 LINES AWAY SAYS SO IN AS
         // MANY WORDS: "Key by object reference, not Order.Id: NT8's OrderId is neither unique nor
         // stable." The P0-171 spec said to use the id; the id is the wrong key, and on THIS

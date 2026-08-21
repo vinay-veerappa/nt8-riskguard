@@ -5080,24 +5080,42 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
 
-            // Skip copy if order is null (cannot determine order direction safely).
+            // P2-147. An execution with no Order carries no readable direction, so it is dropped
+            // either way (guessing a side is worse -- a wrong side DOUBLES a position instead of
+            // copying it). The instrumentation added 2026-08-21 turned the next recurrence into the
+            // measurement, and the measurement settled it: 537/537 null-Order executions arrived
+            // inside the reconnect-replay window (0 outside). They are NT8 re-sending the session on
+            // (re)connect -- historical fills, already Filled, no Order object in this session --
+            // and copying one would manufacture a phantom follower position. So the drop is CORRECT;
+            // the original "a copy silently did not happen" framing was written without knowing what
+            // the executions were. [[measure-the-deployed-system]], [[the-simulator-re-ids-nothing]].
             //
-            // P2-147. Twelve funded executions were dropped here on 2026-08-18 with NO record of
-            // what fields WERE populated, so the fix -- read the side from Execution.MarketPosition
-            // (or a position delta) instead of Order -- cannot be made without guessing, and a side
-            // is broker-dependent and must be measured on THIS provider, not reasoned from Sim101
-            // ([[the-simulator-re-ids-nothing]]). The historical executions have since aged out of
-            // the account's collection and are unrecoverable. So this instruments the drop to CAPTURE
-            // the evidence the next occurrence carries -- MarketPosition especially -- turning a
-            // recurrence into the measurement. It still DROPS (the safe branch); the fix follows once
-            // a capture shows whether MarketPosition is a reliable side when Order is null.
-            // [[measure-the-deployed-system]].
+            // The two cases are logged differently, because their severity is not the same:
+            //   * INSIDE the replay window -> a connect-time replay, expected, dropped quietly.
+            //   * OUTSIDE it -> a LIVE fill with no Order, which has never been observed (0/537) and
+            //     WOULD be a copy that silently did not happen. Still dropped (safe), but logged
+            //     LOUD so the never-seen case cannot pass unnoticed. [[weigh-the-quiet-failure-above-the-loud]]
             if (exec.Order == null)
             {
-                CopierLog(exec.Account.Name, "EXEC_IGNORED",
-                    $"execution {exec.ExecutionId} has no Order, so its direction cannot be determined. " +
-                    $"[P2-147 capture] MarketPosition={exec.MarketPosition} Qty={exec.Quantity} " +
-                    $"Price={exec.Price} Instrument={exec.Instrument?.FullName ?? "null"}");
+                var guard = RiskGuardAddOn.Instance;
+                bool connectReplay = guard != null
+                    && exec.Account != null
+                    && guard.IsWithinReconnectReplayWindow(exec.Account.Name);
+                string detail = $"[P2-147 capture] MarketPosition={exec.MarketPosition} Qty={exec.Quantity} "
+                    + $"Price={exec.Price} Instrument={exec.Instrument?.FullName ?? "null"}";
+                if (connectReplay)
+                {
+                    CopierLog(exec.Account.Name, "EXEC_REPLAY_IGNORED",
+                        $"execution {exec.ExecutionId} has no Order and arrived within the reconnect-replay "
+                        + $"window -- a historical fill NT8 replayed on connect, not copied. {detail}");
+                }
+                else
+                {
+                    CopierLog(exec.Account.Name, "EXEC_NULL_ORDER_LIVE",
+                        $"execution {exec.ExecutionId} has no Order but arrived OUTSIDE the reconnect-replay "
+                        + $"window -- a LIVE fill with no readable direction, NOT copied. This has never been "
+                        + $"observed (0/537 measured); investigate the leader/follower divergence. {detail}");
+                }
                 return;
             }
 

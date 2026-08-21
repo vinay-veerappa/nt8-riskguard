@@ -1574,6 +1574,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // P2-147. "Did this account just (re)connect?" -- the copier asks before it treats a
+        // null-Order execution as a lost live copy. NT8 replays the session on reconnect (every exec
+        // Filled, no Order), and copying a replayed historical fill would manufacture a phantom
+        // follower position, so those MUST be dropped. This reuses the reconnect-replay window
+        // (P0-171) the duplicate-entry rule already stamps in OnConnectionStatusUpdate, rather than
+        // inventing a second notion of "we just reconnected". Measured 2026-08-21: 537/537 null-Order
+        // copier executions fell inside this window; a null-Order exec OUTSIDE it has never been seen
+        // and would be the genuinely dangerous case the copier logs loud.
+        internal bool IsWithinReconnectReplayWindow(string accountName)
+        {
+            if (string.IsNullOrEmpty(accountName)) return false;
+            lock (_stateLock)
+            {
+                AccountState st;
+                return _accountStates.TryGetValue(accountName, out st) && st != null && st.IsWithinReplayWindow();
+            }
+        }
+
         private void AuditPosition(Account account, Position pos)
         {
             if (account == null || pos == null || pos.Instrument == null) return;

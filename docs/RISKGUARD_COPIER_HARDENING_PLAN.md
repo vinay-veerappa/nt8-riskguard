@@ -8250,9 +8250,9 @@ workflow it was watching. [[check-the-exemplar-belongs-to-the-class]] — and th
 originally filed were 5 of 9 funded rows, so the exemplar was also incomplete.
 
 
-### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — OPEN (instrumented for capture 2026-08-21), measured 2026-08-18 (session 58)
+### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — ✅ CLOSED 2026-08-21 (session 63): the capture arrived and REFRAMED the defect. Measured across 13 bursts, **537/537 null-Order copier executions fell inside the reconnect-replay window** (0 outside) — they are NT8 re-sending the session on (re)connect (`CONNECTION_CHANGE "Connecting"` then a burst of `action:N/A` execs), i.e. historical fills, NOT missed live trades. Copying one would manufacture a phantom follower position, so DROPPING IS CORRECT; the "a copy silently did not happen" framing was written without knowing what the executions were. Fix: the null-Order branch now reuses `AccountState.IsWithinReplayWindow()` (the P0-171 stamp, via `RiskGuardAddOn.IsWithinReconnectReplayWindow`) to log the expected connect-replay case quietly (`EXEC_REPLAY_IGNORED`) and the never-observed live case LOUD (`EXEC_NULL_ORDER_LIVE`) — still dropped either way (guessing a side DOUBLES a position). Tests `TestCopyPath_P2147_ConnectReplayNullOrderDroppedQuietly` + `..._LiveNullOrderIsLoud`; `mutate_p2147.py` 6/6. [[a-second-reader-of-the-same-state]], [[weigh-the-quiet-failure-above-the-loud]]. Measured 2026-08-18 (session 58)
 
-**⏳ INSTRUMENTED 2026-08-21 (session 63), fix still pending the captured evidence.** Confirmed by
+**⏳ SUPERSEDED — the instrumentation below did its job; the capture reframed the fix (see header).** Confirmed by
 live query (`nt_extract_trades TAKEPROFITPRO524207503`) that the 2026-08-18 executions have aged
 out of the account's collection and are unrecoverable, so the measurement the fix needs — is
 `Execution.MarketPosition` a reliable side when `Order` is null on THIS provider? — cannot be taken

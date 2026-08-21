@@ -540,7 +540,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // -- COPY-PATH TESTS (previously impossible: OnExecution was #if !TESTING) --
             Run(TestCopyPath_ExitDoesNotFlipFollowerShort);
             Run(TestCopyPath_MicroToMiniDoesNotInflateNotional);
-            Run(TestCopyPath_P2147_NullOrderDropCapturesEvidence);
+            Run(TestCopyPath_P2147_ConnectReplayNullOrderDroppedQuietly);
+            Run(TestCopyPath_P2147_LiveNullOrderIsLoud);
             Run(TestCopyPath_LockedFollowerReceivesNoCopy);
             Run(TestCopyPath_LiveAccountNamedSimIsNotTreatedAsSimulated);
             Run(TestCopyPath_GenuineSimulatorAccountStillReceivesCopies);
@@ -1209,40 +1210,75 @@ namespace NinjaTrader.NinjaScript.AddOns
         // evidence a recurrence carries. This proves the instrument works: the drop still happens
         // (safe branch) AND it records MarketPosition, so the next live null-Order execution is the
         // measurement. [[measure-the-deployed-system]]. The fix itself waits for that capture.
-        private static void TestCopyPath_P2147_NullOrderDropCapturesEvidence()
+        // P2-147. The measurement (2026-08-21) settled it: 537/537 null-Order copier executions fell
+        // INSIDE the reconnect-replay window -- NT8 re-sending the session on connect, historical
+        // fills already Filled with no Order. Copying one would manufacture a phantom follower
+        // position, so it is dropped -- QUIETLY, because it is expected, not a lost live copy.
+        private static void TestCopyPath_P2147_ConnectReplayNullOrderDroppedQuietly()
         {
-            Console.WriteLine("\n[TEST] COPY PATH: a null-Order execution's drop captures MarketPosition (P2-147)");
+            Console.WriteLine("\n[TEST] COPY PATH: a null-Order exec inside the reconnect-replay window is dropped as replay (P2-147)");
 
             var mnq = new Instrument("MNQ 03-26");
-            var leader = new Account { Name = "SimLeader147", Provider = Provider.Simulator };
+            var leader = new Account { Name = "SimLeader147R", Provider = Provider.Simulator };
 
-            // The live shape: an execution with NO Order (the defect condition), but a populated
-            // MarketPosition -- the field the eventual fix would read. ExecutionId mirrors the
-            // 2026-08-18 capture (`_1` suffix), which suggested one fill fanned into several.
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            var state = new AccountState("SimLeader147R");
+            state.ReplaySuppressionUntilUtc = new DateTime(2999, 1, 1, 0, 0, 0, DateTimeKind.Utc); // window WIDE open
+            guard.SetAccountStateForTest("SimLeader147R", state);
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
             var exec = new Execution
             {
-                Account = leader,
-                Instrument = mnq,
-                Order = null,
-                Quantity = 3,
-                Price = 29330.25,
-                ExecutionId = "613562532259_1",
-                MarketPosition = MarketPosition.Short,
-                Name = "NULL_ORDER_FILL"
+                Account = leader, Instrument = mnq, Order = null, Quantity = 3, Price = 29330.25,
+                ExecutionId = "613562532259_1", MarketPosition = MarketPosition.Short, Name = "NULL_ORDER_FILL"
             };
 
             var log = CaptureCopierLog(() => TradeCopierEngine.Instance.OnExecution(exec));
+            RiskGuardAddOn.SetInstanceForTest(null);
 
-            Assert(LoggedEventType(log, "EXEC_IGNORED"),
-                "the null-Order execution is STILL dropped (the safe branch) -- the fix is not to "
-                + "guess a side, it is to measure first");
-            Assert(LoggedEventContaining(log, "P2-147 capture"),
-                "the drop carries the P2-147 capture marker so a recurrence is greppable");
+            Assert(LoggedEventType(log, "EXEC_REPLAY_IGNORED"),
+                "a null-Order exec inside the replay window is a connect-time replay, dropped as such");
+            Assert(!LoggedEventType(log, "EXEC_NULL_ORDER_LIVE"),
+                "and is NOT the loud live case -- copying a replayed historical fill would create a phantom position");
             Assert(LoggedEventContaining(log, "MarketPosition=Short"),
-                "and records the MarketPosition -- the field whose reliability-when-Order-is-null "
-                + "must be measured on this provider before the fix can read from it");
+                "the capture detail is retained so the line is still greppable");
+        }
+
+        // P2-147. A null-Order execution OUTSIDE the replay window has NEVER been observed (0/537). If
+        // it ever happens it is a LIVE fill whose direction cannot be read -- a copy that silently did
+        // not happen -- so it is dropped (safe: guessing a side DOUBLES a position) but logged LOUD,
+        // never folded into the expected-replay noise. [[weigh-the-quiet-failure-above-the-loud]]
+        private static void TestCopyPath_P2147_LiveNullOrderIsLoud()
+        {
+            Console.WriteLine("\n[TEST] COPY PATH: a null-Order exec outside the replay window is logged LOUD (P2-147)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var leader = new Account { Name = "SimLeader147L", Provider = Provider.Simulator };
+
+            var guard = new RiskGuardAddOn();
+            guard.SetConfigForTest(new RiskConfig());
+            // ReplaySuppressionUntilUtc left at DateTime.MinValue -- no recent connect, window closed.
+            guard.SetAccountStateForTest("SimLeader147L", new AccountState("SimLeader147L"));
+            RiskGuardAddOn.SetInstanceForTest(guard);
+
+            var exec = new Execution
+            {
+                Account = leader, Instrument = mnq, Order = null, Quantity = 3, Price = 29330.25,
+                ExecutionId = "613562532259_1", MarketPosition = MarketPosition.Short, Name = "NULL_ORDER_FILL"
+            };
+
+            var log = CaptureCopierLog(() => TradeCopierEngine.Instance.OnExecution(exec));
+            RiskGuardAddOn.SetInstanceForTest(null);
+
+            Assert(LoggedEventType(log, "EXEC_NULL_ORDER_LIVE"),
+                "a null-Order exec with no recent connect is the dangerous case and is logged LOUD");
+            Assert(!LoggedEventType(log, "EXEC_REPLAY_IGNORED"),
+                "and is NOT mislabelled as an expected replay");
+            Assert(LoggedEventContaining(log, "MarketPosition=Short"),
+                "the capture detail (MarketPosition, qty, price, instrument) is recorded for the investigation");
             Assert(LoggedEventContaining(log, "613562532259_1"),
-                "and the execution id, so the captured line ties back to the account's history");
+                "and the execution id ties it back to the account's history");
         }
 
         // P0-6: Math.Max(1, ...) floors sub-1 conversions to a whole contract, so a micro->mini

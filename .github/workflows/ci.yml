@@ -950,7 +950,11 @@ jobs:
           # 479s; the two additions were ESTIMATED at ~250+~200s and MEASURED at ~366s combined -- ~19%
           # high, the same direction every estimate in this file runs (P3-177). The bin now sits at
           # 845s MEASURED, well under the 1367s critical path (the P2-136+P2-101+P2-142+P1-157 bin).
-          - { label: "P0-171+P1-149+P2-155", batteries: "mutate_p0171.py mutate_p1149gate.py mutate_p2155.py" }   # 845s MEASURED run 32507949369 (P0-171 + P1-149 + P2-155)
+          # P2-147 (mutate_p2147.py, 6 mutants) joins here: it REUSES P0-171's reconnect-replay window
+          # to classify a null-Order copier execution (connect replay -> dropped quietly; live -> dropped
+          # LOUD), so it belongs beside P0-171. Est. ~240s local from P2-155's per-mutant rate; true up
+          # with CI's BATTERY_SECONDS on the first green run. Bin ~845s+~240s still well under 1367s.
+          - { label: "P0-171+P1-149+P2-155+P2-147", batteries: "mutate_p0171.py mutate_p1149gate.py mutate_p2155.py mutate_p2147.py" }   # 845s MEASURED (P0-171+P1-149+P2-155) + P2-147 est ~240s
           # P1-170: the daily-loss rail's input survives a recompile. Small battery, so it
           # shares no bin only because the three above it are already at the critical path.
           #
