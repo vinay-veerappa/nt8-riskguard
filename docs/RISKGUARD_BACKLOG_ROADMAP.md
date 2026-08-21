@@ -71,7 +71,7 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 **Actionable sub-tasks:**
 1. **Reframe the plan entry** to the above (it currently reads as wholly open; it is not). *(housekeeping-effort)*
-2. **Wire the contract cap into `RiskGatekeeper.CanTrade`** (`Documents/NinjaTrader 8/bin/Custom/Strategies/Vinay/RiskGatekeeper.cs:98`) so `RiskManagerBase` strategies get a genuine pre-trade size refusal, not just loss/drawdown/count. This is the ONE closeable enforcement gap. ⚠️ `RiskGatekeeper` lives in **neither git repo** (deployed `Strategies\Vinay` only) — decide where it should be version-controlled before editing. Effort **M**; live-validatable via a `RiskManagerBase` strategy on Sim.
+2. ✅ **DONE (v1.61.0)** — **contract cap wired into the `RiskManagerBase` entry path**: `RiskGatekeeper.CanTradeSize → ContractCapGate.Evaluate` is called from `RiskManagerBase.EnterTrade`, and the cap VALUE is single-sourced from the guard (`RiskManagerAddOn.ResolveContractCap()` reads `RiskConfig.Sizing.MaxContractsPerAccount`, refreshed each equity tick via `RiskGatekeeper.SetContractCap`). Both halves are version-controlled now: `RiskGatekeeper.cs` + `RiskManagerBase.cs` in `strategies/Vinay/`, `ContractCapGate.cs` in `addons/` (compiled + mutation-tested 9/9). Source-gated by `tools/check_contract_cap_wired.py` (enforcement call + value-source assignment + guard-single-source read, all with negative controls). ⚠️ The 2026-08-21 inert-cap defect: `RegisterAndMonitor` built `AccountRiskParameters` without `MaxContractsPerAccount`, so the cap was always 0 and could never fire — fixed in the same release, and the gate now proves the cap is populated. **Live-validated 2026-08-21**: on Sim101, two MES orders of 3 (each ≤5 per-order) built toward a 6-lot position; the second was refused pre-trade — `"would leave a position of 6, over the configured cap of 5 (Sizing.MaxContractsPerAccount). Currently long 3. The largest buy that would be accepted is 2."` This exercises the SAME `ContractCapGate.Evaluate` + SAME cap source as the `RiskManagerBase` path (via `BridgeSizingGate`), confirming the value flow and boundary math live; the `RiskManagerBase.EnterTrade` call site itself is source-gated + compiled (no `RiskManagerBase` subclass is deployed to drive it directly).
 3. **Accept manual/external as a documented non-goal** — reactive `MAX_SIZE_BREACH` is the only lever, and it slips. Confirm that flatten is as tight as it can be, and record the residue so it is not re-filed. [[configured-evaluated-enforcing]]
 
 ### Neighbours
@@ -85,8 +85,11 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 ## Wave 3 — lifecycle & CI hardening (protect the invariants)
 
-> **⏳ Status 2026-08-21 (session 63): P2-158 and P2-155 FIX LANDED (code + tests + batteries +
-> gates); committed with Wave 2 for one combined CI run; P3-177 partially done.**
+> **✅ Status 2026-08-21 (session 63): DEPLOYED to the live shadow box as `v1.61.0` (armed,
+> guarding, 0 compile errors; arm confirmed from `interventions.jsonl`, not just health). Both
+> CIs green (core 32513706796 — all 20 jobs; bridge 32513736527) before any write to the box.
+> P2-158 and P2-155 FIX LANDED (code + tests + batteries + gates), committed with Wave 2 for one
+> combined CI run; P3-177 partially done.**
 > - **P2-158**: `tools/check_lock_discipline.py` in BOTH repos, wired into both CI gate jobs. Core:
 >   57 `lock (_stateLock)` blocks inspected, 0 violations (the addon queues cancels via
 >   `DrainPendingCancels`, so nothing calls a broker method inline). Bridge: 0 blocks (no `_stateLock`),
