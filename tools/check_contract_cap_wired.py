@@ -31,8 +31,17 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 TARGET = os.path.join(REPO, 'strategies', 'Vinay', 'RiskManagerBase.cs')
+# The value SOURCE. Enforcement without a cap value is inert -- the exact defect found 2026-08-21:
+# RegisterAndMonitor built AccountRiskParameters without MaxContractsPerAccount, so the cap was always
+# 0 and the refusal could never fire. This gate now also proves the cap is populated FROM the guard's
+# single source of truth (RiskConfig.Sizing.MaxContractsPerAccount), not left to default or duplicated.
+TARGET_ADDON = os.path.join(REPO, 'addons', 'RiskManagerAddOn.cs')
 
 CALL = re.compile(r'\bRiskGatekeeper\s*\.\s*CanTradeSize\s*\(')
+# The cap flows into the registered parameters from ResolveContractCap(), and ResolveContractCap()
+# reads the guard's ONE number. Both must be live for the cap to be non-zero and single-sourced.
+CAP_ASSIGN = re.compile(r'MaxContractsPerAccount\s*=\s*ResolveContractCap\s*\(')
+CAP_SOURCE = re.compile(r'\bSizing\s*\.\s*MaxContractsPerAccount\b')
 DEAD_HEAD = re.compile(r'\b(?:if|while)\s*\(\s*(?:false|0)\s*\)')
 
 
@@ -124,10 +133,15 @@ def strip_dead_branches(text):
     return stripped
 
 
+def live_lines(text, regex):
+    """Line numbers where `regex` matches in real (non-comment, non-dead) code."""
+    stripped = strip_dead_branches(text)
+    return [n for n, line in enumerate(stripped.splitlines(), 1) if regex.search(line)]
+
+
 def live_call_sites(text):
     """Line numbers of real (non-comment, non-dead) `RiskGatekeeper.CanTradeSize(` call sites."""
-    stripped = strip_dead_branches(text)
-    return [n for n, line in enumerate(stripped.splitlines(), 1) if CALL.search(line)]
+    return live_lines(text, CALL)
 
 
 def self_test():
@@ -153,6 +167,19 @@ def self_test():
         if live_call_sites(src):
             problems.append('a call present only in %s was reported WIRED -- a disarmed cap '
                             'would pass this gate' % label)
+    # Value-source controls: the cap must be POPULATED from the guard's number, live.
+    assign_live = 'var p = new AccountRiskParameters { MaxContractsPerAccount = ResolveContractCap() };'
+    assign_dead = '// MaxContractsPerAccount = ResolveContractCap() -- removed\nvar p = new X();'
+    source_live = 'int ResolveContractCap() { return cfg.Sizing.MaxContractsPerAccount; }'
+    source_dead = '// return cfg.Sizing.MaxContractsPerAccount;\nint ResolveContractCap(){return 0;}'
+    if not live_lines(assign_live, CAP_ASSIGN):
+        problems.append('a live MaxContractsPerAccount = ResolveContractCap() was NOT detected')
+    if live_lines(assign_dead, CAP_ASSIGN):
+        problems.append('a commented-out cap assignment was reported wired -- an inert cap would pass')
+    if not live_lines(source_live, CAP_SOURCE):
+        problems.append('a live Sizing.MaxContractsPerAccount read was NOT detected')
+    if live_lines(source_dead, CAP_SOURCE):
+        problems.append('a commented-out cap-source read was reported wired')
     if problems:
         print('SELF-TEST FAILED -- this gate cannot be trusted:\n')
         for p in problems:
@@ -170,16 +197,43 @@ if not os.path.exists(TARGET):
 text = open(TARGET, encoding='utf-8').read()
 sites = live_call_sites(text)
 
-print('Contract-cap wiring in strategies/Vinay/RiskManagerBase.cs:\n')
+failures = []
+print('Contract-cap ENFORCEMENT in strategies/Vinay/RiskManagerBase.cs:')
 if sites:
     print('  [WIRED] RiskGatekeeper.CanTradeSize called at line(s): %s'
           % ', '.join(str(s) for s in sites))
-    print('\nOK: the strategy-side contract cap is wired on the entry path.')
-    sys.exit(0)
+else:
+    print('  [DEAD]  RiskGatekeeper.CanTradeSize is called by NOTHING live in RiskManagerBase.cs.')
+    failures.append('the pre-trade refusal is not wired on the entry path (absent, commented, or in a '
+                    'dead branch) -- wire RiskGatekeeper.CanTradeSize into EnterTrade or delete it.')
 
-print('  [DEAD]  RiskGatekeeper.CanTradeSize is called by NOTHING live in RiskManagerBase.cs.')
-print('\nFAILED: the pre-trade contract-size refusal (P1-149 sub-task 2) is not wired on the entry')
-print('        path -- it is absent, commented out, or stranded in a dead branch. A cap that is')
-print('        configured and reported but enforced nowhere pre-trade reads as protection that does')
-print('        not exist. Wire RiskGatekeeper.CanTradeSize into EnterTrade, or delete the machinery.')
-sys.exit(1)
+print('\nContract-cap VALUE SOURCE in addons/RiskManagerAddOn.cs:')
+if not os.path.exists(TARGET_ADDON):
+    failures.append('%s does not exist -- the registrar that populates the cap moved.' % TARGET_ADDON)
+else:
+    addon = open(TARGET_ADDON, encoding='utf-8').read()
+    assign = live_lines(addon, CAP_ASSIGN)
+    source = live_lines(addon, CAP_SOURCE)
+    if assign:
+        print('  [WIRED] MaxContractsPerAccount = ResolveContractCap() at line(s): %s'
+              % ', '.join(str(s) for s in assign))
+    else:
+        print('  [DEAD]  the registered parameters never get MaxContractsPerAccount from ResolveContractCap().')
+        failures.append('RiskManagerAddOn does not populate MaxContractsPerAccount -- the cap defaults '
+                        'to 0 and the refusal can never fire (the inert-cap defect of 2026-08-21).')
+    if source:
+        print('  [WIRED] reads Sizing.MaxContractsPerAccount (guard single source) at line(s): %s'
+              % ', '.join(str(s) for s in source))
+    else:
+        print('  [DEAD]  ResolveContractCap never reads Sizing.MaxContractsPerAccount.')
+        failures.append('the cap is not read from the guard config (RiskConfig.Sizing.MaxContractsPerAccount) '
+                        '-- a second, divergent source is the defect [[a-second-reader-of-the-same-state]] warns of.')
+
+if failures:
+    print('\nFAILED:')
+    for f in failures:
+        print('  * ' + f)
+    sys.exit(1)
+
+print('\nOK: the contract cap is enforced on the entry path AND populated from the guard single source.')
+sys.exit(0)

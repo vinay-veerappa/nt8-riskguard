@@ -127,6 +127,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 MaxConsecutiveLosers      = MaxConsecutiveLosers,
                 PauseMinutes              = PauseMinutes,
                 HardStopConsecutiveLosers = HardStopConsecutiveLosers,
+                // P1-149. The contract cap is the guard's number, not a second copy of it -- read from
+                // RiskConfig.Sizing.MaxContractsPerAccount so the strategy-side refusal and the guard's
+                // reactive rule agree on the same limit ([[a-second-reader-of-the-same-state]]).
+                MaxContractsPerAccount    = ResolveContractCap(),
             };
 
             // Register with gatekeeper (loads persisted state or starts fresh)
@@ -225,6 +229,27 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             NinjaTrader.NinjaScript.Strategies.Vinay.RiskGatekeeper.UpdateEquity(
                 accountName, e.Value, DateTime.Now);
+
+            // P1-149. Refresh the contract cap from the guard's config on the same throttled tick, so a
+            // guard addon that loaded AFTER this one -- or an operator changing the cap -- is picked up
+            // within a second rather than staying at the registration-time value (0 if the guard was not
+            // yet loaded then).
+            NinjaTrader.NinjaScript.Strategies.Vinay.RiskGatekeeper.SetContractCap(
+                accountName, ResolveContractCap());
+        }
+
+        /// <summary>
+        /// P1-149. The per-account contract cap, read from the guard's single source of truth
+        /// (RiskConfig.Sizing.MaxContractsPerAccount). Returns 0 -- "no cap" -- when the guard addon is
+        /// not loaded or not yet configured; the guard's reactive MAX_SIZE_BREACH still backstops that
+        /// window, and a fail-open cap is safer than one guessed from a second config. ContractCapGate
+        /// treats &lt;= 0 as no cap, matching how the guard reports it.
+        /// </summary>
+        private static int ResolveContractCap()
+        {
+            RiskGuardAddOn guard = RiskGuardAddOn.Instance;
+            RiskConfig cfg = guard != null ? guard.Config : null;
+            return (cfg != null && cfg.Sizing != null) ? cfg.Sizing.MaxContractsPerAccount : 0;
         }
 
         /// <summary>

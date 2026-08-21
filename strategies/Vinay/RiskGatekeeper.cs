@@ -173,6 +173,22 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         }
 
         /// <summary>
+        /// P1-149. Sets this account's contract cap. Called by RiskManagerAddOn from the guard's
+        /// single source of truth (RiskConfig.Sizing.MaxContractsPerAccount) -- at registration and
+        /// again on each equity update, so a guard addon that loads AFTER this one, or a config change,
+        /// is picked up within a cycle rather than leaving the cap stuck at its registration-time value.
+        /// A no-op for an unregistered account: nothing to cap until it is monitored.
+        /// </summary>
+        public static void SetContractCap(string accountName, int cap)
+        {
+            lock (_lock)
+            {
+                if (_parameters.TryGetValue(accountName, out AccountRiskParameters parms))
+                    parms.MaxContractsPerAccount = cap;
+            }
+        }
+
+        /// <summary>
         /// Returns true if the potential loss on the next trade would breach the daily max loss.
         /// potentialLoss should be a positive dollar amount (the max risk on the trade).
         /// </summary>
