@@ -805,7 +805,14 @@ jobs:
           # never been able to fire" is. Three survived the first run, all one gap (the evidence
           # count was asserted for 1 of 5 rules that use it); the fix opened an escape route, and
           # the mutant for THAT survived too. Read the file before adding to it.
-          - { label: "UI3+P2-145+P1-84+P1-156", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py mutate_p1156.py" }   # 883s = UI3 392s + P2-145 208s + P1-84 163s + P1-156 120s (local measure)
+          # P2-150 appended here (the lightest bin at 883s) rather than re-packed: ~250s added
+          # stays well under the ~1358s critical path, and P3-177 is already the pending full
+          # re-measure/re-pack of every battery. Its ~250s is an ESTIMATE (6 suite runs; re-pack
+          # will replace it with the measured BATTERY_SECONDS). P2-150: PlaceBracket reported a
+          # synchronous verdict "partial_submit" that no live input could set; the flagship mutant
+          # re-introduces that read and only the P2-150 test, which drives the stub's unrealistic
+          # synchronous rejection, catches it.
+          - { label: "UI3+P2-145+P1-84+P1-156+P2-150", batteries: "mutate_ui3.py mutate_p2145coverage.py mutate_p184.py mutate_p1156.py mutate_p2150.py" }   # 1133s = UI3 392s + P2-145 208s + P1-84 163s + P1-156 120s + P2-150 ~250s (local measure; P2-150 estimated, re-pack with P3-177)
 
           - { label: "P2-136+P2-101+P2-142+P1-157", batteries: "mutate_p2136survive.py mutate_p2101.py mutate_p2142.py mutate_p1157.py" }   # 1119s = P2-136 613s + P2-101 146s + P2-142 360s (local measure; re-pack once CI prints its BATTERY_SECONDS)
 

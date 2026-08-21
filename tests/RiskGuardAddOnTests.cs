@@ -505,7 +505,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAtm_UnknownSymbolFallsBackToDefaults);
             Run(TestAtm_GetProfileKnownAndUnknown);
             Run(TestAtm_ZeroPriceReturnsError);
-            Run(TestAtm_RejectedExitOrdersPartialSubmit);
+            Run(TestAtm_ExitLegAcceptanceIsNotReportedSynchronously);
             Run(TestAtm_OcoIdSharedAcrossExitOrders);
             Run(TestAtm_ShouldTriggerBreakeven);
             Run(TestAtm_CalculateBreakevenStopPrice);
@@ -10287,7 +10287,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Console.WriteLine("\n[TEST] ATM P2-141: the default 12/2 pair is accepted");
             var result = P2141Place(12, 2);
-            Assert(result != null && result.Status == "submitted",
+            Assert(result != null && result.Status == "pending_legs",
                 "P2-141: the default 12/2 pair is accepted");
         }
 
@@ -10297,7 +10297,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // The tightest PLACEABLE configuration. If this goes red the guard is off by one in
             // the other direction and has started refusing a stop that is genuinely below market.
             var result = P2141Place(6, 5);
-            Assert(result != null && result.Status == "submitted",
+            Assert(result != null && result.Status == "pending_legs",
                 "P2-141: an offset one tick inside the trigger is accepted");
         }
 
@@ -29328,7 +29328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "FixedTicks long submitted");
+            Assert(result.Status == "pending_legs", "FixedTicks long submitted");
             Assert(result.StrategyName == "FixedTicks", "Strategy name is FixedTicks");
             Assert(Approx(result.StopPrice, 17998.0), "Stop = entry - 8 ticks (17998)");
             Assert(Approx(result.TargetPrice, 18004.0), "Target = entry + 16 ticks (18004)");
@@ -29350,7 +29350,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "sell", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "FixedTicks short submitted");
+            Assert(result.Status == "pending_legs", "FixedTicks short submitted");
             Assert(Approx(result.StopPrice, 18002.0), "Short stop = entry + 8 ticks (18002)");
             Assert(Approx(result.TargetPrice, 17996.0), "Short target = entry - 16 ticks (17996)");
             var entry = account.Orders.First(o => o.Name.StartsWith("AtmEntry_"));
@@ -29387,7 +29387,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "DrawdownShield submitted");
+            Assert(result.Status == "pending_legs", "DrawdownShield submitted");
             Assert(result.Note != null && result.Note.Contains("registered"), "Bracket registered note present");
             var brackets = DynamicAtmManager.Instance.GetActiveBrackets();
             Assert(brackets.Any(b => b.BracketId == result.BracketId), "Bracket appears in GetActiveBrackets()");
@@ -29407,7 +29407,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 20.0);
 
-            Assert(result.Status == "submitted", "ScaledRunner submitted");
+            Assert(result.Status == "pending_legs", "ScaledRunner submitted");
             var brackets = DynamicAtmManager.Instance.GetActiveBrackets();
             Assert(brackets.Any(b => b.BracketId == result.BracketId), "ScaledRunner bracket registered");
             Assert(brackets.First(b => b.BracketId == result.BracketId).Config.Type == AtmStrategyType.ScaledRunner, "Bracket carries ScaledRunner config");
@@ -29424,7 +29424,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             var config = new AtmStrategyConfig { Type = AtmStrategyType.FixedTicks, StopTicks = 8, TargetTicks = 16 };
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "FixedTicks submitted");
+            Assert(result.Status == "pending_legs", "FixedTicks submitted");
             var brackets = DynamicAtmManager.Instance.GetActiveBrackets();
             Assert(!brackets.Any(b => b.BracketId == result.BracketId), "FixedTicks bracket NOT registered for monitoring");
         }
@@ -29440,7 +29440,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // MNQ profile: MaxContracts = 50, DefaultATR = 30 (tick 0.25) -> fallback atr = 7.5
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "VolatilityScaled submitted");
+            Assert(result.Status == "pending_legs", "VolatilityScaled submitted");
             Assert(result.CalculatedQuantity == 50, "Calculated quantity capped at profile MaxContracts (50)");
         }
 
@@ -29455,7 +29455,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // fallback atr = 30*0.25 = 7.5; riskPerContract = 7.5*1.5*2.0 = 22.5; qty = floor(200/22.5) = 8
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "VolatilityScaled submitted");
+            Assert(result.Status == "pending_legs", "VolatilityScaled submitted");
             Assert(result.CalculatedQuantity == 8, "Calculated quantity = floor(RiskPerTrade / riskPerContract) = 8");
         }
 
@@ -29471,7 +29471,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // slDist = 7.5*1.5 = 11.25, tpDist = 7.5*2.5 = 18.75
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "AtrAdaptive submitted");
+            Assert(result.Status == "pending_legs", "AtrAdaptive submitted");
             Assert(Approx(result.StopPrice, 17988.75), "Stop = entry - 11.25 (profile default ATR fallback)");
             Assert(Approx(result.TargetPrice, 18018.75), "Target = entry + 18.75 (profile default ATR fallback)");
         }
@@ -29506,7 +29506,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
             // ATR = 1.0 -> slDist = 1.5, tpDist = 2.5
-            Assert(result.Status == "submitted", "AtrAdaptive submitted with live ATR");
+            Assert(result.Status == "pending_legs", "AtrAdaptive submitted with live ATR");
             Assert(Approx(result.StopPrice, 17998.5), "Stop = entry - 1.5 (live ATR=1.0)");
             Assert(Approx(result.TargetPrice, 18002.5), "Target = entry + 2.5 (live ATR=1.0)");
 
@@ -29543,7 +29543,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "SwingPoint submitted");
+            Assert(result.Status == "pending_legs", "SwingPoint submitted");
             Assert(Approx(result.StopPrice, 17995.0), "Stop = swing low 17996 - buffer 1.0 = 17995");
             Assert(Approx(result.TargetPrice, 18010.0), "Target = entry + 2x(entry-stop) = 18010");
 
@@ -29559,7 +29559,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "submitted", "SessionAdaptive submitted");
+            Assert(result.Status == "pending_legs", "SessionAdaptive submitted");
             Assert(result.StrategyName == "SessionAdaptive", "Strategy name is SessionAdaptive");
             Assert(result.StopPrice < 18000 && result.TargetPrice > 18000, "Stop below entry and target above entry for long");
             Assert(result.StopPrice < result.TargetPrice, "Stop strictly below target");
@@ -29575,7 +29575,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 100, 0.25, 50.0);
 
-            Assert(result.Status == "submitted", "Unknown-symbol bracket submitted");
+            Assert(result.Status == "pending_legs", "Unknown-symbol bracket submitted");
             Assert(result.StrategyName == "FixedTicks", "Fallback profile uses FixedTicks");
             Assert(Approx(result.StopPrice, 98.0), "Fallback stop = entry - 8 ticks (98)");
             Assert(Approx(result.TargetPrice, 104.0), "Fallback target = entry + 16 ticks (104)");
@@ -29606,18 +29606,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(!string.IsNullOrEmpty(result.Error), "Error message populated for zero price");
         }
 
-        private static void TestAtm_RejectedExitOrdersPartialSubmit()
+        private static void TestAtm_ExitLegAcceptanceIsNotReportedSynchronously()
         {
-            Console.WriteLine("\n[TEST] ATM: Rejected Exit Orders -> partial_submit");
+            // P2-150. The old test set SimulateExitRejection and asserted "partial_submit". That
+            // status could only ever be reached VIA THE STUB, which rejects Stop_/Target_ orders
+            // synchronously inside Submit() -- a thing no real broker does. Submit is async: the
+            // real Rejected verdict arrives 20-200ms later on OnOrderUpdate, so at the instant
+            // PlaceBracket read OrderState the legs were still Initialized/Submitted and the branch
+            // was dead in production. [[test-doubles-are-not-evidence]], [[a-green-that-can-never-be-red]].
+            //
+            // The honest behaviour: even when the legs ARE terminal at submit time (the stub's
+            // unrealistic case), PlaceBracket does NOT key its report on that synchronous read. It
+            // reports "pending_legs" and hands back the leg ids for the caller to check the real
+            // state. That is the discriminator against the old code, which would have said
+            // "partial_submit" here.
+            Console.WriteLine("\n[TEST] ATM P2-150: exit-leg acceptance is not read synchronously");
             var account = CreateAtmAccount();
-            account.SimulateExitRejection = true;
+            account.SimulateExitRejection = true;   // the stub's unrealistic synchronous rejection
             var instrument = CreateAtmInstrument("MNQ", "MNQ 09-26");
             var config = new AtmStrategyConfig { Type = AtmStrategyType.FixedTicks, StopTicks = 8, TargetTicks = 16 };
 
             var result = DynamicAtmManager.Instance.PlaceBracket(account, instrument, "buy", 1, config, 18000, 0.25, 2.0);
 
-            Assert(result.Status == "partial_submit", "Status becomes partial_submit when exit orders rejected");
-            Assert(result.Note != null && result.Note.Contains("rejected"), "Note mentions rejected exit orders");
+            Assert(result.Status == "pending_legs",
+                "the status is pending_legs, not the dead partial_submit -- acceptance is not known synchronously");
+            Assert(result.Status != "partial_submit",
+                "partial_submit is gone: a status no live input could produce is not a status");
+            Assert(!string.IsNullOrEmpty(result.StopOrderId) && !string.IsNullOrEmpty(result.TargetOrderId),
+                "the leg ids are returned so the caller can read the REAL state via nt_orders");
+            Assert(result.Note != null && result.Note.Contains("Exit-leg acceptance"),
+                "the note tells the caller acceptance is pending and to read the leg ids");
         }
 
         private static void TestAtm_ShouldTriggerBreakeven()

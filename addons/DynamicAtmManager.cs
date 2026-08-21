@@ -495,7 +495,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     account.Submit(validOrders);
                 }
 
-                result.Status = "submitted";
+                // P2-150. "pending_legs", not "submitted". The entry is submitted, but the
+                // protective legs' ACCEPTANCE cannot be known here (see the block below the
+                // monitor registration for why), so the status must not claim it is.
+                result.Status = "pending_legs";
                 result.BracketId = bracketId;
                 result.OcoId = ocoId;
                 result.EntryOrderId = entryOrder.OrderId;
@@ -533,17 +536,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                     result.Note = "Bracket registered for breakeven/trailing monitoring";
                 }
 
-                List<string> rejectedOrders = new List<string>();
-                foreach (var o in new[] { stopOrder, targetOrder })
-                {
-                    if (o != null && (o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled))
-                        rejectedOrders.Add(o.Name + " state=" + o.OrderState);
-                }
-                if (rejectedOrders.Count > 0)
-                {
-                    result.Status = "partial_submit";
-                    result.Note = (result.Note ?? "") + " Some exit orders rejected: " + string.Join(", ", rejectedOrders);
-                }
+                // P2-150. Submit is ASYNCHRONOUS. At this instant the exit legs are still
+                // Initialized/Submitted; their Accepted/Rejected verdict arrives 20-200ms later on
+                // OnOrderUpdate (measured: eight bridge-placed brackets, 2026-08-10). The code that
+                // stood here read `stopOrder.OrderState`/`targetOrder.OrderState` in the same breath
+                // as Submit() and set "partial_submit" on Rejected/Cancelled -- a status NO input
+                // could ever produce, because the only order this loop could catch is one already
+                // terminal BEFORE submission, which nothing creates. [[a-green-that-can-never-be-red]].
+                //
+                // Do NOT restore it with a wider state list: the bug is the TIMING, not the set --
+                // a longer list read at the same instant is still read too early. The truthful
+                // report is that the legs are pending; the caller has StopOrderId/TargetOrderId
+                // (set above) to read the real state via nt_orders / nt_atm_bracket_status. A
+                // genuinely rejected stop is still caught by the guard's own net -- NAKED_POSITION +
+                // the grace timer + MISSING_STOP_ATTACH notice an uncovered position within
+                // StopGuard.StopAttachSeconds -- so this is a truthful-reporting fix, not a coverage
+                // one. [[report-the-outcome-not-the-call]].
+                string legNote = "Exit-leg acceptance is not known at submission; read the stop/target "
+                    + "order ids for the live state.";
+                result.Note = string.IsNullOrEmpty(result.Note) ? legNote : result.Note + " " + legNote;
             }
             catch (Exception ex)
             {
