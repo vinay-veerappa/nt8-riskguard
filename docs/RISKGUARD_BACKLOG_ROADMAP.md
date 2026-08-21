@@ -38,12 +38,16 @@ Two standing constraints from the deployed system:
 
 ## Wave 1 — correctness bugs that mislead (cheap, high trust-value, contained)
 
-> **⏳ Status 2026-08-21 (session 63): all three FIX LANDED (code + tests + batteries + gates),
-> committed and pushed; DEPLOY + Sim re-validation deliberately deferred to the operator.** Not
-> yet closed — each entry in the plan stays OPEN until re-validated on Sim. A fourth, **`P2-181`**,
-> was found while fixing `P2-150`: the bridge's `PlaceOcoOrder` carried the identical dead
-> synchronous verdict ([[a-second-reader-of-the-same-state]] — count the sites), and was fixed the
-> same session. See the plan entries for evidence.
+> **✅ Status 2026-08-21 (session 63): DEPLOYED to the live shadow box (`v1.59.0`, armed,
+> guarding, 0 compile errors) and Sim-validated.** P2-178: `nt_extract_trades` emits true UTC
+> (`04:03:05.645Z` for a 00:03 ET fill = +4h EDT, DST-correct). P2-150: ATM placement returns
+> `status: pending_legs`. P2-154: bad breakeven pair (offset 20 ≥ trigger 12) refused **addon-side**
+> with a structured error (live now, no MCP restart). P2-181: `pending_legs` confirmed live via the
+> shared ATM bracket path; the standalone OCO endpoint's live-check is gated on an MCP-wrapper
+> restart (stale `limitPrice`→`targetPrice` param drift in the running Node process — unrelated to
+> the fix). A fourth, **`P2-181`**, was found while fixing `P2-150`: the bridge's `PlaceOcoOrder`
+> carried the identical dead synchronous verdict ([[a-second-reader-of-the-same-state]] — count the
+> sites), and was fixed the same session. See the plan entries for evidence.
 
 These are wrong *answers*, not missing features. Each is small and each is currently lying to a consumer.
 
@@ -80,6 +84,26 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 ---
 
 ## Wave 3 — lifecycle & CI hardening (protect the invariants)
+
+> **⏳ Status 2026-08-21 (session 63): P2-158 and P2-155 FIX LANDED (code + tests + batteries +
+> gates); committed with Wave 2 for one combined CI run; P3-177 partially done.**
+> - **P2-158**: `tools/check_lock_discipline.py` in BOTH repos, wired into both CI gate jobs. Core:
+>   57 `lock (_stateLock)` blocks inspected, 0 violations (the addon queues cancels via
+>   `DrainPendingCancels`, so nothing calls a broker method inline). Bridge: 0 blocks (no `_stateLock`),
+>   armed via a self-test that supplies a synthetic violation.
+> - **P2-155**: a superseded (post-hot-swap) `DynamicAtmManager` now stops its sweep — the timer
+>   callback refuses to run unless `this` is the current owner (`_activeManager`, set in the ctor;
+>   identical to `Instance` in production) and self-disposes the orphaned timer. Test
+>   `TestAtm_P2155_ASupersededManagerStopsSweeping` (drives the FULL callback, which every other ATM
+>   test bypasses) + `mutate_p2155.py` (6/6). Suite 3507/0.
+> - **P3-177**: fixed the stale honesty in the touched comments with MEASURED data (critical path is
+>   **1335s**, run 32499010481, not the cited ~1119s; `P0-166+P1-151+P0-180` bin measured 789s vs 891s
+>   estimated, ~13% high). The two NEW batteries (`p1149gate`, `p2155`) carry estimates until this
+>   combined run prints their `BATTERY_SECONDS`; a full `pack_ci_matrix.py` re-pack + true-up is the
+>   follow-up once that run is green. Not closed.
+>
+> None closed — each plan entry stays OPEN until CI green + (for P2-155) Sim re-validation on a
+> recompile.
 
 | ID | Problem | Approach | Repo | Effort |
 |---|---|---|---|---|

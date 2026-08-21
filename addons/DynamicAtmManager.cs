@@ -206,6 +206,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         private Timer _monitorTimer;
         private bool _monitoring;
 
+        // P2-155. The manager that currently owns the sweep. Set in the constructor, so the newest
+        // manager is the owner -- and in production NOTHING constructs this class except the Lazy<>
+        // above, so `_activeManager` is always the singleton `Instance`. It is compared against, not
+        // `Instance` directly, only so a test (whose managers are all `new`) can model a hot-swap by
+        // constructing a second manager; the two are identical in production. A hot-swap wipes this
+        // static to null along with `_instance`, and whichever manager the rebuild constructs first
+        // becomes the owner, so an orphan whose timer is still queued reads as superseded.
+        private static DynamicAtmManager _activeManager;
+
         private static readonly Dictionary<string, AtmInstrumentProfile> _profiles;
         private static readonly object _profileLock = new object();
 
@@ -242,6 +251,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             _activeBrackets = new Dictionary<string, ActiveBracket>();
             _bracketLock = new object();
             _bracketStateFile = System.IO.Path.Combine(Globals.UserDataDir, "RiskGuard", "atm_brackets.json");
+            // P2-155. This manager is now the current sweep owner. After a hot-swap rebuilds the
+            // singleton the previous owner's timer is still queued; it will see it is no longer the
+            // owner on its next tick and stop.
+            _activeManager = this;
         }
 
 #if TESTING
@@ -275,6 +288,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// [[report-the-outcome-not-the-call]].
         /// </summary>
         internal bool MonitoringForTest { get { return _monitoring; } }
+
+        /// <summary>P2-155. Null after a superseded manager self-terminates -- it dropped its timer.</summary>
+        internal bool MonitorTimerIsNullForTest { get { return _monitorTimer == null; } }
 #endif
 
         public static AtmInstrumentProfile GetProfile(string rootSymbol)
@@ -803,6 +819,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             _monitorTimer = new Timer(MonitorTick, null, 5000, 5000);
         }
 
+        // P2-155. A superseded manager must stop sweeping. A hot-swap wipes statics, so the Lazy<>
+        // singleton is rebuilt and a NEW manager becomes Instance -- but this OLD instance's
+        // System.Threading.Timer is rooted by the runtime's timer queue, not by _monitorTimer, so it
+        // keeps firing every 5s against a stale _activeBrackets and double-manages the very broker
+        // orders the new Instance now owns from disk. Disposing the timer (allowed from inside its own
+        // callback) makes the orphan self-terminate within one tick; the new Instance's own timer,
+        // started by ReconcilePersistedBrackets, is the only survivor. [[a-successful-compile-wipes-static-state]].
+        private void StopMonitorBecauseSuperseded()
+        {
+            _monitoring = false;
+            Timer t = _monitorTimer;
+            _monitorTimer = null;
+            if (t != null) t.Dispose();
+        }
+
         /// <summary>
         /// P2-112. Takes ownership of `work` and returns TRUE if it will be run on the UI thread;
         /// returns FALSE if there is no dispatcher, in which case THE CALLER MUST RUN IT.
@@ -839,6 +870,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void MonitorTick(object _)
         {
+            // P2-155. Only the CURRENT owner sweeps. If a hot-swap has rebuilt the singleton and this
+            // instance is no longer `_activeManager`, it is an orphan whose timer the runtime still
+            // fires -- stop it before it touches a broker order the live manager now owns.
+            if (!ReferenceEquals(this, _activeManager))
+            {
+                StopMonitorBecauseSuperseded();
+                return;
+            }
             try
             {
                 // NT8 Account/Order/Position objects are NOT thread-safe, so the sweep goes to the
@@ -884,6 +923,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// 987-test suite. That is `P2-27`'s shape: the riskiest code was the least covered.
         /// </summary>
         internal void MonitorTickForTest() { MonitorTickCore(); }
+
+        /// <summary>P2-155. Starts the monitor timer on THIS instance (drives the private EnsureMonitor).</summary>
+        internal void EnsureMonitorForTest() { EnsureMonitor(); }
+
+        /// <summary>
+        /// P2-155. Drives the FULL timer callback, including the supersession guard that
+        /// MonitorTickForTest (which calls MonitorTickCore directly) bypasses. This is the seam that
+        /// lets a test assert an orphaned manager stops sweeping instead of double-managing.
+        /// </summary>
+        internal void MonitorTickFullForTest() { MonitorTick(null); }
 
         /// <summary>Registers a bracket without going through PlaceBracket's broker calls.</summary>
         internal void AddBracketForTest(ActiveBracket b)

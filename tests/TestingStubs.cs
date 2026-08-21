@@ -161,6 +161,11 @@ namespace NinjaTrader.Cbi
         // P1-22: the copier measures latency as leader exec.Time -> follower exec.Time. Left
         // default here so tests that do not care still exercise the wall-clock fallback.
         public DateTime Time { get; set; }
+        // P2-147. The real NT8 Execution carries a MarketPosition independent of its Order (it is
+        // what ExtractTrades reads, and it is populated live). The stub omitted it until a test
+        // needed to prove the null-Order drop captures it -- [[test-doubles-are-not-evidence]], the
+        // stub should model the fields the code reads.
+        public MarketPosition MarketPosition { get; set; }
     }
 
     public class Account

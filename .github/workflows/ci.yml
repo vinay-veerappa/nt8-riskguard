@@ -329,6 +329,25 @@ jobs:
       # a ten-second audit that never ran.
       - name: No dead safety machinery
         run: python tools/check_no_dead_safety_machinery.py
+
+      # P1-149 sub-task 2. The strategy-side contract cap (RiskGatekeeper.CanTradeSize ->
+      # ContractCapGate) closes the one pre-trade enforcement gap RiskManagerBase strategies had.
+      # ContractCapGate is executed by the suite, but RiskManagerBase and RiskGatekeeper name
+      # NinjaTrader.* types, so no test build compiles the CALL SITE -- only a source read can prove
+      # EnterTrade actually consults the cap before placing. A cap configured, reported in the UI and
+      # enforced only reactively, but whose pre-trade half is commented out or dead, reads as
+      # protection that does not exist. This gate has its own self-test negative control.
+      - name: Contract cap is wired on the strategy entry path
+        run: python tools/check_contract_cap_wired.py
+
+      # P2-158. The one invariant whose violation is a deadlock or a stranded position: _stateLock is
+      # never held across a broker call. The check used to exist ONLY in the agent-loop review profile,
+      # so a HAND-WRITTEN change got no lock-scope review -- exactly how P1-157 slipped a Cancel under
+      # the lock. This is the same script the bridge runs ([[a-gate-is-per-repo]]); its self-test
+      # supplies a synthetic violation so it is armed even where the repo holds no _stateLock.
+      - name: No broker call while holding _stateLock
+        run: python tools/check_lock_discipline.py
+
       # A BARE CR is invisible and it breaks the mutation harness. RiskGuardModels.cs was
       # committed containing two occurrences of CR-CR-LF: a stray carriage return sitting in
       # front of a normal CRLF line ending. Nothing visible changed. It compiled, the suite was
@@ -887,13 +906,14 @@ jobs:
           # CONSECUTIVE_LOSS_BREACH still uses a TIMEOUT, because making the fix uniform would decide
           # P2-164 -- what counts as a loss -- from inside a bug fix, and P2-164 is open precisely
           # because the operator asked for that to be measured rather than assumed.
-          # P1-151 ADDED 2026-08-20: the AutoStop-5bps decision. 9 mutants, local ~230s; at the CI
-          # factor ~ estimated 250s, joining the 441s P0-166 bin lands it near ~690s against the
-          # ~1119s critical path. ESTIMATED -- replace with CI's BATTERY_SECONDS on the first green run.
+          # P1-151 ADDED 2026-08-20: the AutoStop-5bps decision. 9 mutants.
           # P0-180 ADDED 2026-08-20: the AutoStop rejected by the guard's OWN arbiter (naked position
-          # caught live on Sim101). 3 mutants, local ~200s; joins this bin near ~890s against the
-          # ~1119s critical path. ESTIMATED -- replace with CI's BATTERY_SECONDS on the first green run.
-          - { label: "P0-166+P1-151+P0-180", batteries: "mutate_p0166.py mutate_p1151.py mutate_p0180.py" }   # 441s MEASURED + P1-151 ~250s + P0-180 ~200s ESTIMATED
+          # caught live on Sim101). 3 mutants.
+          # MEASURED 2026-08-21: this whole bin ran 789s on run 32499010481 -- so the three estimates
+          # (441+250+200 = 891s) were ~13% high, the same direction P3-177 records for every estimate
+          # in this file. It sits well under the MEASURED 1335s critical path (the
+          # P2-136+P2-101+P2-142+P1-157 bin), not the "~1119s" the older comments cite.
+          - { label: "P0-166+P1-151+P0-180", batteries: "mutate_p0166.py mutate_p1151.py mutate_p0180.py" }   # 789s MEASURED run 32499010481 (P0-166 + P1-151 + P0-180)
           # P2-163 + P1-168: instrument permission. Own bin for the same reason as its two
           # neighbours -- every other bin is 770-1119s against a 1119s critical path.
           #
@@ -924,7 +944,14 @@ jobs:
           # WARNING: 462s MEASURED run 32320721779 (19 mutants). Every estimate in this file so far has been
           # wrong in one direction or the other -- replace this with CI's own BATTERY_SECONDS on
           # the first green run.
-          - { label: "P0-171", batteries: "mutate_p0171.py" }   # 462s MEASURED run 32320721779 (19 mutants)
+          # P2-155 ADDED 2026-08-21 (session 63): the ATM monitor latch made singleton-safe (a
+          # superseded manager's timer must stop, not double-manage after a hot-swap). 6 mutants, local
+          # ~200s ESTIMATED. This was the lightest bin (P0-171 alone measured 479s on run 32499010481),
+          # so P1-149 (~250s est) and now P2-155 (~200s est) land here at ~930s, well under the
+          # MEASURED 1335s critical path (the P2-136+P2-101+P2-142+P1-157 bin, run 32499010481 -- the
+          # "~1119s" the older comments cite is stale). Re-measure BOTH new batteries from CI's own
+          # BATTERY_SECONDS on the first green run and re-pack (P3-177).
+          - { label: "P0-171+P1-149+P2-155", batteries: "mutate_p0171.py mutate_p1149gate.py mutate_p2155.py" }   # P0-171 479s MEASURED run 32499010481 + P1-149 ~250s + P2-155 ~200s ESTIMATED
           # P1-170: the daily-loss rail's input survives a recompile. Small battery, so it
           # shares no bin only because the three above it are already at the critical path.
           #

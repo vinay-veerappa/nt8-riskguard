@@ -122,6 +122,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // - Original 9 tests -
             Run(TestMaxPositionSizeEnforcement);
+            Run(TestContractCapGate_ResultingOverCapRefused);
+            Run(TestContractCapGate_NoCapAllowsEverything);
+            Run(TestContractCapGate_ReducingOrderNeverRefused);
+            Run(TestContractCapGate_BoundaryInclusive);
+            Run(TestContractCapGate_ReversalJudgedOnWhatItLeaves);
+            Run(TestContractCapGate_PositionQuantityIsMagnitude);
             Run(TestDailyLossLimitLockout);
             Run(TestTrailingDrawdownLockout);
             Run(TestMaxTradesOvertradingLockout);
@@ -534,6 +540,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // -- COPY-PATH TESTS (previously impossible: OnExecution was #if !TESTING) --
             Run(TestCopyPath_ExitDoesNotFlipFollowerShort);
             Run(TestCopyPath_MicroToMiniDoesNotInflateNotional);
+            Run(TestCopyPath_P2147_NullOrderDropCapturesEvidence);
             Run(TestCopyPath_LockedFollowerReceivesNoCopy);
             Run(TestCopyPath_LiveAccountNamedSimIsNotTreatedAsSimulated);
             Run(TestCopyPath_GenuineSimulatorAccountStillReceivesCopies);
@@ -752,6 +759,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestAtm_P2136_TheSweepItselfDrivesTheRetry);
             Run(TestAtm_P2136_TheGuardsOwnSweepDrivesTheRestore);
             Run(TestAtm_P2136_TheRestoreIsCalledFromGuardStartup);
+            // P2-155: a hot-swap rebuilds the singleton; the OLD manager's timer must stop, not keep
+            // sweeping a stale registry beside the new Instance.
+            Run(TestAtm_P2155_ASupersededManagerStopsSweeping);
             Run(TestAtm_P2134_AMissingReasonSaysSoRatherThanNothing);
             // P1-133: the three sites keyed on an id the broker replaces on accept.
             Run(TestAtm_P1133_ABrokerReissuedIdStillFindsTheStop);
@@ -1190,6 +1200,49 @@ namespace NinjaTrader.NinjaScript.AddOns
                     "Exit copy is clamped to the follower's actual position (expected <= 1, got {0}). "
                     + "Copying the leader's raw exit quantity leaves the follower SHORT the difference.",
                     copiedQty));
+        }
+
+        // P2-147. Twelve funded executions were dropped by the copier because they carried no
+        // Order, with NO record of what fields WERE populated -- so the fix (read the side from
+        // MarketPosition or a position delta) can't be made without measuring THIS provider, and
+        // the historical executions have aged out. The drop is now instrumented to CAPTURE the
+        // evidence a recurrence carries. This proves the instrument works: the drop still happens
+        // (safe branch) AND it records MarketPosition, so the next live null-Order execution is the
+        // measurement. [[measure-the-deployed-system]]. The fix itself waits for that capture.
+        private static void TestCopyPath_P2147_NullOrderDropCapturesEvidence()
+        {
+            Console.WriteLine("\n[TEST] COPY PATH: a null-Order execution's drop captures MarketPosition (P2-147)");
+
+            var mnq = new Instrument("MNQ 03-26");
+            var leader = new Account { Name = "SimLeader147", Provider = Provider.Simulator };
+
+            // The live shape: an execution with NO Order (the defect condition), but a populated
+            // MarketPosition -- the field the eventual fix would read. ExecutionId mirrors the
+            // 2026-08-18 capture (`_1` suffix), which suggested one fill fanned into several.
+            var exec = new Execution
+            {
+                Account = leader,
+                Instrument = mnq,
+                Order = null,
+                Quantity = 3,
+                Price = 29330.25,
+                ExecutionId = "613562532259_1",
+                MarketPosition = MarketPosition.Short,
+                Name = "NULL_ORDER_FILL"
+            };
+
+            var log = CaptureCopierLog(() => TradeCopierEngine.Instance.OnExecution(exec));
+
+            Assert(LoggedEventType(log, "EXEC_IGNORED"),
+                "the null-Order execution is STILL dropped (the safe branch) -- the fix is not to "
+                + "guess a side, it is to measure first");
+            Assert(LoggedEventContaining(log, "P2-147 capture"),
+                "the drop carries the P2-147 capture marker so a recurrence is greppable");
+            Assert(LoggedEventContaining(log, "MarketPosition=Short"),
+                "and records the MarketPosition -- the field whose reliability-when-Order-is-null "
+                + "must be measured on this provider before the fix can read from it");
+            Assert(LoggedEventContaining(log, "613562532259_1"),
+                "and the execution id, so the captured line ties back to the account's history");
         }
 
         // P0-6: Math.Max(1, ...) floors sub-1 conversions to a whole contract, so a micro->mini
@@ -8369,6 +8422,68 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(Math.Abs(stop.StopPrice - 20000.50) < 1e-9,
                 "P1-133: and the order really carries the new price (expected 20000.50, got "
                 + stop.StopPrice + ")");
+        }
+
+        /// <summary>
+        /// P2-155. `_monitoring`/`_monitorTimer` are per-INSTANCE, and after an NT8 hot-swap wipes the
+        /// statics the Lazy&lt;&gt; singleton is rebuilt: a NEW manager becomes Instance and restores
+        /// the brackets from disk, while the OLD manager's System.Threading.Timer -- rooted by the
+        /// runtime's timer queue, not by the wiped static field -- keeps firing every 5s against a
+        /// stale `_activeBrackets` and double-manages the same broker orders the new Instance now owns.
+        /// [[a-successful-compile-wipes-static-state]].
+        ///
+        /// The manager owns the sweep only while it is the newest one constructed (`_activeManager`);
+        /// constructing a SECOND manager models the hot-swap rebuild and demotes the first to an orphan.
+        /// The full timer callback must recognise the orphan is superseded and stop, not sweep.
+        ///
+        /// ⚠️ THE TEST DRIVES THE FULL CALLBACK, NOT THE CORE. Every other ATM test calls
+        /// `MonitorTickForTest` -&gt; `MonitorTickCore` directly, which by design does NOT check
+        /// supersession -- so a guard that never fired would pass all of them. The positive control on
+        /// the SAME instance (Core still sweeps) proves the machinery works and it is the guard, not a
+        /// broken sweep, that stops the orphan.
+        /// </summary>
+        private static void TestAtm_P2155_ASupersededManagerStopsSweeping()
+        {
+            Console.WriteLine("\n[TEST] ATM P2-155: a superseded (post-hot-swap) manager stops its sweep");
+
+            Instrument inst; Order stop; DynamicAtmManager orphan;
+            var acct = AtmSetup(out inst, out stop, out orphan);
+            var bracket = AtmBracketFor(acct, inst, stop, 20000.00, 19990.00);
+            orphan.AddBracketForTest(bracket);
+
+            // The orphan currently owns the sweep and has a running monitor timer.
+            orphan.EnsureMonitorForTest();
+            Assert(orphan.MonitoringForTest,
+                "P2-155 setup: the orphan started its monitor timer (EnsureMonitor set _monitoring).");
+
+            // The hot-swap: a NEW manager is constructed and becomes the current owner, exactly as the
+            // Lazy<> rebuild does after a recompile. The orphan's timer is still queued in the runtime.
+            var rebuilt = new DynamicAtmManager();
+            Assert(rebuilt.MonitoringForTest == false,
+                "P2-155 setup: the rebuilt manager is the fresh owner and has not started sweeping yet.");
+
+            // The FULL timer callback fires on the orphan. A superseded manager must recognise it is no
+            // longer the owner and stop -- it must NOT move the stop, because the live manager owns it.
+            orphan.MonitorTickFullForTest();
+
+            Assert(!bracket.BreakevenTriggered,
+                "P2-155: the orphan did NOT move the stop. At baseline the timer fired unconditionally, "
+                + "so a superseded manager kept managing brackets the new Instance had already restored "
+                + "from disk -- two timers on the same broker order.");
+            Assert(!orphan.MonitoringForTest,
+                "P2-155: and the orphan disposed its own timer (self-terminated within one tick), so it "
+                + "will not fire again.");
+            Assert(orphan.MonitorTimerIsNullForTest,
+                "P2-155: and it dropped the timer field, so a later EnsureMonitor re-arms cleanly rather "
+                + "than leaking a disposed timer.");
+
+            // Positive control, SAME instance: the core sweep -- what the CURRENT Instance's timer
+            // reaches -- still fires. This proves the sweep machinery works and it was the supersession
+            // guard, not a broken sweep, that stopped the orphan above.
+            orphan.MonitorTickForTest();
+            Assert(bracket.BreakevenTriggered,
+                "P2-155 control: driven through MonitorTickCore the breakeven move IS requested, so the "
+                + "sweep itself is sound -- only the supersession guard blocked it.");
         }
 
         /// <summary>
@@ -16730,6 +16845,96 @@ namespace NinjaTrader.NinjaScript.AddOns
             state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 4, 18000, 0, config);
             actions = addon.EvaluateRules(account, state);
             Assert(!actions.Any(a => a.RuleId == "MAX_SIZE_BREACH"), "No size breach under max contracts.");
+        }
+
+        // ------------------------------------------------------------------------------------
+        // P1-149. ContractCapGate -- the PRE-TRADE contract-size decision, the half that can say
+        // no BEFORE the order exists (MAX_SIZE_BREACH above is reactive: it flattens a position
+        // that already filled). The logic is a pure static helper so it is EXECUTED here, not just
+        // read; RiskGatekeeper.CanTradeSize delegates to it, which no test build compiles.
+        //
+        // The discriminators are the ALLOWED and the RESULTING-QUANTITY assertions, not the
+        // refusals: a gate that refused everything passes every "refused" test ever written.
+        // ------------------------------------------------------------------------------------
+
+        private static void TestContractCapGate_ResultingOverCapRefused()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: refuses on the RESULTING position, not the order qty");
+            // The measured shape: long 8 against a cap of 10, a Buy 5 is an order UNDER the cap that
+            // leaves 13, OVER it. Measuring only the order quantity (or inverting the direction test)
+            // waves it through.
+            var d = ContractCapGate.Evaluate(10, 5, "buy", "Long", 8, "Acc", "MES");
+            Assert(!d.Allowed, "Long 8, cap 10, Buy 5 -> 13 is refused (resulting, not order qty).");
+            Assert(d.ResultingQuantity == 13, "Resulting position is reported as 13.");
+            Assert(!string.IsNullOrEmpty(d.Reason) && d.Reason.Contains("13") && d.Reason.Contains("10"),
+                "Refusal names what it would leave (13) and the cap (10).");
+        }
+
+        private static void TestContractCapGate_NoCapAllowsEverything()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: cap <= 0 means NO CAP");
+            // Must agree with the guard, which reports MaxContractsPerAccount <= 0 as
+            // "no per-account contract cap". A cap of 0 that enforced would make the order path and
+            // the inventory screen say opposite things about the same setting.
+            var zero = ContractCapGate.Evaluate(0, 1000, "buy", "Flat", 0, "Acc", "MES");
+            Assert(zero.Allowed, "Cap 0 allows a Buy 1000 (no cap).");
+            var neg = ContractCapGate.Evaluate(-5, 1000, "sell", "Short", 200, "Acc", "MES");
+            Assert(neg.Allowed, "Negative cap allows everything (no cap).");
+            // Non-positive order quantity is not this gate's business and must not be waved past as
+            // "reducing".
+            var noqty = ContractCapGate.Evaluate(10, 0, "buy", "Flat", 0, "Acc", "MES");
+            Assert(noqty.Allowed, "A zero-quantity order is allowed (the order paths reject it themselves).");
+        }
+
+        private static void TestContractCapGate_ReducingOrderNeverRefused()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: a strictly-reducing order is NEVER refused (anti-trap)");
+            // [[a-lockout-must-not-trap-you]]. Long 50 against a cap of 10, a partial Sell 30 still
+            // leaves 20 -- OVER the cap -- and it must STILL be allowed, because it lowers exposure.
+            // This is the flagship: without the anti-trap branch the verdict happens to stay allowed
+            // (a negative resulting slips under the cap) but the REPORTED resulting is wrong, so the
+            // ResultingQuantity assertion is what pins the branch.
+            var partial = ContractCapGate.Evaluate(10, 30, "sell", "Long", 50, "Acc", "MES");
+            Assert(partial.Allowed, "Long 50, cap 10, Sell 30 (leaves 20, still over cap) is ALLOWED.");
+            Assert(partial.ResultingQuantity == 20, "Reducing order reports what it LEAVES (20), not the start (50).");
+            // A full flatten of an over-cap position.
+            var flatten = ContractCapGate.Evaluate(10, 50, "sell", "Long", 50, "Acc", "MES");
+            Assert(flatten.Allowed, "Long 50, cap 10, Sell 50 (full flatten) is ALLOWED.");
+            Assert(flatten.ResultingQuantity == 0, "Full flatten leaves 0.");
+        }
+
+        private static void TestContractCapGate_BoundaryInclusive()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: the cap boundary is inclusive");
+            var at = ContractCapGate.Evaluate(10, 10, "buy", "Flat", 0, "Acc", "MES");
+            Assert(at.Allowed, "Flat, cap 10, Buy 10 -> exactly 10 is ALLOWED (inclusive).");
+            Assert(at.ResultingQuantity == 10, "Resulting is 10 at the boundary.");
+            var over = ContractCapGate.Evaluate(10, 11, "buy", "Flat", 0, "Acc", "MES");
+            Assert(!over.Allowed, "Flat, cap 10, Buy 11 -> 11 is refused (one over).");
+        }
+
+        private static void TestContractCapGate_ReversalJudgedOnWhatItLeaves()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: a reversal is judged on the position it LEAVES");
+            // Long 8, Sell 20 is a reversal to short 12 -- not an add to 28. Measuring it as an add
+            // over-refuses, which looks safe and is not: it refuses legal exits-plus-entries.
+            var ok = ContractCapGate.Evaluate(15, 20, "sell", "Long", 8, "Acc", "MES");
+            Assert(ok.Allowed, "Long 8, cap 15, Sell 20 -> short 12 is ALLOWED (12 <= 15).");
+            Assert(ok.ResultingQuantity == 12, "Reversal leaves short 12, not 28.");
+            var refused = ContractCapGate.Evaluate(10, 20, "sell", "Long", 8, "Acc", "MES");
+            Assert(!refused.Allowed, "Long 8, cap 10, Sell 20 -> short 12 is refused (12 > 10).");
+            Assert(refused.ResultingQuantity == 12, "Refused reversal still reports 12.");
+        }
+
+        private static void TestContractCapGate_PositionQuantityIsMagnitude()
+        {
+            Console.WriteLine("\n[TEST] ContractCapGate: position quantity is a MAGNITUDE, never read as signed");
+            // [[nt8-position-quantity-is-absolute]] / P0-96. Even if a careless caller passes a SIGNED
+            // quantity (-8 for a short of 8), the gate must treat it as magnitude. Reading the sign
+            // makes a Buy 5 against short -8 compute a reversal to 13 and REFUSE a reducing order.
+            var d = ContractCapGate.Evaluate(10, 5, "buy", "Short", -8, "Acc", "MES");
+            Assert(d.Allowed, "Short 8 (passed as -8), cap 10, Buy 5 reduces -> ALLOWED (magnitude, not sign).");
+            Assert(d.ResultingQuantity == 3, "Reduces short 8 by 5 -> leaves 3.");
         }
 
         private static void TestDailyLossLimitLockout()

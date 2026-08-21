@@ -8250,7 +8250,20 @@ workflow it was watching. [[check-the-exemplar-belongs-to-the-class]] — and th
 originally filed were 5 of 9 funded rows, so the exemplar was also incomplete.
 
 
-### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — OPEN, measured 2026-08-18 (session 58)
+### P2-147. Twelve executions on the funded account were dropped by the copier because they carry no `Order`, so no direction could be read — OPEN (instrumented for capture 2026-08-21), measured 2026-08-18 (session 58)
+
+**⏳ INSTRUMENTED 2026-08-21 (session 63), fix still pending the captured evidence.** Confirmed by
+live query (`nt_extract_trades TAKEPROFITPRO524207503`) that the 2026-08-18 executions have aged
+out of the account's collection and are unrecoverable, so the measurement the fix needs — is
+`Execution.MarketPosition` a reliable side when `Order` is null on THIS provider? — cannot be taken
+retroactively. The drop site (`TradeCopierEngine.OnExecution`) now logs `[P2-147 capture]
+MarketPosition=… Qty=… Price=… Instrument=…` on every null-`Order` drop, turning the next
+recurrence into the measurement. It STILL DROPS (the safe branch); the direction-derivation fix
+follows once a capture shows whether `MarketPosition` (or a position delta) can be trusted here —
+NOT before, because a side is broker-dependent and must be measured, not reasoned
+([[the-simulator-re-ids-nothing]], [[measure-the-deployed-system]]). Test:
+`TestCopyPath_P2147_NullOrderDropCapturesEvidence`; the stub `Execution` gained the `MarketPosition`
+field the real one always had.
 
 ```
 2026-08-18T02:00:54Z  TAKEPROFITPRO524207503
@@ -8373,6 +8386,8 @@ own sweep of the suite's preconditions and gets its own ID when taken.
 > **The irreducible residue (NT8 platform fact).** An AddOn has no pre-submit veto for an order it did not originate — `OrderUpdate` fires no earlier than `Submitted`/`Accepted`, and instant fills surface once, already `Filled` (`RiskGuardAddOn.cs:4667-4670`). So **manual UI orders, external-platform orders, and non-`RiskManagerBase` strategies can only be caught reactively** (cancel-if-working = a race; flatten-after-fill = slips, which is what this defect measured). The prop firm's 60-contract desk refusal is the only TRUE pre-trade cap on those paths.
 >
 > **The one closeable gap:** `RiskGatekeeper.CanTrade` (the strategy-side pre-submit gate for `RiskManagerBase` strategies, `Documents/NinjaTrader 8/bin/Custom/Strategies/Vinay/RiskGatekeeper.cs:98`) enforces loss/drawdown/trade-count but NOT the contract cap. Wiring the cap in there would give `RiskManagerBase` strategies a genuine pre-trade size refusal. ⚠️ that file is in NEITHER git repo. See `RISKGUARD_BACKLOG_ROADMAP.md` Wave 2 for the sub-tasks. What remains OPEN is that sub-task and the documented non-goal; the original blanket framing is closed.
+>
+> **⏳ SUB-TASK 2 — the cap LOGIC landed 2026-08-21 (session 63); WIRING + deploy pending.** The operator's decision: `RiskGatekeeper` is version-controlled in **nt8-riskguard**. Added `addons/ContractCapGate.cs` — a pure, executed helper (near-exact port of the bridge's `BridgeSizingGate`, all four load-bearing rules incl. the anti-trap reducing-order exception) — with 6 tests (+19 asserts) and `mutation/mutate_p1149gate.py` **9/9, no survivors** (the flagship anti-trap `if(false)` mutant is caught by the `ResultingQuantity` assertion, not the verdict). `RiskGatekeeper.cs` is now in the repo at `strategies/Vinay/` (out of the test-build glob because it names `Cbi` types) with `MaxContractsPerAccount` (default 0 = no cap) and `CanTradeSize(...)` returning the full decision. ⚠️ **NOT YET LIVE:** `RiskManagerBase` is not yet wired to call `CanTradeSize`, and the `strategies/` deploy path (`sync_nt8.py` globs `addons/` only) is not established — both are the remaining work before this enforces anything. Live-validate via a `RiskManagerBase` strategy on Sim once wired + deployed.
 
 Found because the operator proposed the experiment — *"if you try to go for 1000 contracts it might refuse"* — after this session's author had asserted, wrongly, that the ATM order path has no pre-trade gate at all.
 

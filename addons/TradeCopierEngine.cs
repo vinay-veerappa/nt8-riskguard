@@ -5080,11 +5080,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
 
-            // Skip copy if order is null (cannot determine order direction safely)
+            // Skip copy if order is null (cannot determine order direction safely).
+            //
+            // P2-147. Twelve funded executions were dropped here on 2026-08-18 with NO record of
+            // what fields WERE populated, so the fix -- read the side from Execution.MarketPosition
+            // (or a position delta) instead of Order -- cannot be made without guessing, and a side
+            // is broker-dependent and must be measured on THIS provider, not reasoned from Sim101
+            // ([[the-simulator-re-ids-nothing]]). The historical executions have since aged out of
+            // the account's collection and are unrecoverable. So this instruments the drop to CAPTURE
+            // the evidence the next occurrence carries -- MarketPosition especially -- turning a
+            // recurrence into the measurement. It still DROPS (the safe branch); the fix follows once
+            // a capture shows whether MarketPosition is a reliable side when Order is null.
+            // [[measure-the-deployed-system]].
             if (exec.Order == null)
             {
                 CopierLog(exec.Account.Name, "EXEC_IGNORED",
-                    $"execution {exec.ExecutionId} has no Order, so its direction cannot be determined.");
+                    $"execution {exec.ExecutionId} has no Order, so its direction cannot be determined. " +
+                    $"[P2-147 capture] MarketPosition={exec.MarketPosition} Qty={exec.Quantity} " +
+                    $"Price={exec.Price} Instrument={exec.Instrument?.FullName ?? "null"}");
                 return;
             }
 
