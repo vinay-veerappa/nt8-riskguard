@@ -920,6 +920,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP2116_PeakEquityGivebackNeedsAReadingToo);
             Run(TestP2116_TheRealizedPnLRulesAreDeliberatelyLeftAlone);
             Run(TestP2116_EquityBackedRulesAreFoundBySweepNotByHand);
+            Run(TestP2132_PerAccountContractCapReportsThePosition);
+            Run(TestP2132_AFlatAccountReportsZeroNotNull);
+            Run(TestP2132_AggregateContractCapStillReportsNull);
             Run(TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken);
             Run(TestP186_TheNewsShieldIsRedOutOfTheBox);
             Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
@@ -3200,6 +3203,59 @@ namespace NinjaTrader.NinjaScript.AddOns
                 P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), P2116Account(50182.75)));
             Assert(read.CurrentValue != null && Math.Abs(read.CurrentValue.Value - 50182.75) < 0.001,
                 "an account that DOES report equity carries the number through");
+        }
+
+        // P2-132(a). The 'Max contracts per account' rule reported currentValue=null while the
+        // enforcer read pos.Quantity every sweep -- so the one rule in breach (11 against a cap of 10,
+        // measured on TAKEPROFITPRO524207503) rendered like a rule that had never come close. Derive
+        // the display from the position, the same source the enforcer uses (F-9's remedy).
+        private static void TestP2132_PerAccountContractCapReportsThePosition()
+        {
+            Console.WriteLine("\n[TEST] P2-132: the per-account contract cap reports the current max position, not null");
+
+            var acct = P2116Account(50000.0);
+            acct.MaxPositionQuantity = 11;   // 11 contracts against a cap of 5 -- the measured breach
+            var rule = P2116Rule("Sizing.MaxContractsPerAccount");
+            var reading = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
+            Assert(reading.CurrentValue != null && Math.Abs(reading.CurrentValue.Value - 11) < 0.001,
+                string.Format(
+                    "the per-account contract cap must report the live position (11), not null (was {0}) "
+                    + "-- the enforcer reads pos.Quantity every sweep; the reporter was blind to the one "
+                    + "rule that was in breach", reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
+        }
+
+        private static void TestP2132_AFlatAccountReportsZeroNotNull()
+        {
+            Console.WriteLine("\n[TEST] P2-132: a flat account reports 0 for the per-account contract cap, not null");
+
+            var acct = P2116Account(50000.0);
+            acct.MaxPositionQuantity = 0;   // flat: a real reading of zero contracts, not an absence
+            var rule = P2116Rule("Sizing.MaxContractsPerAccount");
+            var reading = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
+            Assert(reading.CurrentValue != null && Math.Abs(reading.CurrentValue.Value) < 0.001,
+                string.Format(
+                    "a flat account holds 0 contracts -- a real reading, not an absence -- so it reports "
+                    + "0, not null (was {0}). Unlike equity (where 0.0 means no push), 0 contracts is a "
+                    + "fact", reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
+        }
+
+        // Negative control (GREEN now and after): the aggregate cap's currentValue is a cross-account
+        // SUM, a separate slice, and this fix must not touch it.
+        private static void TestP2132_AggregateContractCapStillReportsNull()
+        {
+            Console.WriteLine("\n[TEST] P2-132: the aggregate contract cap is untouched and still reports null");
+
+            var acct = P2116Account(50000.0);
+            acct.MaxPositionQuantity = 11;
+            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var reading = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
+            Assert(reading.CurrentValue == null, string.Format(
+                "the aggregate cap's currentValue is a cross-account sum, a separate slice -- this fix "
+                + "must not touch it, so it still reports null (was {0})",
+                reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
         }
 
         private static void TestP2116_TheFirmNoteIsPrefixedNotReplaced()

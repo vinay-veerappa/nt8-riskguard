@@ -269,6 +269,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool IsExcluded { get; set; }
             public double AccountEquity { get; set; }
             public DateTime LockoutUntil { get; set; }
+            // P2-132(a): the account's current MAX single-instrument position quantity (absolute),
+            // so the "Max contracts per account" rule can report where it stands instead of null.
+            // Populated in GetAccountSnapshots; 0 when flat.
+            public int MaxPositionQuantity { get; set; }
         }
 
         public List<AccountStateSnapshot> GetAccountSnapshots()
@@ -298,15 +302,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                     };
                     
                     var posList = new List<string>();
+                    int maxPosQty = 0;
                     foreach (var pos in state.Positions.Values)
                     {
                         if (pos.MarketPosition != MarketPosition.Flat)
                         {
                             string posType = pos.MarketPosition == MarketPosition.Long ? "L" : "S";
                             posList.Add(string.Format("{0} {1} {2}", posType, pos.Quantity, pos.Instrument.Split(' ')[0]));
+                            int q = (int)Math.Abs(pos.Quantity);
+                            if (q > maxPosQty) maxPosQty = q;
                         }
                     }
                     snapshot.PositionString = posList.Count > 0 ? string.Join(", ", posList) : "FLAT";
+                    // P2-132: report the SAME max position the MAX_SIZE_BREACH enforcer acts on. The
+                    // enforcer iterates stateModel.Positions (EvaluateRules: `if (pos.Quantity > limit)`),
+                    // so the inventory reads state.Positions.Values too -- folded into the loop above,
+                    // NOT the live account.Positions, which would be a DIFFERENT source than the enforcer
+                    // and defeat the point ("derive the display from the enforcer", F-9).
+                    snapshot.MaxPositionQuantity = maxPosQty;
                     list.Add(snapshot);
                 }
             }

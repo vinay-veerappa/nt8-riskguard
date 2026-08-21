@@ -301,7 +301,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
                 Evaluator = c => c.Config.Sizing.MaxContractsPerAccount <= 0
                     ? Off("no per-account contract cap")
-                    : R(null, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1)
+                    : R(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1)
             },
             new GuardRuleDefinition {
                 Name = "Max contracts aggregate", ConfigPath = "Sizing.MaxContractsAggregate",

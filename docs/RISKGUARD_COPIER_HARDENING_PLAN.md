@@ -7256,7 +7256,7 @@ and is the reason for the band. Say which half was measured.
 
 ---
 
-### P2-132. In `shadow`, the rule inventory cannot distinguish a rule that JUST FIRED from one that has never fired — measured on the funded account while `MAX_SIZE_BREACH` was live — OPEN, found 2026-08-16 (session 52)
+### P2-132. In `shadow`, the rule inventory cannot distinguish a rule that JUST FIRED from one that has never fired — measured on the funded account while `MAX_SIZE_BREACH` was live — ⚠️ OPEN: **slice (a) DONE 2026-08-21 (session 63)** — the 'Max contracts per account' rule now reports `currentValue` from the account's max single-instrument position, derived from `state.Positions.Values` (the SAME source the `MAX_SIZE_BREACH` enforcer iterates in `EvaluateRules`, `if (pos.Quantity > limit)`), so a rule in breach no longer renders null while three neighbours report where they stand. Tests `TestP2132_*` (3, incl. a negative control that the aggregate cap stays null); suite 3513/0. ⚠️ This slice was driven through the agent loop, which produced a green candidate that read `account.Positions` (live) instead — a plausible-sounding but WRONG source (the enforcer reads cached `state.Positions`); caught by hand-arbitration after the panel returned `NOT_CONVERGING`. **Slice (b) REMAINS**: the aggregate cap's cross-account-SUM currentValue, and the `EvaluatedNotEnforcing` state vocabulary that renders a just-fired rule identically to a never-fired one. Found 2026-08-16 (session 52)
 
 **Where**: `nt8-riskguard/addons/GuardRules.cs` (the `Max contracts per account` / `Max contracts
 aggregate` evaluators) and the `state` vocabulary the inventory reports.
