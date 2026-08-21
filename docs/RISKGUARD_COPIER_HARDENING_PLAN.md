@@ -7171,7 +7171,7 @@ as the paths driven through it. Stress tests exist to drive the paths nobody tho
 
 ---
 
-### P1-131. The bridge hand-rolls its own order-liveness list, disagrees with the core's shared classifier in BOTH directions, and that count is what decides whether a disconnect would strand you — OPEN, found 2026-08-16 (session 52) by reading live state during market hours
+### P1-131. The bridge hand-rolls its own order-liveness list, disagrees with the core's shared classifier in BOTH directions, and that count is what decides whether a disconnect would strand you — ✅ CLOSED 2026-08-21 (session 63): the extraction + 3-site migration + tests + battery landed earlier as commit `30dcd4e` (`BridgeOrderLiveness.IsTerminal` / `WouldBeStrandedByDisconnect`, state-NAME based so the harness EXECUTES it; `OccupiesSlotForBridge` and the inline `GetOrders` filter both deleted and routed through it; `TestP1131_*` in `BridgeSourceTests.cs` + `mutate_p1131.py`), but was never recorded here and the plan's final requirement — a source gate against a regressive FOURTH list — was missing. Added this session: `tools/check_single_order_liveness.py` fails if a hand-rolled `OrderState` disjunction reappears in `McpBridgeAddOn.cs` or the route to `BridgeOrderLiveness` is severed (comments masked, negative controls in its self-test), wired into bridge CI. ⚠️ Note `BridgeOrderLiveness` answers a DIFFERENT question than the core's `OccupiesSlot` (which excludes `Departing` on purpose) — do not "unify" them; the file's own header records why. Found 2026-08-16 (session 52) by reading live state during market hours
 
 **Where**: `nt8-mcp-bridge/addons/McpBridgeAddOn.cs` — `OccupiesSlotForBridge` (2 call sites) and
 the inline filter in `GetOrders`.
