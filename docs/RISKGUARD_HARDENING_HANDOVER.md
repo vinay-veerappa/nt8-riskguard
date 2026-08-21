@@ -11418,9 +11418,9 @@ sessions after that stopped being true.
    behind are the lesson: a test and a mutant, both written from the same wrong premise as the code,
    were **enforcing** the defect. Its ID is not repeated here — the gate reads any ID in this block
    as work to do, correctly.
-   ⚠️ **Its remainder is real and now has its own ID, `P2-155`**: `EnsureMonitor`'s latch is still
-   per-instance, so a recompile may start a second sweep. ⚠️ MEASURE FIRST — whether the old timer
-   survives a compile is unknown, and the two answers are a duplicated sweep or nothing at all.
+   ⚠️ ~~Its remainder had its own ID, **`P2-155`**~~ — ✅ CLOSED this session (`v1.61.0`): a superseded
+   manager's timer callback refuses to sweep unless it is the current owner (`_activeManager`) and
+   self-disposes the orphaned timer (`mutate_p2155.py` 6/6). ID struck, not named as work.
 2. ~~The hourly re-locking lockout~~ — ✅ CLOSED this session, `v1.50.0`, suite **3295/0**, battery
    **19/19**. Struck rather than deleted because of what the battery caught that review did not: TWO
    of its new tests passed vacuously (a fresh `AccountState` is already `MinValue`, so asserting
@@ -11523,10 +11523,10 @@ sessions after that stopped being true.
    one bin per runner and cannot reproduce it, so its scoring is unchanged. The move also found the
    batteries had drifted into ~10 `run()` variants across scoring generations and UNIFIED the kill
    decision (a crash is not a detection, everywhere now). ID struck, not named as work.
-6c. **`P3-177`** + **`P2-178`** -- the CI critical path is 1358s while `ci.yml`'s packing comments
-   still say 1119s and three local estimates read 21-23% high; and `nt_extract_trades` stamps
-   EASTERN times with a `Z`, so every consumer mis-buckets by four hours. The second one already
-   cost one wrong statement to the operator, caught only because the ledger disagreed.
+6c. **`P3-177`** -- the CI critical path is 1358s while `ci.yml`'s packing comments still say 1119s
+   and three local estimates read 21-23% high. (The exec-time-zone bug that once shared this entry --
+   `nt_extract_trades` stamping EASTERN times with a `Z` -- is ✅ CLOSED `v1.59.0` and live-validated;
+   its ID is struck in the plan, not named here.)
 7. ~~**`P1-151`**~~ — ✅ RESOLVED `v1.57.0` (suite 3470/0, battery 9/9). The operator settled it:
    the 43-second hand speed is behaviour NOT to be accommodated, so `OnMissing` now defaults to the
    non-destructive `AutoStop` at ~5 bps of price on any instrument, `StopAttachSeconds` dropped to a
@@ -11593,8 +11593,9 @@ sessions after that stopped being true.
    operational fact rather than a task: the guard can now come up DISARMED with a funded account
    attached, by design, because all configuration persists. `DISARM_PERSISTED` is the line that
    says so — if it is in the log, nothing is evaluating.
-11. **`P2-147`** — needs a measurement on the funded account's actual provider before any code.
-   ⚠️ Evidence gathered on `Sim101` is evidence about nothing here.
+11. ~~**`P2-147`**~~ — ✅ CLOSED this session: the capture arrived (537/537 null-Order copier
+   executions were connect-time replays, 0 live), and the null-Order branch now classifies them via
+   the reconnect-replay window (`mutate_p2147.py` 6/6). ID struck, not named as work.
 12. Then `P2-126`, `P2-132`, `P2-29`'s remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`.
 
 ⚠️ **Standing, and it is not a technical constraint**: the operator asked to be told before any
