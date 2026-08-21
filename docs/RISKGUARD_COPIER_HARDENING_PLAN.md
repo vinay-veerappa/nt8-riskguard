@@ -11567,7 +11567,7 @@ run; the command is recorded in `ci.yml` beside the bin.
   stop move three times, or a bracket dropped with a position open. Both are reproduced
   deterministically in the suite from the live measurements (`75726b75`, `1a48f3cf`).
 
-### P0-180. `StopGuard.OnMissing: AutoStop` never places a stop in live execution — the guard rejects its own first stop as its own pending state — ✅ FIXED 2026-08-20 (session 62), v1.58.0 — suite 3475/0, battery 3/3; ⚠️ NOT YET LIVE-REVALIDATED
+### P0-180. `StopGuard.OnMissing: AutoStop` never places a stop in live execution — the guard rejects its own first stop as its own pending state — ✅ FIXED + LIVE-VALIDATED 2026-08-20 (session 62), v1.58.0 — suite 3475/0, battery 3/3
 
 **Found by the Sim test, not the suite.** The `P1-151` AutoStop policy shipped in `v1.57.0`
 suite-green, but the FIRST time it ever ran armed-live — a scoped Sim101-only window, MES 1-lot,
@@ -11610,7 +11610,9 @@ after (`EXECUTED`, `[CreateOrder,Submit]`). `mutate_p0180.py` (3/3): re-adds the
 widens the arbiter to reject `Unprotected`, and corrupts the executor's reserve state — P0-180 kills
 each.
 
-⚠️ **Not yet live-revalidated.** The fix must be re-run through the same scoped Sim101 test after
-deploy — a naked MES 1-lot must show `RiskGuardAutoStop` attach ~5 bps below entry — before the box
-is armed live with `OnMissing=AutoStop`. `v1.57.0` carries the defect but no funded account was ever
-exposed: the deployed config was `Flatten` and `shadow` acts on nothing.
+✅ **Live-validated 2026-08-20 (session 62).** After deploying `v1.58.0`, the same scoped Sim101-only
+test was re-run: a naked MES 1-lot placed a `RiskGuardAutoStop` (Sell StopMarket, Accepted) at
+**7665.25** against a **7669.0** entry — **15 ticks = ~4.9 bps** below, exactly the 5 bps rule — with
+no `NAKED_POSITION`. Flatten cancelled the stop; box restored to `shadow`. `v1.57.0` carried the
+defect but no funded account was ever exposed: the deployed config was `Flatten` and `shadow` acts on
+nothing. The box is now safe to arm live with `OnMissing=AutoStop` when the operator chooses.
