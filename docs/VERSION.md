@@ -2,13 +2,13 @@
 
 > ## ⚠️ There are THREE version identifiers for this addon, and only one is authoritative
 >
-> **Re-measured 2026-08-14 after session 35.** Every value below was read off the repo and the live
+> **Re-measured 2026-08-21 (session 59).** Every value below was read off the repo and the live
 > box. They agree today; they have not always, and the block under the table is why.
 >
 > | Identifier | Value | Authoritative? |
 > |---|---|---|
-> | **Git tag on `main`** | **`v1.19.0`** (26 tags, `v1.0.0`…`v1.19.0`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
-> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ✅ **`1.19.0`** — agrees, and the live box answers it | ❌ **Still not authoritative.** Reported over `GET /api/riskguard/version`, **hand-maintained, and it has drifted twice.** Agreement today is a fact, not a guarantee. |
+> | **Git tag on `main`** | **`v1.62.0`** (76 tags, `v1.0.0`…`v1.62.0`) | ✅ **Yes.** It is what `tools/sync_nt8.py` deploys and what `nt8-mcp-bridge` pins its submodule to. |
+> | `RiskGuardAddOn.Version` const (`addons/RiskGuardAddOn.cs:39`) | ✅ **`1.62.0`** — agrees, and the live box answers it | ❌ **Still not authoritative.** Reported over `GET /api/riskguard/version`, **hand-maintained, and it has drifted twice.** Agreement today is a fact, not a guarantee. |
 > | The `v1.7.0-ui-audit` scheme this file used to lead with | — | ❌ No. A pre-hardening release-notes scheme, abandoned mid-2026-07 and unrelated to the tags. Note the collision: there is now a real `v1.7.0` tag that has nothing to do with it. |
 >
 > ✅ **RESOLVED in `v1.12.2` (session 30), and the history is the point.** The constant had drifted to
