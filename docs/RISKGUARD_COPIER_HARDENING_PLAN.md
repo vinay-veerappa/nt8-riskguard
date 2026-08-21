@@ -8379,7 +8379,7 @@ precondition converts one red assertion into an unknown number of unmeasured one
 own sweep of the suite's preconditions and gets its own ID when taken.
 
 
-### P1-149. `Sizing.MaxContractsPerAccount` is configured, evaluated, displayed — and enforced by NOTHING before an order is placed. The only thing that refuses an oversized order is the PROP FIRM, at 60 — ⚠️ REFRAMED 2026-08-21 (session 62): the bridge/copier halves are CLOSED; the RiskGatekeeper sub-task and the documented non-goal remain — OPEN
+### P1-149. `Sizing.MaxContractsPerAccount` is configured, evaluated, displayed — and enforced by NOTHING before an order is placed. The only thing that refuses an oversized order is the PROP FIRM, at 60 — ✅ CLOSED 2026-08-21 (session 63): the RiskGatekeeper sub-task shipped in v1.61.0 — `RiskManagerBase.EnterTrade → RiskGatekeeper.CanTradeSize → ContractCapGate.Evaluate`, with the cap VALUE single-sourced via `RiskManagerAddOn.ResolveContractCap()` reading `RiskConfig.Sizing.MaxContractsPerAccount` (this fixed the inert-cap defect where `RegisterAndMonitor` never set `MaxContractsPerAccount`, so the cap defaulted to 0 and could never fire). Source-gated by `tools/check_contract_cap_wired.py` (enforcement call + value-source assignment + guard-single-source read, each with a negative control). Live-validated 2026-08-21 on Sim101: an over-cap order was refused pre-trade — `"would leave a position of 6, over the configured cap of 5 (Sizing.MaxContractsPerAccount) ... largest buy that would be accepted is 2"` — exercising the SAME `ContractCapGate.Evaluate` + guard single source as the RiskManagerBase path (via `BridgeSizingGate`). The manual/external reactive-only path is the accepted documented NON-GOAL (`MAX_SIZE_BREACH`; NT8 gives an AddOn no pre-submit veto for an order it did not originate). REFRAMED 2026-08-21 (session 62)
 
 > **Research 2026-08-21 (session 62).** The "enforced by nothing" half is now false. `BridgeSizingGate` enforces the cap pre-trade on all three bridge order paths (`McpBridgeAddOn.cs:2623/2712/5760`, reading the guard's `EffectiveMaxContracts` at `RiskGuardAddOn.cs:1639`), and the copier clamps to the same number (`TradeCopierEngine.cs:5318`, lower-binds). The cap is also enforced REACTIVELY in the guard via `MAX_SIZE_BREACH` (`RiskGuardAddOn.cs:4693-4706`). So the number is NOT dead.
 >
@@ -8461,7 +8461,7 @@ and the 03:31 lockout was `SHADOW_LOCKOUT` (`CONSECUTIVE_LOSS_BREACH`). **A shad
 
 
 
-### P2-154. `nt_place_atm_order` still accepts a breakeven pair the addon will refuse, so the operator learns at placement instead of at the schema — OPEN, split out of `P2-141` 2026-08-18 (session 59)
+### P2-154. `nt_place_atm_order` still accepts a breakeven pair the addon will refuse, so the operator learns at placement instead of at the schema — ✅ CLOSED 2026-08-21 (session 63): fixed addon-side (structured refusal mirroring `DynamicAtmManager`'s load-bearing `P2-141` rule), shipped in v1.59.0, live-validated on the shadow box — a bad pair (offset 20 ≥ trigger 12) is refused with a structured error, no MCP restart needed. Split out of `P2-141` 2026-08-18 (session 59)
 
 **⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** New
 `mcp/lib/atm-breakeven.js` refuses an EXPLICIT `offset >= trigger` pair at the MCP tool boundary,
@@ -8493,7 +8493,7 @@ name both values; do not substitute one.
 **Where**: `nt8-mcp-bridge`, `McpBridgeAddOn.cs` around the `breakevenTriggerTicks` read. Its own
 repo, its own suite, its own contract tests.
 
-### P2-155. `_monitoring` and `_monitorTimer` are per-INSTANCE, so a recompile can leave the ATM sweep running on an orphaned manager — OPEN, split out of `P2-142` 2026-08-18 (session 59)
+### P2-155. `_monitoring` and `_monitorTimer` are per-INSTANCE, so a recompile can leave the ATM sweep running on an orphaned manager — ✅ CLOSED 2026-08-21 (session 63): a superseded manager's timer callback now refuses to run unless `this` is the current owner (`_activeManager`, set in the ctor, identical to `Instance` in production) and self-disposes the orphaned timer. `TestAtm_P2155_ASupersededManagerStopsSweeping` (drives the FULL callback, which every other ATM test bypasses) + `mutate_p2155.py` 6/6; shipped in v1.61.0 (compiled + armed live; the deploy hot-swap itself exercised the supersession path). Split out of `P2-142` 2026-08-18 (session 59)
 
 Carried as an unnamed remainder under a now-closed entry, which is why it gets an ID: a remainder
 hiding under a closed entry is invisible to every count.
@@ -8609,7 +8609,7 @@ hazard needs a concurrent caller. The real detector is a source gate, the agent-
 one (`lock_name="_stateLock"`), and it runs **only on loop-authored changes** — this fix was
 hand-written, so nothing checked it.
 
-### P2-158. The lock-discipline check exists in the agent-loop profile and NOT in CI, so it only guards code the loop wrote — OPEN, split out of `P1-157` 2026-08-18 (session 59)
+### P2-158. The lock-discipline check exists in the agent-loop profile and NOT in CI, so it only guards code the loop wrote — ✅ CLOSED 2026-08-21 (session 63): `tools/check_lock_discipline.py` added to BOTH repos and wired into both CI gate jobs (core: 57 `lock (_stateLock)` blocks inspected, 0 violations — the addon queues cancels via `DrainPendingCancels`; bridge: 0 blocks, armed via a self-test that supplies a synthetic violation). Shipped in v1.61.0. CI green. Split out of `P1-157` 2026-08-18 (session 59)
 
 `agent/nt8_riskguard.py:27` configures a `lock_name="_stateLock"` gate, and the loop reports
 `[lock-scope] ok — no risk calls under _stateLock` on every round. That check does not exist in
@@ -10307,7 +10307,7 @@ weight rather than accepting one.
 first. And note the ceiling is a CONSTRAINT, not a target: 19 bins + `checks` = 20 jobs = the whole
 account-wide concurrency limit, shared with the sibling repo.
 
-### P2-178. `nt_extract_trades` returns EASTERN timestamps with a `Z` suffix, so every consumer reads them as UTC — OPEN, found 2026-08-20 (session 61)
+### P2-178. `nt_extract_trades` returns EASTERN timestamps with a `Z` suffix, so every consumer reads them as UTC — ✅ CLOSED 2026-08-21 (session 63): emits true UTC now (converts before formatting); shipped v1.59.0 and live-validated — `04:03:05.645Z` for a 00:03 ET fill (+4h EDT, DST-correct), matches `interventions.jsonl`. Found 2026-08-20 (session 61)
 
 **⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** New
 `addons/BridgeTradeTime.cs` converts the Eastern wall-clock to true UTC (DST-correct via
@@ -10913,7 +10913,7 @@ is exercised only by the suite, so re-banding this to a fix means live-validatin
 placed a real order zero times — on an account where a wrong stop price is real money.
 
 
-### P2-150. `PlaceBracket` reads its exit legs' `OrderState` in the same breath as `Submit()`, so `partial_submit` is a status that can never be set — OPEN, measured 2026-08-18 (session 59)
+### P2-150. `PlaceBracket` reads its exit legs' `OrderState` in the same breath as `Submit()`, so `partial_submit` is a status that can never be set — ✅ CLOSED 2026-08-21 (session 63): the synchronous verdict is gone; the handler now returns `pending_legs` with the leg ids for the caller to read real state, rather than a status no live input could set ([[a-green-that-can-never-be-red]]). Shipped v1.59.0, live-validated — ATM placement returns `status: pending_legs`. Measured 2026-08-18 (session 59)
 
 **⏳ FIX LANDED 2026-08-21 (session 63), pending deploy + Sim re-validation.** `DynamicAtmManager`
 now reports `status: "pending_legs"` with the leg ids and drops the dead synchronous read (the bug
@@ -10994,7 +10994,7 @@ up to half a tick permanently. `Stop_5c903ad3` shows the symptom — a `ChangeSu
 [[nt8-order-change-semantics]] says a modification in flight is not free.
 
 
-### P2-181. The bridge's `PlaceOcoOrder` carries the SAME dead synchronous verdict as `P2-150` — OPEN, found and fixed 2026-08-21 (session 63)
+### P2-181. The bridge's `PlaceOcoOrder` carries the SAME dead synchronous verdict as `P2-150` — ✅ CLOSED 2026-08-21 (session 63): the synchronous verdict fix shipped in v1.59.0 and the shared ATM bracket path is live-validated (`pending_legs`). Trying to live-validate the STANDALONE `PlaceOcoOrder` endpoint surfaced a separate **contract-drift bug** (not a stale process, as first suspected): the wrapper schema marks `limitPrice` REQUIRED for the profit target while the addon read only `targetPrice`, so every call through the documented schema failed `"targetPrice required"`. Fixed 2026-08-21 (session 63) — the addon now accepts `limitPrice` as an alias, guarded by `tools/check_oco_param_contract.py` (fails if a wrapper-required OCO price field is not read by the addon; contract drift is the recurring wrapper-defect class, [[nt8-mcp-wrapper-defects]]). Shipping in the next bridge release; the standalone endpoint is live-validatable this session once deployed (addon-side, no MCP client restart). Found and fixed 2026-08-21 (session 63)
 
 Found while fixing `P2-150`. `McpBridgeAddOn.cs`'s `PlaceOcoOrder` read `stopOrder`/`targetOrder`
 `OrderState` in the same breath as `account.Submit(...)` and set `status: "partial_submit"` from
