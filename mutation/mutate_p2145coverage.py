@@ -44,6 +44,7 @@ import sys
 # is applied and BEFORE restore(), leaving a live mutant in the tree. Measured in CI on
 # mutate_p182.py, 2026-08-15. [[a-battery-must-reach-its-restore-line]].
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import _battery
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
@@ -195,12 +196,7 @@ for target, name, old, new in MUTANTS:
     open(target, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
     try:
         res = run()
-        mm = re.search(r'Failed = (\d+)', res)
-        # Order matters: the undetected-crash verdict CONTAINS 'NO RESULT LINE'.
-        undetected_crash = 'NO ASSERTION FAILED' in res
-        killed = (not undetected_crash) and (
-            ('BUILD FAILED' in res) or ('NO RESULT LINE' in res)
-            or (mm is not None and int(mm.group(1)) > 0))
+        killed = _battery.score(res, run)
         print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
         if not killed:
             survivors.append(name)

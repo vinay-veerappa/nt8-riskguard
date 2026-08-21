@@ -31,6 +31,7 @@ import os, re, subprocess, sys
 # mutant and restoring it, which leaves a LIVE MUTANT in the source tree. Measured in CI on
 # mutate_p182.py, 2026-08-15. The subprocess encoding below is the OTHER half.
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import _battery
 
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -154,15 +155,7 @@ for name, old, new in MUTANTS:
         continue
     open(ENGINE, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
     res = run()
-    mm = re.search(r'Failed = (\d+)', res)
-    # 'NO RESULT LINE' means the runner never printed a result -- it crashed. That is a
-    # KILL, not a survivor: the mutation stopped the suite completing. Scoring it as a
-    # survivor is how this battery reported a survivor for a mutant the suite had in fact
-    # caught, on its own second run.
-    killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res)         or (mm is not None and int(mm.group(1)) > 0)
-    # P2-148: the verdict above cannot tell a detection from a crash.
-    if 'NO ASSERTION FAILED' in res:
-        killed = False
+    killed = _battery.score(res, run)
     print(f'  [{"KILLED" if killed else "SURVIVED"}] {name}: {res}')
     if not killed:
         survivors.append(name)

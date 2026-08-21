@@ -11514,14 +11514,14 @@ sessions after that stopped being true.
    ⚠️ **The gate for it CANNOT REPRODUCE what it prevents**, and is a source check for that reason:
    CI runs one bin per runner with nothing else on the box, so contention never happens there. That
    is why this survived every green run in the project's history until the suite ran in parallel.
-**`P1-179`** -- ⚠️ **THE PART THAT IS NOT FIXED, AND IT IS THE PART THAT MATTERED.** A battery
-   scores `Failed > 0` as a DETECTION, so ANY spurious red marks a mutant KILLED -- silently, no
-   survivor, no warning, a score the suite did not earn. The entry struck above removed the only
-   KNOWN trigger (its ID is not repeated -- this block reads any ID as work to do);
-   it did not make the rule able to tell a detection from an accident. The cheap fix is to require
-   a killed mutant to be killed TWICE, which costs only the killed path, and it must not be applied
-   to survivors. ⚠️ The rule is copied into all 60 batteries, so doing it properly means moving
-   scoring into `_battery.py` first -- a 60-file change that must not ride along with a defect fix.
+~~`P1-179`~~ — ✅ CLOSED, LOCAL-ONLY by design. The kill decision moved into `_battery.py`
+   (`is_kill` + `score`) and all 60 batteries now call it; an apparent kill is re-verified and must
+   reproduce, or it scores a SURVIVOR. Armed ONLY under `RG_DOUBLE_KILL` (set by `ci_local.py`),
+   because the measurement showed re-running every kill adds ~1.5–1.7× compute AND the accident it
+   guards needs cross-worktree contention that only the local parallel runner has — GitHub CI runs
+   one bin per runner and cannot reproduce it, so its scoring is unchanged. The move also found the
+   batteries had drifted into ~10 `run()` variants across scoring generations and UNIFIED the kill
+   decision (a crash is not a detection, everywhere now). ID struck, not named as work.
 6c. **`P3-177`** + **`P2-178`** -- the CI critical path is 1358s while `ci.yml`'s packing comments
    still say 1119s and three local estimates read 21-23% high; and `nt_extract_trades` stamps
    EASTERN times with a `Z`, so every consumer mis-buckets by four hours. The second one already

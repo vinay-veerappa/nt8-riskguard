@@ -53,6 +53,7 @@ import sys
 # mutant and restoring it, which leaves a LIVE MUTANT in the source tree. Measured in CI on
 # mutate_p182.py, 2026-08-15. The subprocess encoding below is the OTHER half.
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import _battery
 
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -264,13 +265,7 @@ for path, name, old, new in MUTANTS:
         continue
     open(path, 'w', encoding='utf-8', newline='').write(src.replace(old, new))
     res = run()
-    mm = re.search(r'Failed = (\d+)', res)
-    # A crash is a kill: the mutation stopped the suite completing.
-    killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
-        or (mm is not None and int(mm.group(1)) > 0)
-    # P2-148: the verdict above cannot tell a detection from a crash.
-    if 'NO ASSERTION FAILED' in res:
-        killed = False
+    killed = _battery.score(res, run)
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)

@@ -151,11 +151,7 @@ for target, name, old, new in MUTANTS:
     open(target, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
     try:
         res = run()
-        mm = re.search(r'Failed = (\d+)', res)
-        undetected_crash = 'NO ASSERTION FAILED' in res
-        killed = (not undetected_crash) and (
-            ('BUILD FAILED' in res) or ('NO RESULT LINE' in res)
-            or (mm is not None and int(mm.group(1)) > 0))
+        killed = _battery.score(res, run)
         print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
         if not killed:
             survivors.append(name)

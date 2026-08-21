@@ -30,7 +30,23 @@ beginning `EXPECTED SURVIVOR:` must survive. Everything else must die.
 
 A broken ANCHOR always fails, expected or not: a mutant whose find-string no longer matches
 proves nothing at all, which is what `mutation/check_anchors.py` exists for.
+
+P1-179 (the double-kill). `is_kill` and `score` below are the SHARED kill decision. Every battery
+scored a mutant inline, and `failed_count > 0` was the whole test -- ANY reason the suite went red
+read as "the mutant was detected", including a flaky test, a machine hiccup, or a collision with
+another battery on the box. That is silent and it INFLATES (a mis-scored kill is a green battery
+with no survivor and no warning), which is the opposite of the loud false-SURVIVOR that
+`check_anchors.py` exists to catch. `score` re-runs an apparent kill and requires it to reproduce.
+
+⚠️ It runs ONLY under `RG_DOUBLE_KILL`, which `tools/ci_local.py` sets. That is deliberate, not a
+half-measure: the accident it guards (e.g. the `P1-175` temp-file collision) needs two batteries
+CONTENDING on one machine, which happens only in the local parallel runner. GitHub CI runs one bin
+per hosted runner with nothing else on the box, cannot reproduce the accident, and so pays nothing
+-- the env var is unset there and every battery runs exactly once, its scoring byte-for-byte as
+before. [[a-source-gate-must-assert-the-condition]]
 """
+import os
+import re
 import sys
 
 # ⚠️ Windows defaults stdout to cp1252. Every gate in this repo prints mutant
@@ -40,6 +56,39 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 EXPECTED_PREFIX = 'EXPECTED SURVIVOR:'
+
+# P1-179. Set by tools/ci_local.py only; see the module docstring for why it is local-only.
+DOUBLE_KILL = os.environ.get('RG_DOUBLE_KILL') == '1'
+
+
+def is_kill(res, base_failed=0):
+    """The kill decision. A harness crash with no assertion is NOT a detection (P2-148 / P1-153):
+    before that fix the first mutant to THROW killed the process before `RESULTS:` printed, and a
+    missing result line scores KILLED, so a crash scored a free kill. A BUILD FAILED, a missing
+    result line, or MORE failed assertions than the baseline had (`base_failed`, 0 for the green
+    batteries) is a real detection. `res` is a battery `run()`'s return string."""
+    if 'NO ASSERTION FAILED' in res:
+        return False
+    mm = re.search(r'Failed = (\d+)', res)
+    # 'GATE FAILED' / 'GATE TIMEOUT' are produced only by mutate_p2136survive, whose run() drives a
+    # gate rather than the suite; harmless elsewhere since no other battery's res can contain them.
+    return (('BUILD FAILED' in res) or ('NO RESULT LINE' in res)
+            or ('GATE FAILED' in res) or ('GATE TIMEOUT' in res)
+            or (mm is not None and int(mm.group(1)) > base_failed))
+
+
+def score(res, rerun, base_failed=0):
+    """True iff the mutant is KILLED. Under DOUBLE_KILL an apparent kill must reproduce: `rerun()`
+    re-runs the suite with the SAME mutant still applied -- the caller restores only AFTER scoring,
+    in its `finally` -- and a kill that does not reproduce is scored a SURVIVOR, because a real
+    detection is deterministic and an accident usually is not. A SURVIVOR is never re-run: it is
+    already the loud, investigated outcome, and re-running it would only add cost to the case that
+    already gets human attention (P1-179)."""
+    if not is_kill(res, base_failed):
+        return False
+    if not DOUBLE_KILL:
+        return True
+    return is_kill(rerun(), base_failed)
 
 
 def _description(mutant):

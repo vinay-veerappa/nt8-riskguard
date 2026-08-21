@@ -46,6 +46,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # See mutate_p2108.py: the battery's OWN stdout must be utf-8, or a non-ASCII character in a
 # mutant description raises between applying a mutant and restoring it, leaving a live mutant.
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import _battery
 
 SUITE = os.path.join(REPO, 'addons', 'PropFirmProtectionSuite.cs')
 RULES = os.path.join(REPO, 'addons', 'GuardRules.cs')
@@ -192,12 +193,7 @@ for target, name, old, new in MUTANTS:
         continue
     open(target, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
     res = run()
-    mm = re.search(r'Failed = (\d+)', res)
-    killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
-        or (mm is not None and int(mm.group(1)) > 0)
-    # P2-148: the verdict above cannot tell a detection from a crash.
-    if 'NO ASSERTION FAILED' in res:
-        killed = False
+    killed = _battery.score(res, run)
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)

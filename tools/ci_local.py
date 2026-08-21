@@ -57,10 +57,21 @@ def say(*parts):
         print(*parts, flush=True)
 
 
-def run(cmd, cwd=REPO, timeout=1800):
+def run(cmd, cwd=REPO, timeout=1800, env=None):
+    full_env = None
+    if env:
+        full_env = dict(os.environ)
+        full_env.update(env)
     p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                       encoding='utf-8', errors='replace', timeout=timeout)
+                       encoding='utf-8', errors='replace', timeout=timeout, env=full_env)
     return p.returncode, (p.stdout or '') + (p.stderr or '')
+
+
+# P1-179. Batteries run with the double-kill armed HERE and nowhere else: an apparent kill is
+# re-verified once and must reproduce, so a suite that goes red from cross-worktree contention
+# (the hazard the comment in worker() describes) scores a SURVIVOR rather than a silent free kill.
+# GitHub CI never sets this -- one bin per runner cannot contend -- so its scoring is unchanged.
+BATTERY_ENV = {'RG_DOUBLE_KILL': '1'}
 
 
 def mutant_count(path):
@@ -161,7 +172,7 @@ def worker(wt, work, results, log_dir):
         except queue.Empty:
             return
         started = time.time()
-        rc, out = run([sys.executable, os.path.join('mutation', battery)], cwd=wt)
+        rc, out = run([sys.executable, os.path.join('mutation', battery)], cwd=wt, env=BATTERY_ENV)
 
         # ⚠️ A RED BASELINE IS NOT A MUTATION FINDING, AND UNDER LOAD IT IS USUALLY A FLAKE.
         # Measured 2026-08-20 while building this: six suites run concurrently in six SEPARATE
@@ -176,9 +187,14 @@ def worker(wt, work, results, log_dir):
         #     `Failed > 0` as a detection. That direction is silent and it inflates the score.
         # Retrying the whole battery once on a red baseline costs one run and removes the first;
         # the second is why `--jobs` defaults low rather than to the core count.
+        # ⚠️ P1-179 now closes the second (silent, inflating) direction directly: batteries run with
+        # RG_DOUBLE_KILL, so a flake DURING a mutant no longer scores a free kill -- the re-run does
+        # not reproduce it and it is scored a SURVIVOR. This retry stays as belt-and-suspenders for
+        # the baseline case, which the double-kill does not cover (a red baseline aborts before any
+        # mutant is scored).
         if rc != 0 and 'baseline is RED' in out:
             say('  [retry] %-28s red baseline, likely a load flake' % battery)
-            rc, out = run([sys.executable, os.path.join('mutation', battery)], cwd=wt)
+            rc, out = run([sys.executable, os.path.join('mutation', battery)], cwd=wt, env=BATTERY_ENV)
         secs = time.time() - started
         with open(os.path.join(log_dir, battery + '.log'), 'w',
                   encoding='utf-8', errors='replace') as f:

@@ -47,6 +47,7 @@ import os, re, subprocess, sys
 # Pinned before anything prints: a non-ASCII glyph in a description raises UnicodeEncodeError on a
 # cp1252 console, and it raises BETWEEN applying a mutant and restoring it.
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import _battery
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
@@ -274,11 +275,7 @@ try:
         open(target, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
         try:
             res = run()
-            mm = re.search(r'Failed = (\d+)', res)
-            undetected_crash = 'NO ASSERTION FAILED' in res
-            killed = (not undetected_crash) and (
-                ('BUILD FAILED' in res) or ('NO RESULT LINE' in res)
-                or (mm is not None and int(mm.group(1)) > 0))
+            killed = _battery.score(res, run)
             print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
             if not killed:
                 survivors.append(name)

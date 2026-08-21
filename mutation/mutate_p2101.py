@@ -177,12 +177,7 @@ for path, name, old, new in MUTANTS:
         continue
     open(path, 'w', encoding='utf-8', newline='').write(ORIGINALS[path].replace(old, new))
     res = run()
-    mm = re.search(r'Failed = (\d+)', res)
-    killed = ('BUILD FAILED' in res) or ('NO RESULT LINE' in res) \
-        or (mm is not None and int(mm.group(1)) > 0)
-    # P2-148: the verdict above cannot tell a detection from a crash.
-    if 'NO ASSERTION FAILED' in res:
-        killed = False
+    killed = _battery.score(res, run)
     print('  [%s] %s: %s' % ('KILLED' if killed else 'SURVIVED', name, res))
     if not killed:
         survivors.append(name)

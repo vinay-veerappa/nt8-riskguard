@@ -10159,7 +10159,31 @@ a detection from an accident, and the next source of non-determinism will be sco
 That residual is **`P1-179`**, filed rather than left inside this closed entry, because work hiding
 under a closed ID is invisible to every count.
 
-### P1-179. A mutation battery cannot distinguish a detection from an accident: `Failed > 0` is scored KILLED, whatever caused it — OPEN, split out of `P1-175` 2026-08-20 (session 61)
+### P1-179. A mutation battery cannot distinguish a detection from an accident: `Failed > 0` is scored KILLED, whatever caused it — ✅ CLOSED 2026-08-20 (session 61), LOCAL-ONLY by design
+
+**The kill decision now lives in `mutation/_battery.py`** (`is_kill` + `score`), and all 60 batteries
+were converted to `killed = _battery.score(res, run)` — a single mechanical change, each keeping its
+own `run()`. `score` re-runs an apparent kill and requires it to reproduce; a one-time red is scored
+a SURVIVOR, because a real detection is deterministic and an accident is not. A survivor is never
+re-run (verified: it is already the loud, investigated outcome).
+
+⚠️ **It runs ONLY under `RG_DOUBLE_KILL`, which `tools/ci_local.py` sets, and NOT in GitHub CI —
+this is the measured decision, not a shortcut.** The measurement the entry demanded: ~500 mutants
+across 60 batteries, ~95% killed, so re-running every kill adds ~1.5–1.7× CI compute and pushes the
+killed-heavy bins (30/24/23 mutants) past the 1119s critical path. And the accident it guards (the
+`P1-175` temp-file collision) needs two batteries CONTENDING on one machine, which happens ONLY in
+the local parallel runner — GitHub CI runs one bin per hosted runner with nothing else on the box
+and structurally cannot reproduce it. So the double-kill is armed exactly where accidents can occur,
+at zero cost to the slot-limited public CI, whose scoring is byte-for-byte unchanged (the env var is
+unset there). Operator decision, 2026-08-20.
+
+⚠️ **The measurement also found what the filed entry's one paragraph did not: the batteries had
+drifted into ~10 `run()` variants across several scoring generations** (only 18 of 60 carried the
+crash-aware `is_kill`). The move therefore UNIFIED the kill decision as well — an improvement
+(a crash is not a detection, everywhere now), validated by a full local CI run in which every
+converted battery still scored all-killed / its declared survivors.
+
+**Original entry (the defect as filed):**
 
 Every one of the 60 batteries scores a mutant like this:
 
