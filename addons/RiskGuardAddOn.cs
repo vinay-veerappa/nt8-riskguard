@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.57.0";
+        public const string Version = "1.58.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -4037,13 +4037,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Quantity = uncovered,
                         RuleId = "MISSING_STOP_ATTACH"
                     });
-                    // For the Unprotected case, transition to a pending state so a
-                    // duplicate call does not re-emit. For the under-covered case
-                    // the FSM is already Protected/ProtectedPending; do not downgrade.
-                    if (isUnprotected)
-                    {
-                        fsm.State = GuardFsmState.ProtectedPending;
-                    }
+                    // P0-180: do NOT reserve ProtectedPending here. This ran BEFORE the arbiter,
+                    // and ValidateInvariant rejects a PlaceStopOrder whose FSM is already
+                    // Protected/ProtectedPending -- so pre-reserving made the guard reject its own
+                    // first stop, leaving the position naked (caught live on Sim101 2026-08-20:
+                    // ARBITER_REJECTED, then NAKED_POSITION every 10s). Re-emission is already
+                    // suppressed by GraceEmitted (set below, checked at the top of this method), so
+                    // the reserve was redundant as well as harmful. The real reserve-before-submit
+                    // lives in ExecuteAction, AFTER the arbiter admits the action -- it sets
+                    // ProtectedPending under lock right before Submit and rolls back on failure
+                    // (P0-3, TestT2_SubmitFailureRollsBackFsmAndClearsGraceEmitted).
                 }
                 else
                 {

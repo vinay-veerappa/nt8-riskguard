@@ -372,6 +372,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestFsm_UnprotectedToProtectedViaOcoStopLeg);
             Run(TestFsm_NoDuplicateAutoStopWhenStopLegPending);
             Run(TestFsm_GraceExpiryPlacesAutoStopOnce);
+            Run(TestP0180_GraceExpiryAutoStopSurvivesItsOwnArbiter);
             Run(TestFsm_StopArrivesBeforePositionIsBuffered);
             Run(TestFsm_FlatTearsDownAndCancelsOrphanAutoStop);
             Run(TestFsm_StandaloneStopReachesProtected);
@@ -24273,11 +24274,71 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(first.Any(a => a.RuleId == "MISSING_STOP_ATTACH"), "First grace expiry emits MISSING_STOP_ATTACH");
 
             var fsm = addon.TestGetFsm(account.Name, mnq.FullName);
-            Assert(fsm.State == GuardFsmState.ProtectedPending, "FSM moved to ProtectedPending after emitting");
 
-            // Second call must not emit again (FSM no longer Unprotected).
+            // P0-180: the anti-duplicate latch is GraceEmitted, NOT a premature ProtectedPending.
+            // EvaluateGraceExpiry used to reserve the FSM to ProtectedPending here, before the
+            // arbiter ran -- and ValidateInvariant rejects PlaceStopOrder in that state, so the
+            // guard rejected its own first stop and the position stayed naked (caught live on
+            // Sim101). The reserve-before-submit belongs in ExecuteAction (line ~6203), AFTER the
+            // arbiter. After emitting, the FSM stays Unprotected with GraceEmitted set.
+            Assert(fsm.State == GuardFsmState.Unprotected,
+                "After emitting, the FSM stays Unprotected -- the reserve is deferred to the executor, "
+                + "so the arbiter does not reject the guard's own stop. Got " + fsm.State);
+            Assert(fsm.GraceEmitted,
+                "GraceEmitted is the anti-duplicate latch that suppresses the second emission.");
+
+            // Second call must not emit again -- suppressed by GraceEmitted, not by the state.
             var second = addon.EvaluateGraceExpiry(account, mnq.FullName);
-            Assert(second.Count == 0, "Second grace-expiry call emits nothing (FSM already ProtectedPending)");
+            Assert(second.Count == 0, "Second grace-expiry call emits nothing (GraceEmitted latch set)");
+        }
+
+        // P0-180. The AutoStop produced at grace expiry must survive the guard's OWN arbiter.
+        // EvaluateGraceExpiry emitted a PlaceStopOrder AND (the defect) pre-reserved the FSM to
+        // ProtectedPending before the arbiter ran; ValidateInvariant rejects PlaceStopOrder in that
+        // state, so the guard rejected its own first stop and the position sat naked. Caught live on
+        // Sim101 2026-08-20 (ARBITER_REJECTED, then NAKED_POSITION every 10s); the unit suite missed
+        // it because grace-expiry, the arbiter and the executor were each driven in isolation and
+        // nothing carried the SAME action from emission through the arbiter. The real
+        // reserve-before-submit is in ExecuteAction (~6203), after the arbiter.
+        private static void TestP0180_GraceExpiryAutoStopSurvivesItsOwnArbiter()
+        {
+            Console.WriteLine("\n[TEST] P0-180: a grace-expiry AutoStop is not rejected by the guard's own arbiter");
+            var config = FsmTestConfig(graceSeconds: 0, onMissing: "AutoStop");
+            config.StopGuard.Offsets = null; // pure bps path, as deployed
+            var mnq = new Instrument("MNQ");
+            var account = AutoStopTestAccount(mnq, MarketPosition.Long, 1, 18000.0, 18000.0);
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            addon.TestClearFsms();
+            addon.TestFsmOnPosition(account, mnq.FullName, MarketPosition.Long, 1);
+
+            // Grace expiry (deadline already past) emits the PlaceStopOrder for the naked long.
+            var actions = addon.EvaluateGraceExpiry(account, mnq.FullName);
+            var attach = actions.FirstOrDefault(a => a.RuleId == "MISSING_STOP_ATTACH"
+                                                     && a.ActionType == GuardActionType.PlaceStopOrder);
+            Assert(attach != null, "Precondition: grace expiry emits a PlaceStopOrder for the naked long.");
+
+            // Route that exact action back through the guard, as DispatchActions does. Capture broker
+            // calls so we can prove a stop is CREATED (risk-reducing), not the position flattened.
+            var brokerCalls = new List<string>();
+            Account.BrokerCallObserver = m => { lock (brokerCalls) { brokerCalls.Add(m); } };
+            string result;
+            try { result = addon.ProcessAction(attach, forceLive: true); }
+            finally { Account.BrokerCallObserver = null; }
+
+            Assert(result != "REJECTED (INVARIANT VIOLATION)",
+                "The arbiter must ADMIT the guard's own grace-expiry AutoStop. Before P0-180 it rejected "
+                + "it, because EvaluateGraceExpiry pre-reserved the FSM to ProtectedPending and "
+                + "ValidateInvariant rejects PlaceStopOrder in that state -- so the first stop was never "
+                + "placed and the position sat naked. Got: " + result);
+            Assert(brokerCalls.Contains("CreateOrder") && !brokerCalls.Contains("Flatten"),
+                "A protective stop is CREATED, not the position flattened, when the AutoStop is admitted. "
+                + "Broker calls: [" + string.Join(",", brokerCalls) + "]");
+
+            var fsm = addon.TestGetFsm(account.Name, mnq.FullName);
+            Assert(fsm != null && fsm.AutoStopOrder != null && fsm.State == GuardFsmState.ProtectedPending,
+                "After a successful placement the executor reserves ProtectedPending and tracks the stop.");
         }
 
         // 4. Stop OrderUpdate arrives BEFORE PositionUpdate -> buffered, consumed on position open.

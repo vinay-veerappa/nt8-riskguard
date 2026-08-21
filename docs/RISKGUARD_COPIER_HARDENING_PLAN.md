@@ -11566,3 +11566,51 @@ run; the command is recorded in `ci.yml` beside the bin.
 * `P2-135`/`P2-136` are **not live-validated**. Reproducing either needs a provider that declines a
   stop move three times, or a bracket dropped with a position open. Both are reproduced
   deterministically in the suite from the live measurements (`75726b75`, `1a48f3cf`).
+
+### P0-180. `StopGuard.OnMissing: AutoStop` never places a stop in live execution — the guard rejects its own first stop as its own pending state — ✅ FIXED 2026-08-20 (session 62), v1.58.0 — suite 3475/0, battery 3/3; ⚠️ NOT YET LIVE-REVALIDATED
+
+**Found by the Sim test, not the suite.** The `P1-151` AutoStop policy shipped in `v1.57.0`
+suite-green, but the FIRST time it ever ran armed-live — a scoped Sim101-only window, MES 1-lot,
+2026-08-20 — the grace timer expired and the guard **rejected its own stop**:
+
+> `ARBITER_REJECTED: Arbiter rejected action PlaceStopOrder — would increase risk or target is invalid.`
+
+The position then sat `NAKED_POSITION` (`covered=0, gap=1`) for the life of the trade, re-logged
+every 10s by the audit sweep. `OnMissing=Flatten` was unaffected — the arbiter admits a
+`FlattenPosition` unconditionally — which is why the pre-existing default always worked and this
+stayed latent.
+
+**Mechanism (a state-machine self-defeat).** `EvaluateGraceExpiry` set `fsm.State = ProtectedPending`
+in its `isUnprotected` branch — *before* the `PlaceStopOrder` it emitted reached the arbiter — and
+`ValidateInvariant` rejects a `PlaceStopOrder` whose FSM is `Protected || ProtectedPending`. The
+reserve and the arbiter's duplicate-check shared one state value with two incompatible meanings, so
+the guard rejected the first stop it ever tried to place. The premature reserve was also
+**redundant**: `GraceEmitted` (set after both branches, checked at the top of the method) already
+suppresses re-emission, and the *real* reserve-before-submit is in `ExecuteAction` (~line 6206) —
+under lock, right before `Submit`, rolled back on failure (that is `P0-3`'s design; see
+`TestT2_SubmitFailureRollsBackFsmAndClearsGraceEmitted`).
+
+**Why the suite missed it.** `EvaluateGraceExpiry`, `ValidateInvariant`, and `ExecuteAction` were
+each driven in isolation with FSM states set up independently; nothing carried the SAME action from
+emission through the arbiter to the executor. Same family as `an-order-is-not-one-fill` and
+`test-doubles-are-not-evidence`. The Sim test exists precisely to catch this class.
+
+**Fix.** Delete the premature `fsm.State = GuardFsmState.ProtectedPending` in `EvaluateGraceExpiry`.
+`GraceEmitted` remains the anti-duplicate latch; the FSM stays `Unprotected` after emission so the
+arbiter admits the action, and the executor reserves `ProtectedPending` after the arbiter passes.
+No arbiter change: its `ProtectedPending` rejection is now correct — it means a stop is genuinely
+pending. `TestFsm_GraceExpiryPlacesAutoStopOnce` updated to assert the FSM stays `Unprotected` with
+`GraceEmitted` set (the latch), not `ProtectedPending`.
+
+**Evidence.** `TestP0180_GraceExpiryAutoStopSurvivesItsOwnArbiter` drives grace-expiry → the emitted
+action → `ProcessAction(forceLive:true)` and asserts the arbiter admits it, a stop is **created**
+(not the position flattened, via `BrokerCallObserver`), and the executor reserves `ProtectedPending`
+and tracks the order. Red before the fix (`REJECTED (INVARIANT VIOLATION)`, broker calls `[]`), green
+after (`EXECUTED`, `[CreateOrder,Submit]`). `mutate_p0180.py` (3/3): re-adds the premature reserve,
+widens the arbiter to reject `Unprotected`, and corrupts the executor's reserve state — P0-180 kills
+each.
+
+⚠️ **Not yet live-revalidated.** The fix must be re-run through the same scoped Sim101 test after
+deploy — a naked MES 1-lot must show `RiskGuardAutoStop` attach ~5 bps below entry — before the box
+is armed live with `OnMissing=AutoStop`. `v1.57.0` carries the defect but no funded account was ever
+exposed: the deployed config was `Flatten` and `shadow` acts on nothing.
