@@ -3484,7 +3484,7 @@ refused. Suite **302 → 310**, wrapper **51 → 53**, `nt_compile` **0 errors**
 <details>
 <summary>The entry as originally filed, 2026-08-14</summary>
 
-### P1-102 (as filed). There is no MCP tool to READ or CLEAR a lockout
+### P1-102 (as filed). There is no MCP tool to READ or CLEAR a lockout — ✅ CLOSED 2026-08-21 (session 62): `nt_lockout` is wired (`nt8-mcp-bridge/mcp/nt-mcp-server.js:314` → `/api/lockout`, schema `mcp/lib/tools.js:364`, status/unlock/reset/clear). Verified in use this session.
 
 **Where**: `nt8-mcp-bridge/mcp/lib/tools.js`. The bridge has
 `POST /api/lockout` with `action` of `status` | `unlock` | `reset` | `clear`, hardened by `P1-90`'s
@@ -8366,7 +8366,13 @@ precondition converts one red assertion into an unknown number of unmeasured one
 own sweep of the suite's preconditions and gets its own ID when taken.
 
 
-### P1-149. `Sizing.MaxContractsPerAccount` is configured, evaluated, displayed — and enforced by NOTHING before an order is placed. The only thing that refuses an oversized order is the PROP FIRM, at 60 — OPEN, measured 2026-08-18 (session 58)
+### P1-149. `Sizing.MaxContractsPerAccount` is configured, evaluated, displayed — and enforced by NOTHING before an order is placed. The only thing that refuses an oversized order is the PROP FIRM, at 60 — ⚠️ REFRAMED 2026-08-21 (session 62): the bridge/copier halves are CLOSED; the RiskGatekeeper sub-task and the documented non-goal remain — OPEN
+
+> **Research 2026-08-21 (session 62).** The "enforced by nothing" half is now false. `BridgeSizingGate` enforces the cap pre-trade on all three bridge order paths (`McpBridgeAddOn.cs:2623/2712/5760`, reading the guard's `EffectiveMaxContracts` at `RiskGuardAddOn.cs:1639`), and the copier clamps to the same number (`TradeCopierEngine.cs:5318`, lower-binds). The cap is also enforced REACTIVELY in the guard via `MAX_SIZE_BREACH` (`RiskGuardAddOn.cs:4693-4706`). So the number is NOT dead.
+>
+> **The irreducible residue (NT8 platform fact).** An AddOn has no pre-submit veto for an order it did not originate — `OrderUpdate` fires no earlier than `Submitted`/`Accepted`, and instant fills surface once, already `Filled` (`RiskGuardAddOn.cs:4667-4670`). So **manual UI orders, external-platform orders, and non-`RiskManagerBase` strategies can only be caught reactively** (cancel-if-working = a race; flatten-after-fill = slips, which is what this defect measured). The prop firm's 60-contract desk refusal is the only TRUE pre-trade cap on those paths.
+>
+> **The one closeable gap:** `RiskGatekeeper.CanTrade` (the strategy-side pre-submit gate for `RiskManagerBase` strategies, `Documents/NinjaTrader 8/bin/Custom/Strategies/Vinay/RiskGatekeeper.cs:98`) enforces loss/drawdown/trade-count but NOT the contract cap. Wiring the cap in there would give `RiskManagerBase` strategies a genuine pre-trade size refusal. ⚠️ that file is in NEITHER git repo. See `RISKGUARD_BACKLOG_ROADMAP.md` Wave 2 for the sub-tasks. What remains OPEN is that sub-task and the documented non-goal; the original blanket framing is closed.
 
 Found because the operator proposed the experiment — *"if you try to go for 1000 contracts it might refuse"* — after this session's author had asserted, wrongly, that the ATM order path has no pre-trade gate at all.
 
