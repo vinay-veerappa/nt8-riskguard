@@ -116,4 +116,13 @@ for target, name, old, new in MUTANTS:
 
 restore()
 print(chr(10) + 'restored originals;', run())
-_battery.finish(survivors, MUTANTS)
+
+# Plain exit, NOT _battery.finish: every mutant here must die (no EXPECTED SURVIVOR), and
+# tools/check_expected_survivors.py requires a battery reaching for finish() to declare one --
+# reaching for the helper without a declaration removes the prompt to justify the next exemption.
+print('\n%d/%d mutants killed' % (len(MUTANTS) - len(survivors), len(MUTANTS)))
+if survivors:
+    print('\nSURVIVORS -- each is a test the suite does not have:')
+    for s in survivors:
+        print('  *', s)
+sys.exit(1 if survivors else 0)
