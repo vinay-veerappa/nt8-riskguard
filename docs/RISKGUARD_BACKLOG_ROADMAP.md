@@ -13,6 +13,15 @@ evidence. This file is only the *order* and the *why-that-order*.
 all 102 accounts flat. AutoStop (`OnMissing=AutoStop`, ~5 bps) live-validated on Sim101. The box is
 safe to arm live at the operator's discretion — that decision is not in this roadmap.
 
+> **⚠️ DEPLOYED SINCE THIS ROADMAP WAS WRITTEN (2026-08-21, session 59):** the live box is now
+> **`v1.62.0`** (`mode: shadow`, armed, guarding, 0 compile errors). Waves 1–3 have largely SHIPPED
+> and are CLOSED in the plan — this file's wave tables are the original *snapshot* and are marked
+> below; the plan headers are authoritative. Cut in order: **`v1.59.0`** (Wave 1: `P2-178`, `P2-150`,
+> `P2-154` + `P2-181`), **`v1.61.0`** (`P1-149` `RiskManagerBase` cap + `P2-155` + `P2-158`),
+> **`v1.62.0`** (`P2-147` + `P2-132a`). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
+> **The genuine OPEN set is now `P2-132`(b), `P2-126`, `P2-29` remainder, `P3-118`, `P3-124`,
+> `P3-110`, `P3-33`** — see the Sequencing summary at the bottom, refreshed this session.
+
 ---
 
 ## How this is ordered
@@ -31,8 +40,8 @@ Two standing constraints from the deployed system:
 
 ## Housekeeping (do first, ~minutes)
 
-- **`P1-102` → CLOSE.** "No MCP tool to read/clear a lockout" is stale: `nt_lockout` exists and calls `/api/lockout` (`nt8-mcp-bridge/mcp/nt-mcp-server.js:314`, schema `mcp/lib/tools.js:364`). Verified 2026-08-21. Mark the entry closed.
-- **`P1-149` → REFRAME** (see the dedicated section below; the "enforced by nothing" half is closed).
+- ~~**`P1-102` → CLOSE.**~~ ✅ DONE — closed 2026-08-15; `nt_lockout` reads/clears via `/api/lockout`.
+- ~~**`P1-149` → REFRAME**~~ ✅ DONE — reframed; the `RiskManagerBase` cap shipped `v1.61.0` and was live-validated on Sim101.
 
 ---
 
@@ -79,7 +88,7 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 | ID | Problem | Approach | Repo | Effort | Live? |
 |---|---|---|---|---|---|
 | ~~**P1-131**~~ ✅ | The bridge hand-rolls its own order-liveness list, disagreeing with the core's shared classifier in BOTH directions — and that decides whether a disconnect would strand you. | **DONE**: `BridgeOrderLiveness` extracted + all 3 sites migrated + tests + `mutate_p1131.py` (shipped `30dcd4e`); source gate `check_single_order_liveness.py` added 2026-08-21. NOT a shared-classifier merge — it answers a DIFFERENT question than core `OccupiesSlot` (the plan entry records why). | bridge | M | tests + battery green locally |
-| **P2-147** | 12 funded-account executions were dropped by the copier because they carry no `Order`, so no direction could be read. | Derive direction from the execution/position delta when `Order` is null; test with the captured live shape. | core (copier) | M | yes — replay the capture |
+| ~~**P2-147**~~ ✅ | 12 funded-account executions were dropped by the copier because they carry no `Order`, so no direction could be read. | **DONE + DEPLOYED `v1.62.0`**: the capture REFRAMED it — 537/537 null-`Order` execs were connect-replay (0 live), so DROPPING is correct; the branch now classifies via the reconnect-replay window (`EXEC_REPLAY_IGNORED` quiet / `EXEC_NULL_ORDER_LIVE` loud). `mutate_p2147.py` 6/6. | core (copier) | M | replayed the capture |
 
 ---
 
@@ -122,9 +131,9 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 | ID | Problem | Approach | Repo | Effort |
 |---|---|---|---|---|
-| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | Add a `lastFiredUtc` / recency to the inventory vocabulary. | core | M |
+| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | **Slice (a) DONE + DEPLOYED `v1.62.0`**: the per-account cap reports `currentValue` from `state.Positions`. **Slice (b) OPEN**: the aggregate cap's cross-account-SUM `currentValue` + the `EvaluatedNotEnforcing` recency vocabulary. ⚠️ Slice (a) has NO battery yet — fold `mutate_p2132.py` in with slice (b). | core | M |
 | **P2-126** | The copier browser UI implements 2 of the 14 actions its own API supports. | Build out the remaining actions against `knownActions` (`McpBridgeAddOn.cs:4253`). | bridge (ui) | M |
-| **P2-108** | `NAKED_POSITION` re-logs every 10s because the audit calls `LogEvent` directly, not via `DispatchActions`. | Throttle, or route through the dedup path. Noise, not risk. | core | S |
+| ~~**P2-108**~~ ✅ | `NAKED_POSITION` re-logs every 10s because the audit calls `LogEvent` directly, not via `DispatchActions`. | **DONE (CLOSED 2026-08-15)**: routed through the dedup path. | core | S |
 
 ---
 
@@ -134,7 +143,7 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 |---|---|---|---|---|
 | **P3-118** | Three readers of `Mode` with three case rules; `Mode: "Live"` is refused as unrecognised by the reader that decides arming. | One canonical, case-insensitive Mode parser. ⚠️ Worth doing BEFORE anyone writes `Mode: "Live"` into config. | core | S-M |
 | **P3-124** | The mini/micro symbol table is written FOUR times in `TradeCopierEngine.cs`, two of them the sizing arithmetic twice. | Extract to one source of truth; the duplication is a drift hazard ([[a-second-reader-of-the-same-state]]). | core (copier) | M |
-| **P3-111** | `/api/bars` throws an unhandled `FormatException` on a caller's query typo (`int.Parse`). | `TryParse` → 400 with a named field. | bridge | S |
+| ~~**P3-111**~~ ✅ | `/api/bars` throws an unhandled `FormatException` on a caller's query typo (`int.Parse`). | **DONE (CLOSED 2026-08-14, live-validated)**: `TryParse` → 400 with a named field. | bridge | S |
 | **P3-110** | The panic flatten's cancel set omits `OrderState.TriggerPending` — NARROWED live; small remainder. | Add `TriggerPending` to `ActiveOrderStates`. | bridge | S |
 | **P3-33** | Global `lock()` on the hot path. | The pragmatic subset (never hold `_stateLock` across I/O) is largely in place; the full actor-model port is LARGE. Defer unless contention is observed. | core | L |
 
@@ -142,11 +151,15 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 ## Sequencing summary
 
-1. **Housekeeping** — close `P1-102`, reframe `P1-149`. (minutes)
-2. **Wave 1** — `P2-178`, `P2-154`, `P2-150`. (contained correctness; each live-checkable)
-3. **Wave 2** — `P1-149` sub-task 2 (RiskGatekeeper cap) + `P1-131` + `P2-147`. (enforcement)
-4. **Wave 3** — `P2-158`, `P2-155`, `P3-177`. (hardening)
-5. **Wave 4** — `P2-132`, `P2-126`, `P2-108`. (observability/UI)
-6. **Wave 5** — `P3-118`, `P3-124`, `P3-111`, `P3-110`, `P3-33`. (architecture)
+⚠️ **Refreshed 2026-08-21 (session 59), post-`v1.62.0`.** Strikethrough = SHIPPED + CLOSED in the plan.
+
+1. ~~**Housekeeping** — close `P1-102`, reframe `P1-149`.~~ ✅ DONE
+2. ~~**Wave 1** — `P2-178`, `P2-154`, `P2-150`~~ ✅ (+ `P2-181`) — DEPLOYED `v1.59.0`
+3. ~~**Wave 2** — `P1-149` sub-task 2 (RiskGatekeeper cap) + `P1-131` + `P2-147`~~ ✅ — cap `v1.61.0`, `P2-147` `v1.62.0`
+4. ~~**Wave 3** — `P2-158`, `P2-155`~~ ✅ `v1.61.0`; **`P3-177` remains** (CI packing true-up — a follow-up, not acute)
+5. **Wave 4** — `P2-132`(**slice b**; slice a shipped `v1.62.0`), `P2-126`; ~~`P2-108`~~ ✅. (observability/UI)
+6. **Wave 5** — `P3-118`, `P3-124`, ~~`P3-111`~~ ✅, `P3-110`, `P3-33`. (architecture)
+
+**The genuine OPEN set, in order:** `P2-132`(b) (fold in `mutate_p2132.py`), `P2-126`, `P2-29` remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`; plus the standing follow-ups `P3-177` (CI packing) and `P1-151`/AutoStop's first live stop.
 
 **Not in this roadmap** (operator decisions, not engineering tasks): arming the box `live`; and the cooldown-ladder config values (deployed `CooldownMinutes=5, MaxConsecutiveLosses=3` vs the discussed `base 2 / cap 4`). Both are inert under `shadow` and change only what happens once armed.
