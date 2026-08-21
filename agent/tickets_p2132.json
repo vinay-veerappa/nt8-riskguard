@@ -1,38 +1,38 @@
 {
-  "_comment": "P2-132 slice (a): the 'Max contracts per account' sizing rule reports currentValue=null while the enforcer reads the live position every sweep, so a rule in breach (11 against a cap of 10, measured on TAKEPROFITPRO524207503) renders identically to one that has never come close -- while three neighbouring rules (Daily loss limit, Max trades per session, Max consecutive losses) all report where you stand. This slice fixes ONLY the per-account contract cap's currentValue by deriving it from the same position data GetAccountSnapshots already gathers. It does NOT touch the aggregate cap (its currentValue is a cross-account sum, a separate computation) and does NOT touch the EvaluatedNotEnforcing state-vocabulary half (b) -- both get their own slices. Reporting-only, shadow-safe: nothing about enforcement changes.",
+  "_comment": "P2-132 slice (a): the 'Max contracts per account' sizing rule reports currentValue=null while the enforcer reads the live position every sweep. Fix ONLY the per-account cap's currentValue by deriving it from the position data GetAccountSnapshots already gathers. TEST-FIRST: the red tests + the MaxPositionQuantity property stub are already committed (93c6d81) -- two tests are RED (per-account cap reports null not the position; flat reports null not 0) and one is a GREEN negative control (aggregate cap stays null). The loop's job is ONLY (1) populate MaxPositionQuantity in GetAccountSnapshots and (2) read it in the per-account evaluator. The negative-control test TestP2132_AggregateContractCapStillReportsNull guards the (wide) evaluator region: touching the aggregate rule turns it red.",
   "tickets": [
     {
       "id": "T1",
-      "title": "The per-account contract cap reports the live position instead of null",
-      "defect": "GuardRuleRegistry's 'Max contracts per account' evaluator returns R(null, c.Config.Sizing.MaxContractsPerAccount, ...) -- a hardcoded null currentValue -- while the enforcer in RiskGuardAddOn reads pos.Quantity every sweep and locks out on 'pos.Quantity > limit'. Measured live on TAKEPROFITPRO524207503: nt_positions showed MNQ Long 11 against a cap of 10, MAX_SIZE_BREACH fired at the second the 11th lot filled, and the rule inventory still reported currentValue:null. This is inconsistent WITHIN one view: Daily loss limit reports -101.25 against -1000, Max trades per session reports 4 against 8, Max consecutive losses reports 5 against 3 -- three rules tell the operator where they stand and the sizing one, the one in breach, does not. F-9's remedy applies: derive the display FROM the same position data the enforcer uses. GetAccountSnapshots already iterates state.Positions.Values (to build PositionString), so the max single-instrument position quantity is in hand at snapshot-build time; it is simply not carried onto the snapshot or read by the evaluator.",
-      "spec": "Carry the account's current MAX single-instrument position quantity (absolute) onto AccountStateSnapshot and report it as the 'Max contracts per account' rule's currentValue. Concretely: (1) add an int property MaxPositionQuantity to AccountStateSnapshot. (2) In GetAccountSnapshots, inside the existing `foreach (var pos in state.Positions.Values)` loop that builds PositionString, also track the maximum of Math.Abs(pos.Quantity) across the non-Flat positions and assign it to snapshot.MaxPositionQuantity (0 when flat). Do NOT add a second loop over positions -- fold it into the existing one. (3) In the 'Max contracts per account' evaluator in GuardRules.cs, replace the null first argument of R(...) with the account's MaxPositionQuantity: R(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1). The null-account branch must STILL report null (no account snapshot, no reading -- the same rule the equity evaluator uses via HasEquityReading). Change NOTHING about enforcement, the aggregate cap ('Max contracts aggregate' keeps its null -- its currentValue is a cross-account sum and is a separate slice), or the EvaluatedNotEnforcing state vocabulary. The evidenceCount argument (c.Account == null ? 0 : 1) is unchanged.",
+      "title": "Populate and report the per-account contract cap's live position",
+      "defect": "GuardRuleRegistry's 'Max contracts per account' evaluator returns R(null, c.Config.Sizing.MaxContractsPerAccount, ...) -- a hardcoded null currentValue -- while the enforcer reads pos.Quantity every sweep and locks out on 'pos.Quantity > limit'. Measured live on TAKEPROFITPRO524207503: MNQ Long 11 against a cap of 10, MAX_SIZE_BREACH fired, and the inventory still reported currentValue:null while Daily loss limit, Max trades per session and Max consecutive losses all reported where the account stood. The AccountStateSnapshot now carries an int MaxPositionQuantity (added in the test-first commit, default 0) but NOTHING populates it and the evaluator does not read it, so the two P2-132 tests are red.",
+      "spec": "Two edits, nothing else. (1) In GetAccountSnapshots, inside the EXISTING `foreach (var pos in state.Positions.Values)` loop that builds PositionString, track the maximum of Math.Abs(pos.Quantity) across the non-Flat positions and assign it to snapshot.MaxPositionQuantity (it stays 0 when the account is flat). Do NOT add a second loop over positions and do NOT change PositionString. (2) In the 'Max contracts per account' evaluator in GuardRules.cs, replace ONLY the null first argument of R(...) with the account's MaxPositionQuantity: R(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1). The null-account branch must STILL report null. Change NOTHING about the 'Max contracts aggregate' evaluator immediately below it (its currentValue is a cross-account sum, a separate slice -- the negative-control test asserts it stays null), nothing about enforcement, and nothing about the evidenceCount argument (c.Account == null ? 0 : 1) or the Off(...) no-cap branch.",
       "regions": [
-        {
-          "id": "TheSnapshotType",
-          "file": "addons/RiskGuardAddOn.cs",
-          "anchor": "public class AccountStateSnapshot",
-          "kind": "decl",
-          "note": "Add the int MaxPositionQuantity property here beside AccountEquity/TradesToday. Add a property; reword nothing else -- neighbouring fields' comments are pinned by tests."
-        },
         {
           "id": "TheSnapshotBuild",
           "file": "addons/RiskGuardAddOn.cs",
           "anchor": "public List<AccountStateSnapshot> GetAccountSnapshots()",
           "kind": "decl",
-          "note": "Populate MaxPositionQuantity inside the EXISTING `foreach (var pos in state.Positions.Values)` loop that builds PositionString -- track max Math.Abs(pos.Quantity) over non-Flat positions. Do not add a second loop and do not disturb PositionString."
+          "note": "Populate MaxPositionQuantity inside the EXISTING `foreach (var pos in state.Positions.Values)` loop that already builds PositionString from pos.MarketPosition/pos.Quantity -- track max Math.Abs(pos.Quantity) over non-Flat positions. One loop, not two; leave PositionString alone."
         },
         {
           "id": "TheEvaluator",
           "file": "addons/GuardRules.cs",
           "anchor": "Name = \"Max contracts per account\"",
           "kind": "stmt",
-          "note": "Replace the R(null, ...) currentValue with c.Account.MaxPositionQuantity (null-account branch stays null). Do NOT touch the 'Max contracts aggregate' definition immediately below it."
+          "note": "Replace ONLY the R(null, ...) first argument in THIS rule (Max contracts per account) with c.Account.MaxPositionQuantity, null-account branch staying null. The region also contains the 'Max contracts aggregate' rule and others -- DO NOT TOUCH THEM. TestP2132_AggregateContractCapStillReportsNull goes red if you touch the aggregate."
+        },
+        {
+          "id": "TheSnapshotTypeContext",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "public class AccountStateSnapshot",
+          "kind": "decl",
+          "readonly": true,
+          "note": "Read-only context: shows MaxPositionQuantity already exists on the snapshot (added test-first). Do not edit."
         }
       ],
       "expect_green": [
-        "P2-132: the per-account contract cap reports the current max position, not null",
-        "P2-132: a flat account reports 0 for the per-account contract cap, not null",
-        "P2-132: the aggregate contract cap is untouched and still reports null"
+        "the per-account contract cap must report the live position (11)",
+        "a flat account holds 0 contracts"
       ]
     }
   ]
