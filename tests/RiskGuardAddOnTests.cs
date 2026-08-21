@@ -12367,18 +12367,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             P2112ResetAnnouncement();
 
             var events = new List<string>();
-            var second = new DynamicAtmManager();
-            seam.SetValue(second, new Func<Action, bool>(_ => false));
-
             RiskGuardAddOn.LogEventObserver = (a, evt) => events.Add(evt);
             try
             {
+                // Drive `atm` while it is the current sweep owner -- it was the last manager
+                // constructed (in AtmSetup), and nothing since has taken ownership.
                 for (int i = 0; i < 5; i++) P2112DriveMonitorTick(atm);
 
                 // A SECOND manager. The message says "once per session", and the condition is
                 // process-wide -- there is one WPF application object, not one per manager. With an
                 // instance-scoped flag this line announces again and the message is a lie, which is
                 // the finding the review panel got right (the other two it upheld were wrong).
+                //
+                // ⚠️ P2-155: constructing it makes IT the current owner, and a superseded manager now
+                // self-terminates instead of sweeping -- so `second` is built HERE, after atm's sweeps,
+                // and driven while it owns the sweep. (Building it first, as this test once did, left
+                // atm superseded and its five sweeps blocked, which hid the every-sweep mutant: the one
+                // announcement then came only from `second` whether the mutant was present or not.) In
+                // production a second manager appears ONLY via a hot-swap rebuild; each is driven while
+                // it owns the sweep, and the process-wide latch is what keeps the second one silent.
+                var second = new DynamicAtmManager();
+                seam.SetValue(second, new Func<Action, bool>(_ => false));
                 P2112DriveMonitorTick(second);
             }
             finally
