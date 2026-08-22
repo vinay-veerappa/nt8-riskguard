@@ -188,6 +188,16 @@ MUTANTS = [
      "the tab is not reading the engine's ratio at all",
      '                symbolMultiplier = SymbolPairTable.MultiplierFrom(symbolRoot);',
      '                symbolMultiplier = 1.0;'),
+
+    # ---- 16. IsMicro reverts to the case-SENSITIVE Dictionary.ContainsValue ----
+    # P3-124 follow-up. ContainsValue ignores the OrdinalIgnoreCase KEY comparer, so IsMicro
+    # would be case-sensitive while IsMini is not -- MultiplierFrom converts a lowercase mini
+    # but not a lowercase micro. The case-insensitivity test dies; every uppercase test survives.
+    (ENGINE,
+     "IsMicro reverts to case-sensitive ContainsValue, so a lowercase micro root is not "
+     "recognised and MultiplierFrom returns 1.0 instead of 0.1; the case-insensitivity test dies",
+     '            return MiniOf(root) != null;',
+     '            return root != null && _miniToMicro.ContainsValue(root);'),
 ]
 
 

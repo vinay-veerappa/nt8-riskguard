@@ -944,6 +944,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // P3-124: the mini/micro symbol table is one definition
             Run(TestP3124_TheMultiplierIsOneDefinition);
+            Run(TestP3124_TheTableIsCaseInsensitiveBothWays);
             Run(TestP3124_TranslateSymbolReadsTheSharedTable);
             Run(TestP3124_TheConflictDetectorReadsTheSharedTable);
             Run(TestP3124_AnUnknownSymbolIsNotAMini);
@@ -3641,6 +3642,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "ES (mini) -> 10.0 multiplier");
             Assert(Math.Abs(SymbolPairTable.MultiplierFrom("MES") - 0.1) < 0.001,
                 "MES (micro) -> 0.1 multiplier");
+        }
+
+        // P3-124 follow-up. The table's four readers claim case-insensitivity, but IsMicro was built
+        // on Dictionary.ContainsValue -- which ignores the OrdinalIgnoreCase KEY comparer -- so it was
+        // case-SENSITIVE while IsMini was not. That made MultiplierFrom asymmetric: a lowercase mini
+        // got 10x but a lowercase micro got 1.0 instead of 0.1. This locks the whole table to ONE
+        // case rule. (Production roots are uppercased, so this was latent -- and uncaught, because
+        // every other test used uppercase. [[detector-needs-a-negative-test]])
+        private static void TestP3124_TheTableIsCaseInsensitiveBothWays()
+        {
+            Console.WriteLine("\n[TEST] P3-124: the symbol table is case-insensitive for minis AND micros");
+
+            Assert(SymbolPairTable.IsMini("nq"), "IsMini is case-insensitive: 'nq' is a mini");
+            Assert(SymbolPairTable.IsMicro("mnq"), "IsMicro is case-insensitive: 'mnq' is a micro");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("nq") - 10.0) < 0.001,
+                "lowercase mini 'nq' -> 10.0, same as 'NQ'");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("mnq") - 0.1) < 0.001,
+                "lowercase micro 'mnq' -> 0.1 (was 1.0 while IsMicro was case-sensitive)");
+            Assert(string.Equals(SymbolPairTable.MiniOf("mes"), "ES", StringComparison.OrdinalIgnoreCase),
+                "MiniOf is case-insensitive: 'mes' -> ES");
+            Assert(string.Equals(SymbolPairTable.MicroOf("es"), "MES", StringComparison.OrdinalIgnoreCase),
+                "MicroOf is case-insensitive: 'es' -> MES");
         }
 
         private static void TestP3124_TranslateSymbolReadsTheSharedTable()

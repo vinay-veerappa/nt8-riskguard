@@ -68,7 +68,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// <summary>True for a MICRO root (MNQ, MES, MYM, MCL, MGC, M2K). Case-insensitive.</summary>
         public static bool IsMicro(string root)
         {
-            return root != null && _miniToMicro.ContainsValue(root);
+            // P3-124 follow-up: NOT _miniToMicro.ContainsValue(root). Dictionary.ContainsValue uses
+            // EqualityComparer<TValue>.Default (ordinal) -- the OrdinalIgnoreCase comparer applies to
+            // KEYS only. So ContainsValue made IsMicro case-SENSITIVE while IsMini (ContainsKey) was
+            // case-insensitive, and MultiplierFrom converted a lowercase mini (10x) but not a
+            // lowercase micro (0.1x) -- the exact asymmetry this one-table refactor set out to remove.
+            // MiniOf already does the reverse lookup case-insensitively, so IsMicro reuses it and the
+            // two cannot diverge.
+            return MiniOf(root) != null;
         }
 
         /// <summary>The micro root for a mini root, or null. Case-insensitive.</summary>
