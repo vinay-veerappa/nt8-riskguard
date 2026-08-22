@@ -10,11 +10,16 @@ green build, 1833 passing tests, and a two-model review panel. Read the list, no
   * mutant 7 is the same shape on PnLRules: a missing section was backfilled from the config
     being REPLACED, so "remove the trailing drawdown rule" passed preflight against the limit
     it was removing.
-  * mutant 3 is the changed-check relaxed to OrdinalIgnoreCase. When this battery was first
-    written it SURVIVED, and the reason is the useful part: every mode pair in the acceptance
-    tests differed under both comparisons, so nothing could tell them apart. `shadow` ->
-    `SHADOW` is the discriminator and it did not exist until the battery demanded it. A
-    surviving mutant is sometimes a missing TEST -- this is one of the times.
+  * mutant 3 is the changed-check's CASE rule. When this battery was first written the mutant
+    relaxed Ordinal -> OrdinalIgnoreCase and SURVIVED, and the reason was the useful part: every
+    mode pair in the acceptance tests differed under both comparisons, so nothing could tell them
+    apart. `shadow` -> `SHADOW` was the discriminator the battery demanded. Then P3-118 made all
+    four readers of Mode case-insensitive (RefuseChange included) AND made SHADOW a valid mode --
+    which turned that discriminator into an EQUIVALENT mutant (both comparisons accept a valid
+    mode). The kill moved to the pure/override case: an unchanged case-variant of an UNIMPLEMENTED
+    mode (pure -> PURE) is a change under Ordinal and gets refused, trapping the operator on a
+    value they did not touch -- the P2-119 defect in the mode field. A surviving mutant is
+    sometimes a missing test; a newly-equivalent one is sometimes a moved test.
 
 ⚠️ WHAT NO MUTANT HERE CAN CATCH, stated so nobody reads this battery as broader than it is.
 The single most dangerous defect in the reviewed patch was that `ConfigSaveResult` was NESTED
@@ -60,13 +65,19 @@ MUTANTS = [
     # and it caught this on its first opportunity. The numbering below is deliberately NOT
     # closed up -- the docstring above and several tests cite mutants by number.
 
-    # ---- 3. the changed-check ignores case ----
+    # ---- 3. the changed-check goes case-SENSITIVE ----
+    # P3-118 made the four readers of Mode case-insensitive, and RefuseChange (the fourth) with
+    # them. This mutant reverts the changed-check to Ordinal: a case-only edit of an UNIMPLEMENTED
+    # mode (pure -> PURE) then reads as a CHANGE, gets re-validated, and is REFUSED -- trapping the
+    # operator on a value they did not change, which is the P2-119 defect in the mode field.
+    # (Was originally the reverse relaxation; it became an equivalent mutant once SHADOW was a valid
+    # mode, so the kill was moved to the pure/override case where Ordinal and IgnoreCase still differ.)
     (EDIT,
-     "the mode changed-check goes case-insensitive, so `shadow` -> `SHADOW` reads as UNCHANGED "
-     "and is written -- a mode preflight then refuses to arm on. SURVIVED on the first run: no "
-     "acceptance test had a mode pair that differed under one comparison and not the other.",
-     '            if (!string.Equals(oldMode, newMode, StringComparison.Ordinal))',
-     '            if (!string.Equals(oldMode, newMode, StringComparison.OrdinalIgnoreCase))'),
+     "the mode changed-check goes case-sensitive, so an unchanged case-variant of an unimplemented "
+     "mode (pure -> PURE) is re-validated and REFUSED -- trapping the operator on a value they did "
+     "not change; TestP2119_AnUnchangedCaseVariantOfABadModeDoesNotTrap dies.",
+     '            if (!string.Equals(oldMode, newMode, StringComparison.OrdinalIgnoreCase))',
+     '            if (!string.Equals(oldMode, newMode, StringComparison.Ordinal))'),
 
     # ---- 4. the NaN comparison, which is the whole reason .Equals is used ----
     (EDIT,

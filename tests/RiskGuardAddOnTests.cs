@@ -1067,6 +1067,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP2119_AnUnchangedNaNIsNotTreatedAsAChange);
             Run(TestP2119_RefuseChangeAcceptsAnUnchangedValidConfig);
             Run(TestP2119_IntroducingAnUnknownModeIsRefused);
+            Run(TestP2119_AnUnchangedCaseVariantOfABadModeDoesNotTrap);
             Run(TestP2119_AConfigWithNoPnLRulesIsNotBackfilledFromTheOldOne);
             Run(TestP2119_ABlankModeIsNotBackfilledFromTheOldOne);
             Run(TestP2119_TheFirstConfigOnAFreshBoxIsValidatedStrictly);
@@ -16127,6 +16128,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P3-118: shadow -> SHADOW is NOT a change under case-insensitive comparison, so it is accepted.
             Assert(Accepted(CallRefuseChange("shadow", "SHADOW", 1500.0, 1500.0, 5, 5)),
                 "P2-119: changing 'shadow' to 'SHADOW' is NOT a change under case-insensitive comparison");
+        }
+
+        // P3-118 follow-up. RefuseChange is the FOURTH reader of Mode; the ticket left it Ordinal
+        // while its own test above already asserted shadow -> SHADOW is "not a change." The gap only
+        // shows on an UNIMPLEMENTED mode, where the two comparisons diverge: 'pure' -> 'PURE' is not a
+        // real change, so it must NOT be re-validated and refused -- that would trap the operator on a
+        // value they did not touch, the P2-119 defect in the mode field. This is the discriminator the
+        // mutation battery needs now that SHADOW is a valid mode. [[one-flag-three-readers]]
+        private static void TestP2119_AnUnchangedCaseVariantOfABadModeDoesNotTrap()
+        {
+            Console.WriteLine("\n[TEST] P2-119: an unchanged case-variant of an unimplemented mode does not trap the operator");
+            Assert(Accepted(CallRefuseChange("pure", "PURE", 1500.0, 1500.0, 5, 5)),
+                "P2-119: 'pure' -> 'PURE' is not a change under case-insensitive comparison, so an "
+                + "already-unimplemented mode, unchanged, is not re-validated and refused");
+            Assert(Accepted(CallRefuseChange("override_with_friction", "OVERRIDE_WITH_FRICTION", 1500.0, 1500.0, 5, 5)),
+                "P2-119: the same for override_with_friction, the other recognised-but-unimplemented mode");
+            // Negative control: actually INTRODUCING an unimplemented mode (a real change) is still refused.
+            Assert(Refused(CallRefuseChange("shadow", "pure", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing shadow -> pure IS a real change and is refused (pure is not implemented)");
         }
 
         /// <summary>

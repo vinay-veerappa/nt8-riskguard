@@ -151,8 +151,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             double oldTrailingDrawdown, double newTrailingDrawdown,
             int oldMinShadowSessions, int newMinShadowSessions)
         {
-            // Ordinal, matching RunPreflight. See RefuseMode.
-            if (!string.Equals(oldMode, newMode, StringComparison.Ordinal))
+            // P3-118: OrdinalIgnoreCase, matching RunPreflight and the other three readers of Mode
+            // (IsRecognisedGuardMode / IsActingMode / DefaultArmedForMode), which P3-118 made
+            // case-insensitive. This is the FOURTH reader; it was left Ordinal in that ticket while
+            // its own acceptance test already asserted "shadow -> SHADOW is NOT a change." A case-only
+            // edit is not a real change, so it is not re-validated -- which is what keeps an UNCHANGED
+            // case-variant of an unimplemented mode (pure -> PURE) from trapping the operator, exactly
+            // as P2-119 keeps an unchanged bad numeric value from trapping them.
+            if (!string.Equals(oldMode, newMode, StringComparison.OrdinalIgnoreCase))
             {
                 // ⚠️ A BLANK MODE MEANS SOMETHING DIFFERENT HERE THAN IT DOES IN Refuse, and
                 // that asymmetry is the point. Refuse validates a PARTIAL body, where an omitted
