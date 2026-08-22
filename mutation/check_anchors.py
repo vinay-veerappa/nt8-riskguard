@@ -182,12 +182,19 @@ def main():
 
         # A battery is either 3-tuples (one implicit file) or 4-tuples (path first).
         default_path = None
-        for key in ('TARGET', 'SOURCE', 'ENGINE', 'ADDON'):
+        for key in ('TARGET', 'SOURCE', 'SRC', 'ENGINE', 'ADDON', 'GUARD'):
             if key in consts:
                 default_path = consts[key]
                 break
         if default_path is None and len(consts) == 1:
             default_path = list(consts.values())[0]
+        # P3-124: if there are exactly two consts and one is GUARD (the 4-tuple target),
+        # the other is the default for the 3-tuple entries.
+        if default_path is None and len(consts) == 2 and 'GUARD' in consts:
+            for k, v in consts.items():
+                if k != 'GUARD':
+                    default_path = v
+                    break
 
         sources = {}
         stripped_sources = {}

@@ -777,6 +777,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                   || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase));
         }
 
+        // P3-118. ONE canonical, case-insensitive guard-mode predicate. All three readers of
+        // Mode (DefaultArmedForMode, RunPreflight check (c), IsActingMode) agree by construction,
+        // not by accident. OrdinalIgnoreCase to match DefaultArmedForMode and the two copier
+        // comparators beside it.
+        internal static bool IsRecognisedGuardMode(string mode)
+        {
+            return string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(mode, "pure", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// The AutoStop distance in TICKS. DECIDED 2026-08-20: ~StopDistanceBps (default 5) basis
         /// points of the entry price, for ANY instrument, so the distance holds across instruments
@@ -1015,6 +1027,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal void SavePersistedStateForTest() { SavePersistedState(); }
         internal void LoadPersistedStateForTest() { LoadPersistedState(); }
         internal int GetShadowSessionsCompletedForTest() { return _shadowSessionsCompleted; }
+        internal void SetShadowSessionsCompletedForTest(int n) { _shadowSessionsCompleted = n; }
         internal DateTime GetLastShadowSessionDateForTest() { return _lastShadowSessionDate; }
         internal void SetLastShadowSessionDateForTest(DateTime d) { _lastShadowSessionDate = d; }
 
@@ -4945,7 +4958,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (connected == 0)
                 result.Fail("ACCOUNTS", "No connected non-excluded accounts found");
             // (c) mode recognised?
-            if (_mode != "shadow" && _mode != "live" && _mode != "pure" && _mode != "override_with_friction")
+            if (!IsRecognisedGuardMode(_mode))
                 result.Fail("MODE", $"Unrecognised mode '{_mode}'");
             // (c2) stop-guard OnMissing action recognised? Applies in every mode.
             string onMissing = _config.StopGuard?.OnMissing;
@@ -5319,7 +5332,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (_stateLock)
             {
-                return _mode == "live" || forceLive;
+                return string.Equals(_mode, "live", StringComparison.OrdinalIgnoreCase) || forceLive;
             }
         }
 

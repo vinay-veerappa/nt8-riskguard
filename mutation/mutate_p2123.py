@@ -181,11 +181,13 @@ MUTANTS = [
     # Not a mutation of the view at all: it proves the tab's numbers actually FOLLOW the
     # engine. If the tests still pass with the engine's conversion removed, the view is not
     # reading it.
+    # P3-124: ComputeEffectiveRatio now reads SymbolPairTable.MultiplierFrom. The old anchor
+    # targeted the inline if/else block; repoint to the new call.
     (ENGINE,
      "the engine stops applying the micro multiplier; if the tab's assertions survive this, "
      "the tab is not reading the engine's ratio at all",
-     '                else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")\n                    symbolMultiplier = 0.1;',
-     '                else if (false)\n                    symbolMultiplier = 0.1;'),
+     '                symbolMultiplier = SymbolPairTable.MultiplierFrom(symbolRoot);',
+     '                symbolMultiplier = 1.0;'),
 ]
 
 

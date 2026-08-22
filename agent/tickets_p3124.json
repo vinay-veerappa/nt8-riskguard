@@ -1,0 +1,46 @@
+{
+  "_comment": "P3-124: the mini/micro symbol table exists in FOUR places inside TradeCopierEngine.cs. Two are the sizing arithmetic written twice (ComputeEffectiveRatio and CalculateFollowerQuantity). Fix: extract one root-pair table with IsMini, MicroOf, MiniOf and MultiplierFrom, and have all four sites read it. This touches the live copy path, so the plan wants its own battery.",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "Extract the mini/micro root-pair table to one source of truth",
+      "defect": "TradeCopierEngine.cs has FOUR copies of the same NQ/MNQ, ES/MES, YM/MYM, CL/MCL, GC/MGC, RTY/M2K mini/micro relation: (1) the symbolMultiplier in ComputeEffectiveRatio (lines 1537-1544), (2) the switch in TranslateSymbol (lines 1589-1603), (3) the symbolMultiplier in CalculateFollowerQuantity (lines 1784-1795), and (4) the pairing test in the conflict detector (lines 4615-4629). Adding a seventh asset class means finding all four, and nothing fails if you find three. Two of the four are the sizing arithmetic: ComputeEffectiveRatio (the reporter) and CalculateFollowerQuantity (the enforcer) both compute absRatio * symbolMultiplier from the same inputs, which is F-9's shape (a reporter and an enforcer computing one number twice).",
+      "spec": "Add a static class `SymbolPairTable` (or a static region inside TradeCopierEngine) with: (a) a readonly Dictionary<string, string> mapping each mini root to its micro root and vice versa (NQ<->MNQ, ES<->MES, YM<->MYM, CL<->MCL, GC<->MGC, RTY<->M2K); (b) `internal static bool IsMini(string root)` -- true for NQ/ES/YM/CL/GC/RTY (case-insensitive); (c) `internal static string MicroOf(string root)` -- returns the micro root or null; (d) `internal static string MiniOf(string root)` -- returns the mini root or null; (e) `internal static double MultiplierFrom(string root)` -- returns 10.0 for a mini root, 0.1 for a micro root, 1.0 otherwise. Then replace ALL FOUR sites: (1) ComputeEffectiveRatio's symbolMultiplier block (lines 1537-1544) with `double symbolMultiplier = rel.AutoSymbolConversion ? SymbolPairTable.MultiplierFrom(symbolRoot) : 1.0;`; (2) TranslateSymbol's switch (lines 1589-1603) with a lookup via MicroOf/MiniOf; (3) CalculateFollowerQuantity's symbolMultiplier block (lines 1784-1795) with the same MultiplierFrom call; (4) the conflict detector's switch (lines 4615-4629) with a pairing check via MicroOf/MiniOf. Do NOT change the conformance test (the P2-123 test comparing ComputeEffectiveRatio and CalculateFollowerQuantity) -- it is what holds the duplication safe, and merging the two functions is a separate step. The conformance test should still pass because the four sites now read ONE table, so the reporter and the enforcer cannot disagree.",
+      "regions": [
+        {
+          "id": "ComputeEffectiveRatioMultiplier",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "double symbolMultiplier = 1.0;",
+          "kind": "stmt",
+          "note": "The FIRST occurrence (inside ComputeEffectiveRatio, around line 1537). Replace the if/else if block that tests NQ/ES/YM/CL/GC/RTY and MNQ/MES/MYM/MCL/MGC/M2K with a call to the shared MultiplierFrom."
+        },
+        {
+          "id": "TranslateSymbolSwitch",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "switch (root)",
+          "kind": "stmt",
+          "note": "The switch inside TranslateSymbol (around line 1589). Replace the 12-case switch with a lookup via MicroOf/MiniOf."
+        },
+        {
+          "id": "CalculateFollowerQuantityMultiplier",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "double symbolMultiplier = 1.0;",
+          "kind": "stmt",
+          "note": "The SECOND occurrence (inside CalculateFollowerQuantity, around line 1784). Same replacement as ComputeEffectiveRatio."
+        },
+        {
+          "id": "ConflictDetectorPairing",
+          "file": "addons/TradeCopierEngine.cs",
+          "anchor": "switch (a)",
+          "kind": "stmt",
+          "note": "The switch inside the conflict detector (around line 4615). Replace the 12-case switch with a pairing check via MicroOf/MiniOf."
+        }
+      ],
+      "expect_green": [
+        "the mini/micro multiplier is one definition",
+        "TranslateSymbol reads the shared table",
+        "the conflict detector reads the shared table"
+      ]
+    }
+  ]
+}

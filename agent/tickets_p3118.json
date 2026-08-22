@@ -1,0 +1,39 @@
+{
+  "_comment": "P3-118: three readers of Mode with three different case rules. Mode: 'Live' is refused as 'unrecognised' by the preflight check (c) which uses ordinal !=, while DefaultArmedForMode already matches it OrdialIgnoreCase. Fix: add one canonical IsRecognisedGuardMode(string) predicate (case-insensitive, OrdinalIgnoreCase) and have all three readers call it. TEST-FIRST: the red tests are below -- they assert that 'Live' and 'SHADOW' are recognised by all three readers, which they currently are NOT (preflight refuses 'Live', IsActingMode returns false for 'Live').",
+  "tickets": [
+    {
+      "id": "T1",
+      "title": "One canonical case-insensitive Mode parser for all three readers",
+      "defect": "RiskGuardAddOn.cs has three places that ask 'what mode is this?' with three different case rules. DefaultArmedForMode (line 773) uses OrdinalIgnoreCase and recognises 'Live'. RunPreflight check (c) (line 4948) uses ordinal != and REFUSES 'Live' as 'Unrecognised mode'. IsActingMode (line 5322) uses ordinal == and returns false for 'Live'. The behaviour is safe (everything fails closed) but the operator is told their mode is 'unrecognised' when it is not -- Live appears everywhere, DefaultArmedForMode recognised it, and the copier would accept it. This is an arming-behaviour change: Mode 'Live' would begin to arm where it now refuses, so the plan explicitly filed it rather than folding it into a validator ticket.",
+      "spec": "Add a static predicate `internal static bool IsRecognisedGuardMode(string mode)` to RiskGuardAddOn that returns true for 'shadow', 'live', 'pure', 'override_with_friction' using OrdinalIgnoreCase (matching DefaultArmedForMode's existing comparison). Then: (1) replace the preflight check (c) at line 4948 `if (_mode != \"shadow\" && _mode != \"live\" && _mode != \"pure\" && _mode != \"override_with_friction\")` with `if (!IsRecognisedGuardMode(_mode))`. (2) replace IsActingMode's `_mode == \"live\"` at line 5322 with `string.Equals(_mode, \"live\", StringComparison.OrdinalIgnoreCase)`. (3) leave DefaultArmedForMode as-is (it already uses OrdialIgnoreCase, but its return is the INVERSE of IsRecognisedGuardMode -- it returns true for non-acting modes, so it should NOT call IsRecognisedGuardMode; just leave it). The key change is (1) and (2): making preflight and IsActingMode case-insensitive so 'Live' is recognised and acted on the same as 'live'.",
+      "regions": [
+        {
+          "id": "PreflightCheckC",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "if (_mode != \"shadow\" && _mode != \"live\" && _mode != \"pure\" && _mode != \"override_with_friction\")",
+          "kind": "stmt",
+          "note": "Replace this ordinal comparison with a call to IsRecognisedGuardMode(_mode). The refusal message should still name the mode."
+        },
+        {
+          "id": "IsActingMode",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "return _mode == \"live\" || forceLive;",
+          "kind": "stmt",
+          "note": "Replace the ordinal == with string.Equals(_mode, \"live\", StringComparison.OrdinalIgnoreCase) || forceLive."
+        },
+        {
+          "id": "IsRecognisedGuardMode",
+          "file": "addons/RiskGuardAddOn.cs",
+          "anchor": "internal static bool DefaultArmedForMode(string mode)",
+          "kind": "decl",
+          "note": "Add the new IsRecognisedGuardMode predicate near DefaultArmedForMode. It returns true for shadow/live/pure/override_with_friction using OrdinalIgnoreCase."
+        }
+      ],
+      "expect_green": [
+        "Live is a recognised guard mode",
+        "SHADOW is a recognised guard mode",
+        "IsActingMode is case-insensitive for Live"
+      ]
+    }
+  ]
+}

@@ -33,6 +33,7 @@ import _battery
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(REPO, 'addons', 'GuardConfigEdit.cs')
+GUARD = os.path.join(REPO, 'addons', 'RiskGuardAddOn.cs')
 
 MUTANTS = [
     # ---- 1. the defect verbatim: the validator validates nothing ----
@@ -41,16 +42,25 @@ MUTANTS = [
      '            if (true) return null;\n            string modeProblem = RefuseMode(mode);'),
 
     # ---- 2. the ticket's OWN first spec ----
+    # P3-118: RefuseMode now uses IsRecognisedGuardMode. The mutant widens IsRecognisedGuardMode
+    # itself (in RiskGuardAddOn.cs, where the anchor lives) to accept `disabled`. The agreement
+    # test (TestP227_TheValidatorAgreesWithPreflightOnEveryMode) drives `disabled` through BOTH
+    # paths; preflight now also calls IsRecognisedGuardMode, so widening it makes both accept
+    # `disabled` -- and the existing TestP227_DisabledIsTheCopiersModeNotTheGuards asserts the
+    # validator REFUSES it. The mutant is in RISKGUARDADDON.CS, not GuardConfigEdit.cs.
     ("`disabled` is accepted again -- the COPIER's mode on the guard's field, which preflight "
      "then refuses, leaving the guard disarmed at the next restart",
-     '            if (mode == "shadow" || mode == "live")',
-     '            if (mode == "shadow" || mode == "live" || mode == "disabled")'),
+     GUARD,
+     '                || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase);',
+     '                || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase)\n'
+     '                || string.Equals(mode, "disabled", StringComparison.OrdinalIgnoreCase);'),
 
     # ---- 3. the ticket's SECOND spec ----
+    # P3-118: the case-insensitive match is now the INTENDED behaviour, so this mutant targets
+    # the OPPOSITE direction: making it ordinal again, which re-introduces the defect P3-118 fixed.
     ("the mode match goes case-insensitive again, so `SHADOW` is accepted and preflight refuses it",
-     '            if (mode == "shadow" || mode == "live")',
-     '            if (string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase)\n'
-     '                || string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase))'),
+     '            if (RiskGuardAddOn.IsRecognisedGuardMode(mode))',
+     '            if (mode == "shadow" || mode == "live")'),
 
     # ---- 4. the core numeric rule ----
     ("a trailing drawdown of ZERO is accepted -- no limit at all, and GuardRules reports the "
@@ -121,6 +131,7 @@ def run():
 
 
 original = open(SRC, encoding='utf-8').read()
+guard_original = open(GUARD, encoding='utf-8').read()
 print('=== baseline ===')
 baseline = run()
 print(' ', baseline)
@@ -135,12 +146,23 @@ if int(m.group(2)) != 0:
     sys.exit(2)
 
 survivors = []
-for name, old, new in MUTANTS:
-    if original.count(old) != 1:
-        print(f'  [SKIP] {name}: anchor matched {original.count(old)} times')
+for entry in MUTANTS:
+    if len(entry) == 3:
+        name, old, new = entry
+        target = SRC
+        target_original = original
+    elif len(entry) == 4:
+        name, target, old, new = entry
+        target_original = guard_original if target == GUARD else original
+    else:
+        print(f'  [SKIP] {entry[0]}: bad MUTANTS entry shape ({len(entry)} elements)')
+        survivors.append(entry[0] + ' (BAD ENTRY)')
+        continue
+    if target_original.count(old) != 1:
+        print(f'  [SKIP] {name}: anchor matched {target_original.count(old)} times')
         survivors.append(name + ' (ANCHOR)')
         continue
-    open(SRC, 'w', encoding='utf-8', newline='').write(original.replace(old, new))
+    open(target, 'w', encoding='utf-8', newline='').write(target_original.replace(old, new))
     res = run()
     killed = _battery.score(res, run)
     print(f'  [{"KILLED" if killed else "SURVIVED"}] {name}: {res}')
@@ -148,7 +170,8 @@ for name, old, new in MUTANTS:
         survivors.append(name)
 
 open(SRC, 'w', encoding='utf-8', newline='').write(original)
-print('\nrestored original;', run())
+open(GUARD, 'w', encoding='utf-8', newline='').write(guard_original)
+print('\nrestored originals;', run())
 print('\nSURVIVORS:', survivors if survivors else 'none')
 
 sys.exit(1 if survivors else 0)

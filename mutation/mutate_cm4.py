@@ -67,9 +67,11 @@ MUTANTS = [
      "                    // Exit with no rule: mirror leaderQty"),
 
     # --- P1-22 must survive ---
+    # P3-124: the conflict detector now reads SymbolPairTable.IsPair, not a switch. The anchor
+    # targets the old `switch (a)` shape; repoint to the new call.
     ("MNQ and MES are declared price comparable",
-     '                case "MNQ": return b == "NQ";',
-     '                case "MNQ": return b == "NQ" || b == "MES";'),
+     'return SymbolPairTable.IsPair(leaderRoot, followerRoot);',
+     'return SymbolPairTable.IsPair(leaderRoot, followerRoot) || (leaderRoot == "MNQ" && followerRoot == "MES");'),
 
     ("every pair is declared comparable",
      "            if (string.IsNullOrEmpty(leaderRoot) || string.IsNullOrEmpty(followerRoot)) return false;",

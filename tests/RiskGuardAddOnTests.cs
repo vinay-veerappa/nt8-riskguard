@@ -934,6 +934,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP2132_AFiredRuleFlowsThroughTheSnapshot);
             Run(TestP2132_AggregateCapUsesNormalizedNotSumUnderCopies);
             Run(TestP2132_AnAggregateBreachRecordsTheFiring);
+
+            // P3-118: one canonical case-insensitive Mode parser
+            Run(TestP3118_LiveIsARecognisedGuardMode);
+            Run(TestP3118_ShadowIsARecognisedGuardMode);
+            Run(TestP3118_IsActingModeIsCaseInsensitiveForLive);
+            Run(TestP3118_PreflightRecognisesCapitalisedLive);
+            Run(TestP3118_PreflightRecognisesCapitalisedShadow);
+
+            // P3-124: the mini/micro symbol table is one definition
+            Run(TestP3124_TheMultiplierIsOneDefinition);
+            Run(TestP3124_TranslateSymbolReadsTheSharedTable);
+            Run(TestP3124_TheConflictDetectorReadsTheSharedTable);
+            Run(TestP3124_AnUnknownSymbolIsNotAMini);
+
             Run(TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken);
             Run(TestP186_TheNewsShieldIsRedOutOfTheBox);
             Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
@@ -3541,6 +3555,134 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "the firm note names the missing equity reading (was \"" + note + "\")");
             Assert(note.IndexOf("in force", StringComparison.OrdinalIgnoreCase) >= 0,
                 "and it KEEPS the text saying which numbers are in force (was \"" + note + "\")");
+        }
+
+        // P3-118. Three readers of Mode with three different case rules. Mode: "Live" is refused
+        // as "unrecognised" by the preflight check (c) which uses ordinal !=, while DefaultArmedForMode
+        // already matches it OrdinalIgnoreCase. Fix: one canonical IsRecognisedGuardMode(string) predicate.
+
+        private static void TestP3118_LiveIsARecognisedGuardMode()
+        {
+            Console.WriteLine("\n[TEST] P3-118: 'Live' is a recognised guard mode (case-insensitive)");
+            Assert(RiskGuardAddOn.IsRecognisedGuardMode("Live"),
+                "IsRecognisedGuardMode must recognise 'Live' (capital L) -- DefaultArmedForMode already does");
+            Assert(RiskGuardAddOn.IsRecognisedGuardMode("LIVE"),
+                "and 'LIVE' (all caps) -- OrdinalIgnoreCase means any case");
+            Assert(RiskGuardAddOn.IsRecognisedGuardMode("live"),
+                "and 'live' (lowercase) -- the existing lower case is still recognised");
+        }
+
+        private static void TestP3118_ShadowIsARecognisedGuardMode()
+        {
+            Console.WriteLine("\n[TEST] P3-118: 'SHADOW' is a recognised guard mode (case-insensitive)");
+            Assert(RiskGuardAddOn.IsRecognisedGuardMode("SHADOW"),
+                "IsRecognisedGuardMode must recognise 'SHADOW' -- the copier recognises it case-insensitively");
+            Assert(RiskGuardAddOn.IsRecognisedGuardMode("shadow"),
+                "and 'shadow' (lowercase)");
+        }
+
+        private static void TestP3118_IsActingModeIsCaseInsensitiveForLive()
+        {
+            Console.WriteLine("\n[TEST] P3-118: IsActingMode is case-insensitive for 'Live'");
+            var addon = new RiskGuardAddOn();
+            addon.SetModeForTest("Live");
+            Assert(addon.IsActingMode(),
+                "IsActingMode must return true for 'Live' (capital L) -- currently uses ordinal == and returns false");
+        }
+
+        private static void TestP3118_PreflightRecognisesCapitalisedLive()
+        {
+            Console.WriteLine("\n[TEST] P3-118: preflight recognises 'Live' as a valid mode");
+            var addon = new RiskGuardAddOn();
+            var cfg = new RiskConfig();
+            cfg.Mode = "Live";
+            cfg.StopGuard.OnMissing = "AutoStop";
+            addon.SetConfigForTest(cfg);
+            addon.SetModeForTest("Live");
+            addon.SetArmedForTest(true);
+            addon.SetShadowSessionsCompletedForTest(0);
+            addon.SetLastShadowSessionDateForTest(DateTime.UtcNow.Date);
+            var result = addon.RunPreflight();
+            // The preflight should NOT fail on MODE for "Live" (it currently does: ordinal !=)
+            Assert(!result.Passed == false || !result.FailureCode.Equals("MODE", StringComparison.OrdinalIgnoreCase),
+                string.Format("preflight must not refuse 'Live' as 'Unrecognised mode' (code: {0}, msg: {1})",
+                result.FailureCode, result.FailureMessage));
+        }
+
+        private static void TestP3118_PreflightRecognisesCapitalisedShadow()
+        {
+            Console.WriteLine("\n[TEST] P3-118: preflight recognises 'SHADOW' as a valid mode");
+            var addon = new RiskGuardAddOn();
+            var cfg = new RiskConfig();
+            cfg.Mode = "SHADOW";
+            cfg.StopGuard.OnMissing = "AutoStop";
+            addon.SetConfigForTest(cfg);
+            addon.SetModeForTest("SHADOW");
+            addon.SetArmedForTest(true);
+            var result = addon.RunPreflight();
+            Assert(!result.FailureCode.Equals("MODE", StringComparison.OrdinalIgnoreCase),
+                string.Format("preflight must not refuse 'SHADOW' as 'Unrecognised mode' (code: {0}, msg: {1})",
+                result.FailureCode, result.FailureMessage));
+        }
+
+        // P3-124. The mini/micro symbol table exists in FOUR places inside TradeCopierEngine.cs.
+        // Fix: extract one root-pair table with IsMini, MicroOf, MiniOf, MultiplierFrom.
+
+        private static void TestP3124_TheMultiplierIsOneDefinition()
+        {
+            Console.WriteLine("\n[TEST] P3-124: the mini/micro multiplier is one definition");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("NQ") - 10.0) < 0.001,
+                "NQ (mini) -> 10.0 multiplier");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("MNQ") - 0.1) < 0.001,
+                "MNQ (micro) -> 0.1 multiplier");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("XYZ") - 1.0) < 0.001,
+                "XYZ (unknown) -> 1.0 multiplier");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("ES") - 10.0) < 0.001,
+                "ES (mini) -> 10.0 multiplier");
+            Assert(Math.Abs(SymbolPairTable.MultiplierFrom("MES") - 0.1) < 0.001,
+                "MES (micro) -> 0.1 multiplier");
+        }
+
+        private static void TestP3124_TranslateSymbolReadsTheSharedTable()
+        {
+            Console.WriteLine("\n[TEST] P3-124: TranslateSymbol reads the shared table");
+            var rel = new CopierRelationship { AutoSymbolConversion = true };
+            Assert(TradeCopierEngine.Instance.TranslateSymbol("NQ 09-26", rel) == "MNQ 09-26",
+                "NQ -> MNQ via the shared table");
+            Assert(TradeCopierEngine.Instance.TranslateSymbol("MNQ 09-26", rel) == "NQ 09-26",
+                "MNQ -> NQ via the shared table");
+            Assert(TradeCopierEngine.Instance.TranslateSymbol("RTY 09-26", rel) == "M2K 09-26",
+                "RTY -> M2K via the shared table");
+            Assert(TradeCopierEngine.Instance.TranslateSymbol("M2K 09-26", rel) == "RTY 09-26",
+                "M2K -> RTY via the shared table");
+        }
+
+        private static void TestP3124_TheConflictDetectorReadsTheSharedTable()
+        {
+            Console.WriteLine("\n[TEST] P3-124: the conflict detector reads the shared table");
+            Assert(SymbolPairTable.IsPair("NQ", "MNQ"),
+                "NQ and MNQ are a mini/micro pair");
+            Assert(SymbolPairTable.IsPair("MNQ", "NQ"),
+                "and the reverse: MNQ and NQ are a pair");
+            Assert(!SymbolPairTable.IsPair("NQ", "ES"),
+                "NQ and ES are NOT a pair");
+            Assert(!SymbolPairTable.IsPair("NQ", "NQ"),
+                "NQ and NQ are NOT a pair (they are the same root, not a mini/micro pair)");
+        }
+
+        private static void TestP3124_AnUnknownSymbolIsNotAMini()
+        {
+            Console.WriteLine("\n[TEST] P3-124: an unknown symbol is not a mini");
+            Assert(!SymbolPairTable.IsMini("XYZ"),
+                "XYZ is not a mini");
+            Assert(!SymbolPairTable.IsMini("MNQ"),
+                "MNQ is a MICRO, not a mini");
+            Assert(SymbolPairTable.IsMini("NQ"),
+                "NQ IS a mini");
+            Assert(SymbolPairTable.IsMini("ES"),
+                "ES IS a mini");
+            Assert(SymbolPairTable.IsMini("RTY"),
+                "RTY IS a mini");
         }
 
         private static void TestP2116_TheInertRowSaysWhatIsMissing()
@@ -15463,15 +15605,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// is true of the comparison and false of the codebase, and they will go looking for a
         /// typo they did not make. See P3-118: three readers of Mode, three different case rules.
         /// </summary>
+        /// <summary>
+        /// P3-118 closed: preflight and the validator are now case-insensitive (IsRecognisedGuardMode),
+        /// so SHADOW and Live are accepted, not refused. The old tests that asserted the ORDINAL
+        /// behaviour are updated to assert the new case-insensitive behaviour. The "case-only variant
+        /// of a valid mode" test is GONE -- there is no case-only variant when the comparison is
+        /// case-insensitive.
+        /// </summary>
         private static void TestP227_ModeIsCaseSensitiveBecausePreflightIs()
         {
-            Console.WriteLine("\n[TEST] P2-27: mode is case-sensitive, because preflight is");
-            Assert(Refused(CallRefuse("SHADOW", 1500.0, 5)),
-                "P2-27: `SHADOW` is REFUSED, because preflight compares the mode ordinally");
-            Assert(Refused(CallRefuse("Live", 1500.0, 0)),
-                "P2-27: `Live` is REFUSED, because preflight compares the mode ordinally");
-            Assert(Mentions(CallRefuse("SHADOW", 1500.0, 5), "case"),
-                "P2-27: a case-only mismatch says so, rather than calling the mode unrecognised");
+            Console.WriteLine("\n[TEST] P2-27: mode is case-insensitive now (P3-118 closed)");
+            // P3-118: SHADOW and Live are ACCEPTED, not refused -- the three readers agree.
+            Assert(Accepted(CallRefuse("SHADOW", 1500.0, 5)),
+                "P2-27: `SHADOW` is ACCEPTED -- IsRecognisedGuardMode is case-insensitive");
+            Assert(Accepted(CallRefuse("Live", 1500.0, 0)),
+                "P2-27: `Live` is ACCEPTED -- IsRecognisedGuardMode is case-insensitive");
         }
 
         /// <summary>
@@ -15602,6 +15750,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// refusal's whole job is to tell somebody what to do next, the ADVICE is behaviour and
         /// belongs in a test.
         /// </summary>
+        /// <summary>
+        /// P3-118 closed: case-only variants are accepted now, so the "case-only mismatch says so"
+        /// test is gone. The positive control that was here (case-only variant of a VALID mode
+        /// still blames case) no longer applies -- a case-only variant IS a valid mode.
+        /// The PURE/DISABLED refusals still do NOT blame case (lowercasing them does not help).
+        /// </summary>
         private static void TestP227_ARefusalDoesNotAdviseAFixThatWouldNotWork()
         {
             Console.WriteLine("\n[TEST] P2-27: a refusal does not advise a fix that would not work");
@@ -15612,13 +15766,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 "P2-27: the `PURE` refusal does not blame CASE -- lowercasing it does not help");
             Assert(!Mentions(CallRefuse("DISABLED", 1500.0, 5), "case"),
                 "P2-27: the `DISABLED` refusal does not blame CASE -- lowercasing it does not help");
-
-            // The positive control. Without it, a refusal that never mentions case at all passes
-            // both assertions above, and the one place the advice IS correct would go silent --
-            // closing the last instance disarms the gate.
-            Assert(Mentions(CallRefuse("Shadow", 1500.0, 5), "case"),
-                "P2-27: a case-only variant of a VALID mode still blames case, which is the one "
-                    + "place that advice is right");
         }
 
         private static void TestP227_TheModeRefusalNamesTheValidModes()
@@ -15947,20 +16094,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void TestP2119_IntroducingAnUnknownModeIsRefused()
         {
             Console.WriteLine("\n[TEST] P2-119: introducing an unknown mode is refused");
-            Assert(Refused(CallRefuseChange("shadow", "Live", 1500.0, 1500.0, 5, 5)),
-                "P2-119: changing mode to a CASE variant is refused -- preflight compares ordinally, "
-                + "so this would write a config the guard then refuses to arm on");
+            // P3-118: case-only variants are accepted now (IsRecognisedGuardMode is case-insensitive)
+            Assert(Accepted(CallRefuseChange("shadow", "Live", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing mode to a case variant is ACCEPTED -- IsRecognisedGuardMode is case-insensitive");
             Assert(Refused(CallRefuseChange("shadow", "disabled", 1500.0, 1500.0, 5, 5)),
                 "P2-119: changing mode to the COPIER's 'disabled' is refused");
             Assert(Accepted(CallRefuseChange("Live", "Live", 1500.0, 1500.0, 5, 5)),
                 "P2-119: but an already-broken mode, unchanged, does not trap the operator either");
-            // Found by writing the mutation battery, not by review: every case above differs
-            // from its old value under an ORDINAL comparison AND under a case-insensitive one,
-            // so a mutant that relaxes the changed-check to OrdinalIgnoreCase survived all of
-            // them. `shadow` -> `SHADOW` is the only pair that tells the two apart.
-            Assert(Refused(CallRefuseChange("shadow", "SHADOW", 1500.0, 1500.0, 5, 5)),
-                "P2-119: changing 'shadow' to 'SHADOW' IS a change and is refused. If the "
-                + "changed-check ignores case, this writes a mode preflight refuses to arm on.");
+            // P3-118: shadow -> SHADOW is NOT a change under case-insensitive comparison, so it is accepted.
+            Assert(Accepted(CallRefuseChange("shadow", "SHADOW", 1500.0, 1500.0, 5, 5)),
+                "P2-119: changing 'shadow' to 'SHADOW' is NOT a change under case-insensitive comparison");
         }
 
         /// <summary>

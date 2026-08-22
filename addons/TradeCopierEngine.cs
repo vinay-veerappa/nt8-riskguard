@@ -46,6 +46,69 @@ namespace NinjaTrader.NinjaScript.AddOns
     /// the mapping is here, where a test can assert every field arrives, rather than
     /// inline in a window the test build compiles away.
     /// </summary>
+    // P3-124. ONE definition of the mini/micro root-pair relation. All four sites in this file
+    // (ComputeEffectiveRatio, TranslateSymbol, CalculateFollowerQuantity, the conflict detector)
+    // read THIS table. Adding a seventh asset class means adding one entry here, not finding four.
+    public static class SymbolPairTable
+    {
+        // Mini root -> micro root, and micro root -> mini root (bidirectional).
+        private static readonly Dictionary<string, string> _miniToMicro =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "NQ", "MNQ" }, { "ES", "MES" }, { "YM", "MYM" },
+                { "CL", "MCL" }, { "GC", "MGC" }, { "RTY", "M2K" },
+            };
+
+        /// <summary>True for a MINI root (NQ, ES, YM, CL, GC, RTY). Case-insensitive.</summary>
+        public static bool IsMini(string root)
+        {
+            return root != null && _miniToMicro.ContainsKey(root);
+        }
+
+        /// <summary>True for a MICRO root (MNQ, MES, MYM, MCL, MGC, M2K). Case-insensitive.</summary>
+        public static bool IsMicro(string root)
+        {
+            return root != null && _miniToMicro.ContainsValue(root);
+        }
+
+        /// <summary>The micro root for a mini root, or null. Case-insensitive.</summary>
+        public static string MicroOf(string root)
+        {
+            if (root == null) return null;
+            string micro;
+            return _miniToMicro.TryGetValue(root, out micro) ? micro : null;
+        }
+
+        /// <summary>The mini root for a micro root, or null. Case-insensitive.</summary>
+        public static string MiniOf(string root)
+        {
+            if (root == null) return null;
+            foreach (var kvp in _miniToMicro)
+                if (string.Equals(kvp.Value, root, StringComparison.OrdinalIgnoreCase))
+                    return kvp.Key;
+            return null;
+        }
+
+        /// <summary>10.0 for a mini root, 0.1 for a micro root, 1.0 otherwise. Case-insensitive.</summary>
+        public static double MultiplierFrom(string root)
+        {
+            if (IsMini(root)) return 10.0;
+            if (IsMicro(root)) return 0.1;
+            return 1.0;
+        }
+
+        /// <summary>True if a and b are a mini/micro pair (either direction). Case-insensitive.</summary>
+        public static bool IsPair(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            string micro = MicroOf(a);
+            if (micro != null && string.Equals(micro, b, StringComparison.OrdinalIgnoreCase)) return true;
+            string mini = MiniOf(a);
+            if (mini != null && string.Equals(mini, b, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+    }
+
     public static class CopierRequests
     {
         /// <summary>Everything the window's "Add Relationship" form collects, and nothing else.</summary>
@@ -1537,10 +1600,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             double symbolMultiplier = 1.0;
             if (rel.AutoSymbolConversion)
             {
-                if (symbolRoot == "NQ" || symbolRoot == "ES" || symbolRoot == "YM" || symbolRoot == "CL" || symbolRoot == "GC" || symbolRoot == "RTY")
-                    symbolMultiplier = 10.0;
-                else if (symbolRoot == "MNQ" || symbolRoot == "MES" || symbolRoot == "MYM" || symbolRoot == "MCL" || symbolRoot == "MGC" || symbolRoot == "M2K")
-                    symbolMultiplier = 0.1;
+                symbolMultiplier = SymbolPairTable.MultiplierFrom(symbolRoot);
             }
 
             return absRatio * symbolMultiplier;
@@ -1585,22 +1645,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // CustomSymbolMappings (which will be refused in matrix mode), not the auto table.
             if (rel == null || (rel.AutoSymbolConversion && rel.SizingMode != CopierSizingMode.PerTickerMatrix))
             {
-                string mapped = null;
-                switch (root)
-                {
-                    case "NQ":  mapped = "MNQ"; break;
-                    case "ES":  mapped = "MES"; break;
-                    case "YM":  mapped = "MYM"; break;
-                    case "CL":  mapped = "MCL"; break;
-                    case "GC":  mapped = "MGC"; break;
-                    case "RTY": mapped = "M2K"; break;
-                    case "MNQ": mapped = "NQ";  break;
-                    case "MES": mapped = "ES";  break;
-                    case "MYM": mapped = "YM";  break;
-                    case "MCL": mapped = "CL";  break;
-                    case "MGC": mapped = "GC";  break;
-                    case "M2K": mapped = "RTY"; break;
-                }
+                // P3-124: reads the ONE shared table, not a second copy of the same switch.
+                string mapped = SymbolPairTable.MicroOf(root) ?? SymbolPairTable.MiniOf(root);
                 if (mapped != null) return mapped + remainder;
             }
 
@@ -1781,17 +1827,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
 
                 // 2. Bidirectional Symbol Multiplier (Mini -> Micro 10x, Micro -> Mini 0.1x)
+                // P3-124: reads the ONE shared table, not a second copy of the same if/else.
                 double symbolMultiplier = 1.0;
                 if (rel.AutoSymbolConversion)
                 {
-                    if (symbol == "NQ" || symbol == "ES" || symbol == "YM" || symbol == "CL" || symbol == "GC" || symbol == "RTY")
-                    {
-                        symbolMultiplier = 10.0; // Mini -> Micro
-                    }
-                    else if (symbol == "MNQ" || symbol == "MES" || symbol == "MYM" || symbol == "MCL" || symbol == "MGC" || symbol == "M2K")
-                    {
-                        symbolMultiplier = 0.1; // Micro -> Mini
-                    }
+                    symbolMultiplier = SymbolPairTable.MultiplierFrom(symbol);
                 }
 
                 rawCopyQty = RoundToContracts(leaderQty * absRatio * symbolMultiplier);
@@ -4610,24 +4650,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (string.IsNullOrEmpty(leaderRoot) || string.IsNullOrEmpty(followerRoot)) return false;
             if (leaderRoot.Equals(followerRoot, StringComparison.OrdinalIgnoreCase)) return true;
 
-            string a = leaderRoot.ToUpper();
-            string b = followerRoot.ToUpper();
-            switch (a)
-            {
-                case "NQ":  return b == "MNQ";
-                case "ES":  return b == "MES";
-                case "YM":  return b == "MYM";
-                case "CL":  return b == "MCL";
-                case "GC":  return b == "MGC";
-                case "RTY": return b == "M2K";
-                case "MNQ": return b == "NQ";
-                case "MES": return b == "ES";
-                case "MYM": return b == "YM";
-                case "MCL": return b == "CL";
-                case "MGC": return b == "GC";
-                case "M2K": return b == "RTY";
-            }
-            return false;
+            // P3-124: reads the ONE shared table, not a fourth copy of the same switch.
+            return SymbolPairTable.IsPair(leaderRoot, followerRoot);
         }
 
         private static string RootOf(string fullName)

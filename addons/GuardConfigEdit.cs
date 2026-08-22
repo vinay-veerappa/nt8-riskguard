@@ -100,34 +100,36 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return null;
             }
 
-            // ORDINAL, because RunPreflight is: `if (_mode != "shadow" && _mode != "live" && ...)`.
-            // A validator that accepted `Shadow` would write a config the guard then refuses to
-            // arm on, which is the entire defect this class exists to prevent. See P3-118 for why
-            // the three readers of Mode disagree about case in the first place.
-            if (mode == "shadow" || mode == "live")
+            // P3-118: the three readers of Mode now agree by construction (IsRecognisedGuardMode),
+            // not by accident. The validator accepts exactly what preflight accepts.
+            if (RiskGuardAddOn.IsRecognisedGuardMode(mode))
             {
-                return null;
+                // pure and override_with_friction are recognised but NOT IMPLEMENTED -- only
+                // 'live' acts, so it would observe while reporting an acting mode. The ordinal
+                // comment below stays for RefuseChange, which still uses Ordinal for the
+                // "no change" comparison.
+                if (string.Equals(mode, "pure", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Mode '" + mode + "' is recognised but NOT IMPLEMENTED -- only 'live' acts, "
+                         + "so it would observe while reporting an acting mode. Use 'shadow' or 'live'.";
+                }
+
+                // shadow and live are the only modes the validator ACCEPTS. `disabled` is NOT in
+                // IsRecognisedGuardMode, so it never reaches here -- but state it explicitly so a
+                // future widening of IsRecognisedGuardMode does not silently accept the copier's mode.
+                if (string.Equals(mode, "disabled", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Mode 'disabled' belongs to the trade COPIER, not the guard. To stop the "
+                         + "guard acting use 'shadow', which observes and records. Valid: 'shadow', 'live'.";
+                }
+
+                return null;   // shadow or live -- accepted
             }
 
-            if (string.Equals(mode, "shadow", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(mode, "live", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Mode '" + mode + "' differs only in CASE from a valid mode, and the guard "
-                     + "compares it exactly. Use '" + mode.ToLowerInvariant() + "'.";
-            }
-
-            if (string.Equals(mode, "pure", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(mode, "override_with_friction", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Mode '" + mode + "' is recognised but NOT IMPLEMENTED -- only 'live' acts, "
-                     + "so it would observe while reporting an acting mode. Use 'shadow' or 'live'.";
-            }
-
-            if (string.Equals(mode, "disabled", StringComparison.OrdinalIgnoreCase))
-            {
-                return "Mode 'disabled' belongs to the trade COPIER, not the guard. To stop the "
-                     + "guard acting use 'shadow', which observes and records. Valid: 'shadow', 'live'.";
-            }
+            // A case-only variant of a valid mode: accepted now, because IsRecognisedGuardMode
+            // is case-insensitive. The old "differs only in CASE" refusal is GONE -- that was
+            // the defect P3-118 was filed to fix.
 
             return "Mode '" + mode + "' is not a guard mode. Valid: 'shadow', 'live'.";
         }
