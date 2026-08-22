@@ -279,6 +279,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             // the AGGREGATE_SIZE_BREACH enforcer compares against. Populated in GetAccountSnapshots.
             public int TotalPositionQuantity { get; set; }
 
+            // P2-132(b): whether ANY non-flat position exceeds its RESOLVED per-instrument limit --
+            // the exact `pos.Quantity > ResolveMaxContracts(...)` test the MAX_SIZE_BREACH enforcer
+            // makes, computed in GetAccountSnapshots so the inventory's breach flag cannot disagree
+            // with the enforcer even when a per-symbol profile sets a cap below the account default.
+            public bool MaxPositionQuantityBreached { get; set; }
+
             // P2-132(b): per-rule last-fired timestamps, copied from AccountState so the inventory
             // can tell "fired a minute ago" from "never fired". Keyed by the enforcer's RuleId.
             public Dictionary<string, DateTime> RuleLastFired { get; set; }
@@ -320,6 +326,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     var posList = new List<string>();
                     int maxPosQty = 0;
                     int totalPosQty = 0;
+                    bool maxBreached = false;
+                    // P2-132(b). Resolve the profile ONCE, the same resolver the MAX_SIZE_BREACH
+                    // enforcer uses, so the per-instrument limit the inventory checks is the one the
+                    // enforcer acts on -- including a per-symbol profile cap below the account default.
+                    var resolvedProfile = GetResolvedProfile(account);
                     foreach (var pos in state.Positions.Values)
                     {
                         if (pos.MarketPosition != MarketPosition.Flat)
@@ -329,6 +340,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                             int q = (int)Math.Abs(pos.Quantity);
                             if (q > maxPosQty) maxPosQty = q;
                             totalPosQty += q;
+                            // P2-132(b). The enforcer's own test: this position vs its resolved limit.
+                            if (resolvedProfile != null)
+                            {
+                                string baseSymbol = pos.InstrumentObj?.MasterInstrument?.Name ?? pos.Instrument.Split(' ')[0];
+                                if (pos.Quantity > ResolveMaxContracts(resolvedProfile, baseSymbol, pos.Instrument))
+                                    maxBreached = true;
+                            }
                         }
                     }
                     snapshot.PositionString = posList.Count > 0 ? string.Join(", ", posList) : "FLAT";
@@ -341,6 +359,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // P2-132(b). The aggregate cap's currentValue is the account's TOTAL non-flat
                     // quantity, the same number EvaluateAggregateSizing sums into totalAggregateContracts.
                     snapshot.TotalPositionQuantity = totalPosQty;
+                    // P2-132(b). Whether the per-account cap is breached, by the enforcer's own
+                    // per-instrument comparison (folded into the loop above).
+                    snapshot.MaxPositionQuantityBreached = maxBreached;
                     list.Add(snapshot);
                 }
             }
@@ -4678,6 +4699,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accName)) continue;
                     if (!_accountStates.TryGetValue(accName, out var st)) continue;
+                    // P2-132(b). The aggregate cap flattens but does NOT lock out, so it never funnels
+                    // through MarkRuleLockout -- record the firing here, on every account the breach
+                    // spans, so the inventory's aggregate row reads "fired just now" instead of the
+                    // "never fired" it showed while this write was missing. Recorded before the
+                    // has-position/throttle gate: a flat account is still inside a breached aggregate.
+                    RecordRuleFired(st, "AGGREGATE_SIZE_BREACH");
                     bool hasPosition = st.Positions.Values.Any(p => p.MarketPosition != MarketPosition.Flat);
                     if (hasPosition)
                     {
@@ -5296,6 +5323,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // P2-132(b). Stamp a rule's last-fired time for the inventory's recency column, WITHOUT the
+        // lockout side effects of MarkRuleLockout. Some rules fire but deliberately do NOT lock out
+        // -- the aggregate cap and instrument permission flatten and move on -- yet the operator
+        // still needs "fired just now" vs "never fired". Runtime-only: not persisted (the map is
+        // RUNTIME_ONLY on AccountState), so this does NOT set _stateDirty. Injectable clock so a
+        // test can drive the boundary without sleeping.
+        private void RecordRuleFired(AccountState st, string ruleId)
+        {
+            if (st == null || string.IsNullOrEmpty(ruleId)) return;
+            st.RuleLastFired[ruleId] = st.UtcNow();
+        }
+
         /// <summary>
         /// P0-166. `detail` is not decoration. Eight hours of hourly re-locking on the funded
         /// account read as routine because this line named the rule and nothing else -- no PnL, no
@@ -5309,13 +5348,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             st.LockoutRuleId = ruleId;   // P0-166: the lapse path needs to know which cure applies
             st.LockoutWasShadowOnly = !IsActingMode();
             // P2-132(b). Record the firing so the inventory can report "fired just now" vs "never
-            // fired". This is the ONE funnel every lockout-capable rule passes through, so the
-            // inventory reads the same source the enforcer writes. The clock is the injectable one
-            // so a test can drive the boundary without sleeping.
-            if (!string.IsNullOrEmpty(ruleId))
-            {
-                st.RuleLastFired[ruleId] = st.UtcNow();
-            }
+            // fired". Every lockout-capable rule funnels through here, so the inventory reads the
+            // same source the enforcer writes.
+            RecordRuleFired(st, ruleId);
             _stateDirty = true;
             if (st.LockoutWasShadowOnly)
             {

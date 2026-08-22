@@ -321,18 +321,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             return account.RuleLastFired.TryGetValue(ruleId, out t) ? (DateTime?)t : null;
         }
 
-        // P2-132(b). The cross-account SUM of non-flat position quantity, the same number
-        // EvaluateAggregateSizing sums into totalAggregateContracts. Each account's contribution is
-        // its TotalPositionQuantity (already absolute, summed across instruments in the snapshot).
-        private static double AggregateTotalQuantity(IList<RiskGuardAddOn.AccountStateSnapshot> accounts)
+        // P2-132(b). The number the aggregate cap is actually compared against -- the SAME
+        // `normalizedAggregate` EvaluateAggregateSizing computes, so the inventory cannot disagree
+        // with the enforcer about the aggregate value OR whether it is in breach. When the copier
+        // mirrors ONE trade across N accounts (ExpectedCopies > 1), the aggregate risk is the
+        // largest single-account position, NOT the gross sum -- reporting the sum here would flag a
+        // breach the enforcer never acts on. When copies <= 1 this is exactly the cross-account sum.
+        // Each account's contribution is its TotalPositionQuantity (absolute, summed across
+        // instruments in the snapshot), the same per-account number the enforcer sums.
+        private static double AggregateNormalizedQuantity(IList<RiskGuardAddOn.AccountStateSnapshot> accounts, int expectedCopies)
         {
             if (accounts == null) return 0;
             double total = 0;
+            double maxSingle = 0;
             foreach (var a in accounts)
             {
-                if (a != null) total += a.TotalPositionQuantity;
+                if (a == null) continue;
+                total += a.TotalPositionQuantity;
+                if (a.TotalPositionQuantity > maxSingle) maxSingle = a.TotalPositionQuantity;
             }
-            return total;
+            int copies = expectedCopies > 0 ? expectedCopies : 1;
+            return copies > 1 ? maxSingle : total;
         }
 
         private static readonly List<GuardRuleDefinition> _rules = new List<GuardRuleDefinition>
@@ -366,9 +375,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
                 Evaluator = c => c.Config.Sizing.MaxContractsPerAccount <= 0
                     ? Off("no per-account contract cap")
+                    // Breach is NOT re-derived here from the flat config cap: the enforcer compares
+                    // each position to its RESOLVED per-instrument limit (ResolveMaxContracts), which
+                    // a per-symbol profile can set below the account default. GetAccountSnapshots
+                    // computes the breach the enforcer's own way and hands it over, so the two cannot
+                    // disagree ("derive the display from the enforcer", F-9).
                     : RB(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity,
                         c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1,
-                        c.Account != null && c.Account.MaxPositionQuantity > c.Config.Sizing.MaxContractsPerAccount,
+                        c.Account != null && c.Account.MaxPositionQuantityBreached,
                         LastFiredOf(c.Account, "MAX_SIZE_BREACH"))
             },
             new GuardRuleDefinition {
@@ -377,15 +391,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Aggregate,
                 // Evidence is the number of accounts it can see. An aggregate cap over ZERO
                 // known accounts is not enforcing anything, and would otherwise read as green.
-                // P2-132(b): currentValue is the cross-account SUM of non-flat quantity, the same
-                // number EvaluateAggregateSizing sums into totalAggregateContracts, and the breach
-                // flag is the same `> limit` comparison that enforcer makes.
-                Evaluator = c => c.Config.Sizing.MaxContractsAggregate <= 0
-                    ? Off("no aggregate contract cap")
-                    : RB(AggregateTotalQuantity(c.AllAccounts), c.Config.Sizing.MaxContractsAggregate,
+                // P2-132(b): currentValue is `normalizedAggregate` -- the exact number the enforcer
+                // compares to the limit -- so the breach flag is the enforcer's own `> limit`
+                // comparison and cannot disagree with it. Computed once, used for both value and flag.
+                Evaluator = c =>
+                {
+                    if (c.Config.Sizing.MaxContractsAggregate <= 0) return Off("no aggregate contract cap");
+                    double normalized = AggregateNormalizedQuantity(c.AllAccounts, c.Config.Sizing.ExpectedCopies);
+                    return RB(normalized, c.Config.Sizing.MaxContractsAggregate,
                         c.AllAccounts == null ? 0 : c.AllAccounts.Count,
-                        AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate,
-                        LastFiredOf(c.Account, "AGGREGATE_SIZE_BREACH"))
+                        normalized > c.Config.Sizing.MaxContractsAggregate,
+                        LastFiredOf(c.Account, "AGGREGATE_SIZE_BREACH"));
+                }
             },
 
             // -- overtrading ------------------------------------------------------------

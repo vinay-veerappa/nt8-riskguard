@@ -929,8 +929,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP2132_ANeverFiredRuleReportsNoLastFired);
             Run(TestP2132_AFiredRuleReportsItsTimestamp);
             Run(TestP2132_GetAccountSnapshotsPopulatesThePositionQuantities);
+            Run(TestP2132_GetAccountSnapshotsFlagsAPerAccountBreach);
             Run(TestP2132_MarkRuleLockoutRecordsTheFiring);
             Run(TestP2132_AFiredRuleFlowsThroughTheSnapshot);
+            Run(TestP2132_AggregateCapUsesNormalizedNotSumUnderCopies);
+            Run(TestP2132_AnAggregateBreachRecordsTheFiring);
             Run(TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken);
             Run(TestP186_TheNewsShieldIsRedOutOfTheBox);
             Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
@@ -3311,11 +3314,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var acct = P2116Account(50000.0);
             acct.MaxPositionQuantity = 11;   // 11 against a cap of 5
+            // P2-132(b). The breach flag is computed by GetAccountSnapshots the enforcer's own way
+            // (against the RESOLVED per-instrument limit), not re-derived in the evaluator -- so the
+            // hand-built snapshot carries the flag. The population path is covered by
+            // TestP2132_GetAccountSnapshotsFlagsAPerAccountBreach.
+            acct.MaxPositionQuantityBreached = true;
             var rule = P2116Rule("Sizing.MaxContractsPerAccount");
             var reading = rule.Evaluator(P2116ContextWith(
                 P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
             Assert(reading.Breached, string.Format(
-                "11 contracts against a cap of 5 must read Breached (was {0})", reading.Breached));
+                "a snapshot flagged breached must read Breached (was {0})", reading.Breached));
         }
 
         private static void TestP2132_ANeverFiredRuleReportsNoLastFired()
@@ -3380,6 +3388,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             Assert(snapshots[0].TotalPositionQuantity == 14, string.Format(
                 "TotalPositionQuantity is the cross-instrument sum (11 + 3 = 14), was {0}",
                 snapshots[0].TotalPositionQuantity));
+            Assert(snapshots[0].MaxPositionQuantityBreached, string.Format(
+                "MNQ 11 against the resolved cap of 5 must flag MaxPositionQuantityBreached (was {0})",
+                snapshots[0].MaxPositionQuantityBreached));
+        }
+
+        // P2-132(b). The population path for the per-account breach flag, and the reason it cannot be
+        // re-derived in the evaluator from the flat config cap: a per-symbol InstrumentLimit sets the
+        // cap the enforcer uses BELOW the account default, and only the resolved limit sees it. This
+        // is the funded account's `MNQ: 1` beside `MaxContractsPerAccount: 5` (P1-159), where a 3-lot
+        // MNQ is a breach the old `MaxPositionQuantity > MaxContractsPerAccount` display read green.
+        private static void TestP2132_GetAccountSnapshotsFlagsAPerAccountBreach()
+        {
+            Console.WriteLine("\n[TEST] P2-132: the per-account breach flag uses the resolved per-instrument limit, not the flat cap");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;   // account default -- 3 is UNDER this
+            config.InstrumentLimits["MNQ"] = new PerInstrumentRiskConfig { MaxContracts = 1 }; // resolved MNQ cap is 1
+            AccountState state; Account account;
+            var addon = P1100Guard("P2132Instr", "shadow", config, out state, out account);
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 3, 20000, 0, config);
+
+            var snapshots = addon.GetAccountSnapshots();
+            Assert(snapshots.Count == 1, "one account snapshot is produced");
+            Assert(snapshots[0].MaxPositionQuantityBreached, string.Format(
+                "MNQ 3 against a resolved cap of 1 must flag breached even though 3 < the account "
+                + "default of 5 -- the old flat-cap display read this green (was {0})",
+                snapshots[0].MaxPositionQuantityBreached));
         }
 
         private static void TestP2132_MarkRuleLockoutRecordsTheFiring()
@@ -3420,6 +3458,75 @@ namespace NinjaTrader.NinjaScript.AddOns
                    && snapshots[0].RuleLastFired.ContainsKey("MAX_SIZE_BREACH"),
                 "the copied snapshot carries the fired rule's timestamp, so the inventory row can "
                 + "report it");
+        }
+
+        // P2-132(b). When the copier mirrors ONE trade across N accounts (ExpectedCopies > 1), the
+        // aggregate cap compares the LARGEST single-account position, NOT the gross sum -- the same
+        // `normalizedAggregate` the enforcer computes. Reporting the sum would flag a breach the
+        // enforcer never acts on. This is the copier scenario the product exists for, and it is
+        // exactly where reporting the raw sum disagreed with the enforcer.
+        private static void TestP2132_AggregateCapUsesNormalizedNotSumUnderCopies()
+        {
+            Console.WriteLine("\n[TEST] P2-132: under ExpectedCopies > 1 the aggregate cap reports the max single account, not the sum");
+
+            var cfg = P2116ConfigWithEveryEquityRuleOn();
+            cfg.Sizing.ExpectedCopies = 3;          // one trade mirrored 3 ways
+            cfg.Sizing.MaxContractsAggregate = 10;
+
+            var acctA = P2116AccountNamed("A", 50000.0);
+            acctA.TotalPositionQuantity = 6;
+            var acctB = P2116AccountNamed("B", 50000.0);
+            acctB.TotalPositionQuantity = 6;
+            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var ctx = P2116ContextWith(cfg, P2116PropConfig(), acctA);
+            ctx.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { acctA, acctB };
+            var reading = rule.Evaluator(ctx);
+
+            Assert(reading.CurrentValue != null && Math.Abs(reading.CurrentValue.Value - 6) < 0.001,
+                string.Format("the aggregate value under 3 copies is the max single account (6), not "
+                + "the sum (12) -- was {0}", reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
+            Assert(!reading.Breached, string.Format(
+                "6 against a cap of 10 is NOT a breach, though the gross sum 12 would falsely be -- "
+                + "the inventory must agree with the enforcer's normalizedAggregate (was {0})", reading.Breached));
+        }
+
+        // P2-132(b). The aggregate cap flattens but never locks out, so it never funnels through
+        // MarkRuleLockout -- its firing is recorded directly in EvaluateAggregateSizing. Without that
+        // write the aggregate row read "never fired" no matter how often it fired: a green that could
+        // never be red. [[a-green-that-can-never-be-red]]
+        private static void TestP2132_AnAggregateBreachRecordsTheFiring()
+        {
+            Console.WriteLine("\n[TEST] P2-132: an aggregate breach records its firing for the inventory's recency column");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsAggregate = 5;
+            config.Sizing.ExpectedCopies = 1;
+
+            var addon = new RiskGuardAddOn();
+            addon.SetConfigForTest(config);
+            addon.SetModeForTest("live");
+            addon.SetArmedForTest(true);
+
+            var accA = new Account { Name = "AggFireA" };
+            var accB = new Account { Name = "AggFireB" };
+            var stateA = new AccountState("AggFireA");
+            var stateB = new AccountState("AggFireB");
+            var mnq = new Instrument("MNQ");
+            stateA.UpdatePosition(accA, mnq, MarketPosition.Long, 4, 18000, 0, config);
+            stateB.UpdatePosition(accB, mnq, MarketPosition.Long, 4, 18000, 0, config);
+            addon.SetAccountStateForTest("AggFireA", stateA);
+            addon.SetAccountStateForTest("AggFireB", stateB);
+            addon.SetSubscribedAccountForTest("AggFireA");
+            addon.SetSubscribedAccountForTest("AggFireB");
+
+            var actions = addon.EvaluateAggregateSizing();   // 4 + 4 = 8 > 5
+
+            Assert(actions.Any(a => a.RuleId == "AGGREGATE_SIZE_BREACH"),
+                "precondition: 8 contracts against an aggregate cap of 5 breaches");
+            Assert(stateA.RuleLastFired.ContainsKey("AGGREGATE_SIZE_BREACH")
+                   && stateB.RuleLastFired.ContainsKey("AGGREGATE_SIZE_BREACH"),
+                "the aggregate breach records AGGREGATE_SIZE_BREACH on every account it spans, so the "
+                + "inventory's aggregate row reports 'fired just now' instead of 'never fired'");
         }
 
         private static void TestP2116_TheFirmNoteIsPrefixedNotReplaced()

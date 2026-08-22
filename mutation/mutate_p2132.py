@@ -10,14 +10,19 @@ THE GROUPS:
      field, and the per-account cap reports null/0 instead of the live position -- the exact defect
      slice (a) closed. The per-account tests die.
 
-  2. THE AGGREGATE SUM (slice b). Neuter TotalPositionQuantity, or the AggregateTotalQuantity sum,
-     and the aggregate cap reports the wrong cross-account total. The sum tests die.
+  2. THE AGGREGATE VALUE (slice b). Neuter TotalPositionQuantity, or AggregateNormalizedQuantity's
+     per-account add, and the aggregate cap reports the wrong number. The value tests die.
 
-  3. THE BREACH FLAG (slice b). Force the breach comparison constant, or invert it, and a rule in
-     breach reads healthy (or vice versa). The breach tests -- including the negative control -- die.
+  3. THE BREACH FLAG (slice b). Force the aggregate breach comparison constant or invert it; neuter
+     the copier normalization so it uses the gross sum under ExpectedCopies > 1 (disagreeing with the
+     enforcer); force the per-account flag false in the evaluator OR drop it at the population site;
+     or swap the RESOLVED per-instrument limit for the flat default (the funded-account MNQ:1 defect).
+     The breach tests -- including the negative control and the copies test -- die.
 
-  4. THE LAST-FIRED TIMESTAMP (slice b). Drop the recording write in MarkRuleLockout, or the read in
-     LastFiredOf, and a fired rule reports "never fired". The fired-rule test dies.
+  4. THE LAST-FIRED TIMESTAMP (slice b). Drop the RecordRuleFired write (kills recency for every
+     rule), drop the aggregate cap's RecordRuleFired call (the aggregate is not lockout-capable, so
+     it is the only writer of ITS recency -- a green that can never be red), or neuter LastFiredOf.
+     The fired-rule tests die.
 
 ⚠️ The negative control (under-limit is NOT breached) is load-bearing: a Breached flag that is true
 whenever a limit exists passes every positive test. [[detector-needs-a-negative-test]]
@@ -52,31 +57,54 @@ MUTANTS = [
      'snapshot.TotalPositionQuantity = totalPosQty;',
      'snapshot.TotalPositionQuantity = 0;'),
 
-    (RULES, 'group 2: AggregateTotalQuantity returns a constant 0, so the aggregate cap reports 0 '
-            'regardless of the accounts; the sum tests die',
-     'foreach (var a in accounts)\n            {\n                if (a != null) total += a.TotalPositionQuantity;\n            }',
-     'foreach (var a in accounts)\n            {\n                if (a != null) total += 0;\n            }'),
+    (RULES, 'group 2: AggregateNormalizedQuantity neuters its per-account add, so the aggregate cap '
+            'reports 0 regardless of the accounts; the sum tests die',
+     'total += a.TotalPositionQuantity;',
+     'total += 0;'),
 
     # ---- group 3: the breach flag (slice b) --------------------------------------------------
-    (RULES, 'group 3: the aggregate breach comparison is forced TRUE, so an under-limit sum reads '
+    (RULES, 'group 3: the aggregate breach comparison is forced TRUE, so an under-limit value reads '
             'breached -- the negative control dies',
-     'AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate',
+     'normalized > c.Config.Sizing.MaxContractsAggregate',
      'true'),
 
     (RULES, 'group 3: the aggregate breach comparison is INVERTED, so a breach reads healthy and an '
-            'under-limit sum reads breached -- both breach tests die',
-     'AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate',
-     'AggregateTotalQuantity(c.AllAccounts) <= c.Config.Sizing.MaxContractsAggregate'),
+            'under-limit value reads breached -- both breach tests die',
+     'normalized > c.Config.Sizing.MaxContractsAggregate',
+     'normalized <= c.Config.Sizing.MaxContractsAggregate'),
 
-    (RULES, 'group 3: the per-account breach comparison is forced FALSE, so a position over the cap '
-            'reads healthy; the per-account breach test dies',
-     'c.Account != null && c.Account.MaxPositionQuantity > c.Config.Sizing.MaxContractsPerAccount',
+    (RULES, 'group 3: the copier normalization is neutered -- the aggregate always uses the gross '
+            'SUM, never the max single account, so under ExpectedCopies > 1 it disagrees with the '
+            'enforcer; the copies test dies',
+     'return copies > 1 ? maxSingle : total;',
+     'return total;'),
+
+    (RULES, 'group 3: the per-account breach flag is forced FALSE, so a breached position reads '
+            'healthy in the evaluator; the per-account breach test dies',
+     'c.Account != null && c.Account.MaxPositionQuantityBreached',
      'false'),
 
+    (GUARD, 'group 3: the per-account breach flag is dropped at the POPULATION site, so the resolved '
+            'per-instrument breach never reaches the snapshot; the population breach tests die',
+     'snapshot.MaxPositionQuantityBreached = maxBreached;',
+     'snapshot.MaxPositionQuantityBreached = false;'),
+
+    (GUARD, 'group 3: the per-account breach uses the profile DEFAULT cap instead of the RESOLVED '
+            'per-instrument limit, so a per-symbol InstrumentLimit below the account default is '
+            'missed -- the funded-account MNQ:1 defect; the InstrumentLimit population test dies',
+     'ResolveMaxContracts(resolvedProfile, baseSymbol, pos.Instrument)',
+     'resolvedProfile.DefaultMaxContracts'),
+
     # ---- group 4: the last-fired timestamp (slice b) -----------------------------------------
-    (GUARD, 'group 4: the recording write in MarkRuleLockout is dropped, so a fired rule reports '
-            '"never fired"; the fired-rule test dies',
+    (GUARD, 'group 4: the recording write in RecordRuleFired is dropped, so no rule -- per-account '
+            'OR aggregate -- ever records a firing; the fired-rule tests die',
      'st.RuleLastFired[ruleId] = st.UtcNow();',
+     '/* dropped */'),
+
+    (GUARD, 'group 4: the aggregate breach never calls RecordRuleFired, so the aggregate row reads '
+            '"never fired" no matter how often it fires -- a green that can never be red; the '
+            'aggregate-firing test dies',
+     'RecordRuleFired(st, "AGGREGATE_SIZE_BREACH");',
      '/* dropped */'),
 
     (RULES, 'group 4: LastFiredOf returns null unconditionally, so a fired rule reports "never '

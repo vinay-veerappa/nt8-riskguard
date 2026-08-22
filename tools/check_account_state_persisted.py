@@ -62,6 +62,13 @@ RUNTIME_ONLY = {
         'session can never come back, and a restored one would suppress a refusal for an order '
         'that no longer exists. Cleared on session reset with RecentEntryAnchors, for the same '
         'reason and in the same place.',
+    'RuleLastFired':
+        'P2-132(b). Display-only recency for the rule inventory ("fired just now" vs "never '
+        'fired"). No rail reads it -- the lockout itself (LockoutUntil, LockoutRuleId) persists '
+        'separately, so a restored lockout is fully re-armed without this. A firing is a session '
+        'fact: "fired before the restart" is not "fired just now", so a restart correctly clears '
+        'it. The one visible consequence -- a currently-locked-out rule reads "never fired" for '
+        'the rest of the session after a restart -- is a stale display line, not a safety gap.',
 }
 
 # Derived from persisted fields on restore -- NOT persisted, deliberately, because a stored copy
