@@ -96,6 +96,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// <summary>Set when the rule is off by operator choice, which is not a defect.</summary>
         public bool DisabledByConfig { get; set; }
 
+        /// <summary>
+        /// P2-132(b). Whether the rule's current value is PAST its limit, folded out of the SAME
+        /// comparison the enforcer makes. This is NOT a sixth state: `Enforcing` vs
+        /// `EvaluatedNotEnforcing` is about AUTHORITY (can it act), and this is about the VALUE
+        /// (is it in breach). A rule can be EvaluatedNotEnforcing AND breached -- that is exactly
+        /// the funded account's MAX_SIZE_BREACH, in shadow, and it is the row the operator most
+        /// needs to see flagged.
+        /// </summary>
+        public bool Breached { get; set; }
+
+        /// <summary>P2-132(b). When the rule last fired, or null if it never has.</summary>
+        public DateTime? LastFiredUtc { get; set; }
+
         /// <summary>Free text the UI shows verbatim. Say what is missing, not that something is missing.</summary>
         public string Note { get; set; }
     }
@@ -167,6 +180,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double? Limit { get; set; }
         public int EvidenceCount { get; set; }
         public string Note { get; set; }
+
+        /// <summary>P2-132(b). Whether the value is past the limit, folded out of the enforcer's own comparison.</summary>
+        public bool Breached { get; set; }
+
+        /// <summary>
+        /// P2-132(b). When the rule last fired, or null if it never has. Carried so "never fired"
+        /// and "fired a minute ago" are different answers in the inventory, which is the whole of
+        /// the recency half of this defect.
+        /// </summary>
+        public DateTime? LastFiredUtc { get; set; }
     }
 
     public class GuardAccountRules
@@ -240,6 +263,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             return new GuardRuleReading { CurrentValue = current, Limit = limit, EvidenceCount = evidence, Note = note };
         }
 
+        // P2-132(b). The full reading, with the breach flag and last-fired timestamp. The breach
+        // flag is folded out of the SAME comparison the enforcer makes, so the inventory cannot
+        // disagree with the enforcer about whether a rule is in breach.
+        private static GuardRuleReading RB(double? current, double? limit, int evidence,
+            bool breached, DateTime? lastFiredUtc, string note = null)
+        {
+            return new GuardRuleReading
+            {
+                CurrentValue = current,
+                Limit = limit,
+                EvidenceCount = evidence,
+                Breached = breached,
+                LastFiredUtc = lastFiredUtc,
+                Note = note
+            };
+        }
+
         private static GuardRuleReading Off(string note)
         {
             return new GuardRuleReading { DisabledByConfig = true, EvidenceCount = 1, Note = note };
@@ -268,6 +308,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool HasEquityReading(RiskGuardAddOn.AccountStateSnapshot account)
         {
             return account != null && !double.IsNaN(account.AccountEquity) && account.AccountEquity != 0.0;
+        }
+
+        // P2-132(b). The last-fired timestamp for a rule, from the account's copied map. Null when
+        // the account is absent or the rule has never fired. The map is keyed by the enforcer's
+        // RuleId, which is the same string the inventory's ConfigPath maps to -- see the mapping
+        // table below.
+        private static DateTime? LastFiredOf(RiskGuardAddOn.AccountStateSnapshot account, string ruleId)
+        {
+            if (account == null || account.RuleLastFired == null) return null;
+            DateTime t;
+            return account.RuleLastFired.TryGetValue(ruleId, out t) ? (DateTime?)t : null;
+        }
+
+        // P2-132(b). The cross-account SUM of non-flat position quantity, the same number
+        // EvaluateAggregateSizing sums into totalAggregateContracts. Each account's contribution is
+        // its TotalPositionQuantity (already absolute, summed across instruments in the snapshot).
+        private static double AggregateTotalQuantity(IList<RiskGuardAddOn.AccountStateSnapshot> accounts)
+        {
+            if (accounts == null) return 0;
+            double total = 0;
+            foreach (var a in accounts)
+            {
+                if (a != null) total += a.TotalPositionQuantity;
+            }
+            return total;
         }
 
         private static readonly List<GuardRuleDefinition> _rules = new List<GuardRuleDefinition>
@@ -301,7 +366,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.PerAccount,
                 Evaluator = c => c.Config.Sizing.MaxContractsPerAccount <= 0
                     ? Off("no per-account contract cap")
-                    : R(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity, c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1)
+                    : RB(c.Account == null ? (double?)null : c.Account.MaxPositionQuantity,
+                        c.Config.Sizing.MaxContractsPerAccount, c.Account == null ? 0 : 1,
+                        c.Account != null && c.Account.MaxPositionQuantity > c.Config.Sizing.MaxContractsPerAccount,
+                        LastFiredOf(c.Account, "MAX_SIZE_BREACH"))
             },
             new GuardRuleDefinition {
                 Name = "Max contracts aggregate", ConfigPath = "Sizing.MaxContractsAggregate",
@@ -309,10 +377,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Source = GuardRuleSource.Config, Scope = GuardRuleScope.Aggregate,
                 // Evidence is the number of accounts it can see. An aggregate cap over ZERO
                 // known accounts is not enforcing anything, and would otherwise read as green.
+                // P2-132(b): currentValue is the cross-account SUM of non-flat quantity, the same
+                // number EvaluateAggregateSizing sums into totalAggregateContracts, and the breach
+                // flag is the same `> limit` comparison that enforcer makes.
                 Evaluator = c => c.Config.Sizing.MaxContractsAggregate <= 0
                     ? Off("no aggregate contract cap")
-                    : R(null, c.Config.Sizing.MaxContractsAggregate,
-                        c.AllAccounts == null ? 0 : c.AllAccounts.Count)
+                    : RB(AggregateTotalQuantity(c.AllAccounts), c.Config.Sizing.MaxContractsAggregate,
+                        c.AllAccounts == null ? 0 : c.AllAccounts.Count,
+                        AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate,
+                        LastFiredOf(c.Account, "AGGREGATE_SIZE_BREACH"))
             },
 
             // -- overtrading ------------------------------------------------------------
@@ -932,6 +1005,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             row.Limit = reading.Limit;
                             row.EvidenceCount = reading.EvidenceCount;
                             row.Note = reading.Note;
+                            row.Breached = reading.Breached;
+                            row.LastFiredUtc = reading.LastFiredUtc;
                         }
                         else
                         {
@@ -1169,6 +1244,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     armedForLive = r.ArmedForLive,
                     isQuarantined = r.IsQuarantined,
                     quarantineReason = r.QuarantineReason,
+                    maxPositionSize = r.MaxPositionSize,
+                    autoSymbolConversion = r.AutoSymbolConversion,
+                    maxSlippageTicks = r.MaxSlippageTicks,
+                    perTickerRatioLines = r.PerTickerRatioLines,
+                    symbolMappingLines = r.SymbolMappingLines,
                     leaderSide = r.LeaderSide,
                     leaderQuantity = r.LeaderQuantity,
                     expectedSide = r.ExpectedSide,

@@ -985,7 +985,11 @@ jobs:
           # the ~2.4x CI factor ~226s, landing this bin near ~740s against a ~1119s critical path.
           # ⚠️ ESTIMATED -- pack_ci_matrix.py refuses a guessed weight and is right to; replace with
           # CI's own BATTERY_SECONDS on the first green run and re-pack if it lands high.
-          - { label: "P1-170+P2-165+P2-161", batteries: "mutate_p1170.py mutate_p2165.py mutate_p2161_p2162.py" }   # 515s MEASURED + P2-161/P2-162 ~226s ESTIMATED (9 mutants) = ~741s job
+          # P2-132 (mutate_p2132.py, 9 mutants) joins this bin 2026-08-21: it covers the sizing
+          # rules' currentValue/breach/last-fired reporting (slice a + b). Local 9 mutants ~80s; at
+          # the ~2.4x CI factor ~226s, landing this bin near ~967s against a ~1119s critical path.
+          # ⚠️ ESTIMATED -- replace with CI's own BATTERY_SECONDS on the first green run.
+          - { label: "P1-170+P2-165+P2-161+P2-132", batteries: "mutate_p1170.py mutate_p2165.py mutate_p2161_p2162.py mutate_p2132.py" }   # 515s MEASURED + P2-161/P2-162 ~226s + P2-132 ~226s ESTIMATED = ~967s job
           # P1-173: an active loss cooldown survives a recompile. Shares no bin for the same
           # reason as its neighbours -- the three above are already at the critical path.
           #

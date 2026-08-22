@@ -261,6 +261,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool IsQuarantined { get; set; }
         public string QuarantineReason { get; set; }
 
+        // P2-126. The set-rarely scalar config, carried so the browser page can edit it
+        // without round-tripping a whole relationship (P?-65's rule). These are per-
+        // RELATIONSHIP, so they repeat across a relationship's per-instrument rows; the
+        // page edits them once and the engine merges the diff.
+        public int MaxPositionSize { get; set; }
+        public bool AutoSymbolConversion { get; set; }
+        public double MaxSlippageTicks { get; set; }
+
+        // P2-126. The two dictionary fields, carried as sorted "KEY=VALUE" lines so the
+        // page can render them in a textarea without building a dynamic key-value form.
+        // The engine's own dictionaries stay the source of truth; these are a read-only
+        // projection for display, and the page writes back a parsed diff.
+        public List<string> PerTickerRatioLines { get; set; }
+        public List<string> SymbolMappingLines { get; set; }
+
         public MarketPosition LeaderSide { get; set; }
         public int LeaderQuantity { get; set; }        // ABSOLUTE; side is carried separately
         public MarketPosition ExpectedSide { get; set; }
@@ -1145,6 +1160,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ArmedForLive = rel.ArmedForLive,
                     IsQuarantined = rel.IsQuarantined,
                     QuarantineReason = rel.QuarantineReason,
+                    MaxPositionSize = rel.MaxPositionSize,
+                    AutoSymbolConversion = rel.AutoSymbolConversion,
+                    MaxSlippageTicks = rel.MaxSlippageTicks,
+                    PerTickerRatioLines = DictionaryLines(rel.PerTickerRatios),
+                    SymbolMappingLines = DictionaryLines(rel.CustomSymbolMappings),
                     LeaderSide = leaderSide,
                     LeaderQuantity = leaderQty,
                     ExpectedSide = expectedSide,
@@ -2141,6 +2161,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (source == null)
                 return new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
             return new Dictionary<string, T>(source, StringComparer.OrdinalIgnoreCase);
+        }
+
+        // P2-126. A read-only projection of a dictionary as sorted "KEY=VALUE" lines, for the
+        // browser page's textarea. The engine's dictionary stays the source of truth; this is
+        // display only, and the page parses a diff back on write. Sorted so the page does not
+        // re-order between refreshes of identical data (the P2-127 fleet-tree lesson).
+        internal static List<string> DictionaryLines(IDictionary<string, double> dict)
+        {
+            if (dict == null || dict.Count == 0) return new List<string>();
+            return dict.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                       .Select(kv => kv.Key + "=" + kv.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                       .ToList();
+        }
+
+        internal static List<string> DictionaryLines(IDictionary<string, string> dict)
+        {
+            if (dict == null || dict.Count == 0) return new List<string>();
+            return dict.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                       .Select(kv => kv.Key + "=" + kv.Value)
+                       .ToList();
         }
 
         // ---- the MCP bridge's request -> object mapping (slice 3b) ----

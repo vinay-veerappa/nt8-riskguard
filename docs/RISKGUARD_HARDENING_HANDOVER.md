@@ -3349,7 +3349,7 @@ and `P?-65` together and makes the redesign testable.
 **Updated 2026-08-13 (session 34).** Finished items are struck through rather than deleted, because
 the *order* they forced is the reusable part.
 
-> ### Do next (session 59): read §5.86's `Order from here` — `P2-132` (slice b + `mutate_p2132`), `P2-126`, then `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`. Everything in `v1.59.0`–`v1.62.0` is CLOSED. The block below is session-56 history, kept for the order it forced.
+> ### Do next (session 63): read §5.86's `Order from here` — `P2-29`'s remainder / `P3-118` / `P3-124` / `P3-110` / `P3-33`. ✅ `P2-132` CLOSED 2026-08-21 (session 63, slice b + `mutate_p2132` 9/9). ✅ `P2-126` CLOSED 2026-08-21 (session 63, full copier write surface). Everything in `v1.59.0`–`v1.62.0` is CLOSED. The block below is session-56 history, kept for the order it forced.
 >
 > ### ~~Do next (session 56):~~ `P1-140`, then `P2-127`. ✅ **`P1-139` FIXED the same session** — suite **2132/0**, battery **13 of 14 killed + 1 declared**. One refused trailing move made the breakeven branch ask the broker to put the stop BACK at breakeven, because `BreakevenTriggered` meant three different things and ✅ CLOSED `P0-67` gave it a fourth; the stop was asked down from 20010.00 to 20000.50 on a live long, in the SAME sweep as the refusal. ⚠️ **Three things outlive that ticket.** The direction guard alone is NOT the fix — it leaves the flag false and the trailing block is gated on it, restoring ✅ CLOSED `P0-67`'s original defect; **the guard is UNKILLABLE from the code around it** (the whole thing replaced by `if (false)` kept the suite green at 2113/0, because the call sites correctly never hand it a wrong-way price, and the source gate matched `IsLong` inside the dead block), which is what the two new `#if TESTING` accessors exist for; and the agent loop ended `NOT_CONVERGING` with **0 of 5 upheld findings holding**, one of them requiring a measurement to reject. **Still OPEN and NOT live-validated: the confirmation run needs a non-Simulator account declining a stop move.** `P1-140`: the partial-profit order is submitted into the stop and target's own OCO group while both of those are sized for the FULL quantity — every outcome NT8 can pick is a defect (naked remainder / flipped position / silently dead feature), and `Math.Floor(1 * 0.50) == 0` is why no 1-lot test or live bracket has ever reached the block. ⚠️ **Not live-validatable on `Sim101` alone either**; it needs 2+ contracts.
 >
@@ -11656,12 +11656,12 @@ Re-derived from the plan's statuses this session — **do not copy forward, re-d
 `v1.59.0`/`v1.61.0`/`v1.62.0` is CLOSED in the plan; the genuinely-open set is below. Weigh by
 §5.6's consequence rule, not band letter. IDs are named as work only where the plan entry is OPEN.
 
-1. **`P2-132`** — slice (a) DONE + deployed (`v1.62.0`); **slice (b) REMAINS** (the aggregate cap's
-   cross-account-SUM `currentValue`, and the `EvaluatedNotEnforcing` state vocabulary so a just-fired
-   rule does not render identically to a never-fired one). ⚠️ **Fold in `mutate_p2132.py`** covering
-   slice (a) too — see above; slice (a) is deployed on 3 tests alone.
-2. **`P2-126`** — the copier browser UI implements 2 of the 14 actions its own API supports
-   (`knownActions`, `McpBridgeAddOn.cs:4253`). Bridge/UI, no core-guard risk.
+1. ~~**`P2-132`**~~ ✅ CLOSED 2026-08-21 (session 63) — slice (b) done: the aggregate cap reports the
+   cross-account SUM, both sizing rules carry a `Breached` flag + `LastFiredUtc`, and `mutate_p2132.py`
+   (9/9) covers both slices including the population paths. ⚠️ NOT YET DEPLOYED — box still runs `v1.62.0`.
+2. ~~**`P2-126`**~~ ✅ CLOSED 2026-08-21 (session 63) — the copier page now dispatches the full write
+   surface: arm/disarm (the one `confirmLive:true` write), the set-rarely scalars, and the two
+   dictionary fields as parsed diffs. ⚠️ NOT YET DEPLOYED.
 3. **`P2-29`**'s remainder, then **`P3-118`** (one canonical case-insensitive `Mode` parser — ⚠️
    worth doing BEFORE anyone writes `Mode: "Live"` into config, which the arming reader currently
    refuses as unrecognised; this is an arming-behaviour change and wants operator sign-off).

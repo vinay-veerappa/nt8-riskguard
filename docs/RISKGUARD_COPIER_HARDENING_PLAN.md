@@ -4878,7 +4878,7 @@ below.
 
 ---
 
-### P2-126. The copier section of the browser UI implements TWO of the fourteen actions its own API supports, so the operator can toggle a relationship and nothing else -- OPEN, found 2026-08-16 (session 50), reported by the operator as "only the enable/disable buttons work"
+### P2-126. The copier section of the browser UI implements TWO of the fourteen actions its own API supports, so the operator can toggle a relationship and nothing else -- ✅ CLOSED 2026-08-21 (session 63), found 2026-08-16 (session 50), reported by the operator as "only the enable/disable buttons work"
 
 **Where**: `nt8-mcp-bridge/ui/index.html` (the `dispatch` / `toggleRow` / `releaseRow` block,
 ~lines 573-611) against `McpBridgeAddOn.cs:4253` `knownActions`
@@ -4925,6 +4925,23 @@ what is missing is a write surface, and the write surface is what
 `GuardConfigEdit`/`CopierRequests` exist to validate. **Every new control must dispatch through
 the existing `dispatch()` chokepoint** — one place that builds a request and one that reads the
 answer, including `refused`, which is the engine declining on purpose and is not an error.
+
+✅ **CLOSED 2026-08-21 (session 63).** The page now dispatches the full write surface. `4de0968`
+(session 58) had already gone 2 → 7 actions (create, delete, groups, mode, ratio); this session
+closed the two remaining §4 decision-3 gaps: **arm/disarm** (the one write that sends
+`confirmLive:true`, so the engine's `ApplyArmingGate` is satisfied rather than silently refusing)
+and the **set-rarely config** — `maxPositionSize`, `maxSlippageTicks`, `autoSymbolConversion`, and
+the two dictionary fields `perTickerRatios` / `customSymbolMappings`, carried on the snapshot row
+as sorted `KEY=VALUE` lines and written back as parsed diffs. Every write still goes through the
+one `dispatch()` chokepoint, and every field is a DIFF so `PerTickerRatios`/`CustomSymbolMappings`
+survive a round trip (P?-65's rule). The snapshot row gained `MaxPositionSize`,
+`AutoSymbolConversion`, `MaxSlippageTicks`, `PerTickerRatioLines`, `SymbolMappingLines` (core,
+`TradeCopierEngine.cs` + `GuardRules.cs`), and the source gate `TestP2126_*` now asserts the arm
+path and the dictionary fields. Core suite **3524/0**, bridge harness **685/0**, wrapper **73/0**,
+both anchor checks 0 broken, `check_bridge_parses` clean. ⚠️ **NOT YET DEPLOYED** — the box still
+runs the pre-arm build; deploy with the next release. ⚠️ The `quarantine`-verb asymmetry (release
+exists, impose does not) is left as-is and still unstated; it is defensible but should be decided
+deliberately, not by omission.
 
 ---
 
@@ -7256,7 +7273,7 @@ and is the reason for the band. Say which half was measured.
 
 ---
 
-### P2-132. In `shadow`, the rule inventory cannot distinguish a rule that JUST FIRED from one that has never fired — measured on the funded account while `MAX_SIZE_BREACH` was live — ⚠️ OPEN: **slice (a) DONE 2026-08-21 (session 63)** — the 'Max contracts per account' rule now reports `currentValue` from the account's max single-instrument position, derived from `state.Positions.Values` (the SAME source the `MAX_SIZE_BREACH` enforcer iterates in `EvaluateRules`, `if (pos.Quantity > limit)`), so a rule in breach no longer renders null while three neighbours report where they stand. Tests `TestP2132_*` (3, incl. a negative control that the aggregate cap stays null); suite 3513/0. ⚠️ This slice was driven through the agent loop, which produced a green candidate that read `account.Positions` (live) instead — a plausible-sounding but WRONG source (the enforcer reads cached `state.Positions`); caught by hand-arbitration after the panel returned `NOT_CONVERGING`. **Slice (b) REMAINS**: the aggregate cap's cross-account-SUM currentValue, and the `EvaluatedNotEnforcing` state vocabulary that renders a just-fired rule identically to a never-fired one. Found 2026-08-16 (session 52). Slice (a) DEPLOYED live `v1.62.0` 2026-08-21 (session 59). ⚠️ **Slice (a) has NO mutation battery** — it rests on the 3 `TestP2132_*` tests only; fold `mutate_p2132.py` into slice (b), covering the `state.Positions` source too ([[mutation-testing-beats-review]])
+### P2-132. In `shadow`, the rule inventory cannot distinguish a rule that JUST FIRED from one that has never fired — measured on the funded account while `MAX_SIZE_BREACH` was live — ✅ CLOSED 2026-08-21 (session 63): **slice (a) DONE + DEPLOYED `v1.62.0`** — the 'Max contracts per account' rule now reports `currentValue` from the account's max single-instrument position, derived from `state.Positions.Values` (the SAME source the `MAX_SIZE_BREACH` enforcer iterates in `EvaluateRules`, `if (pos.Quantity > limit)`), so a rule in breach no longer renders null while three neighbours report where they stand. **Slice (b) DONE 2026-08-21 (session 63)**: the aggregate cap now reports the cross-account SUM of non-flat quantity (`TotalPositionQuantity` summed over `AllAccounts`, the same number `EvaluateAggregateSizing` sums into `totalAggregateContracts`), and both sizing rules carry a `Breached` flag folded out of the enforcer's own `> limit` comparison plus a `LastFiredUtc` timestamp recorded by `MarkRuleLockout` (the ONE funnel every lockout-capable rule passes through) and copied into the snapshot — so "never fired" and "fired a minute ago" are different answers. ⚠️ This slice was driven through the agent loop, which produced a green candidate that read `account.Positions` (live) instead — a plausible-sounding but WRONG source (the enforcer reads cached `state.Positions`); caught by hand-arbitration after the panel returned `NOT_CONVERGING`. Found 2026-08-16 (session 52). Slice (a) DEPLOYED live `v1.62.0` 2026-08-21 (session 59). ✅ **`mutate_p2132.py` (9 mutants, 9/9 killed) now covers BOTH slices** — including the population paths (`GetAccountSnapshots`, `MarkRuleLockout`) that the hand-built-snapshot tests could not see, which the battery's first run exposed as three survivors. Suite 3524/0. ⚠️ **NOT YET DEPLOYED** — slice (b) is on `main` but the box still runs `v1.62.0`; deploy with the next release.
 
 **Where**: `nt8-riskguard/addons/GuardRules.cs` (the `Max contracts per account` / `Max contracts
 aggregate` evaluators) and the `state` vocabulary the inventory reports.

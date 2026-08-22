@@ -19,8 +19,10 @@ safe to arm live at the operator's discretion — that decision is not in this r
 > below; the plan headers are authoritative. Cut in order: **`v1.59.0`** (Wave 1: `P2-178`, `P2-150`,
 > `P2-154` + `P2-181`), **`v1.61.0`** (`P1-149` `RiskManagerBase` cap + `P2-155` + `P2-158`),
 > **`v1.62.0`** (`P2-147` + `P2-132a`). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
-> **The genuine OPEN set is now `P2-132`(b), `P2-126`, `P2-29` remainder, `P3-118`, `P3-124`,
+> **The genuine OPEN set is now `P2-29` remainder, `P3-118`, `P3-124`,
 > `P3-110`, `P3-33`** — see the Sequencing summary at the bottom, refreshed this session.
+> ✅ `P2-132` CLOSED 2026-08-21 (session 63): slice (b) + `mutate_p2132.py` (9/9).
+> ✅ `P2-126` CLOSED 2026-08-21 (session 63): full copier write surface (arm/disarm + set-rarely config).
 
 ---
 
@@ -131,8 +133,8 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 | ID | Problem | Approach | Repo | Effort |
 |---|---|---|---|---|
-| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | **Slice (a) DONE + DEPLOYED `v1.62.0`**: the per-account cap reports `currentValue` from `state.Positions`. **Slice (b) OPEN**: the aggregate cap's cross-account-SUM `currentValue` + the `EvaluatedNotEnforcing` recency vocabulary. ⚠️ Slice (a) has NO battery yet — fold `mutate_p2132.py` in with slice (b). | core | M |
-| **P2-126** | The copier browser UI implements 2 of the 14 actions its own API supports. | Build out the remaining actions against `knownActions` (`McpBridgeAddOn.cs:4253`). | bridge (ui) | M |
+| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | ✅ **CLOSED 2026-08-21 (session 63)**: slice (a) deployed `v1.62.0`; slice (b) — aggregate cross-account SUM + `Breached` flag + `LastFiredUtc` — done, `mutate_p2132.py` 9/9. ⚠️ slice (b) NOT YET DEPLOYED. | core | M |
+| **P2-126** | The copier browser UI implements 2 of the 14 actions its own API supports. | ✅ **CLOSED 2026-08-21 (session 63)**: full write surface — arm/disarm (`confirmLive:true`), set-rarely scalars, per-ticker ratios + symbol mappings as parsed diffs. ⚠️ NOT YET DEPLOYED. | bridge (ui) | M |
 | ~~**P2-108**~~ ✅ | `NAKED_POSITION` re-logs every 10s because the audit calls `LogEvent` directly, not via `DispatchActions`. | **DONE (CLOSED 2026-08-15)**: routed through the dedup path. | core | S |
 
 ---
@@ -157,9 +159,9 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 2. ~~**Wave 1** — `P2-178`, `P2-154`, `P2-150`~~ ✅ (+ `P2-181`) — DEPLOYED `v1.59.0`
 3. ~~**Wave 2** — `P1-149` sub-task 2 (RiskGatekeeper cap) + `P1-131` + `P2-147`~~ ✅ — cap `v1.61.0`, `P2-147` `v1.62.0`
 4. ~~**Wave 3** — `P2-158`, `P2-155`~~ ✅ `v1.61.0`; **`P3-177` remains** (CI packing true-up — a follow-up, not acute)
-5. **Wave 4** — `P2-132`(**slice b**; slice a shipped `v1.62.0`), `P2-126`; ~~`P2-108`~~ ✅. (observability/UI)
+5. **Wave 4** — ~~`P2-132`~~ ✅ (slice b + battery, session 63), ~~`P2-126`~~ ✅ (full write surface, session 63); ~~`P2-108`~~ ✅. (observability/UI)
 6. **Wave 5** — `P3-118`, `P3-124`, ~~`P3-111`~~ ✅, `P3-110`, `P3-33`. (architecture)
 
-**The genuine OPEN set, in order:** `P2-132`(b) (fold in `mutate_p2132.py`), `P2-126`, `P2-29` remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`; plus the standing follow-ups `P3-177` (CI packing) and `P1-151`/AutoStop's first live stop.
+**The genuine OPEN set, in order:** `P2-29` remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`; plus the standing follow-ups `P3-177` (CI packing) and `P1-151`/AutoStop's first live stop.
 
 **Not in this roadmap** (operator decisions, not engineering tasks): arming the box `live`; and the cooldown-ladder config values (deployed `CooldownMinutes=5, MaxConsecutiveLosses=3` vs the discussed `base 2 / cap 4`). Both are inert under `shadow` and change only what happens once armed.

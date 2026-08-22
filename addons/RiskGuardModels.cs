@@ -247,7 +247,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// happened to expire. Persisted: a lockout survives a restart, so its reason must too.
         /// </summary>
         public string LockoutRuleId { get; set; } = null;
-        
+
+        // P2-132(b). Per-rule last-fired timestamps, so the rule inventory can tell a rule that
+        // JUST FIRED from one that has never fired. Keyed by the enforcer's RuleId (the same string
+        // the inventory's ConfigPath maps to). Written by MarkRuleLockout, which is the ONE place
+        // every lockout-capable rule funnels through -- so the inventory reads the SAME source the
+        // enforcer writes, not a second counter that can drift (F-9's rule, P2-103's rule).
+        // Runtime-only: a firing is a session fact, not a persisted one; a restart clears it, which
+        // is correct -- "fired before the restart" is not "fired just now".
+        public Dictionary<string, DateTime> RuleLastFired { get; set; } = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+
         // Session and Overtrading
         public DateTime LastSessionDate { get; set; } = DateTime.MinValue;
         public int TradesToday { get; set; } = 0;

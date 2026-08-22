@@ -922,7 +922,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP2116_EquityBackedRulesAreFoundBySweepNotByHand);
             Run(TestP2132_PerAccountContractCapReportsThePosition);
             Run(TestP2132_AFlatAccountReportsZeroNotNull);
-            Run(TestP2132_AggregateContractCapStillReportsNull);
+            Run(TestP2132_AggregateContractCapReportsTheCrossAccountSum);
+            Run(TestP2132_AggregateContractCapFlagsABreach);
+            Run(TestP2132_AggregateContractCapUnderLimitIsNotBreached);
+            Run(TestP2132_PerAccountContractCapFlagsABreach);
+            Run(TestP2132_ANeverFiredRuleReportsNoLastFired);
+            Run(TestP2132_AFiredRuleReportsItsTimestamp);
+            Run(TestP2132_GetAccountSnapshotsPopulatesThePositionQuantities);
+            Run(TestP2132_MarkRuleLockoutRecordsTheFiring);
+            Run(TestP2132_AFiredRuleFlowsThroughTheSnapshot);
             Run(TestP186_SwitchingOffABrokenRuleCannotHideThatItIsBroken);
             Run(TestP186_TheNewsShieldIsRedOutOfTheBox);
             Run(TestP182_AFlagThatCannotFireMustNotDefaultOn);
@@ -3241,21 +3249,177 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "fact", reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
         }
 
-        // Negative control (GREEN now and after): the aggregate cap's currentValue is a cross-account
-        // SUM, a separate slice, and this fix must not touch it.
-        private static void TestP2132_AggregateContractCapStillReportsNull()
+        // P2-132(b). The aggregate cap now reports the cross-account SUM of non-flat quantity, the
+        // same number EvaluateAggregateSizing sums into totalAggregateContracts. This replaces the
+        // slice-(a) negative control, whose job was to keep slice (a) off the aggregate rule; slice
+        // (b) IS the aggregate rule.
+        private static void TestP2132_AggregateContractCapReportsTheCrossAccountSum()
         {
-            Console.WriteLine("\n[TEST] P2-132: the aggregate contract cap is untouched and still reports null");
+            Console.WriteLine("\n[TEST] P2-132: the aggregate contract cap reports the cross-account sum, not null");
+
+            var acctA = P2116AccountNamed("A", 50000.0);
+            acctA.TotalPositionQuantity = 7;
+            var acctB = P2116AccountNamed("B", 50000.0);
+            acctB.TotalPositionQuantity = 5;
+            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var ctx = P2116ContextWith(P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acctA);
+            ctx.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { acctA, acctB };
+            var reading = rule.Evaluator(ctx);
+            Assert(reading.CurrentValue != null && Math.Abs(reading.CurrentValue.Value - 12) < 0.001,
+                string.Format(
+                    "the aggregate cap must report the cross-account sum (7 + 5 = 12), not null (was {0})",
+                    reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
+        }
+
+        private static void TestP2132_AggregateContractCapFlagsABreach()
+        {
+            Console.WriteLine("\n[TEST] P2-132: the aggregate cap flags a breach when the sum exceeds the limit");
+
+            var acctA = P2116AccountNamed("A", 50000.0);
+            acctA.TotalPositionQuantity = 12;
+            var acctB = P2116AccountNamed("B", 50000.0);
+            acctB.TotalPositionQuantity = 10;
+            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var ctx = P2116ContextWith(P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acctA);
+            ctx.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { acctA, acctB };
+            var reading = rule.Evaluator(ctx);
+            Assert(reading.Breached, string.Format(
+                "22 contracts against an aggregate cap of 20 must read Breached (was {0})", reading.Breached));
+        }
+
+        // Negative control: a sum UNDER the limit must NOT read breached. A Breached flag that is
+        // true whenever a limit exists would pass every positive test ([[detector-needs-a-negative-test]]).
+        private static void TestP2132_AggregateContractCapUnderLimitIsNotBreached()
+        {
+            Console.WriteLine("\n[TEST] P2-132: an aggregate sum under the limit is NOT breached");
+
+            var acctA = P2116AccountNamed("A", 50000.0);
+            acctA.TotalPositionQuantity = 3;
+            var acctB = P2116AccountNamed("B", 50000.0);
+            acctB.TotalPositionQuantity = 4;
+            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var ctx = P2116ContextWith(P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acctA);
+            ctx.AllAccounts = new List<RiskGuardAddOn.AccountStateSnapshot> { acctA, acctB };
+            var reading = rule.Evaluator(ctx);
+            Assert(!reading.Breached, string.Format(
+                "7 contracts against a cap of 20 must NOT read Breached (was {0})", reading.Breached));
+        }
+
+        private static void TestP2132_PerAccountContractCapFlagsABreach()
+        {
+            Console.WriteLine("\n[TEST] P2-132: the per-account cap flags a breach when the position exceeds the limit");
+
+            var acct = P2116Account(50000.0);
+            acct.MaxPositionQuantity = 11;   // 11 against a cap of 5
+            var rule = P2116Rule("Sizing.MaxContractsPerAccount");
+            var reading = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
+            Assert(reading.Breached, string.Format(
+                "11 contracts against a cap of 5 must read Breached (was {0})", reading.Breached));
+        }
+
+        private static void TestP2132_ANeverFiredRuleReportsNoLastFired()
+        {
+            Console.WriteLine("\n[TEST] P2-132: a rule that never fired reports no last-fired timestamp");
 
             var acct = P2116Account(50000.0);
             acct.MaxPositionQuantity = 11;
-            var rule = P2116Rule("Sizing.MaxContractsAggregate");
+            var rule = P2116Rule("Sizing.MaxContractsPerAccount");
             var reading = rule.Evaluator(P2116ContextWith(
                 P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
-            Assert(reading.CurrentValue == null, string.Format(
-                "the aggregate cap's currentValue is a cross-account sum, a separate slice -- this fix "
-                + "must not touch it, so it still reports null (was {0})",
-                reading.CurrentValue == null ? "null" : reading.CurrentValue.ToString()));
+            Assert(reading.LastFiredUtc == null, string.Format(
+                "a rule that never fired must report LastFiredUtc null (was {0})",
+                reading.LastFiredUtc == null ? "null" : reading.LastFiredUtc.ToString()));
+        }
+
+        private static void TestP2132_AFiredRuleReportsItsTimestamp()
+        {
+            Console.WriteLine("\n[TEST] P2-132: a rule that fired reports its last-fired timestamp");
+
+            var acct = P2116Account(50000.0);
+            acct.MaxPositionQuantity = 11;
+            var fired = new DateTime(2026, 8, 21, 12, 0, 0, DateTimeKind.Utc);
+            acct.RuleLastFired = new Dictionary<string, DateTime>(StringComparer.Ordinal)
+            {
+                { "MAX_SIZE_BREACH", fired }
+            };
+            var rule = P2116Rule("Sizing.MaxContractsPerAccount");
+            var reading = rule.Evaluator(P2116ContextWith(
+                P2116ConfigWithEveryEquityRuleOn(), P2116PropConfig(), acct));
+            Assert(reading.LastFiredUtc != null && reading.LastFiredUtc.Value == fired, string.Format(
+                "a rule that fired must report its timestamp (was {0})",
+                reading.LastFiredUtc == null ? "null" : reading.LastFiredUtc.ToString()));
+        }
+
+        // The three tests below drive the POPULATION paths, not hand-built snapshots. The
+        // hand-built tests above cannot see a mutant in GetAccountSnapshots or MarkRuleLockout,
+        // because they set the snapshot fields directly -- which is exactly the blind spot the
+        // mutation battery exposed (three survivors, all population-path). [[a-battery-must-reach-its-restore-line]]
+
+        private static void TestP2132_GetAccountSnapshotsPopulatesThePositionQuantities()
+        {
+            Console.WriteLine("\n[TEST] P2-132: GetAccountSnapshots populates max and total position quantity");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            config.Sizing.MaxContractsAggregate = 20;
+            AccountState state; Account account;
+            var addon = P1100Guard("P2132Pop", "shadow", config, out state, out account);
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            // Two instruments: MNQ 11 (the max) and MES 3, so max=11 and total=14.
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 11, 20000, 0, config);
+            state.UpdatePosition(account, new Instrument("MES"), MarketPosition.Long, 3, 5000, 0, config);
+
+            var snapshots = addon.GetAccountSnapshots();
+            Assert(snapshots.Count == 1, "one account snapshot is produced");
+            Assert(snapshots[0].MaxPositionQuantity == 11, string.Format(
+                "MaxPositionQuantity is the max single-instrument position (11), was {0}",
+                snapshots[0].MaxPositionQuantity));
+            Assert(snapshots[0].TotalPositionQuantity == 14, string.Format(
+                "TotalPositionQuantity is the cross-instrument sum (11 + 3 = 14), was {0}",
+                snapshots[0].TotalPositionQuantity));
+        }
+
+        private static void TestP2132_MarkRuleLockoutRecordsTheFiring()
+        {
+            Console.WriteLine("\n[TEST] P2-132: MarkRuleLockout records the rule's last-fired timestamp");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            AccountState state; Account account;
+            var addon = P1100Guard("P2132Fire", "shadow", config, out state, out account);
+
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 11, 20000, 0, config);
+            var actions = addon.EvaluateRules(account, state);
+
+            Assert(actions.Any(a => a.RuleId == "MAX_SIZE_BREACH"),
+                "precondition: the oversized position breaches MAX_SIZE_BREACH");
+            Assert(state.RuleLastFired != null && state.RuleLastFired.ContainsKey("MAX_SIZE_BREACH"),
+                "MarkRuleLockout records the firing under the enforcer's RuleId, so the inventory "
+                + "can report 'fired just now' vs 'never fired'");
+        }
+
+        private static void TestP2132_AFiredRuleFlowsThroughTheSnapshot()
+        {
+            Console.WriteLine("\n[TEST] P2-132: a fired rule's timestamp flows through GetAccountSnapshots to the inventory");
+
+            var config = new RiskConfig();
+            config.Sizing.MaxContractsPerAccount = 5;
+            AccountState state; Account account;
+            var addon = P1100Guard("P2132Flow", "shadow", config, out state, out account);
+            Account.All.Clear();
+            Account.All.Add(account);
+
+            state.UpdatePosition(account, new Instrument("MNQ"), MarketPosition.Long, 11, 20000, 0, config);
+            addon.EvaluateRules(account, state);
+
+            var snapshots = addon.GetAccountSnapshots();
+            Assert(snapshots.Count == 1 && snapshots[0].RuleLastFired != null
+                   && snapshots[0].RuleLastFired.ContainsKey("MAX_SIZE_BREACH"),
+                "the copied snapshot carries the fired rule's timestamp, so the inventory row can "
+                + "report it");
         }
 
         private static void TestP2116_TheFirmNoteIsPrefixedNotReplaced()

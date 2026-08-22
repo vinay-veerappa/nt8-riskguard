@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.62.0";
+        public const string Version = "1.63.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -273,6 +273,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             // so the "Max contracts per account" rule can report where it stands instead of null.
             // Populated in GetAccountSnapshots; 0 when flat.
             public int MaxPositionQuantity { get; set; }
+
+            // P2-132(b): the account's TOTAL non-flat position quantity (absolute, summed across
+            // instruments), so the "Max contracts aggregate" rule can report the cross-account sum
+            // the AGGREGATE_SIZE_BREACH enforcer compares against. Populated in GetAccountSnapshots.
+            public int TotalPositionQuantity { get; set; }
+
+            // P2-132(b): per-rule last-fired timestamps, copied from AccountState so the inventory
+            // can tell "fired a minute ago" from "never fired". Keyed by the enforcer's RuleId.
+            public Dictionary<string, DateTime> RuleLastFired { get; set; }
         }
 
         public List<AccountStateSnapshot> GetAccountSnapshots()
@@ -298,11 +307,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                         ConsecutiveLosses = state.ConsecutiveLosses,
                         IsExcluded = _config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(state.AccountName),
                         AccountEquity = equity,
-                        LockoutUntil = state.LockoutUntil
+                        LockoutUntil = state.LockoutUntil,
+                        // P2-132(b). Copy the per-rule last-fired map so the inventory can report
+                        // recency. A fresh dictionary, not the live one: the snapshot must not let a
+                        // reader mutate the guard's state, and the guard must not mutate a snapshot
+                        // it has already handed out.
+                        RuleLastFired = state.RuleLastFired == null
+                            ? new Dictionary<string, DateTime>(StringComparer.Ordinal)
+                            : new Dictionary<string, DateTime>(state.RuleLastFired, StringComparer.Ordinal)
                     };
                     
                     var posList = new List<string>();
                     int maxPosQty = 0;
+                    int totalPosQty = 0;
                     foreach (var pos in state.Positions.Values)
                     {
                         if (pos.MarketPosition != MarketPosition.Flat)
@@ -311,6 +328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             posList.Add(string.Format("{0} {1} {2}", posType, pos.Quantity, pos.Instrument.Split(' ')[0]));
                             int q = (int)Math.Abs(pos.Quantity);
                             if (q > maxPosQty) maxPosQty = q;
+                            totalPosQty += q;
                         }
                     }
                     snapshot.PositionString = posList.Count > 0 ? string.Join(", ", posList) : "FLAT";
@@ -320,6 +338,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // NOT the live account.Positions, which would be a DIFFERENT source than the enforcer
                     // and defeat the point ("derive the display from the enforcer", F-9).
                     snapshot.MaxPositionQuantity = maxPosQty;
+                    // P2-132(b). The aggregate cap's currentValue is the account's TOTAL non-flat
+                    // quantity, the same number EvaluateAggregateSizing sums into totalAggregateContracts.
+                    snapshot.TotalPositionQuantity = totalPosQty;
                     list.Add(snapshot);
                 }
             }
@@ -5287,6 +5308,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             st.IsLockedOut = true;
             st.LockoutRuleId = ruleId;   // P0-166: the lapse path needs to know which cure applies
             st.LockoutWasShadowOnly = !IsActingMode();
+            // P2-132(b). Record the firing so the inventory can report "fired just now" vs "never
+            // fired". This is the ONE funnel every lockout-capable rule passes through, so the
+            // inventory reads the same source the enforcer writes. The clock is the injectable one
+            // so a test can drive the boundary without sleeping.
+            if (!string.IsNullOrEmpty(ruleId))
+            {
+                st.RuleLastFired[ruleId] = st.UtcNow();
+            }
             _stateDirty = true;
             if (st.LockoutWasShadowOnly)
             {

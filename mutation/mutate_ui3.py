@@ -127,9 +127,10 @@ MUTANTS = [
 
     ("the aggregate contract cap hardcodes its evidence, so a cap across ZERO known\n"
      "     accounts reports as enforcing",
-     '                    : R(null, c.Config.Sizing.MaxContractsAggregate,\n'
-     '                        c.AllAccounts == null ? 0 : c.AllAccounts.Count)',
-     '                    : R(null, c.Config.Sizing.MaxContractsAggregate, 1)'),
+     '                        c.AllAccounts == null ? 0 : c.AllAccounts.Count,\n'
+     '                        AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate,',
+     '                        1,\n'
+     '                        AggregateTotalQuantity(c.AllAccounts) > c.Config.Sizing.MaxContractsAggregate,'),
 
     # ---- THE "just fill in the null" mutant ----
     # P1-77 REPOINTED THIS ONTO THE REAL EVALUATOR. It used to ADD a do-nothing evaluator to a
