@@ -18,7 +18,7 @@ safe to arm live at the operator's discretion — that decision is not in this r
 > and are CLOSED in the plan — this file's wave tables are the original *snapshot* and are marked
 > below; the plan headers are authoritative. Cut in order: **`v1.59.0`** (Wave 1: `P2-178`, `P2-150`,
 > `P2-154` + `P2-181`), **`v1.61.0`** (`P1-149` `RiskManagerBase` cap + `P2-155` + `P2-158`),
-> **`v1.62.0`** (`P2-147` + `P2-132a`). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
+> **`v1.62.0`** (`P2-147` + `P2-132a`), **`v1.64.0`** (`P2-132b` corrections — aggregate agrees with the enforcer, deployed live flat/shadow). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
 > **The genuine OPEN set is now `P2-29` remainder, `P3-118`, `P3-124`,
 > `P3-110`, `P3-33`** — see the Sequencing summary at the bottom, refreshed this session.
 > ✅ `P2-132` CLOSED 2026-08-21 (session 63): slice (b) + `mutate_p2132.py` (13/13 after critical-review corrections — see plan). Suite 3531/0.
@@ -133,7 +133,7 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 | ID | Problem | Approach | Repo | Effort |
 |---|---|---|---|---|
-| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | ✅ **CLOSED 2026-08-21 (session 63)**: slice (a) deployed `v1.62.0`; slice (b) — aggregate normalized value + `Breached` flag + `LastFiredUtc` — done (4 defects found & fixed in same-session critical review: CI-red gate, dead aggregate recency, enforcer-disagreement under `ExpectedCopies>1`, resolved per-instrument limit), `mutate_p2132.py` 13/13. ⚠️ slice (b) NOT YET DEPLOYED. | core | M |
+| **P2-132** | In `shadow` the rule inventory cannot tell a rule that JUST FIRED from one that never has — measured on the funded account with `MAX_SIZE_BREACH` live. | ✅ **CLOSED 2026-08-21 (session 63)**: slice (a) deployed `v1.62.0`; slice (b) — aggregate normalized value + `Breached` flag + `LastFiredUtc` — done (4 defects found & fixed in same-session critical review: CI-red gate, dead aggregate recency, enforcer-disagreement under `ExpectedCopies>1`, resolved per-instrument limit), `mutate_p2132.py` 13/13. ✅ DEPLOYED live `v1.64.0` (flat, shadow, 0 compile errors). | core | M |
 | **P2-126** | The copier browser UI implements 2 of the 14 actions its own API supports. | ✅ **CLOSED 2026-08-21 (session 63)**: full write surface — arm/disarm (`confirmLive:true`), set-rarely scalars, per-ticker ratios + symbol mappings as parsed diffs. ⚠️ NOT YET DEPLOYED. | bridge (ui) | M |
 | ~~**P2-108**~~ ✅ | `NAKED_POSITION` re-logs every 10s because the audit calls `LogEvent` directly, not via `DispatchActions`. | **DONE (CLOSED 2026-08-15)**: routed through the dedup path. | core | S |
 
