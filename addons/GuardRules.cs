@@ -215,6 +215,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double AccountEquity { get; set; }
         public int TradesToday { get; set; }
 
+        /// <summary>
+        /// F-15. The reason CanTrade would refuse this account, or null if it would allow.
+        /// The UI shows this in the inspector's "why am I blocked" field so the operator
+        /// does not have to guess which gate refused them. Populated by BuildGuardSnapshot.
+        /// </summary>
+        public string BlockedReason { get; set; }
+
         public List<GuardRuleRow> Rules { get; set; }
     }
 
@@ -945,6 +952,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 accountRules.IsLockedOut = account.IsLockedOut;
                 accountRules.AccountEquity = account.AccountEquity;
                 accountRules.TradesToday = account.TradesToday;
+                // F-15: the blocked-reason channel from CanTrade.
+                accountRules.BlockedReason = account.BlockedReason;
                 accountRules.Rules = new List<GuardRuleRow>();
                 snapshot.Accounts.Add(accountRules);
             }
@@ -1145,6 +1154,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     isLockedOut = acct.IsLockedOut,
                     accountEquity = acct.AccountEquity,
                     tradesToday = acct.TradesToday,
+                    blockedReason = acct.BlockedReason,
                     ruleCount = acct.Rules == null ? 0 : acct.Rules.Count,
                     worst = worst == null ? null : worst.Value.ToString(),
                     counts = counts

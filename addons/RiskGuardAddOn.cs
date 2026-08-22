@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.64.0";
+        public const string Version = "1.65.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -240,19 +240,45 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public bool CanTrade(string accountName, string instrument, string strategyName = "DefaultStrategy")
         {
+            string reason;
+            return CanTrade(accountName, instrument, strategyName, out reason);
+        }
+
+        /// <summary>
+        /// F-15: CanTrade with a reason channel. The bare-bool overload delegates here.
+        /// `reason` is null when the call returns true (allowed), and a short string when
+        /// it returns false (blocked). The UI shows this string in the inspector's
+        /// "why am I blocked" field, so the operator does not have to guess which gate
+        /// refused them.
+        /// </summary>
+        public bool CanTrade(string accountName, string instrument, string strategyName, out string reason)
+        {
             lock (_stateLock)
             {
-                if (LockoutBinds(accountName)) return false;
+                if (LockoutBinds(accountName))
+                {
+                    reason = "account is locked out";
+                    return false;
+                }
 
-                if (!_isArmed) return true;
-                if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accountName)) return true;
+                if (!_isArmed) { reason = null; return true; }
+                if (_config.ExcludedAccounts != null && _config.ExcludedAccounts.Contains(accountName))
+                {
+                    reason = null;
+                    return true;
+                }
                 if (!string.IsNullOrEmpty(instrument))
                 {
                     // P2-163: was `BlockedInstruments.Contains(root)` -- default-ALLOW, and an
                     // ordinal Contains that a lowercase config entry defeated silently.
-                    if (ResolveInstrumentPermission(instrument) != InstrumentPermission.Permitted)
+                    var perm = ResolveInstrumentPermission(instrument);
+                    if (perm != InstrumentPermission.Permitted)
+                    {
+                        reason = DescribeInstrumentDenial(perm);
                         return false;
+                    }
                 }
+                reason = null;
                 return true;
             }
         }
@@ -288,6 +314,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P2-132(b): per-rule last-fired timestamps, copied from AccountState so the inventory
             // can tell "fired a minute ago" from "never fired". Keyed by the enforcer's RuleId.
             public Dictionary<string, DateTime> RuleLastFired { get; set; }
+
+            // F-15: the reason CanTrade would refuse this account, or null if allowed.
+            // Populated in BuildGuardSnapshot; flows through to GuardAccountRules.
+            public string BlockedReason { get; set; }
         }
 
         public List<AccountStateSnapshot> GetAccountSnapshots()
@@ -389,12 +419,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                 config = _config;
             }
 
+            var snapshots = GetAccountSnapshots();
+
+            // F-15: populate the blocked-reason field per account, so the UI can show
+            // "why am I blocked" without calling CanTrade itself (which takes a lock
+            // the snapshot already released). The instrument is null because CanTrade's
+            // instrument-permission gate is per-instrument and the snapshot is not.
+            foreach (var snap in snapshots)
+            {
+                string reason;
+                CanTrade(snap.AccountName, null, "Snapshot", out reason);
+                // GuardRuleRegistry.BuildSnapshot copies these into GuardAccountRules.
+                // The field is on AccountStateSnapshot so it flows through the same
+                // path as equity and tradesToday.
+                snap.BlockedReason = reason;
+            }
+
             return GuardRuleRegistry.BuildSnapshot(
                 config,
                 PropFirmProtectionSuite.Instance.Config,
                 mode,
                 isArmed,
-                GetAccountSnapshots(),
+                snapshots,
                 PropFirmProtectionSuite.Instance.NewsEventCount,
                 PropFirmProtectionSuite.Instance.NewsEventsLoadStatus);
         }

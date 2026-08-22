@@ -207,14 +207,24 @@ MUTANTS = [
      '                        MarkRuleLockout(stateModel, "INSTRUMENT_NOT_PERMITTED");'),
 
     # ---- group 6: one question, one answer -------------------------------------------------
+    # F-15: CanTrade now has a reason-channel overload. The anchor targets the
+    # instrument-permission check in the NEW overload (out string reason).
     (GUARD, 'group 6: CanTrade stops using the shared predicate and goes back to its own '
             'default-ALLOW block-list read. The pre-trade gate then permits what the order path '
             'cancels and the position path flattens -- one question with two answers, which is the '
             'shape P1-159 was filed to end',
-     '                    if (ResolveInstrumentPermission(instrument) != InstrumentPermission.Permitted)\n'
-     '                        return false;',
+     '                    var perm = ResolveInstrumentPermission(instrument);\n'
+     '                    if (perm != InstrumentPermission.Permitted)\n'
+     '                    {\n'
+     '                        reason = DescribeInstrumentDenial(perm);\n'
+     '                        return false;\n'
+     '                    }',
      '                    string canRoot = instrument.Split(\' \')[0].ToUpper();\n'
-     '                    if (_config.BlockedInstruments != null && _config.BlockedInstruments.Contains(canRoot)) return false;'),
+     '                    if (_config.BlockedInstruments != null && _config.BlockedInstruments.Contains(canRoot))\n'
+     '                    {\n'
+     '                        reason = "is blacklisted";\n'
+     '                        return false;\n'
+     '                    }'),
 
     (GUARD, 'group 6: the refusal message stops naming which list denied the order. "Blocked" and '
             '"never permitted" are two different edits for the operator to make, and the old message '
