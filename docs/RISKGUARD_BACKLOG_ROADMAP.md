@@ -18,9 +18,9 @@ safe to arm live at the operator's discretion — that decision is not in this r
 > and are CLOSED in the plan — this file's wave tables are the original *snapshot* and are marked
 > below; the plan headers are authoritative. Cut in order: **`v1.59.0`** (Wave 1: `P2-178`, `P2-150`,
 > `P2-154` + `P2-181`), **`v1.61.0`** (`P1-149` `RiskManagerBase` cap + `P2-155` + `P2-158`),
-> **`v1.62.0`** (`P2-147` + `P2-132a`), **`v1.64.0`** (`P2-132b` corrections — aggregate agrees with the enforcer, deployed live flat/shadow). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
-> **The genuine OPEN set is now `P2-29` remainder, `P3-118`, `P3-124`,
-> `P3-110`, `P3-33`** — see the Sequencing summary at the bottom, refreshed this session.
+> **`v1.62.0`** (`P2-147` + `P2-132a`), **`v1.64.0`** (`P2-132b` corrections — aggregate agrees with the enforcer, deployed live flat/shadow), **`v1.65.0`** (`P3-118` case-insensitive Mode parser + `P3-124` one symbol table + `F-15` CanTrade reason channel; `F-11`/`F-14` cross-repo). Also CLOSED since: `P1-102`, `P1-131`, `P2-108`, `P3-111`.
+> **The genuine OPEN set is now `P2-29` remainder, `P3-110`, `P3-33`** — see the
+> Sequencing summary at the bottom, refreshed this session.
 > ✅ `P2-132` CLOSED 2026-08-21 (session 63): slice (b) + `mutate_p2132.py` (13/13 after critical-review corrections — see plan). Suite 3531/0.
 > ✅ `P2-126` CLOSED 2026-08-21 (session 63): full copier write surface (arm/disarm + set-rarely config).
 
@@ -143,8 +143,8 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 
 | ID | Problem | Approach | Repo | Effort |
 |---|---|---|---|---|
-| **P3-118** | Three readers of `Mode` with three case rules; `Mode: "Live"` is refused as unrecognised by the reader that decides arming. | One canonical, case-insensitive Mode parser. ⚠️ Worth doing BEFORE anyone writes `Mode: "Live"` into config. | core | S-M |
-| **P3-124** | The mini/micro symbol table is written FOUR times in `TradeCopierEngine.cs`, two of them the sizing arithmetic twice. | Extract to one source of truth; the duplication is a drift hazard ([[a-second-reader-of-the-same-state]]). | core (copier) | M |
+| **P3-118** | Three readers of `Mode` with three case rules; `Mode: "Live"` is refused as unrecognised by the reader that decides arming. | ✅ **CLOSED 2026-08-22 (session 63)**, released `v1.65.0`: one `IsRecognisedGuardMode` predicate, all readers route through it. ⚠️ A missed FOURTH reader (`RefuseChange`) shipped a00d119 RED; fixed `94ee348` (see plan). | core | S-M |
+| **P3-124** | The mini/micro symbol table is written FOUR times in `TradeCopierEngine.cs`, two of them the sizing arithmetic twice. | ✅ **CLOSED 2026-08-22 (session 63)**, released `v1.65.0`: one `SymbolPairTable`. ⚠️ Follow-up: `IsMicro` was case-sensitive (`ContainsValue` ignores the key comparer); fixed `5fc35c4` (see plan). | core (copier) | M |
 | ~~**P3-111**~~ ✅ | `/api/bars` throws an unhandled `FormatException` on a caller's query typo (`int.Parse`). | **DONE (CLOSED 2026-08-14, live-validated)**: `TryParse` → 400 with a named field. | bridge | S |
 | **P3-110** | The panic flatten's cancel set omits `OrderState.TriggerPending` — NARROWED live; small remainder. | Add `TriggerPending` to `ActiveOrderStates`. | bridge | S |
 | **P3-33** | Global `lock()` on the hot path. | The pragmatic subset (never hold `_stateLock` across I/O) is largely in place; the full actor-model port is LARGE. Defer unless contention is observed. | core | L |
@@ -160,8 +160,8 @@ The defect's central complaint is **half-closed**: `BridgeSizingGate` now enforc
 3. ~~**Wave 2** — `P1-149` sub-task 2 (RiskGatekeeper cap) + `P1-131` + `P2-147`~~ ✅ — cap `v1.61.0`, `P2-147` `v1.62.0`
 4. ~~**Wave 3** — `P2-158`, `P2-155`~~ ✅ `v1.61.0`; **`P3-177` remains** (CI packing true-up — a follow-up, not acute)
 5. **Wave 4** — ~~`P2-132`~~ ✅ (slice b + battery, session 63), ~~`P2-126`~~ ✅ (full write surface, session 63); ~~`P2-108`~~ ✅. (observability/UI)
-6. **Wave 5** — `P3-118`, `P3-124`, ~~`P3-111`~~ ✅, `P3-110`, `P3-33`. (architecture)
+6. **Wave 5** — ~~`P3-118`~~ ✅, ~~`P3-124`~~ ✅, ~~`P3-111`~~ ✅, `P3-110`, `P3-33`. (architecture)
 
-**The genuine OPEN set, in order:** `P2-29` remainder, `P3-118`, `P3-124`, `P3-110`, `P3-33`; plus the standing follow-ups `P3-177` (CI packing) and `P1-151`/AutoStop's first live stop.
+**The genuine OPEN set, in order:** `P2-29` remainder, `P3-110`, `P3-33`; plus the standing follow-ups `P3-177` (CI packing) and `P1-151`/AutoStop's first live stop. (`F-13` fill-timeout + rejected-order protection was filed for a future ticket during F-15/F-11/F-14.)
 
 **Not in this roadmap** (operator decisions, not engineering tasks): arming the box `live`; and the cooldown-ladder config values (deployed `CooldownMinutes=5, MaxConsecutiveLosses=3` vs the discussed `base 2 / cap 4`). Both are inert under `shadow` and change only what happens once armed.

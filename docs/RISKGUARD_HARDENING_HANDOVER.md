@@ -11656,21 +11656,19 @@ Re-derived from the plan's statuses this session — **do not copy forward, re-d
 `v1.59.0`/`v1.61.0`/`v1.62.0` is CLOSED in the plan; the genuinely-open set is below. Weigh by
 §5.6's consequence rule, not band letter. IDs are named as work only where the plan entry is OPEN.
 
-1. ~~**`P2-132`**~~ ✅ CLOSED 2026-08-21 (session 63) — slice (b) done: the aggregate cap reports the
-   cross-account SUM, both sizing rules carry a `Breached` flag + `LastFiredUtc`, and `mutate_p2132.py`
-   (9/9) covers both slices including the population paths. ⚠️ NOT YET DEPLOYED — box still runs `v1.62.0`.
-2. ~~**`P2-126`**~~ ✅ CLOSED 2026-08-21 (session 63) — the copier page now dispatches the full write
-   surface: arm/disarm (the one `confirmLive:true` write), the set-rarely scalars, and the two
-   dictionary fields as parsed diffs. ⚠️ NOT YET DEPLOYED.
-3. **`P2-29`**'s remainder, then **`P3-118`** (one canonical case-insensitive `Mode` parser — ⚠️
-   worth doing BEFORE anyone writes `Mode: "Live"` into config, which the arming reader currently
-   refuses as unrecognised; this is an arming-behaviour change and wants operator sign-off).
-4. **`P3-124`** (the mini/micro symbol table written FOUR times in `TradeCopierEngine.cs`, twice as
-   sizing arithmetic — extract to one source; it is on the LIVE copy path, so it wants its own battery
-   and a Sim round trip), then **`P3-110`** (narrowed to almost nothing: `TriggerPending` on the panic
+1. ~~**`P2-132`**~~ / ~~**`P2-126`**~~ ✅ CLOSED, ✅ **DEPLOYED live `v1.64.0`** (flat, shadow, 0 compile
+   errors). Slice (b) shipped RED first; four defects found in same-session review and fixed (`9ecb0db`),
+   `mutate_p2132.py` 13/13. `nt_health` reads `1.64.0` armed/guarding — the `NOT YET DEPLOYED` this line
+   used to carry is discharged.
+2. ~~**`P3-118`**~~ ✅ / ~~**`P3-124`**~~ ✅ CLOSED (session 63), released **`v1.65.0`**, with **`F-15`**
+   (CanTrade reason channel) and cross-repo `F-11`/`F-14` (bridge pin at `v1.65.0`). Each shipped a defect
+   caught in same-session review — the missed FOURTH Mode reader `RefuseChange` (`94ee348`), the `IsMicro`
+   case-sensitive `ContainsValue` (`5fc35c4`), and F-15's untested reason channel (`a49c113`, 4 tests +
+   `mutate_p2163` group 7). ⚠️ **`v1.65.0` is on `main` but NOT yet deployed** — box runs `v1.64.0`.
+3. **`P2-29`**'s remainder, then **`P3-110`** (narrowed to almost nothing: `TriggerPending` on the panic
    cancel set; **do not add the state on the strength of a source reading** — that reading is what
    produced the entry and it was wrong), then the architectural **`P3-33`** (global lock; DEFER unless
-   contention is observed).
+   contention is observed). `F-13` (fill-timeout + rejected-order protection) filed for a future ticket.
 
 ⚠️ ✅ **`P1-151`/`AutoStop` is RESOLVED (closed `v1.57.0`) but has placed a real stop ZERO times** — the whole
 bps→ticks→resting-order→`Protected` path is proven only by the suite + `mutate_p1151`. Arming `live`

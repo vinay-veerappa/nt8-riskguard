@@ -4628,7 +4628,13 @@ would have put a feature with no tests behind a mutation score that says nothing
 
 ---
 
-### P3-124. The mini/micro symbol table exists in FOUR places inside `TradeCopierEngine.cs`, and two of them are the sizing arithmetic written twice — OPEN, found 2026-08-16 (session 50) while giving the copier window a per-ticker tab
+### P3-124. The mini/micro symbol table exists in FOUR places inside `TradeCopierEngine.cs`, and two of them are the sizing arithmetic written twice — ✅ CLOSED 2026-08-22 (session 63), released `v1.65.0`
+
+> Extracted to ONE `SymbolPairTable` (`IsMini`/`IsMicro`/`MicroOf`/`MiniOf`/`MultiplierFrom`/`IsPair`); all four sites (`ComputeEffectiveRatio`, `TranslateSymbol`, `CalculateFollowerQuantity`, the conflict detector) read it. Batteries `mutate_cm4` 6/6, `mutate_p2123` 17/17.
+>
+> **⚠️ Follow-up defect found in same-session review (fixed `5fc35c4`).** `IsMicro` was built on `Dictionary.ContainsValue`, which uses `EqualityComparer<TValue>.Default` (ordinal) — the `OrdinalIgnoreCase` comparer applies to KEYS only. So `IsMicro` was case-SENSITIVE while `IsMini`/`MicroOf`/`MiniOf` were not, and `MultiplierFrom` converted a lowercase mini (10×) but not a lowercase micro (0.1×) — a NEW asymmetry vs the old uniformly case-sensitive code, and the exact inconsistency the one-table refactor set out to remove. Latent (production roots are uppercased) and uncaught (every test used uppercase). Fixed by having `IsMicro` reuse `MiniOf`; added a lowercase negative-control test + `mutate_p2123` mutant 17.
+
+_Original OPEN note (found 2026-08-16, session 50, while giving the copier window a per-ticker tab):_
 
 **Where**: `addons/TradeCopierEngine.cs` — the `TranslateSymbol` switch (`:1553-1565`), the
 multiplier test inside `ComputeEffectiveRatio` (`:1500-1506`), the same multiplier test AGAIN
@@ -4736,7 +4742,13 @@ is covered by the 48-combination test and by two mutants, and by nothing on the 
 
 ---
 
-### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — OPEN, found 2026-08-16 (session 48) by a test that made two other tests disagree
+### P3-118. Three readers of `Mode`, three different case rules — `Mode: "Live"` is refused as *unrecognised* by the one reader that decides arming — ✅ CLOSED 2026-08-22 (session 63), released `v1.65.0`
+
+> One canonical `IsRecognisedGuardMode(string)` predicate (`OrdinalIgnoreCase`); `RunPreflight` check (c), `IsActingMode`, and `GuardConfigEdit.RefuseMode` all route through it. This is a deliberate, filed ARMING-behaviour change: `Mode: "Live"` now arms/acts where it was previously refused.
+>
+> **⚠️ There was a FOURTH reader the ticket missed (fixed `94ee348`), and it made a00d119 ship RED.** `RefuseChange`'s changed-check stayed `StringComparison.Ordinal` with a now-false comment ("Ordinal, matching RunPreflight" — P3-118 made RunPreflight case-insensitive). The ticket's own test already asserted "shadow → SHADOW is NOT a change," but it passed for the wrong reason (SHADOW validates anyway) — so `mutate_p2119` mutant 3 became an EQUIVALENT mutant once SHADOW was a valid mode, which failed CI. Fixed by making the changed-check `OrdinalIgnoreCase` too (completing the unification); a case-only edit is not re-validated, which keeps an unchanged case-variant of an unimplemented mode (`pure → PURE`) from trapping the operator (P2-119's rule, in the mode field). Moved mutant 3's kill to the `pure/override` case and added a covering test. [[one-flag-three-readers]]
+
+_Original OPEN note (found 2026-08-16, session 48, by a test that made two other tests disagree):_
 
 **Where**: `addons/RiskGuardAddOn.cs`, three places that each ask *what mode is this?*
 
