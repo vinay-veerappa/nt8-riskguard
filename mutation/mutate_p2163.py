@@ -238,6 +238,20 @@ MUTANTS = [
      '                ? "it is on BlockedInstruments"\n'
      '                : "it is not on AllowedInstruments (the permitted set is default-deny)";',
      '            return "it is on BlockedInstruments";'),
+
+    # ---- group 7: F-15's reason channel and the BlockedReason snapshot flow ----
+    # These shipped with no test; the boolean was covered, the strings and the plumbing were not.
+    (GUARD, 'group 7 (F-15): CanTrade blanks the lockout reason, so a locked-out account is refused '
+            'with an empty "why am I blocked" -- the operator is told nothing; the lockout-reason '
+            'test and the snapshot-flow test die',
+     '                    reason = "account is locked out";',
+     '                    reason = "";'),
+
+    (GUARD, 'group 7 (F-15): BuildGuardSnapshot drops the reason onto the row, so every account\'s '
+            'BlockedReason is null no matter why it is blocked -- the reason channel reaches the UI '
+            'as nothing; the snapshot-flow test dies',
+     '                snap.BlockedReason = reason;',
+     '                snap.BlockedReason = null;'),
 ]
 
 ORIGINALS = {p: open(p, encoding='utf-8').read() for p in {m[0] for m in MUTANTS}}

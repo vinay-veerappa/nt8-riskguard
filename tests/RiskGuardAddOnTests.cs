@@ -597,6 +597,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestP1100_ATimedManualLockoutGatesTheBridgesOrderPathToo);
             Run(TestP1100_AnEodManualLockoutBindsEvenInShadowMode);
             Run(TestP1100_TheDisarmedBypassIsHonouredByBothReaders);
+            Run(TestF15_CanTradeReasonNamesTheLockout);
+            Run(TestF15_CanTradeReasonIsNullWhenAllowed);
+            Run(TestF15_CanTradeReasonNamesWhichListDeniedTheInstrument);
+            Run(TestF15_BlockedReasonFlowsThroughTheSnapshot);
             Run(TestP1100_TheReportedGateAndTheEnforcedGateCannotDisagree);
             Run(TestP1100_AShadowOnlyLockoutDoesNotClaimToHaveCancelledAnOrder);
             Run(TestP1100_ALiveAuthorityLockoutStillCancelsTheOrderItSaysItCancels);
@@ -6594,6 +6598,83 @@ namespace NinjaTrader.NinjaScript.AddOns
             other.IsLockedOut = true;
             Assert(!addon2.CanTrade("NotListedAcc", ""), "an unlisted account stays gated when disarmed");
             Assert(addon2.IsAccountLocked("NotListedAcc"), "and the bridge keeps refusing it");
+        }
+
+        // F-15. The reason channel and the BlockedReason snapshot flow shipped with no test at all
+        // (the mutate_p2163 battery covered the pre-existing boolean, not the new strings). These
+        // four make the reason strings and the plumbing load-bearing: a mutant that blanks a reason
+        // or drops the snapshot assignment now has a test to kill it. [[an-alarm-wired-to-a-dead-output]]
+        private static void TestF15_CanTradeReasonNamesTheLockout()
+        {
+            Console.WriteLine("\n[TEST] F-15: CanTrade's reason names the lockout when an account is locked out");
+            AccountState state; Account account;
+            var addon = P1100Guard("F15Lock", "live", new RiskConfig(), out state, out account);
+            addon.LockAccount("F15Lock", -1);
+            string reason;
+            bool allowed = addon.CanTrade("F15Lock", "", "S", out reason);
+            Assert(!allowed && reason == "account is locked out", string.Format(
+                "a locked-out account is refused with a named reason (allowed={0}, reason={1})",
+                allowed, reason ?? "null"));
+        }
+
+        private static void TestF15_CanTradeReasonIsNullWhenAllowed()
+        {
+            Console.WriteLine("\n[TEST] F-15: CanTrade's reason is null when the account is allowed");
+            AccountState state; Account account;
+            var addon = P1100Guard("F15Ok", "live", new RiskConfig(), out state, out account);
+            string reason;
+            bool allowed = addon.CanTrade("F15Ok", "", "S", out reason);
+            Assert(allowed && reason == null, string.Format(
+                "an allowed account returns true with a null reason (allowed={0}, reason={1})",
+                allowed, reason ?? "null"));
+        }
+
+        private static void TestF15_CanTradeReasonNamesWhichListDeniedTheInstrument()
+        {
+            Console.WriteLine("\n[TEST] F-15: CanTrade's reason names WHICH list denied the instrument");
+
+            var blockedCfg = new RiskConfig();
+            blockedCfg.BlockedInstruments.Add("ZB");
+            AccountState s1; Account a1;
+            var addon1 = P1100Guard("F15Blk", "live", blockedCfg, out s1, out a1);
+            string r1;
+            bool allowed1 = addon1.CanTrade("F15Blk", "ZB 03-26", "S", out r1);
+            Assert(!allowed1 && r1 == "it is on BlockedInstruments", string.Format(
+                "a blocked instrument is refused as blocked (allowed={0}, reason={1})", allowed1, r1 ?? "null"));
+
+            var allowCfg = new RiskConfig();
+            allowCfg.AllowedInstruments.Add("MNQ");   // a non-empty allow-list makes the set default-deny
+            AccountState s2; Account a2;
+            var addon2 = P1100Guard("F15Deny", "live", allowCfg, out s2, out a2);
+            string r2;
+            bool allowed2 = addon2.CanTrade("F15Deny", "ZB 03-26", "S", out r2);
+            Assert(!allowed2 && r2 == "it is not on AllowedInstruments (the permitted set is default-deny)",
+                string.Format("an instrument off the allow-list is refused as not-allowed (allowed={0}, reason={1})",
+                    allowed2, r2 ?? "null"));
+        }
+
+        private static void TestF15_BlockedReasonFlowsThroughTheSnapshot()
+        {
+            Console.WriteLine("\n[TEST] F-15: the blocked reason flows through BuildGuardSnapshot to the account row");
+            AccountState lockedState; Account lockedAcct;
+            var addon = P1100Guard("F15SnapLock", "live", new RiskConfig(), out lockedState, out lockedAcct);
+            // a second, unlocked account proves the field is null when the account is allowed
+            var okState = new AccountState("F15SnapOk");
+            var okAcct = new Account { Name = "F15SnapOk" };
+            addon.SetAccountStateForTest("F15SnapOk", okState);
+            addon.SetSubscribedAccountForTest("F15SnapOk");
+            Account.All.Clear();
+            Account.All.Add(lockedAcct);
+            Account.All.Add(okAcct);
+            addon.LockAccount("F15SnapLock", -1);
+
+            var snap = addon.BuildGuardSnapshot();
+            var lockedRow = snap.Accounts.First(a => a.AccountName == "F15SnapLock");
+            var okRow = snap.Accounts.First(a => a.AccountName == "F15SnapOk");
+            Assert(lockedRow.BlockedReason == "account is locked out", string.Format(
+                "the locked account's row carries the reason (was {0})", lockedRow.BlockedReason ?? "null"));
+            Assert(okRow.BlockedReason == null, string.Format(
+                "the allowed account's row has a null reason (was {0})", okRow.BlockedReason ?? "null"));
         }
 
         /// <summary>
