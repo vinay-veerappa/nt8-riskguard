@@ -1,18 +1,19 @@
-# RISKGUARD_BROWSER_GATE_PLAN.md
+﻿# RISKGUARD_BROWSER_GATE_PLAN.md
 
-**Status:** v0 — IDEA, nothing built. Talking doc.
+**Status:** v1 — reviewed plan (external review pass 2026-08-29 folded in; V1 cut defined in §3). Still nothing built.
 **Created:** 2026-08-29. **Last updated:** 2026-08-29.
 **Origin:** user saw https://milkmantrades.com/buy-lock.html — "I am sure we can convert our riskguard into a chrome extension as well to deal with my tradingview and tradovate systems."
 **Decision already made:** when built, it lives in this repo at `browser/`. NOT a new repo, NOT a vendored submodule of the bridge.
 
 ---
 
-## 0. What this is (one paragraph)
+## 0. What this is (one paragraph, updated 2026-08-29 review pass)
 
-A Chrome MV3 extension that blocks **order entry** on TradingView web and Tradovate web when a lock is live. RiskGuard guards the NT8 broker connection: if an order is submitted from a browser, RiskGuard only sees it **after** the fill (react, flatten, lockout). The browser extension is the only cheap thing that can stop the click **before** submission on those surfaces. It is a pre-trade gate for surfaces the C# guard cannot reach. It does not replace RiskGuard; it closes a hole next to it.
+A **Node daemon + launcher** that blocks **order entry** on **TradingView Desktop** (with the web extension and Tradovate adapters parked for later) when a lock is live. RiskGuard guards the NT8 broker connection: an order submitted from TradingView reaches the broker without ever touching NT8, so RiskGuard sees it only **after** the fill (react, flatten, lockout). A CDP overlay — injected into the same Electron/Chromium DOM the MCP already drives — can stop the click **before** submission. It is a pre-trade gate for a surface the C# guard cannot reach; it does not replace RiskGuard, it closes a hole next to it. Safety is defined by **exposure effect, not button side** (§5.4): while locked, generic directional submissions are blocked and explicit Close / Flatten / Cancel always work.
 
-**Framing that must survive every design review in this doc:** this is *friction*, not a vault. Cool-state you removing options from hot-state you. Any feature that pretends to be enforceable from inside the same browser is a lie; see §9.
+**Framing that must survive every design review in this doc:** this is *friction, not a vault* — "blocks verified DOM entry paths on the pinned TradingView build", never "universal order rejection" (§4a contract). Cool-state you removing options from hot-state you. Any feature that pretends to be enforceable from inside the same browser is a lie; see §9.
 
+---
 ---
 
 ## 1. Why a button does anything (the behavioral case, distilled)
@@ -61,47 +62,53 @@ Their field-tested ways to raise friction: buy-lock, one-tap re-buy.
 
 ---
 
-## 3. Architecture (when built)
+## 3. Architecture (when built) — V1 CUT (review finding 11)
 
-Mirror of the HARMONISED_TRADING_ARCHITECTURE 3-layer pattern, carried into the browser plane:
+The full tree below shows the *destination*; the V1 build is the subset marked **[V1]**. The V1 scope statement — one testable proposition — is:
+
+> **When the gate reports `ENFORCING`, the known TradingView Desktop entry paths cannot create exposure, and the explicit emergency exits (Close / Flatten / Cancel) remain available.**
+
+V1 boundaries: TV Desktop only · one installed TV version · one integrated broker · one explicitly configured account · **Node daemon, no cross-language source import** (finding 8) · wrapper launcher · manual + schedule locks · generic directional submissions blocked · explicit Close/Flatten/Cancel preserved · persistent lock state · independent heartbeat witness · frame inventory + blocker canary · append-only lock journal · **no** PnL triggers, **no** behavioral coaching, **no** MV3 extension, **no** Tradovate adapter, **no** narration/journaling.
 
 ```
 browser/
-  daemon/                        # PRIMARY plane: TV Desktop via CDP (decided, §4a)
-    gate_daemon.py               # Playwright connect_over_cdp(9222); inject + lock engine host
+  daemon/                        # PRIMARY plane: TV Desktop via CDP (decided, §4a) — Node, ESM
+    gate_daemon.js               # [V1] attach over CDP (127.0.0.1:9222); lock engine + injector host
+    lock_state/                  # [V1] atomic lock-state file (write-temp+rename+fsync); single-owner; startup restore
+    journal/                     # [V1] append-only lock-transition JSONL (triggered/restored/extended/
+                                 #      expired/unlock-attempted/attachment-lost/health-changed)
     inject/
-      event_kill.js              # capture-phase blocker — injected on every new document
-      dom_watch.js               # greying/toast/PnL scrape — the content-script role
-    status/                      # localhost status page (badge/off-switch equivalent)
-  extension/                     # MV3 plane for web surfaces — same rules schema as daemon
-    manifest.json                # MV3, minimal permissions (see §7)
-    src/core/                    # lock engine — vendor-neutral
-      lock_engine.js             # state machine: no lock < soft lock < hard lock
-      storage.js                 # chrome.storage.local, schema versioning
-      event_kill.js              # capture-phase blocker (same code as daemon inject)
-      alarms.js                  # expirations, schedule windows
-      anchor_probe.js            # liveness monitoring (see §5.2)
-    src/sites/tradingview/
-      adapter.js                 # anchors, side detection, PnL scraper, submit intercept
-      anchors.md                 # every data-name/class relied on + date last verified
-    src/sites/tradovate/
-      adapter.js                 # TBD — DOM discovery pass required (see §6)
-      anchors.md
-    src/ui/
-      popup.html|js              # durations, rule list, status
-      toast.css|js               # locked-state affordance
-      badge.js                   # ON / STALE / OFF — STALE is the important one
-  launcher/                      # TV Desktop wrapper: launches with CDP port, then arms daemon
+      event_kill.js              # [V1] capture-phase blocker — ONE copy, shared (see inject/ note below)
+      dom_watch.js               # frame inventory, greying/toast, anchor probes, canary host
+    witness.js                   # [V1] independent heartbeat: daemon → witness; witness lives OUTSIDE
+                                 #      the daemon process (launcher-hosted) so a dead daemon's
+                                 #      heartbeat gap is observable by something that survives (§5.2)
+    manifest.json                # [V1] coverage manifest: every enabled trading surface → is its
+                                 #      entry path intercepted? unknown-enabled-surface ⇒ INERT/STALE
+    status/                      # localhost status page (launcher-hosted read-only witness view)
+  launcher/
+    launch_tv_debug wrapper      # [V1] launches TV with CDP port, starts daemon, then runs the
+                                 #      readiness handshake (§4a); TV is NOT declared ready until
+                                 #      the witness confirms ENFORCING
+  compat/
+    probe.js                     # [V1] read-only probe against the INSTALLED TV build: anchors,
+                                 #      ticket structure, account header — gates any release
   tests/
-    fixtures/tradingview_ticket.html
-    fixtures/tradovate_ticket.html
-    *.test.js|py                 # Playwright asserts blocked/allowed per §8
+    fixtures/…                   # static ticket DOM copies for unit tests (never sufficient alone, §8)
+    acceptance.test.js           # [V1] the never-trap battery + acceptance matrix (§8.2)
+  extension/                     # MV3 plane for web surfaces — PARKED (out of V1; revive only if a
+    …                            #   web trading need appears)
+  sites/tradovate/               # PARKED (§6 note retained for future discovery pass)
 ```
 
+**Runtime decision (finding 8):** the daemon is **Node**, not Python. The earlier draft had a Python daemon importing the MCP's Node `connection.js` — that does not work and is withdrawn. The MCP stays the on-demand plane; the daemon is a separate Node process. Connection-level reuse is handled by **option 2 of the review**: a small local CDP adapter living in *this* repo, with **contract tests** asserting the adapter's behavior matches the MCP's (same port resolution, same IPv4 default, same target-pick semantics) — a pinned-behavior contract instead of a source import. If drift hurts enough, a genuinely shared package is the later answer; not a cross-repo private import.
+
+**Single-copy rule for safety-critical injection:** `event_kill.js` exists **once** in this repo (`daemon/inject/`). The parked extension must not carry its own copy — if it's ever revived, it consumes the same file. Two copies of a submission blocker is a drift hazard on exactly the component that must never diverge.
+
 **Design rules:**
-- Core never imports from site adapters; adapters declare `{ id, matches, anchors: {...}, isBuyContext(), readPnl(), lock(target), unlock(target) }`.
+- Core never imports from site adapters; adapters declare `{ id, matches, anchors: {...}, isDirectionalContext(), readPnl(), lock(target), unlock(target) }`.
 - Never key on class hashes (they rotate). Anchor on stable attributes (`data-name`, `data-testid`, literal button text as last fallback), and record each anchor with the date it was last observed valid in `anchors.md`.
-- Exits are never blocked, on any adapter, at any lock level. Entry blocked / management allowed / flatten allowed. This is ADR-020's spirit (16:00 liquidation must always remain possible).
+- **Exposure rule replaces the old "exits never blocked" one-liner** (finding 1): V1 = directional submissions blocked (Buy AND Sell), explicit Close/Flatten/Cancel always allowed. Full rule and rationale: §5.4. ADR-020's spirit survives — the 15:59 liquidation path is exactly what `Flatten` is.
 
 ---
 
@@ -116,7 +123,7 @@ browser/
 | Broker mobile app | yes | none | **out of scope — documented gap** (trade from the desk; mobile is for monitoring) |
 | TOS Desktop | yes | none (separate platform) | out of scope |
 
-⚠️ The copier does not help here: followers copy the leader (NT8, guarded). A browser-side order reaches only its own account. But if the locked browser belongs to a *copier leader*, blocking it protects every follower at once.
+âš ï¸ The copier does not help here: followers copy the leader (NT8, guarded). A browser-side order reaches only its own account. But if the locked browser belongs to a *copier leader*, blocking it protects every follower at once.
 
 **One-source-of-truth question for design:** if the extension computes its own daily PnL from a scrape and RiskGuard computes account state from the bridge, two numbers that can disagree (PnL basis: balance vs equity; open PnL included or not; EOD vs intraday anchor). Rule: either the extension is standalone with a *named, visible* number source, or v2 syncs lock state from RiskGuard via localhost (see §10) and its own PnL logic is deleted. No third state where two brains both fire.
 
@@ -132,11 +139,11 @@ User trades from **TradingView Desktop**, not the browser. Turns out this is bui
 |---|---|
 | content script @ `document_start`, all frames | `Page.addScriptToEvaluateOnNewDocument` (re-injects on every navigation/reload automatically) |
 | capture-phase event kill | the exact same injected script — capture phase is a DOM fact, not an extension feature |
-| `chrome.storage.local` | lock state lives in the daemon process instead |
-| popup + badge | daemon serves a tiny local status page (localhost) or writes state the NT8 side displays |
+| `chrome.storage.local` | **persistent lock-state file owned by the daemon** — atomic write (temp+rename+fsync), restored on restart; corrupt/unreadable state ⇒ `STALE/LOCKED`, never OFF (§5.3, review finding 3) |
+| popup + badge | launcher-hosted witness view (read-only). The daemon **cannot** honestly render its own health — a dead daemon updates nothing (finding 2); the witness (§5.2) is what reports |
 | MutationObserver greying/toast | unchanged — it's all just injected JS |
 
-- **Architecture for the Desktop plane:** a small local daemon (Python, Playwright `connect_over_cdp("http://127.0.0.1:9222")`) attaches to the TV process, injects the gate script into every target (main + iframes), and owns the lock engine. The *same* lock engine core can then back both planes: daemon injects into TV Desktop; the MV3 extension (if ever built) reads the same rules schema. One brain, two arms.
+- **Architecture for the Desktop plane:** a small local **Node** daemon attaches to the TV process over CDP (127.0.0.1:9222), injects the gate script into every target (main + iframes), and owns the lock engine + the persistent lock-state file (§5.3). Runtime choice and reuse contract: §3 (finding 8 — no cross-language import).
 - **This is stronger than the extension, not a compromise:**
   1. The daemon is local code we own, sitting next to RiskGuard and the bridge — bridge sync (§5.1 row 7, §10) becomes a plain localhost call, no chrome.runtime messaging.
   2. No permission sandbox theater — storage, alarms, network rules are our own.
@@ -152,7 +159,7 @@ There is already a CDP client on this box: `C:\Users\vinay\tvDownloadOHLC\tradin
 
 ```
                      CDP port 9222 (localhost, IPv4)
-                      ┌──────────────┴──────────────┐
+                      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
               tradingview-mcp                  gate daemon
         (stdio MCP, on-demand,             (always-on, event-driven,
          agent-facing request/response)     trader-facing enforcement)
@@ -163,52 +170,118 @@ There is already a CDP client on this box: `C:\Users\vinay\tvDownloadOHLC\tradin
 | Concern | Home | Notes |
 |---|---|---|
 | Read chart state/studies/prices | MCP (exists) | |
-| Push computed context onto chart | MCP (draw_shape exists; add session-overlay tool) | §14.2 use case 5 |
-| Read hand-drawn drawings as data | MCP (pine drawing reads exist) | §14.3 use case 5 |
+| Push computed context onto chart | MCP (draw_shape exists; add session-overlay tool) | §13.2 use case 5 |
+| Read hand-drawn drawings as data | MCP (pine drawing reads exist) | §13.3 use case 5 |
 | Alert *setting* | MCP (exists) | |
 | Alert *firing* as events | daemon (needs event watching) | |
 | One-shot scrapes (option chains, trade panel dump) | MCP (new tools) | fits request/response |
 | Lock engine, event-kill, DOM-watch, urge telemetry, fill journaling, stale alarm | **daemon** | the whole §5 model |
 | Launcher | MCP `tv_launch`, extended to arm the daemon after launch | |
 
-**Code reuse:** the daemon imports the MCP's `src/connection.js` (`CDP_HOST`/`CDP_PORT` resolution, evaluate helpers, `/json/list` enumeration). Do not re-solve the known traps: Electron resolves to `::1` first while `--remote-debugging-port` binds IPv4 only (connection.js:7-8), and the MSIX path in `health.js`. One anchors file shared by both.
+**Code reuse (rewritten per finding 8):** the daemon does **not** import the MCP's `src/connection.js` — different process, and a runtime dependency on another repo's private source is fragile. Instead: a small local CDP adapter in this repo, plus **contract tests** asserting adapter behavior matches the MCP's on the points that matter (port resolution + IPv4-vs-::1 default, `/json/list` target picking, evaluate semantics). The known traps (Electron resolves `::1` first; the debug port binds IPv4 only; MSIX path) are re-solved once here and pinned by those tests. Anchors stay shared (one `anchors.md`).
 
 **Known issues in the MCP that this plan inherits (fix before building on it):**
-1. `tests/launch.test.js` is **red on this box today** — the test expects `launch()` to refuse with `TradingView not found`, but TV is installed, so the spawn path executes and the "should not spawn" assertion fires. Environment-dependent test, trivially fixable (point TV search at a stub dir in tests), but the suite must be green before the daemon leans on it. House rule: never build on a repo whose suite you haven't run.
+1. ~~`tests/launch.test.js` is red on this box today~~ **RESOLVED 2026-08-29**: the fork now carries the upstream deps-seam fix and the full unit battery is 328/328 green (see the sync session). Kept here as the reminder of the rule: never build on a repo whose suite you haven't run.
 2. Missing CDP plumbing for the daemon needs: `Page.addScriptToEvaluateOnNewDocument` (injection on every new document — absent from connection.js) and `Target.setAutoAttach`-style multi-target handling (the order ticket renders in iframes; connection.js currently targets one page).
-3. **Governance rule, decided here:** the MCP has `ui_click` and can therefore click the Buy button — but the daemon's capture-phase event-kill deadens **MCP-dispatched clicks too** (a synthetic click is still a DOM event). The gate survives the agent. Complementary rule: the MCP gains **no order-placement tools, ever** — same deny-only posture as §14.5's governance line.
+3. **Governance rule, decided here:** the MCP has `ui_click` and can therefore click the Buy button — but the daemon's capture-phase event-kill deadens **MCP-dispatched clicks too** (a synthetic click is still a DOM event). The gate survives the agent. Complementary rule: the MCP gains **no order-placement tools, ever** — same deny-only posture as §13.5's governance line.
 
 ---
 
 ## 5. Lock model
 
-### 5.1 Trigger types (v1 = rows 1–4, everything else parking lot)
+### 5.1 Trigger types (V1 = rows 1–2 only; the rest carry their own gate conditions)
 
-| # | Trigger | Source | Semantics |
-|---|---|---|---|
-| 1 | Manual lock | user picks duration | no unlock button until it expires; or manual-unlock requiring typed `UNLOCK` |
-| 2 | Daily schedule | clock, Central, wraps midnight | entry locked inside window; set once |
-| 3 | Daily loss hit | PnL scrape (TV / Tradovate) | hard lock for N hours; count N clearly on the popup |
-| 4 | Daily gain hit | same | hard lock — protects giveback AND prop-firm best-day consistency share |
-| 5 | Loss-streak counter (parking lot) | adapter detects N consecutive losing round-trips | cooldown, not hard lock, for v1+ |
-| 6 | Cooldown after flatten (parking lot) | fill events via adapter | no re-entry for X minutes after going flat |
-| 7 | RiskGuard sync (v2) | bridge → localhost | lock when FSM enters SoftStop/HardStop/Lockout; release with recovery |
+| # | Trigger | Source | V1? | Semantics |
+|---|---|---|---|---|
+| 1 | Manual lock | user picks duration | **V1** | no unlock button until it expires; or manual-unlock requiring typed `UNLOCK` |
+| 2 | Daily schedule | clock, Central, wraps midnight | **V1** | entry locked inside window; set once |
+| 3 | Daily loss hit | PnL scrape | **NOT V1** | hard lock for N hours. Blocked on the full PnL-semantics dependency list in §5.5 |
+| 4 | Daily gain hit | PnL scrape | **NOT V1** | same; protects giveback AND prop-firm best-day consistency share |
+| 5 | Loss-streak counter | N consecutive losing round-trips | NO | cooldown, not hard lock |
+| 6 | Cooldown after flatten | fill events via adapter | NO | no re-entry for X minutes after going flat |
+| 7 | RiskGuard sync | bridge → localhost | V1.5 | latched, reason-specific, revision-stamped — see §5.5b. **"Release with recovery" is explicitly rejected** — see that section |
+| 8 | staleHealth | heartbeat witness (§4a) | **V1** | lock that engages when the gate cannot prove it is enforcing |
 
-### 5.2 The two fixes milkman didn't build (our v1 differentiators)
+### 5.2 Gate health — the four states + the independent witness (review finding 2 & 6)
 
-1. **Anchor liveness probe.** Every 60 s the adapter asserts its anchors still resolve. Probe result → badge + populator of `last_verified` per site in `anchors.md`. A TV build that renames `side-control-buy` turns into a visible **STALE** badge within a minute, not a lock that never fires. (Their failure mode: "no reading means no trigger", silently.)
-2. **Stale-source alarm.** PnL scraping needs an open tab. If a lock rule depends on PnL and no PnL reading for > 2 min while any position could exist → badge `STALE`, toast, (optional v1.5) a mechanical bell via the existing NT8 side. Behavior choice on record: **fail-closed** (PnL unknown ⇒ treat as locked for the remainder of the day window) is the aggressive default; make it a setting, state it on the popup.
+**Health vocabulary is borrowed from this repo's own `docs/UI_REDESIGN_DESIGN.md:41-71`, not invented:** `CONFIGURED` (written down, nothing computes it) → `EVALUATED` (being measured) → `ENFORCING` (actively blocking, evidence in hand) → `INERT` (present but proving nothing). The milkman `ON/STALE/OFF` badge maps onto these; the UI may show `ON`, but **internally the only states that exist are these four**, and `ON` may never be displayed unless the state is `ENFORCING`.
+
+1. **Anchor liveness probe.** Every 60 s the adapter asserts its anchors still resolve. But an anchor resolving does **not** prove enforcement (finding 6): the listener can be absent from one iframe, removed by navigation, or attached too late. So the probe is a *stack*, and health is the minimum:
+   - anchor recognized on the pinned build
+   - correct account recognized (account-switch detection — see §5.5)
+   - every relevant frame injected (frame inventory, from CDP target list, checked per navigation)
+   - **event-blocker canary**: the injected script fires a synthetic event at a sacrificial control and verifies the interceptor deadened it — the *blocker itself* is tested, not just the anchor it parks on
+   - lock engine loaded and lock state readable
+   - source data fresh (for anything that scrapes)
+2. **The witness problem — a dead daemon cannot report that it is dead (finding 2).** Everything in (1) runs inside the daemon; a crashed daemon updates nothing. So an **independent witness** owns the truth:
+   - the launcher (and later the NT8 bridge) watches a daemon heartbeat: ≥ 1/5 s, containing daemon session id, PID, attached target ids, frame inventory, injection status, canary result, lock-state file hash
+   - the launcher does **not** declare TradingView ready until the witness has seen a heartbeat with `ENFORCING` evidence; until then it shows the gate as `CONFIGURED/NOT-ENFORCING`
+   - the heartbeat file is written by the daemon but *read* by the launcher/RiskGuard UI — the consumer is a different process, so daemon death is observable by something that survives it
+   - heartbeat gap → NT8-side RiskGuard UI shows browser gate `STALE` (v1.5 once bridge sync exists; until then the launcher window/notification carries it)
+3. **Stale-source alarm (retained for v1.5 with PnL).** If a rule depends on scraped PnL and no reading for > 2 min while a position could exist → `EVALUATED/STALE` state, toast, optional mechanical bell. **Fail-closed** default: PnL unknown ⇒ treat as locked for the remainder of the day window; setting, stated on the popup. (Rows 3/4 are out of V1; the fail-closed principle is stated now because it generalizes.)
 
 ### 5.3 Lock semantics, borrowed and hardened
 
-- **Hard lock:** layers 3/4. During a hard lock: trigger list, limits, and schedule are **frozen** (v2 parity).
+- **Hard lock:** during any hard lock: trigger list, limits, and schedule are **frozen** (v2 parity).
 - **Unlock paths:** timer expiry (never before the stated time — "make unlocking slow by design, so the unlock lands tomorrow when you no longer want it"); typed-`UNLOCK` for the manual-until-can't variant; optionally unlock word decided at lock time (random string shown frozen on screen at the time of locking, not pickable at unlock time).
 - **One-sentence check (behavioral):** on any manual-unlock attempt, the popup requires one sentence describing the setup before the input accepts typing. If you can't type the sentence, the urge is the author. (Maps to §1.5.)
 - **Prediction note (optional v1.5, unique to our stack):** before a scheduled-end unlock, optionally demand/offer a note ("next session I expect …") posted to `.agent` outcomes ledger via `capture_outcome` — scoreable later, per §1.1.
+- **Persistence & restoration (finding 3, V1 must-have).** Lock state lives in the daemon process only at runtime; the **authoritative copy is an atomically-written local lock file** (write-temp + rename, fsynced). On daemon start: read, validate, restore. Rules:
+  - A lock that was active at shutdown comes back active after restart — killing the daemon may never clear a lock (that would defeat "never before the stated time").
+  - Corrupt or unreadable lock state ⇒ the gate comes up in `STALE/LOCKED` (locked, visibly unproven), **never** `OFF`.
+  - **Single-instance ownership:** the lock file and heartbeat are owned by exactly one daemon; a second instance refuses to start rather than racing for ownership.
+  - **Append-only lock-transition journal** alongside the state file: triggered, restored, extended, expired, unlock-attempted, attachment-lost, health-changed. This is the audit trail for "why was I locked at 11:40".
+- **Clock policy.** Active countdowns use a **monotonic clock** (never wall-clock). Wall-clock is only for schedules, and schedule evaluation detects clock jumps, sleep/resume, DST and timezone changes — a clock jump forward may trigger a schedule lock evaluation, never shorten or cancel an active lock.
+- **One-sentence check (behavioral):** on any manual-unlock attempt, the popup requires one sentence describing the setup before the input accepts typing. If you can't type the sentence, the urge is the author. (Maps to §1.5.)
+- **Prediction note (optional v1.5):** before a scheduled-end unlock, optionally demand/offer a note ("next session I expect …") posted to `.agent` outcomes ledger via `capture_outcome` — scoreable later, per §1.1.
 
-### 5.4 Never-lock list
+### 5.4 Exposure rule (replaces "Buy locked, Sell allowed" — review finding 1 & 5)
 
-Sell side. Order modify. Cancel. Close/flatten. Chart interaction generally (only entry-side controls that create or add exposure are in scope). ATM/bracket escalation of an existing position. A lock that traps you in a losing position is a different defect class; exits always win.
+The milkman model (block side-control-buy) is **semantically wrong for futures**, and the draft repeated the error. Buy/Sell are *button sides*, not risk postures:
+
+- "Sell is open during a Buy lock" permits opening/adding shorts.
+- Blocking Buy can block *closing* a short.
+- Worst case: long 3, submit Sell 4 through the generic ticket = reversal — one click that closes the long AND opens a short, fully inside a "Sell allowed" policy.
+
+The rule that survives review:
+
+> **While locked, allow an action only when it can be proven to cancel risk or reduce absolute exposure without crossing through flat.**
+
+And the V1 implementation is deliberately narrower still:
+
+> **V1 blocks all generic directional submissions (Buy and Sell alike) and preserves only explicit `Close`, `Flatten`, and `Cancel` controls.** No reduction-by-opposite-side, no size-aware allowances, no exceptions. If position/quantity/account meaning is *uncertain*, default is block (directional) + allow (explicit emergency controls).
+
+Consequences, stated plainly:
+- "Order management allowed" from the earlier draft is too broad and is **withdrawn**: removing a protective stop, widening a stop, increasing a working entry's quantity, and cancel-replace that flips through flat are all exposure-increasing or exposure-destabilizing. V1 policy: working-order *cancellation* always allowed; *modifications* block-or-warn per an explicitly chosen policy, default Block. Tightening-protection allowances are a V1.5 classification problem (§13 parking lot inherits it).
+- The never-trap guarantee is preserved: explicit Close / Flatten / Cancel must pass from **every** supported locked state, and that is its own test battery (§8).
+- The acceptance matrix in §8.2 is the contract; any code change that affects action classification re-runs it.
+
+### 5.5 PnL-trigger prerequisites (why rows 3/4 are not V1 — review finding 7)
+
+The one-brain rule (§4) already says scraped PnL and RiskGuard's account state must not both fire. Before an automatic PnL lock exists at all, every one of these is resolved, in writing:
+
+- exact account identity (one explicitly configured account in V1; no identity ⇒ no trigger)
+- realized vs unrealized basis (defined per firm rule: daily-loss basis is prior-day balance vs equity — the prop-firm engine already encodes this distinction)
+- fees and commissions included or excluded, matching the firm's own accounting
+- reset boundary and timezone (5pm CT? session close?)
+- multi-tab conflict handling (two tabs reading different accounts)
+- account-switch detection mid-session (chart switched to another account ⇒ trigger source invalidates and health drops out of ENFORCING until re-verified)
+- locale/currency parsing of the rendered PnL string
+- behavior when two valid sources disagree (fail-closed)
+- and the honest failure mode already recorded in §5.2: a lock that silently stops firing is worse than one that fires wrongly
+
+### 5.5b Bridge sync — latched, reason-specific, revision-stamped (review finding 9)
+
+"Release with recovery" (the old row-7 wording) is **rejected**: a transient bridge hiccup recovering must never clear a manual, scheduled, PnL, or RiskGuard lock. Effective state is a **union of independent latches**, each with its own owner, expiry, and clear-path:
+
+```text
+effectiveLock = manual OR schedule OR pnlTrip OR riskGuard OR staleHealth
+```
+
+- Clearing one reason never clears the others. Unlock = all reasons individually cleared.
+- Bridge (RiskGuard) updates carry a **monotonically increasing revision number**; a stale/older revision arriving late can never unlock a newer latched state (the same generation-guard idea the MCP connection manager uses).
+- A lost bridge connection is itself a latch source (`staleHealth`), not a release.
+- V1.5, after the daemon exists and the V1 cut is boring.
 
 ---
 
@@ -242,16 +315,48 @@ Meltdown mode: `chrome://extensions` remains reachable; the popup shows the *fai
 
 ## 8. Testing plan (no shipped behavior without a test — repo convention)
 
-- **Fixture pages:** static HTML copies of the TV order ticket and Tradovate ticket (trimmed, but carrying the real anchors + a stub account header). These live in `tests/fixtures/` and are the only DOM the tests assume.
-- **Playwright (headless, loads unpacked):**
-  1. lock manual 1 min → click Buy absent `side-control-buy`-equivalent → no submit/entry event; sell still works.
-  2. schedule lock (fake clock) → same.
-  3. PnL trip at loss and at gain → lock N hours; settings frozen while held.
-  4. anchor mutation (fixture renames attribute) → badge STALE within 60 s + toast.
-  5. PnL tab closed → STALE within 2 min (with fail-closed setting on).
-- **CI:** extension test battery wired into the existing gate scripts pattern (`check_*.py` reached via the guard's CI; if we keep JS, `node --test` where Playwright can't run). *(Recorded because a gate on disk wired to nothing is the known trap — every new defense in this repo gets a `check_*.py` in the same commit as the defense.)*
-- Anchors.md: file date must be touched on every deployment of TV in use; this doc's §2 anchors were valid as of the milkman page fetch (2026-08-29), **not** verified against today's TradingView build — first code task is probing each anchor live and dating it.
+### 8.1 Unit / fixture battery (necessary, never sufficient alone — review finding 10)
 
+- **Fixture pages:** static HTML copies of the TV order ticket (trimmed, carrying the real anchors + a stub account header). These live in 	ests/fixtures/.
+- **Playwright (headless):**
+  1. manual lock 1 min → generic Buy blocked AND generic Sell blocked (acceptance: both directional paths dead, per §5.4).
+  2. schedule lock (fake/monotonic clock) → same.
+  3. **never-trap battery**: from every supported locked state, explicit Close / Flatten / Cancel still pass.
+  4. anchor mutation (fixture renames attribute) → health leaves ENFORCING within 60 s, witness + launcher reflect it.
+  5. **daemon killed mid-lock** → witness reports heartbeat gap; restart restores the active lock from the lock-state file; corrupt lock file ⇒ STALE/LOCKED, never OFF (finding 3).
+  6. **blocker canary**: synthetic event at a sacrificial control is deadened on every frame; a frame missing injection ⇒ not ENFORCING (finding 6).
+  7. second daemon instance refuses to start (single-owner lock file).
+  8. monotonic-clock countdowns; wall-clock schedule detects clock jumps/sleep/DST and does not shorten an active lock.
+- **CI:** battery wired to the guard's check_*.py gate pattern (a gate on disk wired to nothing is the known trap — every new defense gets its check_*.py in the same commit). The tradingview-mcp fork suite (328/328) is also a dependency and must stay green.
+
+### 8.2 Acceptance matrix (the contract — re-run whenever action classification changes)
+
+| Position | Requested action | Locked result |
+|---|---|---|
+| Flat | Buy | Block |
+| Flat | Sell | Block |
+| Long 3 | Buy 1 | Block |
+| Long 3 | Sell 1 via generic ticket | Block in V1 (reduction-by-opposite-side is V1.5, only if proven reducing) |
+| Long 3 | Explicit close / flatten | Allow |
+| Long 3 | Sell 4 (reversal) | Block |
+| Short 3 | Sell 1 | Block |
+| Short 3 | Buy 1 via generic ticket | Block in V1; V1.5 only if proven reducing |
+| Short 3 | Explicit close / flatten | Allow |
+| Any | Cancel working order | Allow |
+| Any | Increase working entry quantity | Block |
+| Any | Remove / widen protective stop | Block (default policy; warn-only if explicitly chosen) |
+| Unknown account / position | Directional submission | Block |
+| Unknown account / position | Explicit flatten / cancel | Allow |
+
+### 8.3 Release evidence (finding 10 — fixtures alone cannot detect a TV update)
+
+1. **Read-only compatibility probe** against the *installed* TradingView build (version recorded): every anchor resolves, ticket + account-header structure matches `anchors.md`, coverage manifest accounts for every enabled trading surface. Failure ⇒ release blocked, gate stays EVALUATED. New `compat/probe.js` — read-only, never a live-trading tool.
+2. **Simulation-account acceptance run**: full acceptance matrix (§8.2) executed against a **simulation account** end-to-end, then a fresh look at the lock journal for anything that tripped silently.
+3. Only after both: the gate may claim ENFORCING on a live account. This mirrors the house rule recorded 2026-08-29 in the nt8 work: fixture batteries prove logic; acceptance runs prove the world still matches the fixtures.
+
+### 8.4 Anchors.md upkeep
+
+- File date touched on every TV deployment the gate runs against. This doc's §2 anchors were valid as of the milkman page fetch (2026-08-29), **not** verified against today's TradingView build — the compat probe's first job is dating them.
 ---
 
 ## 9. Security posture & escape hatches (kept honest, copied from source + mapped)
@@ -272,40 +377,57 @@ Honest tiers (their list, with our mapping):
 
 ## 10. Cross-project integration notes (for v2 thinking)
 
-- **Bridge sync (the v2 payoff):** extension reads lock state from the McpBridge over localhost (auth TBD — token or local-only loopback). Lock state becomes one artifact shared by NT8 guard + browser gate. Same pin-on-tag discipline as bridge ↔ addon: the extension calls a *versioned* endpoint, not a scraper of the addon's UI; break on contract, fail to SAFE (locked or STALE), never to unlocked.
-- **Prop-firm rule presets:** daily loss/pnl numbers should default to the user's actual challenge rules (drawdown mode, daily allowance). We already have encoded, firm-official rule data via the prop-firm directory/simulator tools — a preset dropdown ("Apex 50K: DDB trailing-realized-EOD $2,250 ⇒ gain/loss trip at X") beats free-floating dollar guesses. The intra-day-trailing rule (the most-miscalculated one in the industry) is exactly the case where a hand-typed browser limit lies to you.
+- **Bridge sync (the v2 payoff, superseded by §5.5b):** lock state read from the McpBridge over localhost (auth: token or loopback-only). Lock state becomes one artifact shared by NT8 guard + browser gate — but as **latched, reason-specific, revision-stamped** state (§5.5b), never a single boolean any transient recovery can clear. Same pin-on-tag discipline as bridge ↔ addon: a *versioned* endpoint, not a scraper; break on contract, fail to SAFE (latched-locked), never to unlocked.
+- **Prop-firm rule presets:** daily loss/pnl numbers should default to the user's actual challenge rules (drawdown mode, daily allowance). We already have encoded, firm-official rule data via the prop-firm directory/simulator tools — a preset dropdown ("Apex 50K: DDB trailing-realized-EOD $2,250 â‡’ gain/loss trip at X") beats free-floating dollar guesses. The intra-day-trailing rule (the most-miscalculated one in the industry) is exactly the case where a hand-typed browser limit lies to you.
 - **Consistency link:** dailyGain lock interacts with prop-firm best-day consistency gates — one outsized day effectively raises the remaining target (see prop-firm engine notes). Locking a green morning is this rule's browser-side twin.
 - **Outcomes ledger / trader narrative:** unlock-time prediction notes and close-of-day "flat is a position" summaries can flow into `.agent` outcomes (`capture_outcome`) without any network from the extension — export file → script, or manual paste. Keep the extension itself network-zero; the post-processing is ours.
 
 ---
 
-## 11. Open questions (bring answers, then this doc graduates to a build plan)
+## 11. Open questions — STATUS after the review pass
 
-1. Which surface do you actually trade from most — TradingView charts with an integrated broker, Tradovate's own web portal, or both? (Decides adapter order and which PnL scrape matters first.)
-2. Live accounts or sim/aperture for v1? (Changes how scary fail-closed needs to be.)
-3. Trigger set for v1: rows 1–4 above? Is loss-streak in or out?
-4. Unlock discipline: timer-only, or timer + frozen + one-sentence check + (optional) prediction note — how much friction do you actually want at 11:40 in the morning?
-5. RiskGuard sync: for v1 leave standalone with named stale-state visibility, and add bridge sync as v2? (The one-source-of-truth rule in §4 then strictly holds.)
-6. Do we want the badge/office behavior mirrored into NT8 (RiskGuard shows "browser gate STALE/armed" in its own UI) once bridge sync exists?
-7. **TV Desktop first?** §4a came from a user statement that Desktop (not web) is the daily surface. Confirm, and if so v1 scope = daemon + launcher only, extension dropped until a web browsing need appears.
+**Answered / decided (2026-08-29 review pass):**
+1. Surface: **TV Desktop only** for V1 (§4a). Tradovate stays §6-notes.
+2. Accounts: V1 = **simulation only** until the §8.3 acceptance run passes on a sim account.
+3. Trigger set: V1 = manual + schedule only (§5.1); PnL gated behind §5.5; loss-streak/cooldown parked.
+4. Unlock discipline for V1: timer expiry + frozen settings during hard lock. One-sentence check / prediction notes = V1.5, decide when the gate is boring (§13.1 has the hooks).
+5. RiskGuard sync: V1.5 with latched reason-union + revision stamps (§5.5b). V1 standalone with witness health.
+6. NT8 mirror of gate health: V1.5, rides the bridge sync; RiskGuard UI gets a browser-gate health row only after ENFORCING is trustworthy.
+7. ~~TV Desktop first?~~ **Decided — yes** (§4a); extension parked.
+
+**Open for the build kickoff:**
+- Which integrated broker inside TV Desktop is the one account (decides the ticket-adapter anchors).
+- Daemon auto-restart policy at V1 (restart manually via launcher vs watchdog) — default: launcher restarts it, witness verifies.
+- Modification policy default (Block vs Warn) — the review recommends Block for V1; confirm.
+
+---
 
 ---
 
 ## 12. Parking lot
 
-- Multi-account awareness: per-rule account identity (if the same browser hosts two portals).
-- "Urge log" in-extension (time-stamped entries, re-exported) — timed urge waves, per §1.6.
+- Multi-account awareness (per-rule account identity) — presupposes §5.5 account identity work.
+- Copier-leader awareness (blocking the leader protects followers) — revisit with bridge sync (§5.5b).
 - Peak-equity giveback trigger (browser-side twin of `nt_prop_limits` givebackCapPct).
 - News-window lock (blackout windows like PropFirmProtectionSuite's news shield, browser side).
-- Keep controls in this repo's `browser/` consistent with VISUAL_SYSTEM palette only if we ever surface a chart-side overlay; the extension has no chart UI otherwise.
+- "Urge log" (time-stamped urge entries, re-exportable) — timed urge waves, per §1.6.
+- Working-order modification classification: tighten-protection allowed, widen/increase blocked (the V1.5 slice of finding 5).
+- Exposure-aware partial reductions via signed position + proposed qty (acceptance-matrix rows hard-blocked in V1).
+- Pending-order exposure included in decisions.
+- Auto-restart + state restoration + reattachment + canary after a daemon crash (V1.5).
+- Calm retry feedback (one warning, then a quiet blocked-attempt counter, not repeated beeps).
+- Support bundle: versions, recent heartbeat gaps, frame inventory, canary results, lock transitions.
+- Trusted-person delayed unlock; OS-level wrapper enforcement.
+- MV3 extension; Tradovate adapter; protocol-level request interception; multi-account; narration/journaling/review modes (see §13 brainstorms).
+- VISUAL_SYSTEM palette conformity (ADR-018) IF a chart-side overlay ever ships.
 
 ---
 
-## 14. Control-plane use-case catalog (the CDP link buys more than a lock)
+## 13. Control-plane use-case catalog (the CDP link buys more than a lock)
 
 The gate daemon is the first subscriber of a general capability: a **persistent, bidirectional channel between this repo's computed context and the live TV Desktop DOM** (chart pushes: injected drawings/HUD; pulls: DOM scrapes; behavior: deny + nudge). The use cases below split by whether they ride the **daemon** (always-on, event-driven) or the **MCP** (on-demand, agent-invoked — see §4b). Feasibility tier: **A** = plumbing exists today, **B** = new build but known technique, **C** = speculative/fragile.
 
-### 14.1 Behavioral plane (the user's stated use case, 2026-08-29)
+### 13.1 Behavioral plane (the user's stated use case, 2026-08-29)
 
 *"Logging my behaviour while trading, and somehow shouting at me if I am not doing things right and asking me to back off."*
 
@@ -316,7 +438,7 @@ This is the same product idea as the gate, one level up: **the gate is the mute 
 | Signal (all DOM-observable) | Proxy for |
 |---|---|
 | Order ticket opened / closed | itch to act |
-| Buy↔Sell toggle flips on one ticket | indecision — the urge dressed as analysis (§1.5) |
+| Buyâ†”Sell toggle flips on one ticket | indecision — the urge dressed as analysis (§1.5) |
 | Stop-loss edited / removed / widened on a live ticket | moving the goalposts — the classic tell |
 | Symbol switches per hour | chart-hopping / hunting for a setup that isn't there |
 | Timeframe switches per 15 min | same, temporal flavor |
@@ -338,9 +460,9 @@ Examples of thresholds (all config, all frozen while a hard lock runs — §5.3)
 
 **Line 3 — Reflect (the log, not live).** EOD: daemon aggregates → `capture_outcome` (+ tag `behavior`) → feeds `propose_skill`/narrative review. This is where the weekly "twenty entries show you your trigger pattern" promise (§1.6) actually gets kept — by data, not by memory. No live LLM involvement; it rides the existing self-learning layer. **Tier B.**
 
-⚠️ **Honest failure modes of this plane, recorded now:** (1) the shout trains the user to watch the shout, and tuning thresholds becomes the new way of spending the day near the market — the milkman warning (§1) applies to the telemetry itself; (2) alert fatigue is the default outcome of a warn system that fires a lot — thresholds must default to *rare and loud*, not continuous commentary; (3) measurement changes behavior (good in intent, but means the baseline shifts once installed — compare against post-install baseline only).
+âš ï¸ **Honest failure modes of this plane, recorded now:** (1) the shout trains the user to watch the shout, and tuning thresholds becomes the new way of spending the day near the market — the milkman warning (§1) applies to the telemetry itself; (2) alert fatigue is the default outcome of a warn system that fires a lot — thresholds must default to *rare and loud*, not continuous commentary; (3) measurement changes behavior (good in intent, but means the baseline shifts once installed — compare against post-install baseline only).
 
-### 14.2 Context plane — push (repo computes it, chart should show it)
+### 13.2 Context plane — push (repo computes it, chart should show it)
 
 **User philosophy, recorded 2026-08-29 and binding on this section:** anything expressible as Pine he will write as Pine and maintain as Pine. The CDP plane's job is **not to draw** — it is **to feed Pine the data Pine cannot fetch itself**, and only then to draw where drawing is the only carrier. "Pine gets fed, not fetched."
 
@@ -365,16 +487,16 @@ Examples of thresholds (all config, all frozen while a hard lock runs — §5.3)
 
 *(Deliberately not here: the EOD daily classification (R1/R2/DWP/DNP). It's an outcome/diagnostic, not something the live chart needs — decided 2026-08-29. Also demoted: proactive daemon drawing of session overlays (old Ch C row 1) — Pine-first per user, C draws only as fallback.)*
 
-### 14.3 Context plane — pull (chart is a source; the repo wants what your hands did)
+### 13.3 Context plane — pull (chart is a source; the repo wants what your hands did)
 
 | # | Use case | Daemon or MCP | Tier | Notes |
 |---|---|---|---|---|
 | 5 | **Drawing harvest**: user's hand-drawn S/R boxes, flip zones, intent annotations read via existing pine drawing reads → outcomes ledger / profiler KB. Your intuition becomes labeled training data | MCP (exists today — `data_get_pine_boxes/labels`) | **A** | the pull that was historically hardest: capturing your eye, not just your fills |
 | 6 | **Fill-moment journaling**: TV-side fills observed in DOM → screenshot + extract + session-tag → write to journal/outcomes. Today TV trades are the ones evaporating from journals | daemon (event-driven; MCP can one-shot-dump the panel) | **B/C** | compliance posture: journaling is write-only, never trades |
-| 7 | **Option chain scrape**: TV renders chains it exposes no API for → feed Greeks engine/level scorer as second source beside TOS RTD | MCP (new tool, one-shot) | **B** | direction reversed 2026-08-29: primary OI/GEX source is **Schwab API** (§14.2); TV chain scrape is only the fallback when Schwab/TOS are both down |
+| 7 | **Option chain scrape**: TV renders chains it exposes no API for → feed Greeks engine/level scorer as second source beside TOS RTD | MCP (new tool, one-shot) | **B** | direction reversed 2026-08-29: primary OI/GEX source is **Schwab API** (§13.2); TV chain scrape is only the fallback when Schwab/TOS are both down |
 | 8 | **Alert-fired events**: TV alert firing is DOM/network-observable → local event → ledger entry / narrative trigger / notify. Alerts become a bus instead of a sound | daemon | **B** | setting alerts is already in the MCP |
 
-### 14.3a Signal overlay — "an AI living through TradingView" (brainstorm, captured verbatim-intent, NOT committed)
+### 13.3a Signal overlay — "an AI living through TradingView" (brainstorm, captured verbatim-intent, NOT committed)
 
 *User framing, 2026-08-29: "things like a price narrator, or telling me hey, something is setting up to be a trade, or giving me indications like look for longs now / look for shorts now, or we are in premium/discount, or check for IB strategy… more like an AI living through TradingView."* Recorded as **requirements + looks-possible**, no build decisions made. This is the narrative engine (`TRADER_NARRATIVE_PLAN.md`, NARRATIVE_ENGINE_CURRENT_DESIGN.md) and the ICT/KZ machinery getting a *mouth* on the chart.
 
@@ -384,14 +506,14 @@ Examples of thresholds (all config, all frozen while a hard lock runs — §5.3)
 repo state engines (already exist, run headless)
   narrative engine · ICT features (kz_pivots, imbalance, ipda) · profiler stats
   quarters theory · options levels · GEX (Schwab) · bias signals
-        │  (computed on cron / event — unchanged, no live CDP dependency)
-        ▼
-signal bus ── localhost JSON events: { token, kind, severity, text, ttl, anchors }
-        ▼
+        â”‚  (computed on cron / event — unchanged, no live CDP dependency)
+        â–¼
+signal bus â”€â”€ localhost JSON events: { token, kind, severity, text, ttl, anchors }
+        â–¼
 overlay daemon (the same daemon from §3, one more consumer)
-  ─ resolves token → position over price (CDP price→pixel conversion, or chart-screenhook via injected script)
-        ▼
-   1 HUD band (discreet, one-line)      2 voice (price narrator)      3 Pine-driven marks (optional, via §14.2 Ch A)
+  â”€ resolves token → position over price (CDP price→pixel conversion, or chart-screenhook via injected script)
+        â–¼
+   1 HUD band (discreet, one-line)      2 voice (price narrator)      3 Pine-driven marks (optional, via §13.2 Ch A)
 ```
 
 **The candidate signals (requirement list, "looks possible" assessment each):**
@@ -408,14 +530,14 @@ overlay daemon (the same daemon from §3, one more consumer)
 **Shared spine requirement (this is the one thing to build; everything above rides it):** a `signal bus` daemon process that (a) subscribes to repo engines' outputs as local files/socket/queue — engines stay headless and unchanged, (b) normalizes to one event schema `{token, kind, severity, text, ttl}`, (c) presents through the three mouths (band / voice / Pine-inputs).token = which chart element it anchors to; ttl = events expire so stale guidance dies silently instead of lying around (the §5.2 lesson, again, for words).
 
 **Honesty rules for this plane (binding, non-negotiable):**
-1. **Indications, never instructions.** "Longs look armed" ≠ "go long." The plane delivers *awareness*; the decision, the click, and the risk stay human — this is also what keeps deny-only authority (§14.5) intact: a system that murmurs "premium" cannot be blamed for a trade; a system that says "click buy now" is an order system wearing a costume.
-2. **Every signal names its engine and confidence.** "quarters: premium (static)" vs "narrative: 60% Asia continuation (p12)". Attribution is auditable; a random-feeling oracle gets muted within a week (§14.1 fatigue lesson).
-3. **State changes only, by default.** The narrator speaks on *transitions* (entered discount, IB broken, sweep happened), not on a clock. Ticking narration is the alert-fatigue fate of §14.1 wearing a voice.
+1. **Indications, never instructions.** "Longs look armed" â‰  "go long." The plane delivers *awareness*; the decision, the click, and the risk stay human — this is also what keeps deny-only authority (§13.5) intact: a system that murmurs "premium" cannot be blamed for a trade; a system that says "click buy now" is an order system wearing a costume.
+2. **Every signal names its engine and confidence.** "quarters: premium (static)" vs "narrative: 60% Asia continuation (p12)". Attribution is auditable; a random-feeling oracle gets muted within a week (§13.1 fatigue lesson).
+3. **State changes only, by default.** The narrator speaks on *transitions* (entered discount, IB broken, sweep happened), not on a clock. Ticking narration is the alert-fatigue fate of §13.1 wearing a voice.
 4. **The 14.1 ladder idea applies**: repeated ignored signals may *escalate to the behavioral plane* (log it as "advice taken / not taken" — that's outcome data), but may NEVER auto-execute anything.
 
-*(Status: brainstorm only. Candidate pilot: #4 premium/discount via the spine + one HUD band — smallest scope, engines already exist, no TTS required. Decide after §14.1's telemetry is real.)*
+*(Status: brainstorm only. Candidate pilot: #4 premium/discount via the spine + one HUD band — smallest scope, engines already exist, no TTS required. Decide after §13.1's telemetry is real.)*
 
-### 14.3b Review modes — journaling without the paste (brainstorm, requirements captured, NOT committed)
+### 13.3b Review modes — journaling without the paste (brainstorm, requirements captured, NOT committed)
 
 *User framing, 2026-08-29: "monitor my journalling… instead of me pasting images, we can enter into a specific mode like EOD review, EOW review, next-week review, reviews of today's trades etc — where you read the data directly and then add it to the journalling."* Requirements + looks-possible.
 
@@ -423,28 +545,28 @@ overlay daemon (the same daemon from §3, one more consumer)
 
 **Modes (requirement list):**
 
-| Mode | When | Data reads (all exist or §14.3-adjacent) |
+| Mode | When | Data reads (all exist or §13.3-adjacent) |
 |---|---|---|
-| **Trades-of-today** | any time intraday/on demand | §14.3 #6 fill events + §14.2 session levels (what was drawn/thought then) + §14.1 behavioral telemetry for the trade windows |
-| **EOD review** | after close (15:00 CT session close, ADR-020 anyone?) | chart screenshots at key times (open/IB/noon/close — replay available for re-rendering specific moments), OHLCV summaries, profiler stats, classification (read, not drawn — §14.2 exclusion list), narrative close output, behavior day summary |
+| **Trades-of-today** | any time intraday/on demand | §13.3 #6 fill events + §13.2 session levels (what was drawn/thought then) + §13.1 behavioral telemetry for the trade windows |
+| **EOD review** | after close (15:00 CT session close, ADR-020 anyone?) | chart screenshots at key times (open/IB/noon/close — replay available for re-rendering specific moments), OHLCV summaries, profiler stats, classification (read, not drawn — §13.2 exclusion list), narrative close output, behavior day summary |
 | **EOW review** | Friday / Saturday | week of EOD entries + weekly profiler + giveback/consistency stats + outcomes ledger week roll-up |
 | **Next-week prep** | weekend | bias signals state, GEX/EM levels pre-computed (Schwab), wargaming scenario inputs for the coming week |
 
 **How it works (the honest assembly):**
-1. **Capture layer** — screenshots via existing MCP `capture_screenshot` (and `nt_trade_chart` on the NT8 side for fills); the *shot list* is the new bit: per mode, which chart, which symbol, which time anchors. Daemon can time-stamp-and-snap at the moments that matter during the day so EOD doesn't need replay reconstruction (that's §14.4's replay-bench synergy).
+1. **Capture layer** — screenshots via existing MCP `capture_screenshot` (and `nt_trade_chart` on the NT8 side for fills); the *shot list* is the new bit: per mode, which chart, which symbol, which time anchors. Daemon can time-stamp-and-snap at the moments that matter during the day so EOD doesn't need replay reconstruction (that's §13.4's replay-bench synergy).
 2. **Assembly layer** — an agent prompt per mode (docs-mode of agent-loop generalizes well here: it already reads a repo + graphs + writes structured markdown) with the mode's read-list; output is a **draft** into the journal target.
 3. **Journal target (open, needs a decision):** not the CDP plane's job to pick — candidates already in the ecosystem: **Notion** (MCP exists this box), **NT8 `nt_trade_journal`** (CRUD + macro auto-tagging + TraderSync/TradesViz export already built), memory-store outcomes ledger. Likely: trades → trade_journal; day/week reflections → Notion draft page under review. **One decision needed from user (see below).**
-4. **The monitor** (his word, "monitor my journalling"): a compliance check, §14.1 Line-1 style — "journaled today? streak N" — on the *absence* of an entry, not nagging about content. Amber only; content policing is explicitly out of scope (the journal is judgment, not homework).
+4. **The monitor** (his word, "monitor my journalling"): a compliance check, §13.1 Line-1 style — "journaled today? streak N" — on the *absence* of an entry, not nagging about content. Amber only; content policing is explicitly out of scope (the journal is judgment, not homework).
 
-**Feasibility:** Tier B overall; every capture primitive exists (screenshots, OHLCV, pine reads, exporters); the new build is the **shot-lists + mode prompts + wiring**, which is convention CRUD, not research. Highest-uncertainty item: EOD "shots at key times" if the chart wasn't on that symbol at that time (→ fallback: replay-mode re-render, Tier B, see §14.4 bench).
+**Feasibility:** Tier B overall; every capture primitive exists (screenshots, OHLCV, pine reads, exporters); the new build is the **shot-lists + mode prompts + wiring**, which is convention CRUD, not research. Highest-uncertainty item: EOD "shots at key times" if the chart wasn't on that symbol at that time (→ fallback: replay-mode re-render, Tier B, see §13.4 bench).
 
 **Open decisions for this entry:** (a) journal target(s) — trade_journal vs Notion vs both; (b) do review modes run *inside* the agent session (opencode invoking MCP tools — cheapest, semi-manual: "run EOD review") or as scheduled daemon tasks producing drafts you read later; (c) weekly/next-week modes need weekend data policy (markets closed — replay vs static summaries).
 
-### 14.3c Pointer protocol — live chart Q&A: test / validate / explain on annotation (brainstorm, requirements captured, NOT committed)
+### 13.3c Pointer protocol — live chart Q&A: test / validate / explain on annotation (brainstorm, requirements captured, NOT committed)
 
 *User framing, 2026-08-29: "strategy testing/validating or explaining while I live on the charts and do annotations, or point to something that you can then take a look at?"*
 
-**Core insight that makes this cheap: your drawings already ARE a query payload.** A hand-drawn box carries `{symbol, t1, p1, t2, p2, type, label-text}` — that's a complete structured question. The MCP reads them today (`data_get_pine_boxes/lines/labels`, Tier A). §14.3 #5 harvests them *passively*; this use case uses the same reads *deliberately* — **the same plumbing, two intents**: harvest = data for the ledger; pointer = a question to the agent. Disambiguation is a convention choice, not new tech: (a) an explicit "ask mode" gesture in the UI, (b) a label-text convention (`?` prefix, or a named study the annotations live under), or (c) implicit — user is in an agent session and says "look at the box I drew on NQ". Decide later; fine either way.
+**Core insight that makes this cheap: your drawings already ARE a query payload.** A hand-drawn box carries `{symbol, t1, p1, t2, p2, type, label-text}` — that's a complete structured question. The MCP reads them today (`data_get_pine_boxes/lines/labels`, Tier A). §13.3 #5 harvests them *passively*; this use case uses the same reads *deliberately* — **the same plumbing, two intents**: harvest = data for the ledger; pointer = a question to the agent. Disambiguation is a convention choice, not new tech: (a) an explicit "ask mode" gesture in the UI, (b) a label-text convention (`?` prefix, or a named study the annotations live under), or (c) implicit — user is in an agent session and says "look at the box I drew on NQ". Decide later; fine either way.
 
 **Query → answer flows, each mapped to what already exists:**
 
@@ -454,30 +576,30 @@ overlay daemon (the same daemon from §3, one more consumer)
 | 2 | **Is this level real/significant?** (trend line, horizontal) | distance-check against derived levels: PDH/PDL, KZ pivots, GEX walls (Schwab), quarters, session levels — "within 4 ticks of zero-gamma flip" beats "yeah looks important" | **A/B** |
 | 3 | **Would the model have caught this?** (zone/pattern) | hindsight run of bias signals / profiler combos on that window; narrative engine asked "what did you say at 10:15?" | **B** |
 | 4 | **Test this idea** (pattern + hypothesis text) | NT8 `nt_signal_backtest` / `nt_backtest` on the pattern rule; or TradingView strategy tester (MCP `data_get_strategy_results` + `data_get_trades` already exist) → agent explains metrics + weak spots | **A/B** |
-| 5 | **Validate my trade** (circle the fill) | §14.3 #6 fill data + what conditions looked like pre-entry (bias, GEX, levels) | **B** |
+| 5 | **Validate my trade** (circle the fill) | §13.3 #6 fill data + what conditions looked like pre-entry (bias, GEX, levels) | **B** |
 
-**Answer routes (one of three, per context):** (a) **pinned inline note** — injected DOM element anchored at the annotation's chart position; shares the *price→pixel anchor* problem with §14.3a's spine (same infra, build once), (b) voice via the narrator mouth, (c) the agent session itself (chat answer, no on-chart artifact — cheapest, often enough).
+**Answer routes (one of three, per context):** (a) **pinned inline note** — injected DOM element anchored at the annotation's chart position; shares the *price→pixel anchor* problem with §13.3a's spine (same infra, build once), (b) voice via the narrator mouth, (c) the agent session itself (chat answer, no on-chart artifact — cheapest, often enough).
 
 **The catch to record before anyone falls in love:** the agent explaining what's on your chart is dangerously close to **post-hoc storytelling** — the confabulation risk. Binding discipline: an explanation must anchor to data reads (OHLCV, detector outputs, base rates from the profiler/quantile machinery) and tag any speculative part as narrative, not fact. The repo already owns this instinct in narrative-engine design (known issues section) — carried forward here. Latency expectation: this is async Q&A ("leave the question, read the answer"), not a conversation while bars tick — pointer questions queue; answers land when computed.
 
-*(Status: brainstorm. Nothing to pilot until §14.3 #5's drawing read has been pointed at live annotations once — after that, flow #1 (explain) is the natural first query type.)*
+*(Status: brainstorm. Nothing to pilot until §13.3 #5's drawing read has been pointed at live annotations once — after that, flow #1 (explain) is the natural first query type.)*
 
-### 14.4 Benches (proven or parked, not commitments)
+### 13.4 Benches (proven or parked, not commitments)
 
-- **Replay-mode review**: MCP replay tools exist (start/step/status/trade). A scripted "replay the day we just logged" (§3.5 of the §14.1 ledger) is Tier A adjacent — build the journal first, this comes free after.
+- **Replay-mode review**: MCP replay tools exist (start/step/status/trade). A scripted "replay the day we just logged" (§13.1 Line-1 ledger ledger) is Tier A adjacent — build the journal first, this comes free after.
 - **Away-mode 16:00**: *strip the ticket, watchlist hot-buttons and news feed out of the DOM*, leaving price only — the chart closes itself. Daemon-side. Parked as trigger #8 in §5.1 territory or a §7 rule — **strongest behavioral payoff on this page; the strongest constraint is the removed one** — but deliberately after the gate exists, not before. The §1 warning applies whole: don't let "away-mode settings" become the new tuning habit.
 - **Perf mode**: `Network.setBlockedURLs` + CSS to kill chat/social panels — TV Desktop RAM problem solved as a side effect. Tier B, trivially optional.
-- **Symbol-switch stampede → auto-lock** — same mechanism as §14.1's escalation ladder, different threshold. Listed under 14.1, listed here because it likely ships as a generic "any n-behavior rule can escalate to lock" hook.
+- **Symbol-switch stampede → auto-lock** — same mechanism as §13.1's escalation ladder, different threshold. Listed under 14.1, listed here because it likely ships as a generic "any n-behavior rule can escalate to lock" hook.
 
-### 14.5 Governance line for the whole plane (decided here, applies to everything above)
+### 13.5 Governance line for the whole plane (decided here, applies to everything above)
 
-1. **The CDP plane never places orders. Deny-only authority, total.** Gate kills clicks; Context draws and reads; Behavioral measures and warns. If a future use case seems to need order submission, it goes through the NT8 bridge (which already has its own hardening/audit trail) or a broker API — never through the chart's DOM click path from daemon or MCP. (`replay_trade` is exempt: replay P&L touches no account; and after hours, replay+§14.1 telemetry is exactly how the simulation lab should work.)
+1. **The CDP plane never places orders. Deny-only authority, total.** Gate kills clicks; Context draws and reads; Behavioral measures and warns. If a future use case seems to need order submission, it goes through the NT8 bridge (which already has its own hardening/audit trail) or a broker API — never through the chart's DOM click path from daemon or MCP. (`replay_trade` is exempt: replay P&L touches no account; and after hours, replay+§13.1 telemetry is exactly how the simulation lab should work.)
 2. **Every DOM-sourced capability gets the house treatment from day one**: one probe script, a date-stamped anchors.md entry, one `check_*.py` gate in the same commit — or the feature doesn't ship. A stale anchor must always be *visible* (STALE state), never silent — the §5.2 lesson generalizes to every scrape in this section.
 3. **The chart stays a chart.** The screen is where the trading happens; the plane's UX budget is small (status line at most). Any overlay that turns into a dashboard drifts into the §1 "loop found a new costume" failure and gets cut in review.
 
 ---
 
-## 15. References
+## 14. References
 
 - Source/inspiration: https://milkmantrades.com/buy-lock.html (fetched 2026-08-29). V1/v2 feature lists above are from that page; this doc is ours and the implementation, when it exists, will be ours. **The milkman zips were never downloaded or executed — everything in this plan describing his build comes from the write-up, and any build here is written from scratch.**
 - Repo context: `docs/NT_RISK_GUARD_SPEC.md`, `docs/TRADE_COPIER_PRD.md`, `docs/HARMONISED_TRADING_ARCHITECTURE.md` (tvDownloadOHLC), ADR-020 (RTH liquidation), ADR-018 (visual constraint, N/A here but listed for completeness).
