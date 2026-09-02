@@ -5248,7 +5248,52 @@ namespace NinjaTrader.NinjaScript.AddOns
             // its exits strands it in a position the leader has already left -- the P0-5 failure
             // reached by another route. Entries stay blocked.
             OrderAction leadAction = exec.Order.OrderAction;
-            bool leaderIsExiting = leadAction == OrderAction.Sell || leadAction == OrderAction.BuyToCover;
+            // CM0 (measured 2026-09-02 on Sim101, MNQ SEP26): the ORDER ACTION label cannot tell
+            // an exit from an entry. A MARKET order that OPENS a short from flat carries
+            // OrderAction.Sell -- identical to a long exit -- so the label-based derivation below
+            // classified a short ENTRY as an exit and skipped it (COPY_SKIPPED_NO_POSITION_TO_EXIT),
+            // and would copy a short cover (Buy on a short) to a FLAT follower as a LONG ENTRY.
+            // The ground truth is the leader's POSITION side in this instrument, which is also
+            // provider-independent ([[brokers-differ]]): an OrderAction is a request label the
+            // caller owns, not a broker outcome. Rule: exit = the fill OPPOSES a held non-flat
+            // position; everything else -- including Sell from flat -- is an entry.
+            bool leaderIsExiting;
+            {
+                // A resolvable scan that finds NO position object is a readable FLAT -- the
+                // common open-from-flat case -- not an unreadable one. Unreadable means the
+                // scan could not run at all (null account/instrument or an exception).
+                bool scanRan = false;
+                MarketPosition heldSide = MarketPosition.Flat;
+                try
+                {
+                    if (exec.Account != null && exec.Instrument != null && exec.Account.Positions != null)
+                    {
+                        scanRan = true;
+                        var heldPos = exec.Account.Positions.FirstOrDefault(p => p != null && p.Instrument != null
+                            && p.Instrument.FullName.Equals(exec.Instrument.FullName, StringComparison.OrdinalIgnoreCase));
+                        if (heldPos != null)
+                            heldSide = heldPos.MarketPosition;
+                    }
+                }
+                catch { scanRan = false; }
+
+                if (scanRan)
+                {
+                    bool isBuy = leadAction == OrderAction.Buy || leadAction == OrderAction.BuyToCover;
+                    bool opposes = (heldSide == MarketPosition.Long && !isBuy)
+                                || (heldSide == MarketPosition.Short && isBuy);
+                    leaderIsExiting = opposes;
+                }
+                else
+                {
+                    // FAIL CLOSED to the historical label derivation when the leader position
+                    // cannot be read. Same fallback shape as CLASSIFY_FALLBACK: behaviour is
+                    // unchanged from before this fix, but the drop is visible.
+                    leaderIsExiting = leadAction == OrderAction.Sell || leadAction == OrderAction.BuyToCover;
+                    CopierLog(acctName, "CLASSIFY_FALLBACK",
+                        $"leader position in {exec.Instrument.FullName} could not be read, so exit-vs-entry fell back to the action label '{leadAction}'");
+                }
+            }
 
             List<CopierRelationship> activeRels =
                 GetActiveRelationshipsForLeader(acctName, includeQuarantined: leaderIsExiting);

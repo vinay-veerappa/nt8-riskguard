@@ -550,6 +550,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestCopyPath_LiveAccountNamedSimIsNotTreatedAsSimulated);
             Run(TestCopyPath_GenuineSimulatorAccountStillReceivesCopies);
 
+            // -- CM0: exit-vs-entry classification from the leader POSITION side --
+            Run(TestCM0_FlatToShortViaSellClassifiesEntry);
+            Run(TestCM0_LongExitViaSellClassifiesExit);
+            Run(TestCM0_ShortCoverViaBuyClassifiesExit);
+            Run(TestCM0_FlatToLongViaBuyClassifiesEntry);
+            Run(TestCM0_ShortAddViaSellClassifiesEntry);
+
             // -- COPIER SUBSCRIPTION TESTS (P1-21) --
             Run(TestCopierSubs_LateConnectingLeaderIsCopied);
             Run(TestCopierSubs_RepeatedRefreshAttachesOneHandler);
@@ -1481,6 +1488,120 @@ namespace NinjaTrader.NinjaScript.AddOns
                     + "'Sim' prefix and nothing is armed (got {0} order(s)). The old check would "
                     + "have blocked this account for having the wrong name.",
                     submitted.Count));
+        }
+
+        // ------------------------------------------------------------------
+        // CM0 BATTERY: exit-vs-entry classification (measured 2026-09-02)
+        //
+        // The defect: OnExecution derived leaderIsExiting from the action label, so a market
+        // SELL on a flat account (a short ENTRY) was skipped with COPY_SKIPPED_NO_POSITION_TO_EXIT
+        // and short entries were NEVER copied on any relationship. Each test drives the real
+        // OnExecution and asserts on the derived isExit carried in the COPY_BEGIN log line,
+        // which is the same observable the bridge event stream exposes.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Runs OnExecution against a leader whose position model says `heldSide` and captures
+        /// the COPY_BEGIN message. The `isExit=` field in that line IS the classification.
+        /// </summary>
+        private static string CaptureCopyBeginIsExit(Instrument inst, OrderAction action, int qty,
+                                                     MarketPosition heldSide)
+        {
+            var rel = new CopierRelationship
+            {
+                LeaderAccountName = "SimLeaderCM0",
+                FollowerAccountName = "SimFollowerCM0",
+                IsEnabled = true,
+                ArmedForLive = false,
+                AutoSymbolConversion = false,
+                QuantityRatio = 1.0,
+                MaxPositionSize = 100
+            };
+            var follower = SetupCopyPath("SimLeaderCM0", "SimFollowerCM0", rel, 0, null, MarketPosition.Flat);
+            var leader = Account.All.First(a => a.Name == "SimLeaderCM0");
+            if (heldSide != MarketPosition.Flat)
+            {
+                leader.Positions.Add(new Position
+                {
+                    Instrument = inst,
+                    MarketPosition = heldSide,
+                    Quantity = 1,
+                    AveragePrice = 18000
+                });
+            }
+
+            string copyBegin = null;
+            var previous = TradeCopierEngine.CopierLogObserver;
+            TradeCopierEngine.CopierLogObserver = (acct, evt, msg) =>
+            {
+                if (evt == "COPY_BEGIN" && copyBegin == null) copyBegin = msg;
+            };
+            try
+            {
+                TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, inst, action, qty, "CM0-" + Guid.NewGuid().ToString("N").Substring(0, 8)));
+            }
+            finally
+            {
+                TradeCopierEngine.CopierLogObserver = previous;
+            }
+            return copyBegin;
+        }
+
+        private static bool CopyBeginSaysIsExit(string copyBeginMsg)
+        {
+            if (copyBeginMsg == null) return false;
+            int idx = copyBeginMsg.IndexOf("isExit=", StringComparison.Ordinal);
+            if (idx < 0) return false;
+            string val = copyBeginMsg.Substring(idx + 7).Split(':')[0].Split(',')[0].Trim();
+            return val.Equals("True", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The measured defect: Sell on a FLAT leader is a short ENTRY, not an exit.</summary>
+        private static void TestCM0_FlatToShortViaSellClassifiesEntry()
+        {
+            Console.WriteLine("\n[TEST] CM0: a market SELL on a FLAT leader is a short ENTRY and is copied");
+            var mnq = new Instrument("MNQ 03-26");
+            string msg = CaptureCopyBeginIsExit(mnq, OrderAction.Sell, 1, MarketPosition.Flat);
+            Assert(msg != null, "COPY_BEGIN was logged for the fill");
+            Assert(!CopyBeginSaysIsExit(msg),
+                "Sell from flat must classify as an ENTRY (isExit=False); the label-based rule skipped every short entry");
+        }
+
+        private static void TestCM0_LongExitViaSellClassifiesExit()
+        {
+            Console.WriteLine("\n[TEST] CM0: a SELL against a held LONG is still an EXIT");
+            var mnq = new Instrument("MNQ 03-26");
+            string msg = CaptureCopyBeginIsExit(mnq, OrderAction.Sell, 1, MarketPosition.Long);
+            Assert(msg != null, "COPY_BEGIN was logged for the fill");
+            Assert(CopyBeginSaysIsExit(msg), "Sell opposing a long position must classify as an EXIT");
+        }
+
+        private static void TestCM0_ShortCoverViaBuyClassifiesExit()
+        {
+            Console.WriteLine("\n[TEST] CM0: a BUY against a held SHORT is an EXIT (cover), not a long entry on a flat follower");
+            var mnq = new Instrument("MNQ 03-26");
+            string msg = CaptureCopyBeginIsExit(mnq, OrderAction.Buy, 1, MarketPosition.Short);
+            Assert(msg != null, "COPY_BEGIN was logged for the fill");
+            Assert(CopyBeginSaysIsExit(msg),
+                "Buy opposing a short must classify as an EXIT; labeling it an entry would OPEN a long on a flat follower");
+        }
+
+        private static void TestCM0_FlatToLongViaBuyClassifiesEntry()
+        {
+            Console.WriteLine("\n[TEST] CM0: a BUY on a FLAT leader is a long ENTRY");
+            var mnq = new Instrument("MNQ 03-26");
+            string msg = CaptureCopyBeginIsExit(mnq, OrderAction.Buy, 1, MarketPosition.Flat);
+            Assert(msg != null, "COPY_BEGIN was logged for the fill");
+            Assert(!CopyBeginSaysIsExit(msg), "Buy from flat must classify as an ENTRY");
+        }
+
+        private static void TestCM0_ShortAddViaSellClassifiesEntry()
+        {
+            Console.WriteLine("\n[TEST] CM0: a SELL against a held SHORT is an ENTRY (scale into the short)");
+            var mnq = new Instrument("MNQ 03-26");
+            string msg = CaptureCopyBeginIsExit(mnq, OrderAction.Sell, 1, MarketPosition.Short);
+            Assert(msg != null, "COPY_BEGIN was logged for the fill");
+            Assert(!CopyBeginSaysIsExit(msg), "Sell on the same side as a held short must classify as an ENTRY");
         }
 
         // ------------------------------------------------------------------
@@ -5908,6 +6029,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18001
             });
 
+            // CM0: exit-vs-entry is read from the leader's POSITION side, so the fixture must
+            // model what its own scenario declares: the leader went long on SLIP-C and holds it.
+            leader.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18000
+            });
+
             int ordersBefore = follower.Orders.Count(o => o.Name == "COPIER_FOLLOW");
 
             // A further ENTRY must be refused.
@@ -8535,6 +8663,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             var follower = SetupCopyPath("SimLeader", "SimFollower", rel, 0, null, MarketPosition.Flat);
             var leader = Account.All.First(a => a.Name == "SimLeader");
 
+            // CM0: the leader's position side is the exit signal, so the fixture seeds the
+            // long this scenario is exiting.
+            leader.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18000
+            });
+
             var log = CaptureCopierLog(() =>
                 TradeCopierEngine.Instance.OnExecution(LeaderExec(leader, mnq, OrderAction.Sell, 1, "P171-C")));
 
@@ -8612,6 +8747,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             follower.Positions.Add(new Position
             {
                 Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18001
+            });
+
+            // CM0: the leader's position side is the exit signal, so the fixture seeds the
+            // long its own entry (P171-E) bought.
+            leader.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 18000
             });
 
             var log = CaptureCopierLog(() =>
@@ -15379,6 +15521,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             var leader = new Account { Name = "BurstLeader", Provider = Provider.Simulator };
             Account.All.Add(leader);
+            // CM0: the burst exits a LONG, so the leader's position side is what makes each
+            // Sell an exit; the fixture models the position its scenario declares.
+            leader.Positions.Add(new Position
+            {
+                Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 5, AveragePrice = 18000
+            });
 
             var followers = new List<Account>();
             for (int f = 1; f <= 3; f++)

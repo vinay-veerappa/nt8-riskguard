@@ -1,0 +1,59 @@
+﻿{
+    "_comment":  [
+                     "Slice 1 of 3 for the copier ratio converter. Derived from the agent-loop plan",
+                     "at logs/agent_loop/PLAN_slice1_run2 with FOUR human corrections, each of which",
+                     "the arbiter had rejected as a finding or nobody had caught:",
+                     "",
+                     "1. Four regions became two. The plan\u0027s R2 (441-462) was nested inside R1",
+                     "   (429-534) and its R4 (404-424) inside R3 (382-427). apply() splices",
+                     "   bottom-up, so nested spans lose or duplicate an edit. Now guarded by O47.",
+                     "2. expect_green entries are ASSERTION MESSAGES, not test method names. The",
+                     "   gate matches them against `[FAIL] \u003cmessage\u003e` lines from the C# harness, so",
+                     "   \u0027TradeCopierMatrixTests.Foo\u0027 could never have matched anything and every",
+                     "   acceptance check would have been vacuous.",
+                     "3. The invalid-ratio cases are enumerated individually. One combined",
+                     "   \u0027InvalidRatio_RefusesEntry\u0027 entry let an implementation handle NaN and",
+                     "   miss zero, negative, or either infinity.",
+                     "4. Branch ORDERING is now stated. Appending the matrix branch after the",
+                     "   NetLiquidationRatio guard leaves the original fall-through defect in place",
+                     "   -- the fix would compile, pass a careless suite, and change nothing.",
+                     "",
+                     "5. Two assertions were REMOVED from expect_green after running the suite: \u0027...never null for an unsupported mapping\u0027 and \u0027...still applied the mini micro auto table\u0027. Both already PASS at baseline, because they pin behaviour that must not REGRESS rather than behaviour that must change. expect_green means \u0027red now, green after\u0027, and the loop refuses a ticket whose expect_green is not red at baseline -- correctly. The two tests remain in the suite, where the no-new-failures gate protects them. Verified: 789 passed, 17 failed."
+                 ],
+    "tickets":  [
+                    {
+                        "title":  "Copier slice 0: entry-vs-exit must come from the leader POSITION side, not the OrderAction label",
+                        "defect":  "TradeCopierEngine.cs OnExecution (line ~5251) derives leaderIsExiting from the ORDER ACTION label: `leadAction == OrderAction.Sell || leadAction == OrderAction.BuyToCover`. On NT8 a MARKET order that OPENS a short from flat carries OrderAction.Sell, identical to a long exit. Measured live on Sim101 (2026-09-02, MNQ SEP26): leader flat, market SELL 1 fills (opens short) -\u003e copier logs COPY_BEGIN isExit=True, then COPY_SKIPPED_NO_POSITION_TO_EXIT and copies nothing. Short entries are NEVER copied on any relationship. The mirror error: covering a short from flat via market BUY 1 (OrderAction.Buy) is classified isExit=False, so a leader short-exit would be copied to a FLAT follower as a LONG ENTRY, opening risk in a direction the leader has left (P0-5 family). Broker-state note (handover [[brokers-differ]]): OrderAction is a request label owned by the caller, not a broker outcome; the leader POSITION side before/after the fill is the only readable ground truth and is provider-independent.",
+                        "spec":  "Derive exit vs entry from POSITION DELTA, not the action label, in OnExecution before activeRels is computed. All under the existing structure; do not change OnExecution\u0027s signature (called from OnAccountExecutionUpdate).\n\nA. READ THE LEADER POSITION BEFORE THE COPY PATH RUNS. Resolve leader Account from exec.Account (already non-null past the guards). Read exec.Account.Positions for exec.Instrument.FullName: capture positionSideBefore (MarketPosition) and quantityBefore (Quantity; 0 when Flat or object null).\n\nB. CLASSIFY. PositionQuantity after this execution = quantityBefore adjusted by exec side: NT8 Executions carry MarketPosition AFTER applying the fill, so read exec.MarketPosition and exec.Quantity as the after-state (trace-validated: ExecutionUpdateCallback marketPosition=Short quantity=1 on a flat-\u003eshort entry; PositionUpdateCallback quantity=0 on a cover). isExit = the leader position SHRINKS or flips-to-flat: (quantityAfter \u003c quantityBefore) OR (positionAfter == Flat and quantityBefore \u003e 0). An open from flat (quantityBefore == 0, after != Flat) is NOT an exit even when the action label is Sell. A flip (long 1 -\u003e short 1 through a 2-lot opposite fill) is TWO events: the closing half is the exit, the opening half the new entry; with one Execution in hand treat a flip as EXIT-then-ENTRY by copying the exit against the follower first, then the entry for the remainder, keeping P1-99 slice accounting intact. If the after-state cannot be read (null position object and quantityBefore == 0), FAIL CLOSED to the current label-based derivation and log CLASSIFY_FALLBACK with both quantities.\n\nC. DO NOT CHANGE what isExit feeds: GetActiveRelationshipsForLeader(includeQuarantined: leaderIsExiting), the exit sizing path, and the exit-side alignment branch keep their existing semantics. Only the boolean\u0027s derivation moves.\n\nD. LOG. Keep COPY_BEGIN\u0027s isExit= field (now the derived value) and add the observed delta to its message: before/after side+quantity. Add one CopierLog event CLASSIFY_FROM_POSITION at DEBUG-equivalent verbosity on each entry fill showing label -\u003e derived mapping, so regressions are visible in the bridge event stream.\n\nE. TESTS. The harness (tests/RiskGuardTests.csproj, dotnet run --project tests/RiskGuardTests.csproj --no-build after dotnet build) gets a new battery covering: (1) flat-\u003eshort via OrderAction.Sell classifies ENTRY; (2) long exit via OrderAction.Sell classifies EXIT; (3) short cover via OrderAction.Buy on short 1 classifies EXIT; (4) flat-\u003elong via Buy classifies ENTRY; (5) flip long-\u003eshort classifies EXIT-then-ENTRY; (6) unreadable after-state falls back to label with CLASSIFY_FALLBACK logged. Mutation anchors: the string \u0027isExit=\u0027 in OnExecution\u0027s COPY_BEGIN log must still exist (wrapper contract), and at least one test must FAIL if the classification reads the action label alone.",
+                        "context":  "OnExecution is at TradeCopierEngine.cs:5142; leaderIsExiting is computed at ~5250-5251 from exec.Order.OrderAction. Available on Execution: Account, Order, Instrument, Quantity, Price, MarketPosition (AFTER the fill), ExecutionId, Name, Time. Order carries OrderAction. followerAcc.Positions and followerAcc.CreateOrder are used downstream and unchanged. The follower position side/qty read at ~5405-5418 stays where it is. CopierLog(account, eventType, message) is the log channel. Recursion/redelivery guards run BEFORE the classification point - do not reorder them. The existing suite convention: tests/RiskGuardTests.csproj, mutation anchors under tools/, one acceptance battery per finding.",
+                        "expect_green":  [
+                                             "matrix entry sized 3 MES from the table with no symbol multiplier",
+                                             "matrix entry sized 5 MES on a second relationship from the same leader fill",
+                                             "matrix entry with no rule for the leader instrument was refused and flagged clamped",
+                                             "matrix exit with no rule mirrored the leader and was capped to the follower position",
+                                             "matrix entry with a NaN ratio was refused",
+                                             "matrix entry with a zero ratio was refused",
+                                             "matrix entry with a negative ratio was refused rather than absolute-valued",
+                                             "matrix entry with a positive infinity ratio was refused",
+                                             "matrix entry with a negative infinity ratio was refused",
+                                             "matrix entry whose ratio rounds to zero was refused and flagged clamped",
+                                             "matrix mode left MES untranslated instead of routing it to ES",
+                                             "matrix mode refused an entry whose custom mapping names a different root",
+                                             "matrix exit never increased an opposite side follower position",
+                                             "matrix entry clamped to the remaining capacity when the follower already holds contracts",
+                                             "matrix mode ignored the flat QuantityRatio on the relationship",
+                                             "matrix mode with a null ratio table refused the entry without throwing",
+                                             "matrix branch was evaluated before the unimplemented sizing mode guard"
+                                         ],
+                        "regions":  [
+                                        {
+                                            "note":  "Entry-vs-exit classification, ~5142-5650. The action-label derivation at ~5250-5251 is the throw site; COPY_BEGIN log carries isExit and must remain. Recursion guards above must not move.",
+                                            "id":  "R1",
+                                            "anchor":  "public void OnExecution(Execution exec)",
+                                            "file":  "addons/TradeCopierEngine.cs"
+                                        }
+                                    ],
+                        "id":  "CM0"
+                    }
+                ]
+}

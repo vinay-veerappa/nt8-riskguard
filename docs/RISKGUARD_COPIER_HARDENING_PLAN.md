@@ -11676,7 +11676,7 @@ run; the command is recorded in `ci.yml` beside the bin.
   deterministically in the suite from the live measurements (`75726b75`, `1a48f3cf`).
 
 
-### P0-182. A stale execution reset the session state BACKWARD and ping-ponged 44+ times in one second, wedging NT8's UI thread - FIXED 2026-09-01 (session 63), v1.66.0 - suite 3585/0, battery 3/3
+### P0-182. A stale execution reset the session state BACKWARD and ping-ponged 44+ times in one second, wedging NT8's UI thread - FIXED 2026-09-01 (session 63), v1.66.0 - suite 3585/0, battery 3/3 -- CLOSED 2026-09-01
 
 **Found by driving the deployed box, not by the suite.** 2026-09-01, 18:09 ET - the firm
 boundary (22:00 UTC) rolled during an NT8 restart, LUCID reconnected, and the log flooded:

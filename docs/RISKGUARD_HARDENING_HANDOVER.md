@@ -548,6 +548,31 @@ part that still matters.
 | T5 — `P0-8` + `P0-9` | copier respects the lockout; fails closed when unguarded |
 | — | test-harness repair (the suite could not previously catch defects) |
 
+### CM0 — exit-vs-entry classification reads the POSITION side, not the action label (2026-09-02, measured live then fixed)
+Found while wiring the standalone widget's order ticket through the copier: leader **flat**, market
+**SELL 1 MNQ SEP26** filled — an entry — and the copier logged `COPY_BEGIN isExit=True` then
+`COPY_SKIPPED_NO_POSITION_TO_EXIT`. The old rule (`leadAction == Sell || BuyToCover`) cannot tell
+that short entry from a long exit, so **short entries were never copied on any relationship**, and
+the mirror error (a short cover carried `OrderAction.Buy` = "entry") would have OPENED a long on a
+flat follower in a direction the leader had already left.
+
+The fix (`TradeCopierEngine.OnExecution`): exit = the fill **opposes a held non-flat leader
+position in this instrument**; `Sell` from flat is an entry. Provider-independent by construction
+([[brokers-differ]] — an OrderAction is a caller-owned request label, the position is the broker's
+answer). When the position scan cannot run at all (null account/instrument, exception) it fails
+closed to the historical label derivation and logs `CLASSIFY_FALLBACK`. The first version of the
+patch treated an *empty* positions list as unreadable — the CM0 battery caught its own fix
+misfiring on the common open-from-flat case before anything shipped.
+
+**Acceptance**: 5-case battery (`TestCM0_*` in `tests/RiskGuardAddOnTests.cs`, registered after
+the copy-path block) driving the real `OnExecution` and asserting on the `isExit=` field of the
+`COPY_BEGIN` log line — the same observable the bridge event stream exposes. Four pre-existing
+fixtures declared a leader position in their scenario comments without seeding it
+(`ExitDoesNotFlipFollowerShort`, `EntryQuarantinesButExitStillCopies`,
+`AQuarantineNoticeIsNotCountedAsAnOutcome`, `ANothingToExitSkipIsLoggedNotSwallowed`,
+`Stress_S7_CopierFanOutUnderBurst`); those fixtures now seed the position their own scenario
+declares. Ticket: `agent/tickets_copier_classification.json`.
+
 ### T2 (P0-2 + P0-3)
 The auto-stop now **reserves before it submits**: `AutoStopOrder`, `RecognizedStopOrder`,
 `CoveredQuantity` and `State = ProtectedPending` are written under `_stateLock` *before*
