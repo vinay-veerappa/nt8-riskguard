@@ -1,15 +1,20 @@
 # RiskGuard / TradeCopier Hardening — Session Handover
 
-**Last updated**: 2026-08-14 (**session 38 — §5.45**). Core **`v1.22.0`** is tagged, deployed and
-**NT8-compiled clean (0 errors)** — core suite **1436/0**, bridge harness **108/0**, MCP wrapper
-**43/0**, **27** core mutation batteries + the bridge's **2** (and CI in that repo now runs them —
-it ran **neither** until §5.44), **283 anchors / 0 broken**, all 8 gates green.
-**118 IDs, 9 open** — **three closed and live-validated this session** (`P1-100`, `P0-104`,
-`P2-101`), and every one of them was **found by driving the deployed box**, not by the suite, which
-was green throughout all three. Every figure here was **measured, not incremented** — the previous
-revision of this paragraph claimed the bridge harness was both `92/0` and `108/0` in consecutive
-sentences, which is what incrementing one number and appending another looks like.
+**Last updated**: 2026-09-01 (**session 63 - P0-182**). Core **`v1.66.0`** is FIXED IN SOURCE,
+NOT YET DEPLOYED (deploy after the next NT8 restart; deploy.py pins by tag, so tag `v1.66.0`
+first). Suite **3585/0** at 69 batteries, **19** CI bins re-packed from run 33292548555's
+BATTERY_SECONDS lines, both ID gates green.
 
+- **`P0-182` is FIXED, deploy pending.** A stale 8/31-dated execution replayed by an account
+  re-subscription reset the session state BACKWARD from 9/1, and the two dates ping-ponged
+  44+ resets (each with a SaveState write) in one second, wedging NT8's UI thread for hours -
+  the hanging chart 2026-09-01, found by reading the native log, not by the suite. The fix
+  routes the reset decision through the new pure `SessionResetGate` (forward applies,
+  same-day no-op, backward refused + dropped). Battery 3/3. The matrix re-pack used P0-182's
+  ESTIMATED 105s (3 mutants x P0-180's 35s/mutant); replace with CI's own BATTERY_SECONDS on
+  the first green run.
+
+- **P0-180 is live-validated** (5.62, unchanged from session 62's record).
 ✅ **`P1-100` is CLOSED and live-validated** (§5.43). A SHADOW-only lockout blocked real orders —
 `CanTrade` was right, but the bridge's three order paths and `GET /api/lockout` all ask
 `IsAccountLocked`, which returned the raw flag and had never been taught either `P2-92`'s authority

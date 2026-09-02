@@ -128,6 +128,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             Run(TestContractCapGate_BoundaryInclusive);
             Run(TestContractCapGate_ReversalJudgedOnWhatItLeaves);
             Run(TestContractCapGate_PositionQuantityIsMagnitude);
+            Run(TestSessionResetGate_ForwardDateApplied);
+            Run(TestSessionResetGate_BackwardDateRefused);
+            Run(TestSessionResetGate_SameDateIsNoOp);
+            Run(TestSessionResetGate_ReplayStormSequence);
             Run(TestDailyLossLimitLockout);
             Run(TestTrailingDrawdownLockout);
             Run(TestMaxTradesOvertradingLockout);
@@ -17574,6 +17578,58 @@ namespace NinjaTrader.NinjaScript.AddOns
             var d = ContractCapGate.Evaluate(10, 5, "buy", "Short", -8, "Acc", "MES");
             Assert(d.Allowed, "Short 8 (passed as -8), cap 10, Buy 5 reduces -> ALLOWED (magnitude, not sign).");
             Assert(d.ResultingQuantity == 3, "Reduces short 8 by 5 -> leaves 3.");
+        }
+
+        private static void TestSessionResetGate_ForwardDateApplied()
+        {
+            Console.WriteLine("\n[TEST] SessionResetGate: a forward date is a genuine new day and is APPLIED");
+            var d = SessionResetGate.Evaluate(new DateTime(2026, 8, 31), new DateTime(2026, 9, 1));
+            Assert(d.Apply, "State 8/31, event 9/1 -> reset APPLIES (genuine day rollover).");
+            Assert(d.Reason == "new-day", "Reason is 'new-day'.");
+            Assert(d.EffectiveDate == new DateTime(2026, 9, 1), "Effective date is the event's date.");
+        }
+
+        private static void TestSessionResetGate_BackwardDateRefused()
+        {
+            Console.WriteLine("\n[TEST] SessionResetGate: a BACKWARD date is stale data and is REFUSED -- the P0-182 core");
+            // The live defect: state had already moved to 9/1; a stale 8/31-dated replayed fill
+            // reset the state BACK to 8/31, and the next 9/1 event reset it forward again --
+            // 44+ alternating resets in one second, each with a SaveState write.
+            var d = SessionResetGate.Evaluate(new DateTime(2026, 9, 1), new DateTime(2026, 8, 31));
+            Assert(!d.Apply, "State 9/1, event 8/31 -> reset REFUSED (stale data, not a new day).");
+            Assert(d.Reason == "stale-date-refused", "Reason is 'stale-date-refused'.");
+            Assert(d.EffectiveDate == new DateTime(2026, 9, 1), "The state's date is PRESERVED at 9/1 -- never moves backward.");
+            Assert(d.StoredDate == new DateTime(2026, 9, 1), "StoredDate reported for the refusal log.");
+        }
+
+        private static void TestSessionResetGate_SameDateIsNoOp()
+        {
+            Console.WriteLine("\n[TEST] SessionResetGate: a same-day re-detect is a no-op, not a reset");
+            // A second fill later the same day must NOT re-run the reset (no counter wipe, no save).
+            var d = SessionResetGate.Evaluate(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1, 14, 30, 0));
+            Assert(!d.Apply, "Same day -> no reset (the counters must survive a second fill).");
+            Assert(d.Reason == "same-day-noop", "Reason is 'same-day-noop'.");
+        }
+
+        private static void TestSessionResetGate_ReplayStormSequence()
+        {
+            Console.WriteLine("\n[TEST] SessionResetGate: the P0-182 replay storm as a SEQUENCE stays forward-only");
+            // Drive the exact live sequence: forward, then stale backward, then forward again.
+            // The gate must never accept the backward leg -- the state can only ever advance.
+            DateTime state = new DateTime(2026, 8, 30);
+            var d1 = SessionResetGate.Evaluate(state, new DateTime(2026, 9, 1));
+            Assert(d1.Apply, "8/30 -> 9/1 applied.");
+            state = d1.EffectiveDate;
+
+            var d2 = SessionResetGate.Evaluate(state, new DateTime(2026, 8, 31)); // stale replay
+            Assert(!d2.Apply, "Stale 8/31 replay against 9/1 state -> REFUSED (this is what killed the box).");
+            Assert(d2.EffectiveDate == state, "State still 9/1 after the stale replay.");
+
+            var d3 = SessionResetGate.Evaluate(state, new DateTime(2026, 9, 1, 18, 9, 32));
+            Assert(!d3.Apply, "Second same-day event -> no-op, no reset, no save.");
+
+            var d4 = SessionResetGate.Evaluate(state, new DateTime(2026, 9, 2));
+            Assert(d4.Apply && d4.EffectiveDate == new DateTime(2026, 9, 2), "Next genuine day 9/2 applied.");
         }
 
         private static void TestDailyLossLimitLockout()

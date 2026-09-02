@@ -11675,6 +11675,45 @@ run; the command is recorded in `ci.yml` beside the bin.
   stop move three times, or a bracket dropped with a position open. Both are reproduced
   deterministically in the suite from the live measurements (`75726b75`, `1a48f3cf`).
 
+
+### P0-182. A stale execution reset the session state BACKWARD and ping-ponged 44+ times in one second, wedging NT8's UI thread - FIXED 2026-09-01 (session 63), v1.66.0 - suite 3585/0, battery 3/3
+
+**Found by driving the deployed box, not by the suite.** 2026-09-01, 18:09 ET - the firm
+boundary (22:00 UTC) rolled during an NT8 restart, LUCID reconnected, and the log flooded:
+
+> `[RiskGatekeeper] LFE02559938020006 new session 8/31/2026 | Blown: True`
+> `[RiskGatekeeper] LFE02559938020006 new session 9/1/2026  | Blown: True`
+
+...alternating 44+ times in ~1 second, each with a SaveState file write. Then the native log
+went dead at 18:13:29 and NT8's UI thread stayed blocked for hours (1% CPU = stuck, not busy;
+`nt_charts` timing out while file-backed bridge reads worked; the chart window hung).
+
+**Mechanism (no monotonic guard).** `RiskManagerAddOn.OnExecutionUpdate` called
+`RiskGatekeeper.ResetDay(account, fill.Date)` on EVERY execution event whenever the stored
+state's `TradingDate.Date != fill.Date`. At re-subscription the broker replays historical
+fills; the first stale 8/31-dated replay moved the state BACKWARD from 9/1 to 8/31, the next
+current-dated event moved it forward, and the two ping-ponged. Each iteration wrote state to
+disk under lock, on the UI thread, ~44 times per second until the queue wedged. Same family
+as P1-99 and P0-180: a decision point tested in isolation, never driven by the SAME event
+stream that the deployed box sees - an account re-subscription replay was not in any fixture.
+
+**Fix.** The reset decision moved into `addons/SessionResetGate.cs` (pure, testable, same
+split as `ContractCapGate` for P1-149): a reset may move the trading date strictly FORWARD
+or land on the same date (a no-op); a BACKWARD move is refused as stale data and the event
+is DROPPED, logged once per refusal with both dates. `OnExecutionUpdate` consults the gate
+and only calls `ResetDay` on an `Apply` verdict. The gate returns a verdict object, not a
+bool, so a refusal for the wrong reason is still visible in logs and assertable in tests.
+
+**Evidence.** `TestSessionResetGate_ForwardDateApplied`, `TestSessionResetGate_BackwardDateRefused`
+(the live defect), `TestSessionResetGate_SameDateIsNoOp`, and
+`TestSessionResetGate_ReplayStormSequence` (the exact live sequence: forward, stale backward,
+same-day, next genuine day - the state can only ever advance). Suite 3585/0.
+`mutate_p0182.py` (3/3): re-allows backward dates, applies same-day resets (every fill would
+wipe the counters), and reports the STALE date as EffectiveDate on a refusal - P0-182 kills
+each. `run_times.tsv` re-derived from run 33292548555's BATTERY_SECONDS lines; the matrix
+re-packed to 19 bins with P0-182 estimated at 105s (3 mutants x P0-180's 35s/mutant - replace
+with CI's own BATTERY_SECONDS on the first green run).
+
 ### P0-180. `StopGuard.OnMissing: AutoStop` never places a stop in live execution — the guard rejects its own first stop as its own pending state — ✅ FIXED + LIVE-VALIDATED 2026-08-20 (session 62), v1.58.0 — suite 3475/0, battery 3/3
 
 **Found by the Sim test, not the suite.** The `P1-151` AutoStop policy shipped in `v1.57.0`

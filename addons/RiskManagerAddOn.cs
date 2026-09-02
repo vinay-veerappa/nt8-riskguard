@@ -263,11 +263,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string accountName = e.Execution.Account.Name;
 
                 // New session detection — reset gatekeeper state for the new day
+                // P0-182: the reset decision goes through SessionResetGate. The old inline check
+                // (`state.TradingDate.Date != fill.Date`) reset on ANY date difference, so a stale
+                // or replayed fill dated BEFORE the stored state moved the trading date BACKWARD,
+                // and the next current-dated event moved it forward again -- 44+ alternating
+                // resets in one second on 2026-09-01 (re-subscription replay), each with a
+                // SaveState write, wedging the UI thread. A reset may move FORWARD only; a
+                // backward move is stale data and is dropped here, logged once per refusal.
                 var state = NinjaTrader.NinjaScript.Strategies.Vinay.RiskGatekeeper.GetState(accountName);
-                if (state != null && state.TradingDate.Date != e.Execution.Time.Date)
+                if (state != null)
                 {
-                    NinjaTrader.NinjaScript.Strategies.Vinay.RiskGatekeeper.ResetDay(
-                        accountName, e.Execution.Time.Date);
+                    var decision = SessionResetGate.Evaluate(state.TradingDate, e.Execution.Time);
+                    if (decision.Apply)
+                    {
+                        NinjaTrader.NinjaScript.Strategies.Vinay.RiskGatekeeper.ResetDay(
+                            accountName, decision.EffectiveDate);
+                    }
+                    else if (decision.Reason == "stale-date-refused")
+                    {
+                        Log(string.Format(
+                            "[RiskManagerAddOn] P0-182 stale execution dropped for {0}: event {1:yyyy-MM-dd} is older than stored session {2:yyyy-MM-dd}",
+                            accountName, decision.EventDate, decision.StoredDate.Value),
+                            LogLevel.Warning);
+                    }
                 }
 
                 // Detect closing fills by position flipping to flat
