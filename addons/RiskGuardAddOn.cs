@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -36,7 +36,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // is running on a live account. Bump it in the SAME commit as the release tag --
         // tools/check_version_matches_tag.py fails the build otherwise, because on
         // 2026-08-13 this said 1.1.0 while v1.2.0 was tagged, deployed and compiled.
-        public const string Version = "1.66.0";
+        public const string Version = "1.67.0";
         public object StateLock => _stateLock;
         public RiskConfig Config => _config;
 
@@ -46,7 +46,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// POST route -- announced an outcome they had never been told. A failed write left the
         /// file holding the old limits under a dialog saying the new ones were in force.
         ///
-        /// âš ï¸ EVERY VALUE VALIDATED HERE MUST BE THE VALUE THAT GETS WRITTEN. The first draft
+        /// ⚠️ EVERY VALUE VALIDATED HERE MUST BE THE VALUE THAT GETS WRITTEN. The first draft
         /// substituted the live value whenever the incoming one was blank or its section was
         /// missing -- so a config with `Mode: ""` or no `PnLRules` at all passed preflight on
         /// the strength of values it did not contain, and was then serialised AS IS. Validating
@@ -566,7 +566,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // F-6. The push-alert OUTBOX: events this guard has decided are worth telling a human
         // about, drained to `alerts_outbox.jsonl` beside interventions.jsonl.
         //
-        // âš ï¸ NO HTTP HAPPENS IN THIS PROCESS, DELIBERATELY. A webhook POST from an NT8 callback
+        // ⚠️ NO HTTP HAPPENS IN THIS PROCESS, DELIBERATELY. A webhook POST from an NT8 callback
         // thread can block on a slow or wedged remote host, and this addon shares its process with
         // the platform that manages real positions -- the same reasoning that made the bridge's
         // connect path refuse a bare `Dispatcher.Invoke`. Delivery is a separate Python process
@@ -576,7 +576,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // `Retry-After` read from the 429 header rather than guessed, capped exponential backoff,
         // and delivery telemetry.
         //
-        // âš ï¸ AND A SEPARATE FILE, NOT ANOTHER LogEvent LINE. Emitting the decision through
+        // ⚠️ AND A SEPARATE FILE, NOT ANOTHER LogEvent LINE. Emitting the decision through
         // LogEvent would re-enter the sink from inside itself; a separate outbox makes recursion
         // structurally impossible rather than guarded against, and it means the relay parses only
         // decided alerts instead of re-implementing the filter on the far side, where it would
@@ -664,7 +664,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // untouched. Every surface then reports the trade as protected, and it is: protected
                 // at its opening price, with a stop that will never move again.
                 //
-                // âš ï¸ THIS IS THE ONLY STARTUP PATH THAT CLASS HAS. Nothing else in this assembly
+                // ⚠️ THIS IS THE ONLY STARTUP PATH THAT CLASS HAS. Nothing else in this assembly
                 // referenced `DynamicAtmManager` at all -- it is reached solely through the bridge's
                 // `/api/order/atm` -- so without this line the restore would be
                 // [[dead-safety-machinery-gate]] verbatim: written, tested, mutation-covered, and
@@ -867,7 +867,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// static singleton wiped) or a RESTART (new process). Pure, and takes no NinjaTrader
         /// type, so it is reachable from a test without a platform stub.
         ///
-        /// âš ï¸ A recompile is not a restart, and this code treated them as one. "Armed state must be
+        /// ⚠️ A recompile is not a restart, and this code treated them as one. "Armed state must be
         /// set fresh each session" was doing work the phrase does not cover: 84 ARMED_ON_START
         /// events in one 3 MB tail of interventions.jsonl were 84 sessions by that reckoning and
         /// ONE session by the operator's -- several of them from an unrelated repo deploying
@@ -914,7 +914,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // P2-142. An operator who disarmed stays disarmed, through a recompile and
             // through a restart, because ALL configuration is persistent.
             //
-            // âš ï¸ THE ASYMMETRY IS THE WHOLE DESIGN AND IT IS NOT AN OVERSIGHT. Only a
+            // ⚠️ THE ASYMMETRY IS THE WHOLE DESIGN AND IT IS NOT AN OVERSIGHT. Only a
             // DISARM is honoured from persisted state. A persisted ARM is still ignored,
             // which is FR-30/31 and stays true: `_isArmed` is set to false on load and
             // arming an acting mode still requires preflight plus a deliberate toggle. The
@@ -948,7 +948,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // MEASURED on the funded account 2026-08-18 right after deploying v1.45.0:
                 // zero FSMs against a live MNQ Short 6, guard loaded/armed/guarding.
                 //
-                // âš ï¸ P1-15 ADDED EXACTLY THIS TO ToggleArmed AND THIS PATH NEVER LEARNED IT.
+                // ⚠️ P1-15 ADDED EXACTLY THIS TO ToggleArmed AND THIS PATH NEVER LEARNED IT.
                 // Two readers of one fact; only one was taught. Seeding is idempotent (it
                 // skips keys already tracked) and makes no broker calls, so it is safe here.
                 foreach (var accName in _subscribedAccounts)
@@ -1113,7 +1113,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // two branches back into one survived the entire suite while both messages still existed in
         // the source.
         //
-        // âš ï¸ The rule stands where it was aimed -- do not assert on wording that will be reworded.
+        // ⚠️ The rule stands where it was aimed -- do not assert on wording that will be reworded.
         // Use this only where the MESSAGE is the product, i.e. where two branches share a type and
         // differ only in what they say, and assert on the distinguishing PHRASE rather than the
         // sentence.
@@ -1395,7 +1395,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // giveback fire EARLY on the next one.
                                     state.PeakOpenGain = kvp.Value.PeakOpenGain;
                                     state.PeakGivebackTriggered = kvp.Value.PeakGivebackTriggered;
-                                    // âš ï¸ NORMALISED BACK TO NaN. The live field uses NaN for "has
+                                    // ⚠️ NORMALISED BACK TO NaN. The live field uses NaN for "has
                                     // not triggered"; JSON has no NaN literal, so a state file
                                     // written before this field existed -- or by any writer that
                                     // omits it -- deserializes 0.0, and 0.0 is a LEGITIMATE trigger
@@ -1423,7 +1423,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // by $96, and the inventory row reading EvaluatedNotEnforcing
                                     // -- true, and completely misleading.
                                     //
-                                    // âš ï¸ DERIVED, NOT PERSISTED, AND DELIBERATELY SO. The identity
+                                    // ⚠️ DERIVED, NOT PERSISTED, AND DELIBERATELY SO. The identity
                                     // below holds at every site that writes any of the three:
                                     // AccountItemUpdate sets Last = raw and Realized = raw -
                                     // SessionStart in the same breath, and both session-reset paths
@@ -1433,7 +1433,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                     // edit that updates one and not the other, with no way to tell
                                     // which is right. [[a-second-reader-of-the-same-state]].
                                     //
-                                    // âš ï¸ The worse half of P1-170 is fixed here too, and it is not
+                                    // ⚠️ The worse half of P1-170 is fixed here too, and it is not
                                     // obvious from this line. Left at 0.0, the next
                                     // AccountItemUpdate computed its delta against zero and handed
                                     // the whole session's loss to RecordRealizedDelta as ONE losing
@@ -1650,7 +1650,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // pair is inside any window: 45 false refusals from that one event, 17 from an
                     // induced one.
                     //
-                    // âš ï¸ ARMED ON EVERY TRANSITION, NOT ON `Connected`. The first fix armed on
+                    // ⚠️ ARMED ON EVERY TRANSITION, NOT ON `Connected`. The first fix armed on
                     // `Connected` and suppressed NOTHING, because the replay arrives BEFORE
                     // `Connected` does. Both measured reconnects agree:
                     //
@@ -1731,7 +1731,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// The contract cap that applies to one account and instrument: the per-instrument profile
         /// if there is one, otherwise the account default.
         ///
-        /// âš ï¸ EXTRACTED FOR `P1-149` SO THERE IS EXACTLY ONE READER OF THIS RULE. The reactive
+        /// ⚠️ EXTRACTED FOR `P1-149` SO THERE IS EXACTLY ONE READER OF THIS RULE. The reactive
         /// `MAX_SIZE_BREACH` sweep had this lookup inline, and the bridge's new PRE-trade gate needs
         /// the same answer. Two copies of a three-branch precedence rule is
         /// [[a-second-reader-of-the-same-state]] -- this repo's most repeated shape -- and the
@@ -1763,7 +1763,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// reactive sweep uses. Returns 0 when nothing is configured, which every caller must read
         /// as "no cap" -- matching `GuardRules`' own `Off("no per-account contract cap")`.
         ///
-        /// âš ï¸ Deliberately NOT mode-aware. It answers "what is the configured cap", not "should you
+        /// ⚠️ Deliberately NOT mode-aware. It answers "what is the configured cap", not "should you
         /// act on it"; whether `shadow` suppresses an action is the caller's question and folding it
         /// in here would make one method answer two, which is how `configured / evaluated /
         /// enforcing` gets confused in the first place.
@@ -2081,7 +2081,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             int streakBefore = state.ConsecutiveLosses;
                             state.RecordRealizedDelta(tradePnL, _config);
 
-                            // âš ï¸ P1-172. `ConsecutiveLosses <= TradesToday` HOLDS FOR EVERY GENUINE
+                            // ⚠️ P1-172. `ConsecutiveLosses <= TradesToday` HOLDS FOR EVERY GENUINE
                             // SEQUENCE. A streak cannot exceed the trades in the session, and it
                             // resets to 0 on any win, so it cannot exceed the trades since the last
                             // win either. `TradesToday` is debounced to the trade lifecycle (P1-16)
@@ -2438,7 +2438,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // `Protected` -- correct by its own definition, and therefore a naked half
                         // that looks covered on the chart AND in the guard's own state.
                         //
-                        // âš ï¸ `OrderType.Market` IS THE SAFETY CLAUSE, NOT AN OPTIMISATION. A long
+                        // ⚠️ `OrderType.Market` IS THE SAFETY CLAUSE, NOT AN OPTIMISATION. A long
                         // bracket's stop and target are BOTH sells, arrive 3-11ms apart (measured),
                         // and `IsPositionReducingOrder` returns false for both while the position
                         // still reads Flat -- which at 3ms is the ordinary case. Without the market
@@ -2447,7 +2447,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // leg is never a market order, so the filter is drawn where it cannot reach
                         // one. [[a-filter-that-matches-too-much]].
                         //
-                        // âš ï¸ IT HAS ITS OWN GATE, AND `Filled` IS THE REASON. This first sat INSIDE
+                        // ⚠️ IT HAS ITS OWN GATE, AND `Filled` IS THE REASON. This first sat INSIDE
                         // the rate governor's `Submitted || Accepted` branch, sharing one condition
                         // rather than copying it. The live log settled it: two of the three measured
                         // duplicates produced exactly ONE event each, in state `Filled`, with no
@@ -2468,7 +2468,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // queued cancel is dropped. On that path the ANNOUNCEMENT is the product --
                         // it is what ends the silent half-coverage.
                         //
-                        // âš ï¸ THE ANCHOR IS THE FIRST EVENT OBSERVED, AND ORDERING DOES NOT MATTER
+                        // ⚠️ THE ANCHOR IS THE FIRST EVENT OBSERVED, AND ORDERING DOES NOT MATTER
                         // HERE. A reviewer argued that if a duplicate's Submitted somehow overtook the
                         // first order's, the rule would cancel "the legitimate one". For a platform
                         // duplicate the two orders are identical -- same instrument, side and size --
@@ -2479,7 +2479,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         bool dupObservable = e.Order.OrderState == OrderState.Submitted
                             || e.Order.OrderState == OrderState.Accepted
                             || e.Order.OrderState == OrderState.Filled;
-                        // âš ï¸ AN ANCHORED ORDER THAT DIED NEVER BECAME A POSITION. Without this,
+                        // ⚠️ AN ANCHORED ORDER THAT DIED NEVER BECAME A POSITION. Without this,
                         // a broker REJECTION is the worst case the rule can produce: the entry is
                         // anchored at Submitted, the broker refuses it, the operator immediately
                         // retries -- and the guard cancels the retry as a duplicate of an order that
@@ -2504,7 +2504,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // beside the first -- and it is what lets a test place two events at an EXACT
                             // window boundary, which is the only way to prove the gap check below binds.
                             DateTime dupNow = stateModel.UtcNow();
-                            // âš ï¸ THERE IS DELIBERATELY NO PRUNING PASS. There was one, and once the
+                            // ⚠️ THERE IS DELIBERATELY NO PRUNING PASS. There was one, and once the
                             // anchor started REFRESHING on a non-duplicate entry it became redundant:
                             // the gap is measured at the decision point, so an expired anchor cannot
                             // produce a false positive and the next real entry overwrites it. Deleting
@@ -2554,7 +2554,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                         // unique nor stable.
                                         double gapMs = (dupNow - anchor.FirstSeenUtc).TotalMilliseconds;
 
-                                        // âš ï¸ THE WINDOW IS CHECKED HERE, NOT ONLY BY THE PRUNE ABOVE.
+                                        // ⚠️ THE WINDOW IS CHECKED HERE, NOT ONLY BY THE PRUNE ABOVE.
                                         // Leaving it to the prune makes the window an emergent property
                                         // of a housekeeping pass: `DateTime.UtcNow` is coarse on Windows,
                                         // so two events inside one tick share a timestamp, the anchor is
@@ -2574,7 +2574,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                         }
                                         else if (!ReferenceEquals(anchor.Order, e.Order))
                                         {
-                                            // âš ï¸ A NON-DUPLICATE ENTRY REPLACES THE ANCHOR, AND WITHOUT THIS
+                                            // ⚠️ A NON-DUPLICATE ENTRY REPLACES THE ANCHOR, AND WITHOUT THIS
                                             // THE RULE WORKS ONCE PER INSTRUMENT AND SIDE PER SESSION. The
                                             // key already exists, so the `else` below never runs and the
                                             // anchor keeps its ORIGINAL timestamp forever -- every later
@@ -2632,7 +2632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // (P1-172): CooldownUntil is a deadline by construction and lapses on its own.
                         bool cooldownActive = DateTime.UtcNow < stateModel.CooldownUntil;
 
-                        // âš ï¸ P1-172. THIS READER REFUSES ON THE RAW COUNTER WITH NO DEADLINE, AND
+                        // ⚠️ P1-172. THIS READER REFUSES ON THE RAW COUNTER WITH NO DEADLINE, AND
                         // THAT IS WHAT MADE A WRONG COUNT A SESSION-LONG TRADING BAN. The condition
                         // is an OR: no lockout need be active, no cooldown need be running, and
                         // nothing is consulted that can ever expire. The counter has exactly three
@@ -2650,13 +2650,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // `EvaluateLockoutPhase` can lapse it and zero the counter (P0-166's cure,
                         // already written, previously unreachable from here).
                         //
-                        // âš ï¸ THIS LOOSENS NOTHING. It only ADDS a deadline where there was none: the
+                        // ⚠️ THIS LOOSENS NOTHING. It only ADDS a deadline where there was none: the
                         // refusal below still fires on this event and every event until the deadline
                         // lapses, and when a lockout already binds -- including an EOD one -- this
                         // block is skipped entirely and that lockout keeps its own scope. What it
                         // removes is the case of an unbounded refusal owned by no rule.
                         // [[a-lockout-must-not-trap-you]], [[a-second-reader-of-the-same-state]]
-                        // âš ï¸ `!IsLockedOut` IS NOT REDUNDANT WITH `!entryLockoutBinds`. A lockout that
+                        // ⚠️ `!IsLockedOut` IS NOT REDUNDANT WITH `!entryLockoutBinds`. A lockout that
                         // does not BIND still exists and still owns `LockoutRuleId` -- a shadow-only
                         // lockout (P1-100) and a disarmed-bypass account (LockoutBypassWhileDisarmed)
                         // are both `IsLockedOut` with `LockoutBinds` false. Arming here would clobber
@@ -2722,7 +2722,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         if (e.Order.OrderState == OrderState.Submitted || e.Order.OrderState == OrderState.Accepted || e.Order.OrderState == OrderState.Working)
                         {
-                            // âš ï¸ P1-168: an order that REDUCES the position is never refused here. If
+                            // ⚠️ P1-168: an order that REDUCES the position is never refused here. If
                             // an instrument stops being permitted while a position is open, refusing
                             // the exit would trap the operator in the very instrument the rule wants
                             // them out of. The position sweep flattens it; this must not fight that.
@@ -2743,7 +2743,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     if (_config.InstrumentLimits != null && _config.InstrumentLimits.TryGetValue(instRoot, out var perInstCap))
                     {
-                        // âš ï¸ P2-165: THE CAP MUST NEVER REFUSE THE QUANTITY THAT CLOSES THE POSITION.
+                        // ⚠️ P2-165: THE CAP MUST NEVER REFUSE THE QUANTITY THAT CLOSES THE POSITION.
                         // This rule had no reducing-order exemption at all, and the trap it opened is
                         // reachable rather than theoretical: P1-160 measured the platform turning two
                         // 1-lot MNQ entries into a position of 2, three times in six attempts, under
@@ -2753,7 +2753,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // no way out but to fight it one lot at a time. [[a-lockout-must-not-trap-you]]
                         // -- the quantity clamp is the load-bearing half, not the refusal.
                         //
-                        // âš ï¸ AND THE EXEMPTION IS CLAMPED TO THE OPEN QUANTITY, WHICH IS THE WHOLE
+                        // ⚠️ AND THE EXEMPTION IS CLAMPED TO THE OPEN QUANTITY, WHICH IS THE WHOLE
                         // CARE HERE. `IsPositionReducingOrder` asks about DIRECTION ONLY -- a Sell 5
                         // against a Long 1 satisfies it -- so exempting every reducing order would
                         // let one order close 1 and open an oversized 4 the other way, making the cap
@@ -2857,7 +2857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // Process lockout actions OUTSIDE the lock to prevent re-entrancy.
             //
-            // âš ï¸ P2-107 found this site calling ProcessAction in a BARE loop -- the only one of
+            // ⚠️ P2-107 found this site calling ProcessAction in a BARE loop -- the only one of
             // the five that never called CoalesceActions, so P1-19's within-batch merge had never
             // applied on the order-update path at all. Routing it through the dispatcher fixes
             // that as a side effect; it is recorded here because a fix that arrives silently is
@@ -2892,7 +2892,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // gives immediacy; this one gives the guarantee, and the difference was measured rather
             // than reasoned about.
             //
-            // âš ï¸ THE ATM MANAGER'S OWN SWEEP CANNOT BE THE DRIVER. `EnsureMonitor` is called from
+            // ⚠️ THE ATM MANAGER'S OWN SWEEP CANNOT BE THE DRIVER. `EnsureMonitor` is called from
             // `PlaceBracket` only, so after a recompile with no new order there is NO ATM timer -- and
             // the restore, the deferral retry and its bounded give-up all sit behind a timer that
             // never starts. `mutate_p2136survive.py` put `if (false)` in front of the init call and the
@@ -2901,7 +2901,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // it. THIS timer is started unconditionally in InitializeRiskGuard beside the others and
             // runs whether or not any bracket exists.
             //
-            // âš ï¸ AND IT IS REACHABLE FROM A TEST, WHICH THE INIT PATH IS NOT. `ExecuteSafetySweep` is
+            // ⚠️ AND IT IS REACHABLE FROM A TEST, WHICH THE INIT PATH IS NOT. `ExecuteSafetySweep` is
             // internal and already driven by the suite, so a mutant that kills this call FAILS a test
             // rather than passing every gate. That is the whole reason the call lives here and not
             // only in a private startup method a C# assertion can see only as text.
@@ -3223,7 +3223,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 var alertsToWrite = new List<string>();
                 string alertLine;
                 while (_alertQueue.TryDequeue(out alertLine)) alertsToWrite.Add(alertLine);
-                // âš ï¸ `Encoding.UTF8` WRITES A BOM, and on a JSONL file that is a defect. Measured
+                // ⚠️ `Encoding.UTF8` WRITES A BOM, and on a JSONL file that is a defect. Measured
                 // live 2026-08-15, first run: the outbox began `EF BB BF {"timestamp_utc"...`, the
                 // relay's `json.loads` refused the line, and THE FIRST ALERT OF EVERY NEW OUTBOX
                 // WAS LOST -- the first alert being, by construction, the one announcing that
@@ -3280,20 +3280,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// `MAX_SIZE_BREACH` sweep and the bridge's pre-trade `EffectiveMaxContracts` -- enforce
         /// `_config.InstrumentLimits` without any of them holding a second copy of it.
         ///
-        /// âš ï¸ `InstrumentLimits` used to be read by exactly ONE production site: the per-ORDER
+        /// ⚠️ `InstrumentLimits` used to be read by exactly ONE production site: the per-ORDER
         /// check in `ExecuteOrderUpdate`, against `e.Order.Quantity`. So `MNQ: 1` refused a 3-lot
         /// order and permitted three 1-lot orders that built the identical 3-lot POSITION.
         /// Measured live on the funded account 2026-08-18, whose config carries `MNQ: 1` beside
         /// `MaxContractsPerAccount: 5` and an EMPTY `Profiles` list -- so every position resolved
         /// to 5 and the cap the operator had configured bound nothing that could lose money.
         ///
-        /// âš ï¸ THE TWO CAPS COMBINE BY MINIMUM, NOT BY PRECEDENCE. A cap is a maximum, and the
+        /// ⚠️ THE TWO CAPS COMBINE BY MINIMUM, NOT BY PRECEDENCE. A cap is a maximum, and the
         /// minimum of two maxima can never permit more than either surface intended, so this
         /// direction cannot fail unsafely. Any precedence order silently ignores one of the two
         /// configured numbers, and an operator who tightens the losing one sees no change and
         /// concludes the guard is enforcing something it is not.
         ///
-        /// âš ï¸ THE MERGED DICTIONARY IS A FRESH COPY, WITH THE ORDINAL-IGNORE-CASE COMPARER.
+        /// ⚠️ THE MERGED DICTIONARY IS A FRESH COPY, WITH THE ORDINAL-IGNORE-CASE COMPARER.
         /// This line used to be `baseProfile.InstrumentProfiles ?? new Dictionary<...>()`, which
         /// ALIASED the config object's own dictionary and supplied no comparer on the fallback.
         /// Merging into that alias would write derived caps back into `_config.Profiles[i]`, where
@@ -3536,7 +3536,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //     path drops to `Unprotected` only when `CoveredQuantity <= 0`. The state is doing its
         //     job; a reader mistaking it for full coverage is why the message now says so out loud.
         //
-        // âš ï¸ NARROWING THIS PREDICATE HAD TO NOT LOSE A TRUE POSITIVE. Requiring a gap silences
+        // ⚠️ NARROWING THIS PREDICATE HAD TO NOT LOSE A TRUE POSITIVE. Requiring a gap silences
         // the 17, but the left arm was also the only thing that would have reported a position
         // whose coverage is complete while the state machine does not agree -- an FSM stuck in
         // `Unprotected` or `FlattenPending` with a full stop behind it. That is a real disagreement
@@ -3584,7 +3584,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// state and its covered quantity.
         /// </summary>
         /// <param name="hasFsm">
-        /// False when no FSM exists for this (account, instrument). âš ï¸ This is NOT rare and it is
+        /// False when no FSM exists for this (account, instrument). ⚠️ This is NOT rare and it is
         /// not always a defect: `RunGuardAudit` iterates every account, while FSM creation honours
         /// `ExcludedAccounts` and `_isArmed`. An account the guard was told not to guard therefore
         /// has a position and no FSM, and reports a full gap -- correctly, since nothing is
@@ -3823,7 +3823,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// **MUST be called with `_stateLock` NOT held.** Calling it from inside the lock would
         /// defeat the entire point: the lock is re-entrant, so the queue would drain and the
         /// broker call would happen under the lock exactly as before, while *looking* correct.
-        /// The TESTING build throws on that mistake rather than letting it pass review â€” this
+        /// The TESTING build throws on that mistake rather than letting it pass review — this
         /// is precisely the "nested lock buys nothing" trap recorded in the hardening plan.
         /// </summary>
         private void DrainPendingCancels()
@@ -4050,7 +4050,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             // guard exists to prevent, arriving by the guard's own hand, and it
                             // is the same shape as P1-56 and P1-140.
                             //
-                            // âš ï¸ THE CONDITION IS FULL COVERAGE BY SOMEONE ELSE, NOT THE MERE
+                            // ⚠️ THE CONDITION IS FULL COVERAGE BY SOMEONE ELSE, NOT THE MERE
                             // APPEARANCE OF ANOTHER STOP. Withdrawing on appearance strips the
                             // remainder of a partly-covered position of its only cover -- the
                             // guard cancelling the protection it just placed. Coverage is
@@ -4344,7 +4344,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             workingStopsByInstrument[instrument] = 1;
                     }
 
-                    // âš ï¸ RECORDED HERE, after this account's positions AND orders have been
+                    // ⚠️ RECORDED HERE, after this account's positions AND orders have been
                     // enumerated without throwing. This is what lets a CLOSED position clear its
                     // own record: there is no position left to iterate, so nothing key-scoped
                     // would ever be marked resolved. Recording the account instead is the fix,
@@ -4432,7 +4432,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
                 // P2-108. One decision point for all three findings.
                 //
-                // âš ï¸ The budget is re-read from the MODE every pass and never cached: 1 while
+                // ⚠️ The budget is re-read from the MODE every pass and never cached: 1 while
                 // observing, 6 while acting. In `shadow` the guard's product IS the observation
                 // and it is complete after one line -- the 1 is the fix, not a tuning value.
                 int auditBudget = AuditFindingThrottle.BudgetFor(IsActingMode());
@@ -4444,7 +4444,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     LogEvent(findingAccount[key], findingType[key], findingText[key]);
                 }
 
-                // âš ï¸ SUPPRESSION IS ANNOUNCED, EXACTLY ONCE. Silently withholding a true finding
+                // ⚠️ SUPPRESSION IS ANNOUNCED, EXACTLY ONCE. Silently withholding a true finding
                 // trades a screaming alarm for a silent one, which is the same defect inverted:
                 // the operator could not tell "resolved" from "still true and no longer mentioned".
                 foreach (string key in firedKeys)
@@ -4662,7 +4662,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
             // P2-101. Give up ONCE and say so, rather than retrying forever and saying it forever.
             //
-            // âš ï¸ The warning this replaces could NEVER FIRE. It read
+            // ⚠️ The warning this replaces could NEVER FIRE. It read
             // `UtcNow > LastLockoutFlattenAttempt.AddSeconds(30)`, and the retry above sets
             // `LastLockoutFlattenAttempt = UtcNow` every 5 seconds -- so the interval it measured
             // was reset by the very loop it was watching, and could not reach 30. The live run
@@ -4692,7 +4692,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // P2-101. How many intervention attempts one lockout phase may emit before it gives up.
         //
-        // âš ï¸ ONE in a non-acting mode, and that is the whole defect, not a tuning choice.
+        // ⚠️ ONE in a non-acting mode, and that is the whole defect, not a tuning choice.
         // `ProcessAction` answers "SHADOW (SKIPPED)" for every action outside `live`, so the
         // position cannot close, so "is the position still open" -- the retry's exit condition --
         // is permanently true. A second identical `[SHADOW] Would execute FlattenPosition` line
@@ -4807,7 +4807,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // per-order refusal cannot see -- so this is what makes instrument permission
                     // bind at all for an instantly-filled market order.
                     //
-                    // âš ï¸ Flatten, do NOT lock out. Being in the wrong instrument should not cost the
+                    // ⚠️ Flatten, do NOT lock out. Being in the wrong instrument should not cost the
                     // session: the operator can switch to a permitted one immediately. MAX_SIZE_BREACH
                     // below marks a lockout because a size breach is a discipline failure; this can be
                     // a fat-fingered symbol.
@@ -5116,7 +5116,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // guard never arms here again. The existence check above still applies to
                         // them, which is what stops this exemption swallowing the whole gate.
                         //
-                        // âš ï¸ WRITTEN AS `!(equity > 0)`, NOT `equity <= 0`, AND THAT IS THE POINT.
+                        // ⚠️ WRITTEN AS `!(equity > 0)`, NOT `equity <= 0`, AND THAT IS THE POINT.
                         // Every comparison against NaN is false, so `NaN <= 0` does not skip and
                         // `NaN > 0.40` does not fail -- a NaN equity would slide through BOTH
                         // guards and the check would silently PASS. Fail-open in a validator is the
@@ -5287,7 +5287,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 LogEvent(accountName, "OVERRIDE_REJECTED", "Incorrect confirm phrase.");
                 return false;
             }
-            // The forced wait is enforced by the caller (UI/CLI) â€” this method performs the unlock
+            // The forced wait is enforced by the caller (UI/CLI) — this method performs the unlock
             // only after the wait has elapsed. We log the intent and the wait duration.
             LogEvent(accountName, "OVERRIDE_ACCEPTED",
                 $"Confirm phrase accepted; applying override after {waitSec}s friction wait. Account will be unlocked.");
@@ -5456,7 +5456,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         /// is the ordinary case. `P1-159` closed this exact shape for the contract cap; this closes it
         /// for instrument permission.
         ///
-        /// âš ï¸ Returns WHICH list denied it, because "blocked" and "not on the allow-list" are two
+        /// ⚠️ Returns WHICH list denied it, because "blocked" and "not on the allow-list" are two
         /// different things for the operator to do something about.
         /// </summary>
         internal InstrumentPermission ResolveInstrumentPermission(string instrument)
@@ -5718,14 +5718,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // P2-107. THE outbound path. Every rule-produced action goes through here: coalesced
         // within the batch (P1-19), then de-duplicated across batches, then processed.
         //
-        // âš ï¸ `accountsEvaluated` is not decoration and it is not derivable from `actions`. It is
+        // ⚠️ `accountsEvaluated` is not decoration and it is not derivable from `actions`. It is
         // the set of accounts this producer just looked at, INCLUDING the ones it decided needed
         // nothing -- because that decision is the only signal that a condition resolved. An
         // account left out of it keeps its record forever and will never re-announce; an account
         // wrongly included has its record cleared by a producer that did not evaluate it, which
         // restores the repetition. Pass exactly what the producer iterated.
         //
-        // âš ï¸ Do NOT route the operator's panic buttons through here. TriggerManualFlatten and
+        // ⚠️ Do NOT route the operator's panic buttons through here. TriggerManualFlatten and
         // TriggerManualFlattenAll call ProcessAction(forceLive: true) directly, deliberately: a
         // second press is a second instruction, not a duplicate.
         internal void DispatchActions(List<GuardAction> actions, string producer, IList<string> accountsEvaluated)
@@ -6543,14 +6543,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // F-6. Ask the sink whether a human should be told. Enqueues onto a SEPARATE
                 // queue and never calls LogEvent, so this cannot re-enter itself.
                 //
-                // âš ï¸ WRAPPED, because the alert path must never be able to cost us the audit
+                // ⚠️ WRAPPED, because the alert path must never be able to cost us the audit
                 // record. The log line is already enqueued above; a throw here would lose nothing
                 // written, but it would propagate into whatever rule was mid-evaluation. A
                 // notifier that can break the guard is a worse trade than a missed notification.
                 try
                 {
                     var alertsCfg = _config != null ? _config.Alerts : null;
-                    // âš ï¸ DISABLED IS A SEPARATE GATE, not a severity floor. There is deliberately
+                    // ⚠️ DISABLED IS A SEPARATE GATE, not a severity floor. There is deliberately
                     // no "none" rank: an unknown floor string falls back to "warning"
                     // (FloorRankOf), so smuggling "off" through MinSeverity would push MORE, not
                     // less -- the fail-open this component exists to avoid.
@@ -6727,7 +6727,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // The heuristic (balance - realized - unrealized) captures the SESSION-start
                 // balance because `realized` is session-scoped. On an account up $5,000 over
                 // its life it reads 55,000 instead of 50,000, so the trail-lock floor is wrong
-                // by lifetime profit â€” and the error GROWS as the account does. When the plan
+                // by lifetime profit — and the error GROWS as the account does. When the plan
                 // states an AccountSize, that is the plan's starting balance by definition.
                 if (fm.ResolvedAccountSize > 0.0)
                 {
