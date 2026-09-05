@@ -340,6 +340,19 @@ jobs:
       - name: Contract cap is wired on the strategy entry path
         run: python tools/check_contract_cap_wired.py
 
+      # CanEnterTrade computes NINE distinct reasons to refuse an entry and, until
+      # 2026-09-05, surfaced each only under `DebugMode && CurrentBar % 100 == 0` -- so a
+      # strategy that quietly stopped entering had nine possible causes and, on 99% of bars,
+      # a record of none. A refusal a consumer cannot read is indistinguishable from the
+      # strategy simply not having a setup. Asserts a POSITIVE count rather than the absence
+      # of a bare `return false`, because an absence check passes vacuously the day the
+      # method is restructured. Self-tests five negative directions.
+      # Runs its five negative controls FIRST, in-process: check_ci_runs_every_battery
+      # requires each gate wired exactly once, so a separate --selftest step would fail
+      # that gate and the tempting fix would be to drop the control.
+      - name: Every entry refusal reports its reason
+        run: python tools/check_entry_refusals_reported.py
+
       # P2-158. The one invariant whose violation is a deadlock or a stranded position: _stateLock is
       # never held across a broker call. The check used to exist ONLY in the agent-loop review profile,
       # so a HAND-WRITTEN change got no lock-scope review -- exactly how P1-157 slipped a Cancel under

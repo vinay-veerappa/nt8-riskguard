@@ -457,7 +457,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             if (!isBacktest && !RiskGatekeeper.CanTrade(acctName))
             {
                 if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL gatekeeper: acct={acctName} bar={CurrentBar}", LogLevel.Information);
-                return false;
+                return Blocked("gatekeeper", currentTime);
             }
 
             // ── Local backtest / fallback gates ──
@@ -468,13 +468,13 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (accountBlown && StopOnAccountBlown)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL accountBlown: bar={CurrentBar}", LogLevel.Information);
-                    return false;
+                    return Blocked("accountBlown", currentTime);
                 }
 
                 if (isDoneForDay)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL doneForDay: bar={CurrentBar}", LogLevel.Information);
-                    return false;
+                    return Blocked("doneForDay", currentTime);
                 }
 
                 if (isPaused)
@@ -482,7 +482,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                     if (Times[0][0] < pauseUntil)
                     {
                         if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL paused: bar={CurrentBar} until={pauseUntil}", LogLevel.Information);
-                        return false;
+                        return Blocked("paused", currentTime);
                     }
                     isPaused = false;
                 }
@@ -490,7 +490,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (todayTradeCount >= MaxTradesPerDay)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL maxTrades: bar={CurrentBar} {todayTradeCount}/{MaxTradesPerDay}", LogLevel.Information);
-                    return false;
+                    return Blocked("maxTrades", currentTime);
                 }
             }
 
@@ -501,7 +501,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (currentTime < EarliestEntry * 100 || currentTime > LatestEntry * 100)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL timeFence: currentTime={currentTime} Earliest={EarliestEntry*100} Latest={LatestEntry*100} bar={CurrentBar}", LogLevel.Information);
-                    return false;
+                    return Blocked("timeFence", currentTime);
                 }
             }
             else
@@ -510,7 +510,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (currentTime < EarliestEntry * 100 && currentTime > LatestEntry * 100)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL timeFence: currentTime={currentTime} Earliest={EarliestEntry*100} Latest={LatestEntry*100} bar={CurrentBar}", LogLevel.Information);
-                    return false;
+                    return Blocked("timeFence", currentTime);
                 }
             }
 
@@ -531,7 +531,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             if (!isBacktest && RiskGatekeeper.WouldBreachDailyMaxLoss(Account.Name, potentialLoss))
             {
                 if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL gatekeeperDailyMaxLoss: bar={CurrentBar} potentialLoss={potentialLoss}", LogLevel.Information);
-                return false;
+                return Blocked("gatekeeperDailyMaxLoss", currentTime);
             }
 
             // Local fallback for daily max loss (only when NOT registered with gatekeeper AND not backtest)
@@ -541,7 +541,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (sessionPnL - potentialLoss < -DailyMaxLoss)
                 {
                     if (DebugMode && CurrentBar % 100 == 0) Log($"[DBG] CanEnterTrade FAIL localDailyMaxLoss: bar={CurrentBar} sessionPnL={sessionPnL} potentialLoss={potentialLoss} DailyMaxLoss={DailyMaxLoss}", LogLevel.Information);
-                    return false;
+                    return Blocked("localDailyMaxLoss", currentTime);
                 }
             }
 
@@ -1232,9 +1232,42 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             return double.NaN;
         }
 
-        private string GetSignalName(string direction)
+        /// <summary>
+        /// The entry order's signal name, which becomes `Execution.Name` on the fill.
+        ///
+        /// ⚠️ THIS DEFAULT IS CONSTANT PER DIRECTION -- every long entry a strategy ever
+        /// takes is named `"<Strategy>_Long"`. That is fine for NT8's own bookkeeping and
+        /// useless as an identifier: nothing downstream can tell one entry from another,
+        /// so joining a fill to the decision that produced it needs an approximate
+        /// nearest-timestamp match. VIRTUAL so a subclass can supply a per-entry name;
+        /// the `_Queen` / `_Runner` / `_Leg1` / `_Leg2` suffixes this class appends then
+        /// give the legs of one bracket a shared entry key.
+        /// </summary>
+        protected virtual string GetSignalName(string direction)
         {
             return string.Format("{0}_{1}", GetStrategyName(), direction);
+        }
+
+        /// <summary>
+        /// `CanEnterTrade` refused, and this says WHY. Nine distinct reasons are computed
+        /// in that method and were previously surfaced only through
+        /// `if (DebugMode && CurrentBar % 100 == 0) Log(...)` -- so a strategy that
+        /// quietly stopped entering had nine possible causes and a record of none of them
+        /// on 99% of bars. A refusal a consumer cannot read is indistinguishable from the
+        /// strategy simply not having a setup.
+        ///
+        /// Called from ONE place (`Blocked`), so a new refusal path cannot forget it.
+        /// Default is no-op: this class has no opinion about where the reason should go.
+        /// </summary>
+        protected virtual void OnEntryBlocked(string reason, int currentTime) { }
+
+        /// <summary>Refuse the entry, reporting the reason. Every `return false` in
+        /// `CanEnterTrade` goes through here -- a bare `return false` would be a refusal
+        /// nobody is told about, which is the defect this exists to close.</summary>
+        private bool Blocked(string reason, int currentTime)
+        {
+            OnEntryBlocked(reason, currentTime);
+            return false;
         }
     }
 }
