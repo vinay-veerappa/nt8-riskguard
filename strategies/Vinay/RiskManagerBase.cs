@@ -113,15 +113,16 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         #endregion
 
         #region Timeframe Configuration
-        /// <summary>
-        /// When true (default), adds a 5-minute secondary series and computes ATR on it.
-        /// Range-based strategies (IB, ORB) should set this false in SetStrategyDefaults()
-        /// and override GetCurrentATR() to return their range-based risk metric instead.
-        /// When false, Close5m/High5m/Low5m helpers MUST NOT be called.
-        /// </summary>
-        [NinjaScriptProperty]
-        [Display(Name = "Add Secondary Timeframe (5m)", Order = 0, GroupName = "Timeframe")]
-        public bool AddSecondaryTimeframe { get; set; }
+        // ── B9 (2026-09-05): AddSecondaryTimeframe and SecondaryTimeframeMinutes
+        // are DELETED. A feature eleven bots must set -- nine of them to false --
+        // was a strategy concern living in the risk manager. ConfigureStrategy()
+        // runs inside State.Configure (see OnStateChange below), where AddDataSeries
+        // is legal, so a strategy that needs a secondary series adds it itself and
+        // owns its resolution. GetCurrentATR() carries no series reference either:
+        // a subclass that wants an ATR-based risk metric constructs its own
+        // indicator and overrides GetCurrentATR() to return it (BBMRReversionBot
+        // and ICTFVGCISDBot already did exactly that). The Close5m/High5m/Low5m
+        // helpers are gone with the knob -- nothing called them.
 
         /// <summary>
         /// When true, emits verbose [DBG]/[DIAG] Log() diagnostics for every gate in
@@ -153,6 +154,10 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         protected string tradeDirection;
         protected string entrySignalName;  // set by EnterWithRangeStop / EnterTrade
         protected bool   trailFirstBar;     // SupertrendTrail: skip ratchet on entry bar (Python parity)
+        /// <summary>B9 fork change #3: the leg1 (TP1) price captured at entry, so
+        /// intrabar breakeven management can watch the bar touch it. NaN for a
+        /// policy that does not name one.</summary>
+        protected double customTp1Price = double.NaN;
 
         // Backtest-only account state (not used in live mode — RiskGatekeeper owns this)
         protected double accountEquity;
@@ -166,7 +171,8 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         protected DateTime pauseUntil;
 
         // Indicator
-        protected ATR atrIndicator;
+        // B9: `protected ATR atrIndicator` deleted with the knob. A subclass
+        // owns its ATR indicator and returns it from GetCurrentATR().
 
         // ──────────────────────────────────────────────────────────────
         // LIFECYCLE
@@ -214,9 +220,8 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 TrailAtrMult        = 2.0;
                 TargetRMultiple     = 2.0;
 
-                // Timeframe — default true for backward compat with ATR-based strategies.
-                // Range-based strategies (IB/ORB) override to false in SetStrategyDefaults().
-                AddSecondaryTimeframe = true;
+                // Timeframe — AddSecondaryTimeframe deleted (B9). A strategy adds
+                // its own series in ConfigureStrategy().
 
                 // DebugMode — default true for backtest diagnostics. Set false for live.
                 DebugMode = true;
@@ -230,20 +235,19 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 if (BarsRequiredToTradeParam > 0)
                     BarsRequiredToTrade = BarsRequiredToTradeParam;
 
-                // Only add the 5-min secondary when the strategy actually uses it.
-                // Range-based strategies set AddSecondaryTimeframe=false and override
-                // GetCurrentATR() to return their range-based risk metric.
-                if (AddSecondaryTimeframe)
-                    AddDataSeries(BarsPeriodType.Minute, 5);
+                // B9 fork change #2: ConfigureStrategy runs BEFORE any series this
+                // base might have added, so a subclass can call AddDataSeries itself
+                // -- which is now the ONLY way a secondary series appears (the
+                // AddSecondaryTimeframe knob is deleted). This ordering is the
+                // extension point; needing a base-class property per strategy was
+                // the defect.
                 ConfigureStrategy();
             }
             else if (State == State.DataLoaded)
             {
-                // Only construct the ATR indicator when the secondary series exists.
-                // When AddSecondaryTimeframe=false, atrIndicator stays null and
-                // GetCurrentATR() returns 0 unless overridden by the subclass.
-                if (AddSecondaryTimeframe)
-                    atrIndicator = ATR(BarsArray[1], AtrPeriod);
+                // B9: the base no longer constructs an ATR indicator. A subclass
+                // that wants one builds it in its own InitializeStrategy() and
+                // returns it from GetCurrentATR().
 
                 // Account state — initialise once from the parameter
                 // HWM starts at the same value so no phantom drawdown on day 1
@@ -284,16 +288,13 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             // NOTE: BarsRequiredToTrade is now set in State.Configure (not here — NT8 throws
             // "cannot be set from this state" if set during OnBarUpdate).
 
-            // Gate on primary series always; gate on secondary only when it exists.
-            // When AddSecondaryTimeframe=false, there is no BarsArray[1] to check.
+            // Gate on the primary series. B9: the base no longer knows whether a
+            // secondary series exists -- a strategy that adds one gates its own
+            // warmup (every bot that has one already did, e.g. BBMRReversionBot's
+            // warmup gate on CurrentBars[1]).
             if (CurrentBars[0] < BarsRequiredToTrade)
             {
                 if (DebugMode && CurrentBar % 200 == 0) Log($"[DBG] BarsRequired gate: CurrentBars[0]={CurrentBars[0]} < BRT={BarsRequiredToTrade}", LogLevel.Information);
-                return;
-            }
-            if (AddSecondaryTimeframe && CurrentBars[1] < BarsRequiredToTrade)
-            {
-                if (DebugMode && CurrentBar % 200 == 0) Log($"[DBG] Secondary BRT gate: CurrentBars[1]={CurrentBars[1]} < BRT={BarsRequiredToTrade}", LogLevel.Information);
                 return;
             }
 
@@ -429,6 +430,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             breakevenMoved   = false;
             tradeDirection   = null;
             entrySignalName  = null;
+            customTp1Price   = double.NaN;
             entryPrice       = 0;
             initialStopPrice = 0;
             currentStopPrice = 0;
@@ -620,6 +622,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             tradeDirection    = direction;
             entrySignalName   = signalName;
             trailFirstBar     = true;  // skip ratchet on entry bar (Python parity)
+            customTp1Price    = double.NaN;   // set below for FixedTP1TP2
 
             double customLimit = GetCustomLimitPrice(direction == "Long" ? 1 : -1, entry);
             bool isLimit = !double.IsNaN(customLimit) && customLimit > 0;
@@ -692,6 +695,8 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 // 2 contracts: leg1 scales 50% at TP1, leg2 runs to TP2 or EOD
                 double tp1 = GetCustomProfitTarget(direction == "Long" ? 1 : -1, effectiveEntry, stopDist);
                 double tp2 = GetCustomTP2(direction == "Long" ? 1 : -1, effectiveEntry);
+                // B9 fork change #3: captured for intrabar breakeven management
+                customTp1Price = tp1;
 
                 if (double.IsNaN(tp1) || double.IsNaN(tp2))
                 {
@@ -862,12 +867,24 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             // Python parity: after TP1 (leg1) hits, move leg2 stop to breakeven.
             // NT8 handles the profit target fills automatically via SetProfitTarget.
             // We only need to move the runner (leg2) stop to BE after TP1 fills.
+            // B9 fork change #3, same shape as ManageCoverTheQueen: the trigger is
+            // the bar TOUCHING the leg1 level (high/low), not the close alone --
+            // the close-only check leaves the runner at full risk through a bar
+            // that reached the target and closed back.
             string runnerSignal = (!string.IsNullOrEmpty(entrySignalName) ? entrySignalName : GetSignalName(tradeDirection)) + "_Leg2";
 
             if (!breakevenMoved)
             {
-                // Check if leg1 has been filled (position reduced from 2 to 1)
-                if (Position.MarketPosition != MarketPosition.Flat && Position.Quantity == 1)
+                // Check if leg1 has been filled (position reduced from 2 to 1),
+                // OR the bar touched the leg1 level (intrabar, before the fill
+                // confirms on this bar's close).
+                bool leg1Filled = Position.MarketPosition != MarketPosition.Flat
+                                  && Position.Quantity == 1;
+                bool touched = !double.IsNaN(customTp1Price)
+                               && (tradeDirection == "Long"
+                                   ? High[0] >= customTp1Price
+                                   : Low[0] <= customTp1Price);
+                if (leg1Filled || touched)
                 {
                     breakevenMoved = true;
                     currentStopPrice = tradeDirection == "Long" ? entryPrice : entryPrice;
@@ -881,12 +898,18 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             string runnerSignal = (!string.IsNullOrEmpty(entrySignalName) ? entrySignalName : GetSignalName(tradeDirection)) + "_Runner";
             double queenPts = entryPrice * 0.0010;
 
-            // Once price reaches Queen TP1, move Runner stop to Breakeven (+1 tick)
+            // Once price reaches Queen TP1, move Runner stop to Breakeven (+1 tick).
+            // B9 fork change #3: the trigger is the bar TOUCHING the queen level
+            // (high/low), not the close alone. A close-only check leaves the
+            // runner's stop at full risk through a bar that reached the target
+            // and closed back -- the queen leg then fills, but the protection
+            // this management exists to provide arrives a bar late. Declared
+            // live-behaviour change, landed with a test.
             if (!breakevenMoved)
             {
                 bool queenHit = tradeDirection == "Long"
-                    ? (currentPrice >= entryPrice + queenPts)
-                    : (currentPrice <= entryPrice - queenPts);
+                    ? (High[0] >= entryPrice + queenPts)
+                    : (Low[0] <= entryPrice - queenPts);
 
                 if (queenHit)
                 {
@@ -1110,17 +1133,14 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         // ──────────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Returns the current ATR value from the 5-min secondary series.
-        /// VIRTUAL so range-based subclasses (IntradayStrategyBase) can override
-        /// it to return their range-based risk metric (e.g. IB rangeRange) instead —
-        /// this unblocks the CanEnterTrade atr&gt;0 gate as soon as the range completes,
-        /// without waiting for the 5-min ATR to warm up.
-        /// When AddSecondaryTimeframe=false, the base returns 0; subclasses MUST override.
+        /// Risk-distance input for the daily-max-loss gate and entry sizing.
+        /// B9: the base carries NO series and NO indicator, so the default falls
+        /// back to the primary bar's range -- a subclass with a real risk metric
+        /// (5m ATR, IB rangeRange) OVERRIDES this and returns it. Every bot in
+        /// production already does. VIRTUAL for exactly that reason.
         /// </summary>
         protected virtual double GetCurrentATR()
         {
-            if (AddSecondaryTimeframe && atrIndicator != null && CurrentBars.Length > 1 && CurrentBars[1] >= AtrPeriod)
-                return atrIndicator[0];
             if (CurrentBars[0] >= 1)
                 return Math.Max(TickSize * 4, High[0] - Low[0]);
             return 15.0;
@@ -1209,23 +1229,10 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
             return current >= startHHMM * 100 && current <= endHHMM * 100;
         }
 
-        // 5-min secondary helpers — ONLY valid when AddSecondaryTimeframe=true.
-        // Calling these when the secondary was not added will throw an index error.
-        protected double Close5m(int barsAgo = 0)
-        {
-            if (!AddSecondaryTimeframe) throw new InvalidOperationException("Close5m requires AddSecondaryTimeframe=true");
-            return Closes[1][barsAgo];
-        }
-        protected double High5m(int barsAgo  = 0)
-        {
-            if (!AddSecondaryTimeframe) throw new InvalidOperationException("High5m requires AddSecondaryTimeframe=true");
-            return Highs[1][barsAgo];
-        }
-        protected double Low5m(int barsAgo   = 0)
-        {
-            if (!AddSecondaryTimeframe) throw new InvalidOperationException("Low5m requires AddSecondaryTimeframe=true");
-            return Lows[1][barsAgo];
-        }
+        // B9: the Close5m/High5m/Low5m helpers are deleted with the knob. No
+        // caller ever used them (census 2026-09-05), and a helper that throws
+        // unless a strategy remembered to set a flag was the layering defect
+        // wearing a guard.
 
         protected virtual double GetCustomStopPrice(int signal, double entryPrice)
         {

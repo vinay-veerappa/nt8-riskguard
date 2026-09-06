@@ -353,6 +353,15 @@ jobs:
       - name: Every entry refusal reports its reason
         run: python tools/check_entry_refusals_reported.py
 
+      # B9 fork change #3 (2026-09-05): the CoverTheQueen / FixedTP1TP2 breakeven
+      # fires on the bar TOUCHING the queen/TP1 level (High/Low), not the close
+      # alone -- a close-only check leaves the runner's stop at full risk through
+      # a bar that reached the target and closed back. Reads RiskManagerBase.cs
+      # structurally (no test build compiles it), with negative controls in
+      # --selftest so the gate is armed rather than trusted.
+      - name: The breakeven fires on an intrabar touch
+        run: python tools/check_intrabar_breakeven.py --selftest
+
       # P2-158. The one invariant whose violation is a deadlock or a stranded position: _stateLock is
       # never held across a broker call. The check used to exist ONLY in the agent-loop review profile,
       # so a HAND-WRITTEN change got no lock-scope review -- exactly how P1-157 slipped a Cancel under
