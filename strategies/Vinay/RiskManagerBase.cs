@@ -633,12 +633,17 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 double queenPts = effectiveEntry * 0.0010; // 10 Basis Points (approx 20-30 pts on NQ)
                 double runnerPts = Math.Max(TargetRMultiple * riskPoints, queenPts * 3.0); // 30 bps runner target
 
+                // B4 option (a): the strategy's leg sizes, defaulting to (1, 1).
+                (int queenQty, int runnerQty) = GetLegQuantities(
+                    direction == "Long" ? 1 : -1, effectiveEntry, riskPoints);
+                queenQty = Math.Max(1, queenQty);
+                runnerQty = Math.Max(1, runnerQty);
+
                 // Section 11 item 19: the strategy's DECLARED target becomes the
                 // queen leg's payoff when it is on the right side of the
                 // EFFECTIVE entry; NaN / absent / wrong-side falls back to the
                 // frozen queen_bps. Mirrors the Python engine's fill-time guard
-                // (kernel Pending struct -> right-side check at fill). The
-                // runner stays at runner_bps (ADR-023 frozen).
+                // (kernel Pending struct -> right-side check at fill).
                 int sigForTarget = direction == "Long" ? 1 : -1;
                 double declaredTarget = GetDeclaredQueenTarget(sigForTarget, effectiveEntry);
                 bool queenDeclared =
@@ -652,41 +657,55 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                         ? effectiveEntry + queenPts
                         : effectiveEntry - queenPts);
 
+                // B4 option (a): the declared RUNNER target, same fill-time
+                // right-side guard; NaN falls back to the frozen runner_bps.
+                double declaredRunner = GetCustomRunnerTarget(sigForTarget, effectiveEntry, riskPoints);
+                bool runnerDeclared =
+                    !double.IsNaN(declaredRunner)
+                    && (direction == "Long"
+                        ? declaredRunner > effectiveEntry
+                        : declaredRunner < effectiveEntry);
+                double runnerExit = runnerDeclared
+                    ? declaredRunner
+                    : (direction == "Long"
+                        ? effectiveEntry + runnerPts
+                        : effectiveEntry - runnerPts);
+
                 if (direction == "Long")
                 {
                     if (isLimit)
                     {
-                        EnterLongLimit(1, customLimit, signalName + "_Queen");
-                        EnterLongLimit(1, customLimit, signalName + "_Runner");
+                        EnterLongLimit(queenQty, customLimit, signalName + "_Queen");
+                        EnterLongLimit(runnerQty, customLimit, signalName + "_Runner");
                     }
                     else
                     {
-                        EnterLong(1, signalName + "_Queen");
-                        EnterLong(1, signalName + "_Runner");
+                        EnterLong(queenQty, signalName + "_Queen");
+                        EnterLong(runnerQty, signalName + "_Runner");
                     }
                     SetStopLoss(signalName + "_Queen", CalculationMode.Price, stop, false);
                     SetProfitTarget(signalName + "_Queen", CalculationMode.Price, queenExit);
 
                     SetStopLoss(signalName + "_Runner", CalculationMode.Price, stop, false);
-                    SetProfitTarget(signalName + "_Runner", CalculationMode.Price, effectiveEntry + runnerPts);
+                    SetProfitTarget(signalName + "_Runner", CalculationMode.Price, runnerExit);
                 }
                 else
                 {
                     if (isLimit)
                     {
-                        EnterShortLimit(1, customLimit, signalName + "_Queen");
-                        EnterShortLimit(1, customLimit, signalName + "_Runner");
+                        EnterShortLimit(queenQty, customLimit, signalName + "_Queen");
+                        EnterShortLimit(runnerQty, customLimit, signalName + "_Runner");
                     }
                     else
                     {
-                        EnterShort(1, signalName + "_Queen");
-                        EnterShort(1, signalName + "_Runner");
+                        EnterShort(queenQty, signalName + "_Queen");
+                        EnterShort(runnerQty, signalName + "_Runner");
                     }
                     SetStopLoss(signalName + "_Queen", CalculationMode.Price, stop, false);
                     SetProfitTarget(signalName + "_Queen", CalculationMode.Price, queenExit);
 
                     SetStopLoss(signalName + "_Runner", CalculationMode.Price, stop, false);
-                    SetProfitTarget(signalName + "_Runner", CalculationMode.Price, effectiveEntry - runnerPts);
+                    SetProfitTarget(signalName + "_Runner", CalculationMode.Price, runnerExit);
                 }
             }
             else if (TradePolicy == TradePolicyType.FixedTP1TP2)
@@ -1273,6 +1292,38 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         protected virtual double GetCustomTP2(int signal, double entryPrice)
         {
             return double.NaN;
+        }
+
+        /// <summary>
+        /// B4 option (a): the strategy's declared RUNNER-leg target for the
+        /// CoverTheQueen bracket, or NaN for "no declaration" (the frozen
+        /// runner_bps then applies, ADR-023 unchanged). The queen's declared
+        /// target already flows through GetDeclaredQueenTarget (section 11
+        /// item 19); the runner needed the same seam once a strategy's
+        /// entry plan -- computed at declaration time with the range/stop
+        /// geometry -- had to reach the engine's bracket, because the
+        /// enter-inside path (IntradayStrategyBase's
+        /// EnterWithPackTradingBrackets) is the layering defect B4 exists to
+        /// remove. The FILL-TIME side guard mirrors the queen's: a declared
+        /// runner behind the EFFECTIVE entry is refused and the bps fallback
+        /// applies, logged.
+        /// </summary>
+        protected virtual double GetCustomRunnerTarget(int signal, double entryPrice, double stopDist)
+        {
+            return double.NaN;
+        }
+
+        /// <summary>
+        /// B4 option (a): the queen/runner leg SIZES for the CoverTheQueen
+        /// bracket. Default (1, 1) is every strategy that has ever run this
+        /// policy; IBStrategyBase overrides with the pack-trading split
+        /// (halfQty = max(1, qty/2), runnerQty = max(1, qty - halfQty)) so
+        /// its qty formula survives the re-plumb. Returned quantities are
+        /// clamped to >= 1 at the call site.
+        /// </summary>
+        protected virtual (int QueenQty, int RunnerQty) GetLegQuantities(int signal, double entryPrice, double stopDist)
+        {
+            return (1, 1);
         }
 
         /// <summary>
