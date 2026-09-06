@@ -630,6 +630,25 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                 double queenPts = effectiveEntry * 0.0010; // 10 Basis Points (approx 20-30 pts on NQ)
                 double runnerPts = Math.Max(TargetRMultiple * riskPoints, queenPts * 3.0); // 30 bps runner target
 
+                // Section 11 item 19: the strategy's DECLARED target becomes the
+                // queen leg's payoff when it is on the right side of the
+                // EFFECTIVE entry; NaN / absent / wrong-side falls back to the
+                // frozen queen_bps. Mirrors the Python engine's fill-time guard
+                // (kernel Pending struct -> right-side check at fill). The
+                // runner stays at runner_bps (ADR-023 frozen).
+                int sigForTarget = direction == "Long" ? 1 : -1;
+                double declaredTarget = GetDeclaredQueenTarget(sigForTarget, effectiveEntry);
+                bool queenDeclared =
+                    !double.IsNaN(declaredTarget)
+                    && (direction == "Long"
+                        ? declaredTarget > effectiveEntry
+                        : declaredTarget < effectiveEntry);
+                double queenExit = queenDeclared
+                    ? declaredTarget
+                    : (direction == "Long"
+                        ? effectiveEntry + queenPts
+                        : effectiveEntry - queenPts);
+
                 if (direction == "Long")
                 {
                     if (isLimit)
@@ -643,7 +662,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                         EnterLong(1, signalName + "_Runner");
                     }
                     SetStopLoss(signalName + "_Queen", CalculationMode.Price, stop, false);
-                    SetProfitTarget(signalName + "_Queen", CalculationMode.Price, effectiveEntry + queenPts);
+                    SetProfitTarget(signalName + "_Queen", CalculationMode.Price, queenExit);
 
                     SetStopLoss(signalName + "_Runner", CalculationMode.Price, stop, false);
                     SetProfitTarget(signalName + "_Runner", CalculationMode.Price, effectiveEntry + runnerPts);
@@ -661,7 +680,7 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
                         EnterShort(1, signalName + "_Runner");
                     }
                     SetStopLoss(signalName + "_Queen", CalculationMode.Price, stop, false);
-                    SetProfitTarget(signalName + "_Queen", CalculationMode.Price, effectiveEntry - queenPts);
+                    SetProfitTarget(signalName + "_Queen", CalculationMode.Price, queenExit);
 
                     SetStopLoss(signalName + "_Runner", CalculationMode.Price, stop, false);
                     SetProfitTarget(signalName + "_Runner", CalculationMode.Price, effectiveEntry - runnerPts);
@@ -1214,6 +1233,23 @@ namespace NinjaTrader.NinjaScript.Strategies.Vinay
         }
 
         protected virtual double GetCustomLimitPrice(int signal, double currentPrice)
+        {
+            return double.NaN;
+        }
+
+        /// <summary>
+        /// Section 11 item 19: the strategy's DECLARED queen-leg target, or NaN
+        /// for "no declaration". Captured at arm time (the same pattern as
+        /// GetCustomLimitPrice) and consulted in the CoverTheQueen bracket path.
+        /// The FILL-TIME guard lives in EnterTrade -- it re-checks the side
+        /// against the EFFECTIVE entry, which may be a limit price rather than
+        /// the close the declaration was recorded against -- and falls back to
+        /// queen_bps visibly (logged in GovernedStrategy's decision) rather
+        /// than accepting a target behind entry, which is the geometry-defect
+        /// class. The runner leg is UNCHANGED at runner_bps: ADR-023's
+        /// Cover-The-Queen is frozen.
+        /// </summary>
+        protected virtual double GetDeclaredQueenTarget(int signal, double entryPrice)
         {
             return double.NaN;
         }
